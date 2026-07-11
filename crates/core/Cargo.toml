@@ -1,0 +1,8 @@
+[package]
+name = "conlang-core"
+version = "0.1.0"
+edition = "2021"
+description = "Autosegmental sound-change engine core (repr module, M0 step 1)"
+
+[dependencies]
+# 刻意零依賴(M0 §6:smallvec/thiserror 於 M0 步驟 2 引入;此步驟 std 即可)
