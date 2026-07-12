@@ -18,31 +18,23 @@ pub mod word;
 pub use feature::{FeatBit, FeatBits, FeatureRegistry};
 pub use intern::{SymId, SymTable, ValId, ValTable};
 pub use invariant::{check_word, InvariantIssue, Severity};
-pub use melody::{Autoseg, MelodyTier, OnAnchorLoss, OnStray, TierPolicies, Visibility};
+pub use melody::{Autoseg, Links, MelodyTier, OnAnchorLoss, OnStray, TierPolicies, Visibility};
 pub use prosody::{AnchorRef, Level, ProsodyLayers, Span, StaleFlags};
 pub use word::{Bracket, MorphUnit, Seg, Word};
 
 /// 表徵層錯誤。核心不 panic(可移植性規範),一律回傳本型別。
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// thiserror 提供 `Display` 與 `std::error::Error`,使 `lifecycle::EngineError` 可 `#[from]` 之。
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ReprError {
     /// 特徵原子超過 64 個(MVP 以 u64 bitset 承載;超出時未來換 u128/Vec<u64>)。
+    #[error("feature space exhausted (64 atoms max in MVP)")]
     FeatureSpaceExhausted,
     /// 引用了不存在的錨點。
+    #[error("dangling anchor: {0:?}")]
     DanglingAnchor(prosody::AnchorRef),
     /// 對 Segment 層請求下層(Segment 是骨架,無下層)。
+    #[error("level {0:?} has no lower level")]
     NoLowerLevel(prosody::Level),
-}
-
-impl core::fmt::Display for ReprError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            ReprError::FeatureSpaceExhausted => {
-                write!(f, "feature space exhausted (64 atoms max in MVP)")
-            }
-            ReprError::DanglingAnchor(a) => write!(f, "dangling anchor: {:?}", a),
-            ReprError::NoLowerLevel(l) => write!(f, "level {:?} has no lower level", l),
-        }
-    }
 }
 
 /// 專案級環境:所有 interner 與特徵註冊表的單一存放處。

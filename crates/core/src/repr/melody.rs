@@ -3,8 +3,14 @@
 //! 單一資訊源:聯結邊只存在於 `Autoseg::links`(自體段不另存「我掛在哪」的副本);
 //! 序列位置(D6 keep-in-place 的「原位」)就是 `MelodyTier::seq` 的索引,不另存欄位。
 
+use smallvec::SmallVec;
+
 use super::intern::{SymId, ValId};
 use super::prosody::{AnchorRef, Level};
+
+/// 一個自體段的聯結邊集合。幾乎恆為 0–2 條(浮游 0、單掛 1、延展/多掛 2),
+/// 故內聯儲存兩條免堆配置(I3:替換原 `Vec<AnchorRef>` 佔位)。
+pub type Links = SmallVec<[AnchorRef; 2]>;
 
 /// 可見性(B6/D6 相關;經架構書同步,為 extraprosodicity 預留的通用機制)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -52,23 +58,25 @@ impl Default for TierPolicies {
 
 /// 自體段。`links` 為空 = 浮游(合法、可長期,D6);多條 = 延展。
 /// links 維持依 (level 固定, index 遞增) 排序,便於 NCC 檢查與 notation。
-// NOTE(I3): links 用 Vec 暫代 smallvec::SmallVec<[AnchorRef; 2]>,M0 步驟 2 引入依賴後替換。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Autoseg {
     pub val: ValId,
-    pub links: Vec<AnchorRef>,
+    pub links: Links,
 }
 
 impl Autoseg {
     pub fn floating(val: ValId) -> Self {
         Autoseg {
             val,
-            links: Vec::new(),
+            links: Links::new(),
         }
     }
 
-    pub fn linked(val: ValId, anchors: Vec<AnchorRef>) -> Self {
-        Autoseg { val, links: anchors }
+    pub fn linked(val: ValId, anchors: impl IntoIterator<Item = AnchorRef>) -> Self {
+        Autoseg {
+            val,
+            links: anchors.into_iter().collect(),
+        }
     }
 
     pub fn is_floating(&self) -> bool {

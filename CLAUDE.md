@@ -71,28 +71,30 @@
 
 ## 5. 目前狀態與下一個任務
 
-**設計鏈狀態**:docs/01–10 全部到位,無懸空依賴(B 原語集已定死 D 的 ChangeEntry;E 已補齊 A Generator 的抽樣上游)。實作僅 M0 步驟 1 起頭,其餘為設計層。
+**設計鏈狀態**:docs/01–10 全部到位,無懸空依賴。另有根目錄 `../docs/`(repo 外)新增
+`12_邏輯分層架構`與`架構修補01_共時規則系統與臨時韻律域`——修補對 M0 步驟 2–3 **零衝擊**,
+插入點在步驟 4(規則檔 `level: stem|word|phrase` 標記,預設 word)與步驟 6(spellout 的
+phrase-level 空掛鉤);Grammar Store 本體為 M0 後的步驟 8。
+**注意:修補文件建議的 docs/05 追加決策編號 I9–I12 與 repo 既有 I9/I10 撞號,納入 repo 前需重編。**
 
-**已完成(M0 步驟 1)**:`crates/core/src/repr/` 表徵模組——intern、feature、prosody(含 I8 拓撲)、
-melody、word、invariant(NCC/覆蓋)、notation。含單元測試與整合測試
-(`tests/word_states.rs`:範例 8.1 / 8.4 的狀態序列)。
-**注意:此程式碼在無 Rust 工具鏈的環境撰寫,尚未編譯過。**
+**已完成(M0 步驟 1,commit `bccc837`)**:`crates/core/src/repr/` 表徵模組——intern、feature、
+prosody(I8 拓撲)、melody、word、invariant、notation。本機工具鏈首跑即全綠。
 
-**Session 啟動程序(第一次在本機開發時)**:
-1. `cargo test -p conlang-core` — 修掉所有編譯錯誤(預期為 use 路徑/borrow 邊角的小修,
-   演算法邏輯已經 Python 鏡像驗證,若需大改邏輯請先對照 `repr/invariant.rs` 的註解與規格)。
-2. `rustup target add wasm32-unknown-unknown && cargo build -p conlang-core --target wasm32-unknown-unknown` — 確認可移植性。
-3. 全綠後 commit:`M0 step1: repr module compiles & tests pass`。
+**已完成(M0 步驟 2)**:
+- `lifecycle/`:`Action` 六 variant、`commit`(凍結快照+一次寫入;I10 收攏)、`validate`、
+  `needs_reparse`(A3)、`run`(執行語意 §1 步驟 3–5 編排;步驟 1–2 的 selector 屬 verbs/scan)。
+- `primitives/`:六原語建構器 + proptest 不變量(純函數、守恆、逆元、單調、冪等)。
+- 依賴引入:smallvec(`Autoseg::links`,I3 完結)、thiserror;dev:proptest、insta(insta 步驟 3 起用)。
+- 出口已過:`tests/word_states.rs` 狀態轉換全為原語呼叫(音段層除外,I9),全測試綠 + wasm 綠。
+- 新決策:I9(六原語作用域定界)、I10(commit 重編界定),見 docs/05 §9。
 
-**下一個任務(M0 步驟 2,見 M0 實作參照 §8)**:
-- `crates/core/src/primitives/`:六原語 associate/delink/insert/delete/dominate/release,
-  操作 `Action` enum(定義移入 `lifecycle`),每原語附 proptest 不變量
-  (commit 後 NCC 檢查完備、associate 後浮游數守恆、剖析後音節層覆蓋完備…)。
-- `crates/core/src/lifecycle/`:Parallel Match → Action Evaluation → Commit → Validation →
-  Lazy Reparse Mark(執行語意 §1 的唯一實作處);此時引入 `thiserror`、`smallvec`
-  (替換 `Autoseg::links` 的 Vec,見程式碼中 `NOTE(I3)`)、`proptest`、`insta`。
-- 出口:`tests/word_states.rs` 的手動狀態轉換改寫為原語呼叫,全綠 = 步驟 2 完成。
-- 之後依序:步驟 3 動詞第一批(8.1 綠燈)→ 步驟 4 dsl crate(logos+chumsky)→ …(M0 實作參照 §8)。
+**下一個任務(M0 步驟 3,見 M0 實作參照 §8)**:
+- `crates/core/src/verbs/` 第一批:insert / dock / fill / merge——**全部組合六原語**,不得另闢狀態
+  (dock=條件 associate、fill=逐 Ø insert+associate、merge=delete+associate)。
+- 需要最小 selector/匹配基礎(Parallel Match 的實作處):tier 內容定址 + Ø 偵測,範圍以 8.1 所需為度。
+- 出口:**範例 8.1(tonogenesis)綠燈**——以規則序列(而非測試手動呼叫原語)從 *ba 推導到 pà,
+  insta 快照對齊每 commit 一狀態。
+- 之後:步驟 4 dsl crate(logos+chumsky;加 `level:` 標記)→ 步驟 5(spread/shift/locality/lazy)→ 步驟 6(scan/spellout + phrase-level 掛鉤)。
 
 ## 6. 命名原則(全專案實作規範,凌駕任何單篇審查建議)
 
