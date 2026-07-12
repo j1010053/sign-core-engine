@@ -24,8 +24,9 @@ fn stmt_actions(p: &Program, w: &Word, s: &LoweredStmt) -> Result<Vec<Action>, E
         LoweredStmt::InsertFloatingNear {
             tier,
             val,
-            onset_test,
-        } => verbs::insert_floating_near(w, *tier, *val, *onset_test),
+            test,
+            probe,
+        } => verbs::insert_floating_near(w, *tier, *val, *test, *probe),
         LoweredStmt::Dock { tier, strategy } => verbs::dock(w, *tier, *strategy),
         LoweredStmt::Fill { tier, val } => verbs::fill(w, *tier, *val),
         LoweredStmt::MergeAdjacentEqual { tier } => verbs::merge_adjacent_equal(w, *tier),

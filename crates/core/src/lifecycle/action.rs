@@ -41,6 +41,8 @@ pub enum Action {
         at: Option<usize>,
         val: ValId,
         links: Links,
+        /// 浮游原位記憶(I11 v2;`insert … near X` 寫入 X)。
+        origin: Option<u32>,
     },
     /// 刪一個自體段(連同其所有聯結邊)。commit 重建 `seq` 收攏後續索引(I10)。
     Delete { tier: SymId, seq_idx: usize },

@@ -113,6 +113,7 @@ mod tests {
                 at: None,
                 val: ValId(1),
                 links: Default::default(),
+                origin: None,
             }],
         )
         .unwrap();
@@ -182,6 +183,7 @@ mod tests {
                 at: Some(1),
                 val: ValId(1),
                 links: Default::default(),
+                origin: None,
             }],
         )
         .unwrap();

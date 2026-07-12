@@ -51,6 +51,18 @@ pub fn insert(tier: SymId, at: Option<usize>, val: ValId, links: Links) -> Actio
         at,
         val,
         links,
+        origin: None,
+    }
+}
+
+/// insert 浮游 + 原位記憶(I11 v2:`insert … near X`)。
+pub fn insert_floating_at(tier: SymId, at: Option<usize>, val: ValId, origin: u32) -> Action {
+    Action::Insert {
+        tier,
+        at,
+        val,
+        links: Links::new(),
+        origin: Some(origin),
     }
 }
 

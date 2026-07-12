@@ -12,7 +12,7 @@ use conlang_core::repr::melody::MelodyTier;
 use conlang_core::repr::prosody::Level;
 use conlang_core::repr::Env;
 use conlang_core::strategy::{Pick, Strategy, TieBreak};
-use conlang_core::verbs::{Domain, OnConflict, SegEnv, SegMatch, SegOut, SegPat, SegPos, Ward};
+use conlang_core::verbs::{Domain, InsertProbe, OnConflict, SegEnv, SegMatch, SegOut, SegPat, SegPos, Ward};
 
 use crate::ast::*;
 
@@ -31,7 +31,8 @@ pub enum LoweredStmt {
     InsertFloatingNear {
         tier: SymId,
         val: ValId,
-        onset_test: FeatBits,
+        test: FeatBits,
+        probe: InsertProbe,
     },
     Dock {
         tier: SymId,
@@ -282,15 +283,17 @@ pub fn lower(file: &FileAst) -> Result<Program, LowerError> {
                             return Err(unsupported("`near` level differing from tier anchor"));
                         }
                     }
-                    // 環境:M0 僅支援 `/ onset&[矩陣] _`
+                    // 環境:`/ onset&[矩陣] _`(Onset 探測)或 `/ [矩陣] _`(錨點內容探測)
                     let mut test = FeatBits::EMPTY;
+                    let mut probe = InsertProbe::AnchorContent;
                     match e {
                         None => {}
                         Some(RuleEnv { pre: Some(pre), post: None }) => {
-                            let mut saw_onset = false;
                             for el in &pre.0 {
                                 match el {
-                                    Element::Named(n) if n == "onset" => saw_onset = true,
+                                    Element::Named(n) if n == "onset" => {
+                                        probe = InsertProbe::Onset
+                                    }
                                     Element::Matrix(atoms) => {
                                         test = test.union(matrix_bits(&names, atoms)?.0)
                                     }
@@ -301,16 +304,14 @@ pub fn lower(file: &FileAst) -> Result<Program, LowerError> {
                                     }
                                 }
                             }
-                            if !saw_onset {
-                                return Err(unsupported("insert env without `onset`"));
-                            }
                         }
                         Some(_) => return Err(unsupported("insert env shape")),
                     }
                     stmts.push(LoweredStmt::InsertFloatingNear {
                         tier,
                         val: vid,
-                        onset_test: test,
+                        test,
+                        probe,
                     });
                 }
                 Stmt::Dock {

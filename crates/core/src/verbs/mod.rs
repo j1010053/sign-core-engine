@@ -58,6 +58,9 @@ fn empty_anchors(w: &Word, tier: &MelodyTier) -> Vec<u32> {
 /// 浮游者的**原位投影**(I11):左鄰最近已聯結者的最大錨點 +1;
 /// 無則右鄰最近已聯結者的最小錨點 −1(飽和);全浮游時 seq 索引即投影。
 fn projected_anchor(tier: &MelodyTier, i: usize) -> u32 {
+    if let Some(o) = tier.seq[i].origin {
+        return o; // 原位記憶優先(I11 v2)
+    }
     for j in (0..i).rev() {
         if let Some(a) = tier.seq[j].links.iter().map(|l| l.index).max() {
             return a + 1;
@@ -85,33 +88,60 @@ fn insert_pos(tier: &MelodyTier, anchor: u32) -> Option<usize> {
 
 // ── 動詞 ──
 
-/// `insert <值> floating near mora / onset&[test] _`(8.1 tonogenesis 的子項)。
-/// 對每個「onset 含匹配音段」的音節,在其第一個莫拉附近 insert 浮游 `val`。
-/// 匹配 = 自然類超集測試(`seg.feats ⊇ test`)。VerbClass::Query(讀韻律結構)。
+/// insert-near 的環境探測方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsertProbe {
+    /// `/ onset&[test] _`:錨點所屬音節的 onset 匹配(僅 mora 錨;8.1)。
+    Onset,
+    /// `/ [test] _`:錨點自身內容匹配(segment 錨=該音段;mora 錨=核心音段;8.2/8.5)。
+    AnchorContent,
+}
+
+/// `insert <值> floating near <錨層> / <env> _`:對每個環境匹配的錨點,
+/// insert 浮游 `val` 並寫入原位記憶(I11 v2)。VerbClass::Query。
 pub fn insert_floating_near(
     w: &Word,
     tier: SymId,
     val: ValId,
-    onset_test: FeatBits,
+    test: FeatBits,
+    probe: InsertProbe,
 ) -> Result<Vec<Action>, EngineError> {
     let t = tier_of(w, tier)?;
+    let level = t.anchor;
     let mut out = Vec::new();
-    for syl_idx in 0..w.prosody.syllables.len() {
-        let onset_hit = onset_segs(w, syl_idx)
-            .iter()
-            .any(|&i| w.skeleton[i as usize].feats.contains(onset_test));
-        if !onset_hit {
-            continue;
+    match probe {
+        InsertProbe::Onset => {
+            for syl_idx in 0..w.prosody.syllables.len() {
+                let onset_hit = onset_segs(w, syl_idx)
+                    .iter()
+                    .any(|&i| w.skeleton[i as usize].feats.contains(test));
+                if !onset_hit {
+                    continue;
+                }
+                let Some(mora) = first_mora_in(w, syl_idx) else {
+                    continue; // 無莫拉可停靠:B8 noop
+                };
+                out.push(primitives::insert_floating_at(
+                    tier,
+                    insert_pos(t, mora),
+                    val,
+                    mora,
+                ));
+            }
         }
-        let Some(mora) = first_mora_in(w, syl_idx) else {
-            continue; // 無莫拉可停靠:B8 noop
-        };
-        out.push(primitives::insert(
-            tier,
-            insert_pos(t, mora),
-            val,
-            Default::default(),
-        ));
+        InsertProbe::AnchorContent => {
+            let n = w.anchor_count(level) as u32;
+            for a in 0..n {
+                if anchor_matches(w, level, a, test) {
+                    out.push(primitives::insert_floating_at(
+                        tier,
+                        insert_pos(t, a),
+                        val,
+                        a,
+                    ));
+                }
+            }
+        }
     }
     Ok(out)
 }
@@ -634,12 +664,12 @@ mod tests {
     fn insert_matches_onset_class_per_syllable() {
         // 兩音節 onset 皆 [+voice] → 兩個浮游;皆不匹配 → noop(B8)
         let w = cvcv([voiced(), voiced()]);
-        let acts = insert_floating_near(&w, TONE, H, voiced()).unwrap();
+        let acts = insert_floating_near(&w, TONE, H, voiced(), InsertProbe::Onset).unwrap();
         assert_eq!(acts.len(), 2);
         let w2 = commit(&w, &acts).unwrap();
         assert_eq!(w2.tier(TONE).unwrap().floating_indices().len(), 2);
 
-        let none = insert_floating_near(&w, TONE, H, FeatBits(2)).unwrap();
+        let none = insert_floating_near(&w, TONE, H, FeatBits(2), InsertProbe::Onset).unwrap();
         assert!(none.is_empty());
     }
 

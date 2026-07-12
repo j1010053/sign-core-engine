@@ -179,12 +179,23 @@ fn apply_seg_deletes(after: &mut Word, actions: &[Action]) -> Result<(), EngineE
             Level::Pword => &|i| Some(i), // pword 極少作 anchor;M0 不映射
             Level::Custom(_) => &|i| Some(i), // 自定域(I14):M0 僅平移標 stale,錨點索引不映射
         };
+        // 錨點軸座標平移量:舊索引 → 其下方存活數(= 新座標)
+        let coord = |old: u32| -> u32 { (0..old).filter(|&i| map(i).is_some()).count() as u32 };
         for a in tier.seq.iter_mut() {
             let mut new_links = crate::repr::melody::Links::new();
+            let mut dropped_at: Option<u32> = None;
             for l in a.links.iter() {
                 if let Some(ni) = map(l.index) {
                     new_links.push(AnchorRef::new(l.level, ni));
+                } else {
+                    dropped_at.get_or_insert(coord(l.index));
                 }
+            }
+            if new_links.is_empty() && !a.links.is_empty() {
+                // 浮游化(D14):寫入原位記憶(I11 v2,重編後座標)
+                a.origin = dropped_at;
+            } else if let Some(o) = a.origin {
+                a.origin = Some(coord(o)); // 既有原位同步重映射
             }
             a.links = new_links; // 全消失 = 回浮游,序列原位不動(D6)
         }
@@ -386,6 +397,7 @@ fn apply_tier(
                 at,
                 val,
                 links,
+                origin,
             } if *t == tier => {
                 let pos = at.unwrap_or(seq_len);
                 if pos > seq_len {
@@ -397,7 +409,11 @@ fn apply_tier(
                 }
                 let mut links: Links = links.clone();
                 normalize_links(&mut links);
-                ins_before[pos].push(Autoseg { val: *val, links });
+                ins_before[pos].push(Autoseg {
+                    val: *val,
+                    links,
+                    origin: *origin,
+                });
             }
             _ => {}
         }

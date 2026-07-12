@@ -62,6 +62,10 @@ impl Default for TierPolicies {
 pub struct Autoseg {
     pub val: ValId,
     pub links: Links,
+    /// 原位記憶(I11 v2):浮游時在錨點軸上的原位——insert near 時寫入、
+    /// 錨點刪除浮游化(D14)時由 commit 寫入舊位;是 D6「不漂移」的位置記憶,
+    /// 非聯結資訊複本。dock 投影優先取此值。
+    pub origin: Option<u32>,
 }
 
 impl Autoseg {
@@ -69,6 +73,7 @@ impl Autoseg {
         Autoseg {
             val,
             links: Links::new(),
+            origin: None,
         }
     }
 
@@ -76,6 +81,7 @@ impl Autoseg {
         Autoseg {
             val,
             links: anchors.into_iter().collect(),
+            origin: None,
         }
     }
 

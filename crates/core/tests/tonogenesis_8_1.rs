@@ -22,7 +22,7 @@
 use conlang_core::lifecycle::{run, Outcome, VerbClass};
 use conlang_core::repr::{notation, Env, FeatBits, Level, MelodyTier, Seg, Span, SymId, Word};
 use conlang_core::strategy::Strategy;
-use conlang_core::verbs;
+use conlang_core::verbs::{self, InsertProbe};
 
 struct Fixture {
     env: Env,
@@ -129,8 +129,8 @@ fn derive_8_1(fx: &mut Fixture, transcript: &mut String, label: &str, w: Word) -
     transcript.push_str(&format!("{label}\n  {:<13} {}\n", "input", fx.render(&w)));
 
     // tonogenesis:兩個平行子項共享同一次 Parallel Match(B5)→ 合為一個 commit
-    let mut acts = verbs::insert_floating_near(&w, fx.tone, h, fx.voiceless).unwrap();
-    acts.extend(verbs::insert_floating_near(&w, fx.tone, l, fx.voiced).unwrap());
+    let mut acts = verbs::insert_floating_near(&w, fx.tone, h, fx.voiceless, InsertProbe::Onset).unwrap();
+    acts.extend(verbs::insert_floating_near(&w, fx.tone, l, fx.voiced, InsertProbe::Onset).unwrap());
     let w = step(
         fx,
         transcript,
