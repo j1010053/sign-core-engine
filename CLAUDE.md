@@ -97,7 +97,7 @@ prosody(I8 拓撲)、melody、word、invariant、notation。本機工具鏈首�
 - **I12(音段規則通道)**:`Action::SegRewrite{idx,sym,feats}`(整段替換、長度不變;非第七原語,
   不供動詞組合)+ `repr::Inventory`(SymId↔FeatBits,住 `Env`)+ `verbs::rewrite`
   (特徵矩陣匹配、onset 述語、逐欄位 set_field、Inventory 反查,無對應=error)。
-- `crates/dsl/`:logos lexer(入口 NFC,I6;**註解暫定 `;`**——規格未定,`#`=詞界、`//` 被沿用欄佔用)
+- `crates/dsl/`:logos lexer(入口 NFC,I6;**註解 `/*…*/`**,擁有者定案,記法表見 docs/02 §2)
   + chumsky 行導向 parser → 型別化 AST → lowering(名稱→id/bits;超出 8.1 範圍者明確報
   Unsupported)→ executor(每規則一 commit;B5 同規則語句共享凍結 match)。
   宣告貼合 Lexurgy(`Feature`/`Symbol`/`Class` + 自有 `Melody`);音段規則 `A => B / C _ D`。

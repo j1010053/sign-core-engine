@@ -4,8 +4,9 @@
 //! 標點。關鍵字不設專用 token——在 parser 依字串判定,避免與規則名/IPA 符號撞名
 //! (strategy 名是開放集 D28,本就須以識別字承載)。
 //!
-//! 註解:`;` 至行尾(**暫定**:規格未定註解語法;`#` 已被詞界佔用 D19,
-//! `//` 已被 Lexurgy 沿用欄佔用)。詞界 `#` 為獨立 token。
+//! 註解:`/* … */` 區塊註解(專案擁有者 2026-07-12 定案;`#` 已被詞界佔用 D19,
+//! `//` 已被 Lexurgy 沿用欄佔用)。可跨行;跨行時吞掉其中的換行,兩側殘句併為一行。
+//! 詞界 `#` 為獨立 token。
 
 use logos::Logos;
 use unicode_normalization::UnicodeNormalization;
@@ -16,7 +17,7 @@ pub enum Tok {
     #[token("\n")]
     Newline,
 
-    #[regex(r";[^\n]*", logos::skip)]
+    #[regex(r"/\*[^*]*\*+([^/*][^*]*\*+)*/", logos::skip)]
     Comment,
 
     #[token(":")]
@@ -106,7 +107,7 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0][0], Tok::Ident("dock-tone".into()));
         assert_eq!(lines[0][1], Tok::Colon);
-        let lines = lex_lines("[+voice]&onset => [-voice] ; devoice\n").unwrap();
+        let lines = lex_lines("[+voice]&onset => [-voice] /* devoice */\n").unwrap();
         assert_eq!(
             lines[0],
             vec![
@@ -121,6 +122,19 @@ mod tests {
                 Tok::Minus,
                 Tok::Ident("voice".into()),
                 Tok::RBrack,
+            ]
+        );
+    }
+
+    #[test]
+    fn block_comments_including_tricky_closers() {
+        // `**/` 收尾與跨行皆可
+        let lines = lex_lines("a /* x **/ b\n/* multi\nline */ c\n").unwrap();
+        assert_eq!(
+            lines,
+            vec![
+                vec![Tok::Ident("a".into()), Tok::Ident("b".into())],
+                vec![Tok::Ident("c".into())],
             ]
         );
     }

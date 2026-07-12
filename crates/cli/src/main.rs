@@ -43,7 +43,7 @@ fn main() -> ExitCode {
 
     for line in words.lines() {
         let word_text = line.trim();
-        if word_text.is_empty() || word_text.starts_with(';') {
+        if word_text.is_empty() || word_text.starts_with("/*") {
             continue;
         }
         let w = match build_word(&program, word_text) {

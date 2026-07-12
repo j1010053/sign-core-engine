@@ -1,5 +1,5 @@
-; 範例 8.1(docs/02 §12)— tonogenesis 規則檔
-; 宣告貼合 Lexurgy(Feature/Symbol/Class);Melody 為本 DSL 擴充
+/* 範例 8.1(docs/02 §12)— tonogenesis 規則檔
+   宣告貼合 Lexurgy(Feature/Symbol/Class);Melody 為本 DSL 擴充 */
 
 Feature voice(+voice, -voice)
 
