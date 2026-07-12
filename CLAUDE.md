@@ -90,24 +90,31 @@ prosody(I8 拓撲)、melody、word、invariant、notation。本機工具鏈首�
   `needs_reparse`(A3)、`run`(執行語意 §1 步驟 3–5 編排)。
 - `primitives/`:六原語建構器 + proptest 不變量。新決策 I9/I10(docs/05 §9)。
 
-**已完成(M0 步驟 3)**:
-- `strategy/`:統一解析器 `resolve(candidates, reference, strategy)`(D28);內建
-  nearest(+prefer-left/right tie-break,D17)/leftmost/rightmost;自定義註冊留步驟 4+。
-- `verbs/` 第一批:`insert_floating_near`(onset 特徵環境)、`dock`(條件 associate,
-  浮游參考=原位投影 **I11**)、`fill`(逐 Ø insert+associate,D22)、`merge_adjacent_equal`
-  (delete+associate)。全組合原語;動詞做執行語意 §1 步驟 1–2,產 `Vec<Action>` 交 `run`。
-- 出口已過:`tests/tonogenesis_8_1.rs`——8.1 全規則序列 × 四詞(*pa/*ba/*baba/*a),
-  每 commit 一 insta 快照;對立轉移/三分 H/M/Ø/OCP 合併皆有硬斷言。devoicing 為手動
-  音段操作(I9,音段層規則機制隨步驟 4+ 引入)。
-- 新決策:I11(dock 原位投影),見 docs/05 §9。
+**已完成(M0 步驟 3,commit `0809f7a`)**:`strategy/`(D28 統一解析器)+ `verbs/` 第一批
+(insert_floating_near / dock / fill / merge_adjacent_equal,全組合原語)。新決策 I11(dock 原位投影)。
 
-**下一個任務(M0 步驟 4,見 M0 實作參照 §8)**:
-- `crates/dsl/`:logos lexer(入口 unicode-normalization 正規化,I6)+ chumsky parser
-  → 型別化 AST(引用 core 型別);能解析 8.1 規則檔全文。
-- **P3 插入點**:規則檔語法加 `level: stem|word|phrase` 標記(預設 word;φ/ι/U 為合法層名無行為)。
-- 音段層規則機制(devoicing 類 rewrite)需在此步或步驟 5 定案 commit 通道——屆時提案新 I 決策。
-- `crates/cli/`:讀規則檔+詞表 → 跑 → 輸出(含 trace),串 end-to-end。
-- 之後:步驟 5(spread/shift/locality/lazy-reparse → 8.2–8.5)→ 步驟 6(scan/spellout + phrase-level 掛鉤 → 8.6)。
+**已完成(M0 步驟 4)**:
+- **I12(音段規則通道)**:`Action::SegRewrite{idx,sym,feats}`(整段替換、長度不變;非第七原語,
+  不供動詞組合)+ `repr::Inventory`(SymId↔FeatBits,住 `Env`)+ `verbs::rewrite`
+  (特徵矩陣匹配、onset 述語、逐欄位 set_field、Inventory 反查,無對應=error)。
+- `crates/dsl/`:logos lexer(入口 NFC,I6;**註解暫定 `;`**——規格未定,`#`=詞界、`//` 被沿用欄佔用)
+  + chumsky 行導向 parser → 型別化 AST → lowering(名稱→id/bits;超出 8.1 範圍者明確報
+  Unsupported)→ executor(每規則一 commit;B5 同規則語句共享凍結 match)。
+  宣告貼合 Lexurgy(`Feature`/`Symbol`/`Class` + 自有 `Melody`);音段規則 `A => B / C _ D`。
+  **P3 已插入**:`level: stem|word|phrase` 標記(預設 word,僅記錄無行為)。
+- `crates/cli/`:`conlang <rules.dsl> <words.txt>` → 逐詞推導表(trace);
+  造詞為**暫定 CV 音節化**(`Class vowel` 判核心;`Parse` 宣告於步驟 5+ 取代)。
+- 出口已過:`examples/8_1_tonogenesis.dsl` 全文經 DSL 管線與 CLI 實跑,四詞推導
+  與步驟 3 語意一致(`dsl_8_1.rs` insta 快照 + 硬斷言);devoicing 已是 DSL 規則。
+
+**下一個任務(M0 步驟 5,見 M0 實作參照 §8)**:
+- `verbs/` 第二批:`spread`(iterative,方向顯式,blocked-by/within/on-conflict)、
+  `shift`(iterative,delink+associate 逐格)+ `delete`/`insert` 音段層(骨架長度變動)
+  的跨層連鎖重編(I10 解除點:commit 重編上層 Span + 旋律 link)。
+- `locality/`:局部可達上界(執行語意 §5;可達閉包 ∪ 錨定層相鄰一格)。
+- stability/lazy-reparse 完整化:錨點刪→浮游 keep-in-place(D14/D6)、stale 標記與 query 重剖。
+- 出口:**8.2–8.5 綠燈**(鼻化和諧+阻塞、聲調穩定+位移、補償性延長全 DSL 化、ATR 雙向)。
+- 之後:步驟 6(scan/spellout + phrase-level 掛鉤 → 8.6)。
 
 ## 6. 命名原則(全專案實作規範,凌駕任何單篇審查建議)
 

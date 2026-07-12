@@ -1,0 +1,323 @@
+//! chumsky parser(I6):行導向——lexer 已依行分組,每行以小型 parser 解析為
+//! [`Line`],再以分組後處理把語句掛回所屬規則。錯誤以行號回報。
+//!
+//! 規則頭與語句同行合法(`dock-tone: dock …`);`level:` 為保留語句頭,
+//! 不會被誤認為規則名(P3)。
+
+use chumsky::prelude::*;
+
+use crate::ast::*;
+use crate::lexer::Tok;
+
+/// 一行解析結果。
+#[derive(Debug, Clone, PartialEq)]
+enum Line {
+    Decl(Decl),
+    RuleHeader(String, Option<Stmt>),
+    Stmt(Stmt),
+}
+
+/// 解析錯誤:行號(1 起算)+ 訊息。
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("parse error at line {line}: {msg}")]
+pub struct ParseError {
+    pub line: usize,
+    pub msg: String,
+}
+
+// ── 小工具 ──
+
+fn ident() -> impl Parser<Tok, String, Error = Simple<Tok>> + Clone {
+    select! { Tok::Ident(s) => s }
+}
+
+fn kw(s: &'static str) -> impl Parser<Tok, (), Error = Simple<Tok>> + Clone {
+    select! { Tok::Ident(x) if x == s => () }
+}
+
+/// 特徵原子名:`+voice` / `-voice` / `labial`(號誌併入值名字串,lowering 拆解)。
+fn atom() -> impl Parser<Tok, String, Error = Simple<Tok>> + Clone {
+    just(Tok::Plus)
+        .to("+")
+        .or(just(Tok::Minus).to("-"))
+        .or_not()
+        .then(ident())
+        .map(|(sign, name)| format!("{}{}", sign.unwrap_or(""), name))
+}
+
+/// `[atom atom …]`
+fn matrix() -> impl Parser<Tok, Vec<String>, Error = Simple<Tok>> + Clone {
+    atom()
+        .repeated()
+        .delimited_by(just(Tok::LBrack), just(Tok::RBrack))
+}
+
+fn element() -> impl Parser<Tok, Element, Error = Simple<Tok>> + Clone {
+    matrix().map(Element::Matrix).or(just(Tok::Hash).to(Element::Boundary)).or(
+        ident().map(|s| match s.as_str() {
+            "Ø" => Element::Empty,
+            "floating" => Element::Floating,
+            _ => Element::Named(s),
+        }),
+    )
+}
+
+fn selector() -> impl Parser<Tok, Selector, Error = Simple<Tok>> + Clone {
+    element()
+        .separated_by(just(Tok::Amp))
+        .at_least(1)
+        .map(Selector)
+}
+
+/// `/ pre? _ post?`
+fn rule_env() -> impl Parser<Tok, RuleEnv, Error = Simple<Tok>> + Clone {
+    just(Tok::Slash)
+        .ignore_then(selector().or_not())
+        .then_ignore(just(Tok::Underscore))
+        .then(selector().or_not())
+        .map(|(pre, post)| RuleEnv { pre, post })
+}
+
+// ── 語句 ──
+
+fn stmt() -> impl Parser<Tok, Stmt, Error = Simple<Tok>> + Clone {
+    let insert = kw("insert")
+        .ignore_then(ident())
+        .then_ignore(kw("floating"))
+        .then(kw("near").ignore_then(ident()).or_not())
+        .then(rule_env().or_not())
+        .map(|((val, near), env)| Stmt::Insert { val, near, env });
+
+    let dock = kw("dock")
+        .ignore_then(selector())
+        .then_ignore(kw("strategy"))
+        .then(ident())
+        .then(ident().or_not())
+        .map(|((sel, strategy), tiebreak)| Stmt::Dock {
+            sel,
+            strategy,
+            tiebreak,
+        });
+
+    let fill = kw("fill")
+        .ignore_then(ident())
+        .then_ignore(kw("Ø"))
+        .then_ignore(just(Tok::Arrow))
+        .then(ident())
+        .then(kw("within").ignore_then(ident()).or_not())
+        .map(|((tier, val), within)| Stmt::Fill { tier, val, within });
+
+    let merge = kw("merge")
+        .then(kw("adjacent-equal"))
+        .to(Stmt::MergeAdjacentEqual);
+
+    let level = kw("level")
+        .then(just(Tok::Colon))
+        .ignore_then(ident())
+        .map(Stmt::Level);
+
+    let rewrite = selector()
+        .then_ignore(just(Tok::Arrow))
+        .then(selector())
+        .then(rule_env().or_not())
+        .map(|((from, to), env)| Stmt::Rewrite { from, to, env });
+
+    choice((level, insert, dock, fill, merge, rewrite))
+}
+
+// ── 宣告 ──
+
+fn decl() -> impl Parser<Tok, Decl, Error = Simple<Tok>> + Clone {
+    let feature = kw("Feature")
+        .ignore_then(ident())
+        .then(
+            atom()
+                .separated_by(just(Tok::Comma))
+                .at_least(1)
+                .delimited_by(just(Tok::LParen), just(Tok::RParen)),
+        )
+        .map(|(name, values)| Decl::Feature { name, values });
+
+    let symbol = kw("Symbol")
+        .ignore_then(ident())
+        .then(matrix().or_not())
+        .map(|(name, atoms)| Decl::Symbol {
+            name,
+            atoms: atoms.unwrap_or_default(),
+        });
+
+    let class = kw("Class")
+        .ignore_then(ident())
+        .then(
+            ident()
+                .separated_by(just(Tok::Comma))
+                .at_least(1)
+                .delimited_by(just(Tok::LBrace), just(Tok::RBrace)),
+        )
+        .map(|(name, members)| Decl::Class { name, members });
+
+    let melody = kw("Melody")
+        .ignore_then(ident())
+        .then(
+            ident()
+                .separated_by(just(Tok::Comma))
+                .at_least(1)
+                .delimited_by(just(Tok::LBrace), just(Tok::RBrace)),
+        )
+        .then_ignore(kw("anchor"))
+        .then(ident())
+        .map(|((name, values), anchor)| Decl::Melody {
+            name,
+            values,
+            anchor,
+        });
+
+    choice((feature, symbol, class, melody))
+}
+
+// ── 行 → 檔 ──
+
+fn line_parser() -> impl Parser<Tok, Line, Error = Simple<Tok>> {
+    let header = ident()
+        .try_map(|s, span| {
+            if s == "level" {
+                Err(Simple::custom(span, "'level' is a reserved statement head"))
+            } else {
+                Ok(s)
+            }
+        })
+        .then_ignore(just(Tok::Colon))
+        .then(stmt().or_not())
+        .map(|(name, inline)| Line::RuleHeader(name, inline));
+
+    choice((
+        decl().map(Line::Decl),
+        stmt().map(Line::Stmt),
+        header,
+    ))
+    .then_ignore(end())
+}
+
+/// 解析整檔(lexer 已行分組)。
+pub fn parse_lines(lines: &[Vec<Tok>]) -> Result<FileAst, ParseError> {
+    let mut file = FileAst::default();
+    let p = line_parser();
+    for (i, toks) in lines.iter().enumerate() {
+        let lineno = i + 1; // 空行已濾除,此為邏輯行號
+        let parsed = p.parse(toks.clone()).map_err(|errs| ParseError {
+            line: lineno,
+            msg: errs
+                .first()
+                .map(|e| format!("{e:?}"))
+                .unwrap_or_else(|| "unknown".into()),
+        })?;
+        match parsed {
+            Line::Decl(d) => {
+                if !file.rules.is_empty() {
+                    return Err(ParseError {
+                        line: lineno,
+                        msg: "declarations must precede rules".into(),
+                    });
+                }
+                file.decls.push(d);
+            }
+            Line::RuleHeader(name, inline) => {
+                let mut stmts = Vec::new();
+                if let Some(s) = inline {
+                    stmts.push(s);
+                }
+                file.rules.push(RuleAst { name, stmts });
+            }
+            Line::Stmt(s) => match file.rules.last_mut() {
+                Some(r) => r.stmts.push(s),
+                None => {
+                    return Err(ParseError {
+                        line: lineno,
+                        msg: "statement outside of any rule".into(),
+                    })
+                }
+            },
+        }
+    }
+    Ok(file)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::lex_lines;
+
+    fn parse(src: &str) -> FileAst {
+        parse_lines(&lex_lines(src).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn parses_declarations() {
+        let f = parse("Feature voice(+voice, -voice)\nSymbol p [-voice]\nSymbol a\nClass vowel {a}\nMelody tone {H, M, L} anchor mora\n");
+        assert_eq!(f.decls.len(), 5);
+        assert_eq!(
+            f.decls[0],
+            Decl::Feature {
+                name: "voice".into(),
+                values: vec!["+voice".into(), "-voice".into()]
+            }
+        );
+        assert_eq!(
+            f.decls[4],
+            Decl::Melody {
+                name: "tone".into(),
+                values: vec!["H".into(), "M".into(), "L".into()],
+                anchor: "mora".into()
+            }
+        );
+    }
+
+    #[test]
+    fn parses_rule_with_inline_and_following_stmts() {
+        let f = parse(
+            "tonogenesis:\n    insert H floating near mora / onset&[-voice] _\n    insert L floating near mora / onset&[+voice] _\ndock-tone: dock tone&floating strategy nearest\n",
+        );
+        assert_eq!(f.rules.len(), 2);
+        assert_eq!(f.rules[0].stmts.len(), 2);
+        assert!(matches!(f.rules[0].stmts[0], Stmt::Insert { .. }));
+        assert!(matches!(f.rules[1].stmts[0], Stmt::Dock { .. }));
+    }
+
+    #[test]
+    fn parses_rewrite_and_level_marker_p3() {
+        let f = parse("devoicing:\n    level: word\n    [+voice]&onset => [-voice]\n");
+        assert_eq!(f.rules[0].stmts[0], Stmt::Level("word".into()));
+        match &f.rules[0].stmts[1] {
+            Stmt::Rewrite { from, to, env } => {
+                assert_eq!(
+                    from.0,
+                    vec![
+                        Element::Matrix(vec!["+voice".into()]),
+                        Element::Named("onset".into())
+                    ]
+                );
+                assert_eq!(to.0, vec![Element::Matrix(vec!["-voice".into()])]);
+                assert!(env.is_none());
+            }
+            other => panic!("expected rewrite, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_env_with_boundary() {
+        let f = parse("final: [+voice] => [-voice] / _ #\n");
+        match &f.rules[0].stmts[0] {
+            Stmt::Rewrite { env: Some(e), .. } => {
+                assert!(e.pre.is_none());
+                assert_eq!(e.post.as_ref().unwrap().0, vec![Element::Boundary]);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn statement_outside_rule_is_error() {
+        let lines = lex_lines("merge adjacent-equal\n").unwrap();
+        assert!(parse_lines(&lines).is_err());
+    }
+}

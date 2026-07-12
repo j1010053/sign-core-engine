@@ -10,6 +10,7 @@
 pub mod feature;
 pub mod intern;
 pub mod invariant;
+pub mod inventory;
 pub mod melody;
 pub mod notation;
 pub mod prosody;
@@ -17,6 +18,7 @@ pub mod word;
 
 pub use feature::{FeatBit, FeatBits, FeatureRegistry};
 pub use intern::{SymId, SymTable, ValId, ValTable};
+pub use inventory::Inventory;
 pub use invariant::{check_word, InvariantIssue, Severity};
 pub use melody::{Autoseg, Links, MelodyTier, OnAnchorLoss, OnStray, TierPolicies, Visibility};
 pub use prosody::{AnchorRef, Level, ProsodyLayers, Span, StaleFlags};
@@ -37,13 +39,15 @@ pub enum ReprError {
     NoLowerLevel(prosody::Level),
 }
 
-/// 專案級環境:所有 interner 與特徵註冊表的單一存放處。
+/// 專案級環境:所有 interner、特徵註冊表與音素庫的單一存放處。
 /// `Word` 快照只存整數 id,字串進出僅在 parse 入口與 spell-out 出口(I1/interning)。
 #[derive(Debug, Default, Clone)]
 pub struct Env {
     pub syms: SymTable,
     pub vals: ValTable,
     pub feats: FeatureRegistry,
+    /// 音素庫(I12):符號 ↔ 特徵束;音段規則改寫後的反查來源。
+    pub inv: Inventory,
 }
 
 impl Env {

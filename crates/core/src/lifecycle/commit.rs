@@ -11,7 +11,7 @@
 
 use crate::repr::melody::{Autoseg, Links};
 use crate::repr::prosody::AnchorRef;
-use crate::repr::word::Word;
+use crate::repr::word::{Seg, Word};
 
 use super::action::Action;
 use super::error::EngineError;
@@ -19,10 +19,27 @@ use super::error::EngineError;
 /// 在凍結快照 `before` 上套用 `actions`,回傳新 `Word`。任一 Action 索引越界 → `EngineError`。
 pub fn commit(before: &Word, actions: &[Action]) -> Result<Word, EngineError> {
     let mut after = before.clone(); // I1:快照 = clone
-    // 韻律與旋律互不影響索引,順序任意;先韻律再旋律。
+    // 三族互不影響索引(SegRewrite 長度不變,I12),順序任意。
+    apply_segmental(&mut after, actions)?;
     apply_prosodic(&mut after, actions)?;
     apply_melodic(&mut after, actions)?;
     Ok(after)
+}
+
+/// 套用所有音段規則通道(SegRewrite):整段替換,骨架長度與所有索引不變(I12)。
+/// 同批多個 SegRewrite 指向同一音段時依 Action 序後者為準(parallel 同拍衝突的確定性解)。
+fn apply_segmental(after: &mut Word, actions: &[Action]) -> Result<(), EngineError> {
+    for a in actions {
+        if let Action::SegRewrite { idx, sym, feats } = *a {
+            let len = after.skeleton.len();
+            let seg = after
+                .skeleton
+                .get_mut(idx)
+                .ok_or(EngineError::SegIndexOutOfRange { idx, len })?;
+            *seg = Seg::new(sym, feats);
+        }
+    }
+    Ok(())
 }
 
 /// 套用所有韻律原語(dominate/release):就地擴縮 Span,節點數不變。

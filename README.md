@@ -5,12 +5,19 @@
 
 Autosegmental 音變引擎(M0)。規範上游:《M0 實作參照 v1.0》→《執行語意規格 v0.1》→《語法規格 v0.3》。
 
-## 目前進度:M0 步驟 3 完成 — verbs 第一批(8.1 綠燈)
+## 目前進度:M0 步驟 4 完成 — DSL + CLI 端到端(8.1 全綠)
 
-- `crates/core/src/strategy/`(步驟 3):統一候選解析器(D28)——nearest/leftmost/rightmost + tie-break
-- `crates/core/src/verbs/`(步驟 3):insert_floating_near、dock(I11 原位投影)、fill(D22)、
-  merge_adjacent_equal——全組合六原語;整合測試 `tests/tonogenesis_8_1.rs` 以規則序列推導
-  四詞(*pa/*ba/*baba/*a),每 commit 一 insta 快照 = **範例 8.1 引擎層綠燈**
+```
+cargo run -p conlang-cli --bin conlang -- examples/8_1_tonogenesis.dsl examples/words.txt
+```
+
+- `crates/dsl/`(步驟 4):logos lexer(NFC 入口,I6)+ chumsky parser + lowering + executor;
+  宣告貼合 Lexurgy(`Feature`/`Symbol`/`Class`)+ 自有 `Melody`;音段規則 `A => B / C _ D`
+  走 I12 通道(`SegRewrite` + `Inventory` 反查);`level:` 標記已插入(P3,預設 word)
+- `crates/cli/`(步驟 4):規則檔+詞表 → 逐詞推導表(trace);暫定 CV 音節化
+- `crates/core/src/strategy/`(步驟 3):統一候選解析器(D28)
+- `crates/core/src/verbs/`(步驟 3–4):insert_floating_near、dock(I11)、fill(D22)、
+  merge_adjacent_equal、rewrite(I12)——動詞=原語組合;rewrite=音段規則通道
 
 ### 步驟 1–2 基座
 
@@ -42,10 +49,12 @@ cargo build -p conlang-core --target wasm32-unknown-unknown   # 可移植性(I4)
   跨層連鎖重編(音段增刪→上層 Span+旋律 link)留步驟 5。
 - **I11**:dock 浮游參考位置=原位投影——左鄰已聯結最大錨點+1 → 右鄰最小錨點−1 → seq 索引;
   各浮游者獨立求 nearest,共同著陸依 D27。
+- **I12**:音段規則通道——`Action::SegRewrite`(替換,長度不變;非第七原語)+ Inventory 反查
+  (無對應=error);音段增刪與跨層連鎖留步驟 5。
 - **P1–P4**(架構修補層,權威=`docs/架構修補01` §4):Word=臨時韻律域、Grammar Store、
   strata 層級錨定、cophonology 閂。
 
-## 下一步:M0 步驟 4 — dsl crate + CLI
+## 下一步:M0 步驟 5 — verbs 第二批 + locality + stability
 
-logos+chumsky 解析 8.1 規則檔(含 P3 的 `level:` 標記);音段層規則 commit 通道定案;
-CLI 串 end-to-end(見《M0 實作參照》§8)。
+spread/shift(iterative)、音段增刪的跨層連鎖重編(I10 解除)、locality 上界、
+lazy-reparse 完整化;出口 = 8.2–8.5 綠燈(見《M0 實作參照》§8)。

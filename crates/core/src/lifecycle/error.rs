@@ -56,4 +56,12 @@ pub enum EngineError {
         node: usize,
         target: u32,
     },
+
+    /// `SegRewrite` 指向不存在的骨架音段(I12)。
+    #[error("segment index {idx} out of range (skeleton len {len})")]
+    SegIndexOutOfRange { idx: usize, len: usize },
+
+    /// 音段規則改寫後的特徵束在音素庫無對應符號(I12,對齊 Lexurgy 行為)。
+    #[error("no symbol in inventory for rewritten feature bundle at segment {idx}")]
+    NoSymbolForBundle { idx: usize },
 }

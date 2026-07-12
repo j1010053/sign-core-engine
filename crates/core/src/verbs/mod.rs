@@ -17,6 +17,7 @@ use crate::lifecycle::{Action, EngineError};
 use crate::primitives;
 use crate::repr::feature::FeatBits;
 use crate::repr::intern::{SymId, ValId};
+use crate::repr::inventory::Inventory;
 use crate::repr::melody::MelodyTier;
 use crate::repr::prosody::AnchorRef;
 use crate::repr::word::Word;
@@ -146,6 +147,75 @@ pub fn fill(w: &Word, tier: SymId, val: ValId) -> Result<Vec<Action>, EngineErro
         .collect())
 }
 
+/// 音段 rewrite 規則的環境項(`/ pre _ post`;皆可省略)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SegPat {
+    /// 特徵矩陣(自然類超集測試)。
+    Feats(FeatBits),
+    /// 詞界 `#`。
+    Boundary,
+}
+
+/// 音段 rewrite 規則的環境(骨架相鄰一格;語法貼合 Lexurgy 的 `/ C _ D`)。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SegEnv {
+    pub pre: Option<SegPat>,
+    pub post: Option<SegPat>,
+}
+
+impl SegEnv {
+    fn matches(&self, w: &Word, idx: usize) -> bool {
+        let side = |pat: Option<SegPat>, neighbor: Option<&crate::repr::word::Seg>| match pat {
+            None => true,
+            Some(SegPat::Boundary) => neighbor.is_none(),
+            Some(SegPat::Feats(f)) => neighbor.is_some_and(|s| s.feats.contains(f)),
+        };
+        side(self.pre, idx.checked_sub(1).and_then(|i| w.skeleton.get(i)))
+            && side(self.post, w.skeleton.get(idx + 1))
+    }
+}
+
+/// 音段是否為 onset(I8:落在某音節內、不入任何莫拉的前緣音段)。
+fn is_onset(w: &Word, idx: u32) -> bool {
+    (0..w.prosody.syllables.len()).any(|s| onset_segs(w, s).contains(&idx))
+}
+
+/// 音段層 rewrite 規則:`[match] (&onset) => [subs] / pre _ post`(I12;語法貼合 Lexurgy)。
+/// 對每個匹配音段:逐特徵欄位 `set_field` 改寫 → Inventory 反查新符號(無對應 = error)
+/// → `SegRewrite`。整段替換、長度不變;非六原語,不供動詞組合。
+/// `subs` = (欄位遮罩, 新值位) 序列,由呼叫端(DSL lowering)自輸出矩陣求得。
+/// VerbClass::Query(onset 述語讀韻律結構)。
+pub fn rewrite(
+    w: &Word,
+    inv: &Inventory,
+    match_feats: FeatBits,
+    require_onset: bool,
+    subs: &[(FeatBits, FeatBits)],
+    env: SegEnv,
+) -> Result<Vec<Action>, EngineError> {
+    let mut out = Vec::new();
+    for (idx, seg) in w.skeleton.iter().enumerate() {
+        if !seg.feats.contains(match_feats) {
+            continue;
+        }
+        if require_onset && !is_onset(w, idx as u32) {
+            continue;
+        }
+        if !env.matches(w, idx) {
+            continue;
+        }
+        let mut feats = seg.feats;
+        for &(mask, value) in subs {
+            feats = feats.set_field(mask, value);
+        }
+        let sym = inv
+            .sym_for(feats)
+            .ok_or(EngineError::NoSymbolForBundle { idx })?;
+        out.push(Action::SegRewrite { idx, sym, feats });
+    }
+    Ok(out)
+}
+
 /// `merge adjacent-equal` = delete+associate(OCP 合併)。
 /// 以前狀態一次判斷(parallel):seq 上相鄰同值的極大連段,保留首者、
 /// 其餘刪除並把其聯結併給首者(冪等:重複邊由 commit 去重)。VerbClass::Melodic。
@@ -253,6 +323,56 @@ mod tests {
         let t = w2.tier(TONE).unwrap();
         assert_eq!(t.seq.len(), 2);
         assert!(t.seq.iter().all(|a| a.val == M && a.links.len() == 1)); // 獨立,非延展
+    }
+
+    #[test]
+    fn rewrite_devoices_onsets_via_inventory_i12() {
+        // b=[+voice](bit0)、p=[-voice](bit1);devoicing: [+voice]&onset => [-voice]
+        let vplus = FeatBits(0b01);
+        let vminus = FeatBits(0b10);
+        let mask = FeatBits(0b11); // voice 欄位遮罩
+        let mut inv = Inventory::new();
+        inv.register(SymId(0), vplus); // 骨架偶數位 = onset b
+        let p_sym = SymId(77);
+        inv.register(p_sym, vminus);
+
+        let w = cvcv([vplus, vplus]);
+        let acts = rewrite(&w, &inv, vplus, true, &[(mask, vminus)], SegEnv::default()).unwrap();
+        assert_eq!(acts.len(), 2); // 兩個濁 onset 皆改寫
+        let w2 = commit(&w, &acts).unwrap();
+        assert_eq!(w2.skeleton[0].sym, p_sym);
+        assert_eq!(w2.skeleton[0].feats, vminus);
+        assert_eq!(w2.skeleton[2].sym, p_sym);
+        // 核心元音(非 onset)不動
+        assert_eq!(w2.skeleton[1].sym, SymId(1));
+        // 旋律/韻律完全不受影響(長度不變,I12)
+        assert_eq!(w2.prosody, w.prosody);
+
+        // 無對應符號 → error(Inventory 缺 [-voice] 時)
+        let empty_inv = Inventory::new();
+        let err = rewrite(&w, &empty_inv, vplus, true, &[(mask, vminus)], SegEnv::default());
+        assert!(matches!(
+            err.unwrap_err(),
+            EngineError::NoSymbolForBundle { .. }
+        ));
+    }
+
+    #[test]
+    fn rewrite_env_boundary_and_neighbor() {
+        // 只在詞首:/ # _
+        let vplus = FeatBits(0b01);
+        let vminus = FeatBits(0b10);
+        let mask = FeatBits(0b11);
+        let mut inv = Inventory::new();
+        inv.register(SymId(50), vminus);
+        let w = cvcv([vplus, vplus]);
+        let env = SegEnv {
+            pre: Some(SegPat::Boundary),
+            post: None,
+        };
+        let acts = rewrite(&w, &inv, vplus, false, &[(mask, vminus)], env).unwrap();
+        assert_eq!(acts.len(), 1); // 僅 idx 0(詞首);idx 2 前有音段
+        assert!(matches!(acts[0], Action::SegRewrite { idx: 0, .. }));
     }
 
     #[test]

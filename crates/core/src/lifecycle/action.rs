@@ -4,14 +4,21 @@
 //! `super::commit`(單一資訊源:commit 是唯一改變表徵的地方)。所有索引(`seq_idx`、
 //! `node`、`target`)都指向**規則套用前的凍結快照**(I1/I2:parallel 一次定案,commit 重編)。
 //!
-//! 具名動詞(spread/dock/fill/merge/parse…)不新增 variant,而是產生這六者的序列
-//! (基礎先行,M0 §1.1 原則 2);理論宏更只是資料表。故此 enum **凍結為六個**(I9)。
+//! 具名動詞(spread/dock/fill/merge/parse…)不新增 variant,而是產生**六原語**的序列
+//! (基礎先行,M0 §1.1 原則 2);理論宏更只是資料表。六原語清單凍結(I9)。
+//!
+//! `SegRewrite` **不是**第七個原語(I12):它是音段層 rewrite 規則(`A => B / C _ D`,
+//! 語法貼合 Lexurgy)的專屬通道——不供具名動詞組合,僅由音段規則匹配產生,
+//! 走同一 commit 管線(執行語意 §1 對所有規則一體適用)。骨架長度不變;
+//! 音段增/刪與其跨層連鎖留步驟 5(I10)。
 
+use crate::repr::feature::FeatBits;
 use crate::repr::intern::{SymId, ValId};
 use crate::repr::melody::Links;
 use crate::repr::prosody::{AnchorRef, Level};
 
-/// 六原語。前四者操作旋律 tier(`Autoseg`),後二者操作韻律結構(`Span`)。
+/// 六原語 + 音段規則通道(I12)。前四者操作旋律 tier(`Autoseg`),
+/// dominate/release 操作韻律結構(`Span`),`SegRewrite` 替換骨架音段。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     // ── 旋律原語(旋律層:時間乘客;D2 聯結動詞家族的原子)──
@@ -54,17 +61,26 @@ pub enum Action {
         node: usize,
         target: u32,
     },
+
+    // ── 音段規則通道(I12;非原語,見模組說明)──
+    /// 整段替換骨架第 `idx` 個音段(符號 + 特徵束;長度不變,錨點/聯結皆穩定)。
+    /// 由音段層 rewrite 規則產生;`sym` 已由 Inventory 反查完畢(無對應=規則層 error)。
+    SegRewrite {
+        idx: usize,
+        sym: SymId,
+        feats: FeatBits,
+    },
 }
 
 impl Action {
-    /// 旋律 Action 所屬的 tier;韻律 Action 回 `None`。commit 依此分組。
+    /// 旋律 Action 所屬的 tier;其餘回 `None`。commit 依此分組。
     pub fn tier(&self) -> Option<SymId> {
         match *self {
             Action::Associate { tier, .. }
             | Action::Delink { tier, .. }
             | Action::Insert { tier, .. }
             | Action::Delete { tier, .. } => Some(tier),
-            Action::Dominate { .. } | Action::Release { .. } => None,
+            Action::Dominate { .. } | Action::Release { .. } | Action::SegRewrite { .. } => None,
         }
     }
 
@@ -76,5 +92,10 @@ impl Action {
     /// 是否為韻律層原語(operate on `Span`;§2 的 repair 類)。
     pub fn is_prosodic(&self) -> bool {
         matches!(self, Action::Dominate { .. } | Action::Release { .. })
+    }
+
+    /// 是否為音段規則通道(I12)。
+    pub fn is_segmental(&self) -> bool {
+        matches!(self, Action::SegRewrite { .. })
     }
 }
