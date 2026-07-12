@@ -1,8 +1,8 @@
 //! chumsky parser(I6):行導向——lexer 已依行分組,每行以小型 parser 解析為
 //! [`Line`],再以分組後處理把語句掛回所屬規則。錯誤以行號回報。
 //!
-//! 規則頭與語句同行合法(`dock-tone: dock …`);`level:` 為保留語句頭,
-//! 不會被誤認為規則名(P3)。
+//! 規則頭與語句同行合法(`dock-tone: dock …`);`stage:` 為保留語句頭,
+//! 不會被誤認為規則名(P3/I14)。
 
 use chumsky::prelude::*;
 
@@ -150,10 +150,10 @@ fn stmt() -> impl Parser<Tok, Stmt, Error = Simple<Tok>> + Clone {
         .then(ident())
         .map(|((sel, target), ward)| Stmt::Dominate { sel, target, ward });
 
-    let level = kw("level")
+    let stage = kw("stage")
         .then(just(Tok::Colon))
         .ignore_then(ident())
-        .map(Stmt::Level);
+        .map(Stmt::Stage);
 
     let rewrite = selector()
         .then_ignore(just(Tok::Arrow))
@@ -161,7 +161,7 @@ fn stmt() -> impl Parser<Tok, Stmt, Error = Simple<Tok>> + Clone {
         .then(rule_env().or_not())
         .map(|((from, to), env)| Stmt::Rewrite { from, to, env });
 
-    choice((level, insert, dock, fill, merge, spread, shift, dominate, rewrite))
+    choice((stage, insert, dock, fill, merge, spread, shift, dominate, rewrite))
 }
 
 // ── 宣告 ──
@@ -195,6 +195,10 @@ fn decl() -> impl Parser<Tok, Decl, Error = Simple<Tok>> + Clone {
         )
         .map(|(name, members)| Decl::Class { name, members });
 
+    let prosody = kw("Prosody")
+        .ignore_then(ident().separated_by(just(Tok::Lt)).at_least(1))
+        .map(|chain| Decl::Prosody { chain });
+
     let melody = kw("Melody")
         .ignore_then(ident())
         .then(
@@ -211,7 +215,7 @@ fn decl() -> impl Parser<Tok, Decl, Error = Simple<Tok>> + Clone {
             anchor,
         });
 
-    choice((feature, symbol, class, melody))
+    choice((feature, symbol, class, prosody, melody))
 }
 
 // ── 行 → 檔 ──
@@ -219,8 +223,8 @@ fn decl() -> impl Parser<Tok, Decl, Error = Simple<Tok>> + Clone {
 fn line_parser() -> impl Parser<Tok, Line, Error = Simple<Tok>> {
     let header = ident()
         .try_map(|s, span| {
-            if s == "level" {
-                Err(Simple::custom(span, "'level' is a reserved statement head"))
+            if s == "stage" {
+                Err(Simple::custom(span, "'stage' is a reserved statement head"))
             } else {
                 Ok(s)
             }
@@ -323,9 +327,9 @@ mod tests {
     }
 
     #[test]
-    fn parses_rewrite_and_level_marker_p3() {
-        let f = parse("devoicing:\n    level: word\n    [+voice]&onset => [-voice]\n");
-        assert_eq!(f.rules[0].stmts[0], Stmt::Level("word".into()));
+    fn parses_rewrite_and_stage_marker_p3_i14() {
+        let f = parse("devoicing:\n    stage: word\n    [+voice]&onset => [-voice]\n");
+        assert_eq!(f.rules[0].stmts[0], Stmt::Stage("word".into()));
         match &f.rules[0].stmts[1] {
             Stmt::Rewrite { from, to, env } => {
                 assert_eq!(

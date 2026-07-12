@@ -7,6 +7,7 @@
 //! - 韻律結構只存在於 [`prosody::ProsodyLayers`] 的 Span 序列
 //! - stale 旗標只存在於 [`prosody::StaleFlags`]
 
+pub mod domain;
 pub mod feature;
 pub mod intern;
 pub mod invariant;
@@ -18,6 +19,7 @@ pub mod word;
 
 pub use feature::{FeatBit, FeatBits, FeatureRegistry};
 pub use intern::{SymId, SymTable, ValId, ValTable};
+pub use domain::{DaughterLoss, DomainDef, DomainRegistry};
 pub use inventory::Inventory;
 pub use invariant::{check_word, InvariantIssue, Severity};
 pub use melody::{Autoseg, Links, MelodyTier, OnAnchorLoss, OnStray, TierPolicies, Visibility};
@@ -48,6 +50,8 @@ pub struct Env {
     pub feats: FeatureRegistry,
     /// 音素庫(I12):符號 ↔ 特徵束;音段規則改寫後的反查來源。
     pub inv: Inventory,
+    /// 韻律域註冊表(I14):內建+自定域定義的單一存放處。
+    pub domains: DomainRegistry,
 }
 
 impl Env {

@@ -18,7 +18,7 @@ tonogenesis:
 dock-tone: dock tone&floating strategy nearest
 
 devoicing:
-    level: word
+    stage: word
     [+voice]&onset => [-voice]
 
 fill-default: fill tone Ø => M within pword

@@ -12,6 +12,8 @@ pub enum Decl {
     Symbol { name: String, atoms: Vec<String> },
     /// `Class vowel {a, e}`
     Class { name: String, members: Vec<String> },
+    /// `Prosody mora < syllable < foot < pword`(鏈中未知名 → 註冊自定域,I14)
+    Prosody { chain: Vec<String> },
     /// `Melody tone {H, M, L} anchor mora`
     Melody {
         name: String,
@@ -57,8 +59,8 @@ pub struct RuleEnv {
 /// 規則內語句。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
-    /// `level: stem|word|phrase`(P3;預設 word)
-    Level(String),
+    /// `stage: stem|word|phrase`(P3/I14;預設 word)
+    Stage(String),
     /// `insert <值> floating [near <層>] [/ env]`
     Insert {
         val: String,

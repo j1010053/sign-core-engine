@@ -21,6 +21,8 @@ pub enum Level {
     Syllable,
     Foot,
     Pword,
+    /// 自定韻律域(I14;定義住 `super::domain::DomainRegistry`)。
+    Custom(u16),
 }
 
 impl Level {
@@ -32,6 +34,7 @@ impl Level {
             Level::Syllable => Some(Level::Segment),
             Level::Foot => Some(Level::Syllable),
             Level::Pword => Some(Level::Foot),
+            Level::Custom(_) => None, // 自定域下層由 DomainRegistry 定義(I14)
         }
     }
 
@@ -43,6 +46,7 @@ impl Level {
             Level::Syllable => "σ",
             Level::Foot => "Ft",
             Level::Pword => "ω",
+            Level::Custom(_) => "χ", // 佔位;正式字符由 DomainRegistry::glyph(I14)
         }
     }
 
@@ -53,6 +57,7 @@ impl Level {
             Level::Syllable => Some(1),
             Level::Foot => Some(2),
             Level::Pword => Some(3),
+            Level::Custom(_) => None, // 自定域 stale 以 mark_all 粗粒度承載(M0)
         }
     }
 }
@@ -99,6 +104,8 @@ pub struct ProsodyLayers {
     pub syllables: Vec<Span>,
     pub feet: Vec<Span>,
     pub pwords: Vec<Span>,
+    /// 自定域的 Span 序列(I14):(custom id, spans)。
+    pub extra: Vec<(u16, Vec<Span>)>,
 }
 
 impl ProsodyLayers {
@@ -109,6 +116,7 @@ impl ProsodyLayers {
             Level::Syllable => Some(&self.syllables),
             Level::Foot => Some(&self.feet),
             Level::Pword => Some(&self.pwords),
+            Level::Custom(id) => self.extra.iter().find(|(i, _)| *i == id).map(|(_, v)| v),
         }
     }
 
@@ -119,6 +127,11 @@ impl ProsodyLayers {
             Level::Syllable => Some(&mut self.syllables),
             Level::Foot => Some(&mut self.feet),
             Level::Pword => Some(&mut self.pwords),
+            Level::Custom(id) => self
+                .extra
+                .iter_mut()
+                .find(|(i, _)| *i == id)
+                .map(|(_, v)| v),
         }
     }
 }

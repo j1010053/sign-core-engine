@@ -87,6 +87,14 @@ fn apply_seg_deletes(after: &mut Word, actions: &[Action]) -> Result<(), EngineE
         s.lo = lo;
         s.hi = hi;
     }
+    // 自定域(I14):M0 假設 skeleton 為下層,僅平移;政策細化隨步驟 6+ reparse
+    for (_, spans) in after.prosody.extra.iter_mut() {
+        for s in spans.iter_mut() {
+            let (lo, hi) = (shift(s.lo), shift(s.hi));
+            s.lo = lo;
+            s.hi = hi;
+        }
+    }
 
     // (b)(c) 空節點政策 + 無核心音節清理(先算音節去留,再算莫拉去留)
     // 音節刪除條件:變空,或內部已無任何非空莫拉(無核心)。
@@ -169,6 +177,7 @@ fn apply_seg_deletes(after: &mut Word, actions: &[Action]) -> Result<(), EngineE
             Level::Syllable => &|i| syl_map.get(i as usize).copied().flatten(),
             Level::Foot => &|i| feet_map.get(i as usize).copied().flatten(),
             Level::Pword => &|i| Some(i), // pword 極少作 anchor;M0 不映射
+            Level::Custom(_) => &|i| Some(i), // 自定域(I14):M0 僅平移標 stale,錨點索引不映射
         };
         for a in tier.seq.iter_mut() {
             let mut new_links = crate::repr::melody::Links::new();

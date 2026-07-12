@@ -19,7 +19,7 @@ cargo run -p conlang-cli --bin conlang -- examples/8_1_tonogenesis.dsl examples/
 
 - `crates/dsl/`(步驟 4):logos lexer(NFC 入口,I6)+ chumsky parser + lowering + executor;
   宣告貼合 Lexurgy(`Feature`/`Symbol`/`Class`)+ 自有 `Melody`;音段規則 `A => B / C _ D`
-  走 I12 通道(`SegRewrite` + `Inventory` 反查);`level:` 標記已插入(P3,預設 word)
+  走 I12 通道(`SegRewrite` + `Inventory` 反查);`stage:` 標記已插入(P3/I14,預設 word)
 - `crates/cli/`(步驟 4):規則檔+詞表 → 逐詞推導表(trace);暫定 CV 音節化
 - `crates/core/src/strategy/`(步驟 3):統一候選解析器(D28)
 - `crates/core/src/verbs/`(步驟 3–4):insert_floating_near、dock(I11)、fill(D22)、

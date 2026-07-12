@@ -34,7 +34,7 @@
 | `10_統計先驗與抽樣引擎_v0.1.md` | 模組 E:唯讀先驗庫(PHOIBLE/Grambank/WALS/CLICS,附網址與授權)+ 無狀態抽樣;有效分佈=手動>導入 provider>投影>E1 先驗,覆寫層住節點。**設計層;01–10 設計鏈至此閉合** |
 | `11_測試案例集總索引_v0.1.md` | **全專案測試索引**:DSL 範例 8.1–8.6、18 案折磨測試、十實例、Rust 測試、Lexurgy 黑盒的統一映射與狀態;動工任一模組前先查其驗收案例 |
 | `12_邏輯分層架構_v0.1.md` | 四層架構(展示/應用/引擎/資料);引擎分即時+批次兩子層,DSL core crate 跨兩子層共用;應用層(Command/Query API)為下一個設計空白。**設計層** |
-| `架構修補01_共時規則系統與臨時韻律域_v0.1.md` | **P 系列決策權威(P1–P4)**:Word=臨時韻律域、Grammar Store、strata 層級錨定+循環套用、cophonology 閂;對 M0 步驟 2–3 零衝擊,插入點=步驟 4(`level:` 標記)與步驟 6(phrase-level 掛鉤);修補內容已回寫 docs/01–09、12 |
+| `架構修補01_共時規則系統與臨時韻律域_v0.1.md` | **P 系列決策權威(P1–P4)**:Word=臨時韻律域、Grammar Store、strata 層級錨定+循環套用、cophonology 閂;對 M0 步驟 2–3 零衝擊,插入點=步驟 4(`stage:` 標記,I14)與步驟 6(phrase-level 掛鉤);修補內容已回寫 docs/01–09、12 |
 | `archive/` | 已取代的歷史文件,勿引用(各檔頭有橫幅說明) |
 
 ## 2. 不可違反的設計不變式(內化這些,寫每一行程式碼時對照)
@@ -79,7 +79,7 @@
 **設計鏈狀態**:docs/01–12 + 架構修補01 全部到位並已納入 repo(repo 版為權威;根目錄
 `../docs/` 為使用者設計工作區的歷史快照)。修補的四個決策已另立 **P 系列**(P1–P4,
 權威=修補01 §4;原建議編號 I9–I12 因與實作層撞號而重編)。修補對 M0 步驟 2–3 **零衝擊**,
-插入點在步驟 4(規則檔 `level: stem|word|phrase` 標記,預設 word)與步驟 6(spellout 的
+插入點在步驟 4(規則檔 `stage: stem|word|phrase` 標記,預設 word;關鍵詞依 I14)與步驟 6(spellout 的
 phrase-level 空掛鉤);Grammar Store 本體為 M0 後的步驟 8。
 
 **已完成(M0 步驟 1,commit `bccc837`)**:`crates/core/src/repr/` 表徵模組——intern、feature、
@@ -101,7 +101,7 @@ prosody(I8 拓撲)、melody、word、invariant、notation。本機工具鏈首�
   + chumsky 行導向 parser → 型別化 AST → lowering(名稱→id/bits;超出 8.1 範圍者明確報
   Unsupported)→ executor(每規則一 commit;B5 同規則語句共享凍結 match)。
   宣告貼合 Lexurgy(`Feature`/`Symbol`/`Class` + 自有 `Melody`);音段規則 `A => B / C _ D`。
-  **P3 已插入**:`level: stem|word|phrase` 標記(預設 word,僅記錄無行為)。
+  **P3 已插入**:`stage: stem|word|phrase` 標記(預設 word,僅記錄無行為;I14 改名)。
 - `crates/cli/`:`conlang <rules.dsl> <words.txt>` → 逐詞推導表(trace);
   造詞為**暫定 CV 音節化**(`Class vowel` 判核心;`Parse` 宣告於步驟 5+ 取代)。
 - 出口已過:`examples/8_1_tonogenesis.dsl` 全文經 DSL 管線與 CLI 實跑,四詞推導

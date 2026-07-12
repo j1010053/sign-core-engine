@@ -16,9 +16,9 @@ use conlang_core::verbs::{Domain, OnConflict, SegEnv, SegMatch, SegOut, SegPat, 
 
 use crate::ast::*;
 
-/// 規則層級(P3;M0 內僅標記,無行為)。
+/// 規則的層級錨定 stage(P3/I14;M0 內僅標記,無行為)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RuleLevel {
+pub enum Stage {
     Stem,
     #[default]
     Word,
@@ -73,7 +73,7 @@ pub enum LoweredStmt {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoweredRule {
     pub name: String,
-    pub level: RuleLevel,
+    pub stage: Stage,
     pub stmts: Vec<LoweredStmt>,
 }
 
@@ -108,8 +108,8 @@ pub enum LowerError {
     Unsupported { rule: String, what: String },
     #[error("feature space exhausted while declaring {0:?}")]
     FeatureSpace(String),
-    #[error("invalid level {0:?} (expected stem|word|phrase)")]
-    BadLevel(String),
+    #[error("invalid stage {0:?} (expected stem|word|phrase)")]
+    BadStage(String),
     #[error("invalid anchor level {0:?}")]
     BadAnchor(String),
 }
@@ -196,6 +196,13 @@ pub fn lower(file: &FileAst) -> Result<Program, LowerError> {
                 let ids = members.iter().map(|m| env.syms.intern(m)).collect();
                 classes.insert(name.clone(), ids);
             }
+            Decl::Prosody { chain } => {
+                for name in chain {
+                    if env.domains.by_name(name).is_none() {
+                        env.domains.register_named(name); // 自定域(I14)
+                    }
+                }
+            }
             Decl::Melody {
                 name,
                 values,
@@ -203,7 +210,9 @@ pub fn lower(file: &FileAst) -> Result<Program, LowerError> {
             } => {
                 let tname = env.syms.intern(name);
                 let vals: Vec<ValId> = values.iter().map(|v| env.vals.intern(v)).collect();
-                let lvl = level_of(anchor).ok_or_else(|| LowerError::BadAnchor(anchor.clone()))?;
+                let lvl = level_of(anchor)
+                    .or_else(|| env.domains.by_name(anchor))
+                    .ok_or_else(|| LowerError::BadAnchor(anchor.clone()))?;
                 tiers.push(MelodyTier::new(tname, lvl, vals));
             }
         }
@@ -252,16 +261,16 @@ pub fn lower(file: &FileAst) -> Result<Program, LowerError> {
             rule: r.name.clone(),
             what: what.to_owned(),
         };
-        let mut level = RuleLevel::default();
+        let mut stage = Stage::default();
         let mut stmts = Vec::new();
         for s in &r.stmts {
             match s {
-                Stmt::Level(l) => {
-                    level = match l.as_str() {
-                        "stem" => RuleLevel::Stem,
-                        "word" => RuleLevel::Word,
-                        "phrase" => RuleLevel::Phrase,
-                        other => return Err(LowerError::BadLevel(other.to_owned())),
+                Stmt::Stage(l) => {
+                    stage = match l.as_str() {
+                        "stem" => Stage::Stem,
+                        "word" => Stage::Word,
+                        "phrase" => Stage::Phrase,
+                        other => return Err(LowerError::BadStage(other.to_owned())),
                     };
                 }
                 Stmt::Insert { val, near, env: e } => {
@@ -522,7 +531,7 @@ pub fn lower(file: &FileAst) -> Result<Program, LowerError> {
         }
         rules.push(LoweredRule {
             name: r.name.clone(),
-            level,
+            stage,
             stmts,
         });
     }

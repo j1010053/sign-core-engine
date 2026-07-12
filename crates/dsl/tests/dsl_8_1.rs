@@ -66,12 +66,12 @@ fn dsl_8_1_end_to_end() {
     assert_eq!(tone(&finals[3]), "M~μ0");
 }
 
-/// `level:` 標記(P3)可解析且預設 word。
+/// `stage:` 標記(P3/I14)可解析且預設 word。
 #[test]
-fn level_marker_parses_with_default_word() {
+fn stage_marker_parses_with_default_word() {
     let p = compile(RULES).unwrap();
-    use conlang_dsl::lower::RuleLevel;
+    use conlang_dsl::lower::Stage;
     assert_eq!(p.rules[2].name, "devoicing");
-    assert_eq!(p.rules[2].level, RuleLevel::Word); // 顯式標記
-    assert_eq!(p.rules[0].level, RuleLevel::Word); // 預設
+    assert_eq!(p.rules[2].stage, Stage::Word); // 顯式標記
+    assert_eq!(p.rules[0].stage, Stage::Word); // 預設
 }
