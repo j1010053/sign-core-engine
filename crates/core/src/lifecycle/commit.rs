@@ -19,11 +19,205 @@ use super::error::EngineError;
 /// 在凍結快照 `before` 上套用 `actions`,回傳新 `Word`。任一 Action 索引越界 → `EngineError`。
 pub fn commit(before: &Word, actions: &[Action]) -> Result<Word, EngineError> {
     let mut after = before.clone(); // I1:快照 = clone
-    // 三族互不影響索引(SegRewrite 長度不變,I12),順序任意。
+    // 全部 Action 以前狀態索引;SegRewrite(長度不變,I12)/韻律/旋律先套用,
+    // SegDelete 的跨層連鎖(I13)最後跑並重映射一切。
     apply_segmental(&mut after, actions)?;
     apply_prosodic(&mut after, actions)?;
     apply_melodic(&mut after, actions)?;
+    apply_seg_deletes(&mut after, actions)?;
     Ok(after)
+}
+
+/// SegDelete 連鎖(I13):骨架移除 → Span 平移 → 空節點政策(mora keep-empty、
+/// 其餘 delete)→ 無核心音節清理 → 孤兒空莫拉清理 → 旋律 links 重映射
+/// (錨點消失 = on-anchor-loss float,D14;序列原位不動,D6)→ stale 標記。
+fn apply_seg_deletes(after: &mut Word, actions: &[Action]) -> Result<(), EngineError> {
+    use crate::repr::prosody::Level;
+
+    let mut deleted: Vec<usize> = actions
+        .iter()
+        .filter_map(|a| match *a {
+            Action::SegDelete { idx } => Some(idx),
+            _ => None,
+        })
+        .collect();
+    if deleted.is_empty() {
+        return Ok(());
+    }
+    deleted.sort_unstable();
+    deleted.dedup();
+    let len = after.skeleton.len();
+    if let Some(&bad) = deleted.iter().find(|&&i| i >= len) {
+        return Err(EngineError::SegIndexOutOfRange { idx: bad, len });
+    }
+
+    // (a) 骨架移除 + 音段新舊索引映射(None = 已刪)
+    let seg_map: Vec<Option<u32>> = {
+        let mut map = Vec::with_capacity(len);
+        let mut new_idx = 0u32;
+        for i in 0..len {
+            if deleted.binary_search(&i).is_ok() {
+                map.push(None);
+            } else {
+                map.push(Some(new_idx));
+                new_idx += 1;
+            }
+        }
+        map
+    };
+    let mut kept = 0usize;
+    after.skeleton.retain(|_| {
+        let keep = seg_map[kept].is_some();
+        kept += 1;
+        keep
+    });
+
+    // Span 平移:lo/hi 各減去其前方被刪的數量
+    let shift = |x: u32| -> u32 {
+        let cut = deleted.iter().take_while(|&&d| (d as u32) < x).count() as u32;
+        x - cut
+    };
+    for m in after.prosody.moras.iter_mut() {
+        let (lo, hi) = (shift(m.lo), shift(m.hi));
+        m.lo = lo;
+        m.hi = hi;
+    }
+    for s in after.prosody.syllables.iter_mut() {
+        let (lo, hi) = (shift(s.lo), shift(s.hi));
+        s.lo = lo;
+        s.hi = hi;
+    }
+
+    // (b)(c) 空節點政策 + 無核心音節清理(先算音節去留,再算莫拉去留)
+    // 音節刪除條件:變空,或內部已無任何非空莫拉(無核心)。
+    let syl_alive: Vec<bool> = after
+        .prosody
+        .syllables
+        .iter()
+        .map(|s| {
+            !s.is_empty_node()
+                && after
+                    .prosody
+                    .moras
+                    .iter()
+                    .any(|m| !m.is_empty_node() && m.within(s))
+        })
+        .collect();
+    // 莫拉刪除條件:空節點且(不落於任何存活音節內)——落於存活音節內的空莫拉
+    // 依 keep-empty 存活(8.4);隨死亡音節或孤兒化者刪(8.3)。
+    let mora_alive: Vec<bool> = after
+        .prosody
+        .moras
+        .iter()
+        .map(|m| {
+            if !m.is_empty_node() {
+                return true;
+            }
+            after
+                .prosody
+                .syllables
+                .iter()
+                .zip(&syl_alive)
+                .any(|(s, &alive)| alive && m.within(s))
+        })
+        .collect();
+
+    // 各層新舊索引映射 + 過濾
+    let make_map = |alive: &[bool]| -> Vec<Option<u32>> {
+        let mut n = 0u32;
+        alive
+            .iter()
+            .map(|&a| {
+                if a {
+                    let v = Some(n);
+                    n += 1;
+                    v
+                } else {
+                    None
+                }
+            })
+            .collect()
+    };
+    let mora_map = make_map(&mora_alive);
+    let syl_map = make_map(&syl_alive);
+    let mut i = 0;
+    after.prosody.moras.retain(|_| {
+        let k = mora_alive[i];
+        i += 1;
+        k
+    });
+    let mut i = 0;
+    after.prosody.syllables.retain(|_| {
+        let k = syl_alive[i];
+        i += 1;
+        k
+    });
+
+    // 音步(over 音節)/韻詞(over 音步):依音節映射平移;變空即刪(on-daughter-loss delete)。
+    remap_upper_layer(&mut after.prosody.feet, &syl_map);
+    let feet_alive: Vec<bool> = after.prosody.feet.iter().map(|f| !f.is_empty_node()).collect();
+    let feet_map = make_map(&feet_alive);
+    after.prosody.feet.retain(|f| !f.is_empty_node());
+    remap_upper_layer(&mut after.prosody.pwords, &feet_map);
+    after.prosody.pwords.retain(|p| !p.is_empty_node());
+
+    // (d) 旋律 links 重映射;錨點消失 → 邊移除(on-anchor-loss float,D14)
+    for tier in after.melodies.iter_mut() {
+        let map: &dyn Fn(u32) -> Option<u32> = match tier.anchor {
+            Level::Segment => &|i| seg_map.get(i as usize).copied().flatten(),
+            Level::Mora => &|i| mora_map.get(i as usize).copied().flatten(),
+            Level::Syllable => &|i| syl_map.get(i as usize).copied().flatten(),
+            Level::Foot => &|i| feet_map.get(i as usize).copied().flatten(),
+            Level::Pword => &|i| Some(i), // pword 極少作 anchor;M0 不映射
+        };
+        for a in tier.seq.iter_mut() {
+            let mut new_links = crate::repr::melody::Links::new();
+            for l in a.links.iter() {
+                if let Some(ni) = map(l.index) {
+                    new_links.push(AnchorRef::new(l.level, ni));
+                }
+            }
+            a.links = new_links; // 全消失 = 回浮游,序列原位不動(D6)
+        }
+    }
+
+    // (e) stale 標記(D23):骨架已變動,韻律結構視為過期(重剖機制留步驟 6+)
+    after.stale.mark(Level::Mora);
+    after.stale.mark(Level::Syllable);
+    if !after.prosody.feet.is_empty() {
+        after.stale.mark(Level::Foot);
+    }
+    Ok(())
+}
+
+/// 上層(音步/韻詞)Span 依下層新舊映射重編:端點取存活下層節點的新索引範圍。
+fn remap_upper_layer(spans: &mut [crate::repr::prosody::Span], lower_map: &[Option<u32>]) {
+    for s in spans.iter_mut() {
+        // [lo,hi) 內存活者的新索引 min/max
+        let mut new_lo = None;
+        let mut new_hi = None;
+        for old in s.lo..s.hi {
+            if let Some(&Some(ni)) = lower_map.get(old as usize) {
+                new_lo = Some(new_lo.map_or(ni, |v: u32| v.min(ni)));
+                new_hi = Some(new_hi.map_or(ni + 1, |v: u32| v.max(ni + 1)));
+            }
+        }
+        match (new_lo, new_hi) {
+            (Some(lo), Some(hi)) => {
+                s.lo = lo;
+                s.hi = hi;
+            }
+            _ => {
+                // 全滅:壓成空節點,呼叫端隨後過濾
+                let base = lower_map
+                    .get(s.lo as usize)
+                    .and_then(|&m| m)
+                    .unwrap_or(0);
+                s.lo = base;
+                s.hi = base;
+            }
+        }
+    }
 }
 
 /// 套用所有音段規則通道(SegRewrite):整段替換,骨架長度與所有索引不變(I12)。

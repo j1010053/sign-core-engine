@@ -20,31 +20,59 @@ pub struct StepRecord {
 }
 
 fn stmt_actions(p: &Program, w: &Word, s: &LoweredStmt) -> Result<Vec<Action>, EngineError> {
-    match *s {
+    match s {
         LoweredStmt::InsertFloatingNear {
             tier,
             val,
             onset_test,
-        } => verbs::insert_floating_near(w, tier, val, onset_test),
-        LoweredStmt::Dock { tier, strategy } => verbs::dock(w, tier, strategy),
-        LoweredStmt::Fill { tier, val } => verbs::fill(w, tier, val),
-        LoweredStmt::MergeAdjacentEqual { tier } => verbs::merge_adjacent_equal(w, tier),
-        LoweredStmt::Rewrite {
-            match_feats,
-            require_onset,
-            ref subs,
-            env,
-        } => verbs::rewrite(w, &p.env.inv, match_feats, require_onset, subs, env),
+        } => verbs::insert_floating_near(w, *tier, *val, *onset_test),
+        LoweredStmt::Dock { tier, strategy } => verbs::dock(w, *tier, *strategy),
+        LoweredStmt::Fill { tier, val } => verbs::fill(w, *tier, *val),
+        LoweredStmt::MergeAdjacentEqual { tier } => verbs::merge_adjacent_equal(w, *tier),
+        LoweredStmt::Spread {
+            tier,
+            val,
+            ward,
+            blocked_by,
+            within,
+            through,
+            on_conflict,
+        } => verbs::spread(
+            w,
+            *tier,
+            *val,
+            *ward,
+            *blocked_by,
+            *within,
+            *through,
+            *on_conflict,
+        ),
+        LoweredStmt::Shift { tier, n, ward } => verbs::shift(w, *tier, *n, *ward),
+        LoweredStmt::DominateEmpty { level, class, ward } => {
+            verbs::dominate_empty(w, *level, class, *ward)
+        }
+        LoweredStmt::Rewrite { m, out, env } => verbs::rewrite(w, &p.env.inv, m, out, env),
     }
 }
 
 fn class_of(rule: &LoweredRule) -> VerbClass {
+    // repair 類(dominate/release)不觸發 reparse(A3);全 repair 規則 → Repair
+    if !rule.stmts.is_empty()
+        && rule
+            .stmts
+            .iter()
+            .all(|s| matches!(s, LoweredStmt::DominateEmpty { .. }))
+    {
+        return VerbClass::Repair;
+    }
     let reads_prosody = rule.stmts.iter().any(|s| {
         matches!(
             s,
             LoweredStmt::InsertFloatingNear { .. }
                 | LoweredStmt::Dock { .. }
                 | LoweredStmt::Fill { .. }
+                | LoweredStmt::Spread { .. }
+                | LoweredStmt::Shift { .. }
                 | LoweredStmt::Rewrite { .. }
         )
     });

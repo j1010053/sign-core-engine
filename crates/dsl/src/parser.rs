@@ -53,13 +53,21 @@ fn matrix() -> impl Parser<Tok, Vec<String>, Error = Simple<Tok>> + Clone {
 }
 
 fn element() -> impl Parser<Tok, Element, Error = Simple<Tok>> + Clone {
-    matrix().map(Element::Matrix).or(just(Tok::Hash).to(Element::Boundary)).or(
+    choice((
+        matrix().map(Element::Matrix),
+        just(Tok::Hash).to(Element::Boundary),
+        just(Tok::Dot).to(Element::SylBoundary),
+        just(Tok::Star).to(Element::Star),
+        just(Tok::At).ignore_then(ident()).map(Element::ClassRef),
+        ident()
+            .delimited_by(just(Tok::Lt), just(Tok::Gt))
+            .map(Element::LevelRef),
         ident().map(|s| match s.as_str() {
             "Ø" => Element::Empty,
             "floating" => Element::Floating,
             _ => Element::Named(s),
         }),
-    )
+    ))
 }
 
 fn selector() -> impl Parser<Tok, Selector, Error = Simple<Tok>> + Clone {
@@ -82,7 +90,7 @@ fn rule_env() -> impl Parser<Tok, RuleEnv, Error = Simple<Tok>> + Clone {
 
 fn stmt() -> impl Parser<Tok, Stmt, Error = Simple<Tok>> + Clone {
     let insert = kw("insert")
-        .ignore_then(ident())
+        .ignore_then(atom())
         .then_ignore(kw("floating"))
         .then(kw("near").ignore_then(ident()).or_not())
         .then(rule_env().or_not())
@@ -103,13 +111,44 @@ fn stmt() -> impl Parser<Tok, Stmt, Error = Simple<Tok>> + Clone {
         .ignore_then(ident())
         .then_ignore(kw("Ø"))
         .then_ignore(just(Tok::Arrow))
-        .then(ident())
+        .then(atom())
         .then(kw("within").ignore_then(ident()).or_not())
         .map(|((tier, val), within)| Stmt::Fill { tier, val, within });
 
     let merge = kw("merge")
         .then(kw("adjacent-equal"))
         .to(Stmt::MergeAdjacentEqual);
+
+    let spread = kw("spread")
+        .ignore_then(atom())
+        .then(ident())
+        .then(kw("blocked-by").ignore_then(selector()).or_not())
+        .then(kw("within").ignore_then(ident()).or_not())
+        .then(kw("through").or_not().map(|t| t.is_some()))
+        .then(kw("on-conflict").ignore_then(atom()).or_not())
+        .map(
+            |(((((val, ward), blocked_by), within), through), on_conflict)| Stmt::Spread {
+                val,
+                ward,
+                blocked_by,
+                within,
+                through,
+                on_conflict,
+            },
+        );
+
+    let shift = kw("shift")
+        .ignore_then(select! { Tok::Int(n) => n })
+        .then(ident())
+        .then(ident())
+        .map(|((n, unit), ward)| Stmt::Shift { n, unit, ward });
+
+    let dominate = kw("dominate")
+        .ignore_then(selector())
+        .then_ignore(just(Tok::ThinArrow))
+        .then(selector())
+        .then(ident())
+        .map(|((sel, target), ward)| Stmt::Dominate { sel, target, ward });
 
     let level = kw("level")
         .then(just(Tok::Colon))
@@ -122,7 +161,7 @@ fn stmt() -> impl Parser<Tok, Stmt, Error = Simple<Tok>> + Clone {
         .then(rule_env().or_not())
         .map(|((from, to), env)| Stmt::Rewrite { from, to, env });
 
-    choice((level, insert, dock, fill, merge, rewrite))
+    choice((level, insert, dock, fill, merge, spread, shift, dominate, rewrite))
 }
 
 // ── 宣告 ──
@@ -159,7 +198,7 @@ fn decl() -> impl Parser<Tok, Decl, Error = Simple<Tok>> + Clone {
     let melody = kw("Melody")
         .ignore_then(ident())
         .then(
-            ident()
+            atom()
                 .separated_by(just(Tok::Comma))
                 .at_least(1)
                 .delimited_by(just(Tok::LBrace), just(Tok::RBrace)),

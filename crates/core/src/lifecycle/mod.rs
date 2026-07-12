@@ -285,6 +285,63 @@ mod tests {
         ));
     }
 
+    /// I13(8.4 形):coda 刪除 → 音節縮、其空莫拉存活(keep-empty,音節仍有核心)。
+    #[test]
+    fn seg_delete_keeps_empty_mora_when_syllable_has_nucleus_i13() {
+        // a k:σ[0,2) μ0[0,1) μ1[1,2)(weight-by-position)
+        let mut w = Word::new();
+        w.skeleton.push(Seg::new(SymId(0), FeatBits::EMPTY)); // a
+        w.skeleton.push(Seg::new(SymId(1), FeatBits::EMPTY)); // k
+        w.prosody.syllables.push(Span::new(0, 2));
+        w.prosody.moras.push(Span::new(0, 1));
+        w.prosody.moras.push(Span::new(1, 2));
+        let w = commit(&w, &[Action::SegDelete { idx: 1 }]).unwrap();
+
+        assert_eq!(w.skeleton.len(), 1);
+        assert_eq!(w.prosody.syllables.len(), 1);
+        assert_eq!(w.prosody.syllables[0], Span::new(0, 1));
+        assert_eq!(w.prosody.moras.len(), 2);
+        assert!(w.prosody.moras[1].is_empty_node()); // 空莫拉存活待 dominate
+        assert!(w.stale.is_stale(Level::Mora)); // D23
+    }
+
+    /// I13(8.3 形):核心刪除 → 無核心音節與其空莫拉一併亡 → 調浮游(D14)、原位(D6)。
+    #[test]
+    fn seg_delete_kills_nucleusless_syllable_and_floats_tone_i13() {
+        // t a p a:σ0[0,2) σ1[2,4) μ0[1,2) μ1[3,4);tone: L~μ0 H~μ1
+        let (mut w, _vals) = word_with_tier();
+        w.skeleton.clear();
+        for i in 0..4 {
+            w.skeleton.push(Seg::new(SymId(i), FeatBits::EMPTY));
+        }
+        w.prosody.syllables.clear();
+        w.prosody.moras.clear();
+        w.prosody.syllables.push(Span::new(0, 2));
+        w.prosody.syllables.push(Span::new(2, 4));
+        w.prosody.moras.push(Span::new(1, 2));
+        w.prosody.moras.push(Span::new(3, 4));
+        {
+            let t = w.tier_mut(TONE).unwrap();
+            t.seq.push(Autoseg::linked(
+                ValId(1),
+                vec![AnchorRef::new(Level::Mora, 0)],
+            ));
+            t.seq.push(Autoseg::linked(
+                ValId(0),
+                vec![AnchorRef::new(Level::Mora, 1)],
+            ));
+        }
+        let w = commit(&w, &[Action::SegDelete { idx: 3 }]).unwrap();
+
+        assert_eq!(w.skeleton.len(), 3); // t a p(p 成節外殘渣待重剖)
+        assert_eq!(w.prosody.syllables.len(), 1); // σ1 無核心 → 亡
+        assert_eq!(w.prosody.moras.len(), 1); // 其空莫拉隨亡
+        let t = w.tier(TONE).unwrap();
+        assert_eq!(t.seq.len(), 2); // 自體段不消失
+        assert!(!t.seq[0].is_floating()); // L 仍掛 μ0
+        assert!(t.seq[1].is_floating()); // H 浮游,序列原位 @1
+    }
+
     #[test]
     fn repair_class_never_triggers_reparse() {
         let (mut w, _vals) = word_with_tier();

@@ -1,0 +1,8 @@
+---
+source: crates/dsl/tests/dsl_8_2_to_8_5.rs
+expression: t
+---
+*tapá (H on final mora)
+  input              t a p a  |  H~μ1
+  final-vowel-loss   t a p  |  (H)@0
+  redock             t a p  |  H~μ0

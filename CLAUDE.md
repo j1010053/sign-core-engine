@@ -107,14 +107,25 @@ prosody(I8 拓撲)、melody、word、invariant、notation。本機工具鏈首�
 - 出口已過:`examples/8_1_tonogenesis.dsl` 全文經 DSL 管線與 CLI 實跑,四詞推導
   與步驟 3 語意一致(`dsl_8_1.rs` insta 快照 + 硬斷言);devoicing 已是 DSL 規則。
 
-**下一個任務(M0 步驟 5,見 M0 實作參照 §8)**:
-- `verbs/` 第二批:`spread`(iterative,方向顯式,blocked-by/within/on-conflict)、
-  `shift`(iterative,delink+associate 逐格)+ `delete`/`insert` 音段層(骨架長度變動)
-  的跨層連鎖重編(I10 解除點:commit 重編上層 Span + 旋律 link)。
-- `locality/`:局部可達上界(執行語意 §5;可達閉包 ∪ 錨定層相鄰一格)。
-- stability/lazy-reparse 完整化:錨點刪→浮游 keep-in-place(D14/D6)、stale 標記與 query 重剖。
-- 出口:**8.2–8.5 綠燈**(鼻化和諧+阻塞、聲調穩定+位移、補償性延長全 DSL 化、ATR 雙向)。
-- 之後:步驟 6(scan/spellout + phrase-level 掛鉤 → 8.6)。
+**已完成(M0 步驟 5)**:
+- **I13(音段刪除連鎖,I10 解除)**:`Action::SegDelete` + commit cascade——Span 平移、
+  mora keep-empty、**無核心音節清理**(統一 8.3 調浮游與 8.4 空莫拉修復)、旋律 links
+  重映射 + on-anchor-loss float(D14)+ 原位(D6)、stale 標記;殘餘節外音段待重剖(步驟 6+)。
+- `verbs/` 第二批:`spread`(iterative 展開、blocked-by、within pword|stem、through、
+  bidirectional 同拍衝突 D11 + on-conflict stop|val)、`shift`(邊出界→浮游)、
+  `dominate_empty`(repair,A3)、`rewrite` 泛化(@class、coda 述語、`*` 刪除、`.` 音節界)。
+- `locality/`:可達上界計算(執行語意 §5);對一般 selector 的強制執行隨步驟 6 接上。
+- DSL:spread/shift/dominate 語句、`@class`/`<level>`/`*`/`.` element、`+nasal` 型值名、
+  `anchor segment`;註解 `/*…*/`。
+- 出口已過:**8.2–8.5 全數端到端綠燈**(`examples/8_2`–`8_5` + `dsl_8_2_to_8_5.rs`)。
+  詞彙給定旋律/型態括號/WBP 莫拉由測試注入(詞條載入層職責)。
+
+**下一個任務(M0 步驟 6,見 M0 實作參照 §8)**:
+- `scan/`:三道鎖(along/within/from)+ over linked-only|all、調簇不透明(D18)、
+  序數尾槽、環境沿掃描軸(D20)、`…` 任意距離。
+- `spellout/`:純函數(C11)——order/empty/floating/contour/project;D27 衝突檢查;
+  **phrase-level 規則掛鉤**(P3 插入點,MVP 傳空集)。
+- 出口:**8.6(Bantu 三連發)綠燈**,M0 收工;之後步驟 7 = Lexurgy harness 骨架。
 
 ## 6. 命名原則(全專案實作規範,凌駕任何單篇審查建議)
 

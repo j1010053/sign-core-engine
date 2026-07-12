@@ -27,12 +27,20 @@ pub enum Element {
     Matrix(Vec<String>),
     /// 識別字 element:類名/層名/tier 名/旋律值/文字音段——lowering 依宣告消歧。
     Named(String),
+    /// `@vowel`(類別引用)
+    ClassRef(String),
+    /// `<mora>`(韻律層引用)
+    LevelRef(String),
     /// `floating`
     Floating,
     /// `Ø`(零特徵)
     Empty,
     /// `#`(詞界)
     Boundary,
+    /// `.`(音節界;僅環境內)
+    SylBoundary,
+    /// `*`(刪除;僅改寫輸出側)
+    Star,
 }
 
 /// selector = element (`&` element)*(序數尾槽步驟 6 才需要)。
@@ -71,7 +79,28 @@ pub enum Stmt {
     },
     /// `merge adjacent-equal`
     MergeAdjacentEqual,
-    /// 音段 rewrite:`<sel> => <sel> [/ env]`(貼合 Lexurgy)
+    /// `spread <值> <方向> [blocked-by <sel>] [within <單位>] [through] [on-conflict <值|stop>]`
+    Spread {
+        val: String,
+        ward: String,
+        blocked_by: Option<Selector>,
+        within: Option<String>,
+        through: bool,
+        on_conflict: Option<String>,
+    },
+    /// `shift <n> <軌道單位> <方向>`
+    Shift {
+        n: u32,
+        unit: String,
+        ward: String,
+    },
+    /// `dominate <sel> -> <sel> <方向>`(結構修復)
+    Dominate {
+        sel: Selector,
+        target: Selector,
+        ward: String,
+    },
+    /// 音段 rewrite:`<sel> => <sel|*> [/ env]`(貼合 Lexurgy)
     Rewrite {
         from: Selector,
         to: Selector,

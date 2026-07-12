@@ -13,6 +13,7 @@
 #![deny(missing_debug_implementations)]
 
 pub mod lifecycle;
+pub mod locality;
 pub mod primitives;
 pub mod repr;
 pub mod strategy;

@@ -27,6 +27,17 @@ pub enum Tok {
     #[token("=>")]
     #[token("→")]
     Arrow,
+    /// `->`(dominate 的目標箭頭;與改寫箭頭 `=>` 區分)
+    #[token("->")]
+    ThinArrow,
+    #[token("@")]
+    At,
+    #[token(".")]
+    Dot,
+    #[token("<")]
+    Lt,
+    #[token(">")]
+    Gt,
     #[token("/")]
     Slash,
     #[token("_")]
@@ -58,6 +69,10 @@ pub enum Tok {
     /// `Ø` 亦落入此類,由 parser 判為零特徵記號。
     #[regex(r"[\p{L}][\p{L}\p{M}\p{N}\-]*", |lex| lex.slice().to_owned())]
     Ident(String),
+
+    /// 整數(shift 的步數)。
+    #[regex(r"[0-9]+", |lex| lex.slice().parse::<u32>().ok())]
+    Int(u32),
 }
 
 /// 詞法錯誤:位置 + 該行內容片段。

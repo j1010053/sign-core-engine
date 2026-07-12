@@ -12,7 +12,7 @@ use conlang_core::repr::melody::MelodyTier;
 use conlang_core::repr::prosody::Level;
 use conlang_core::repr::Env;
 use conlang_core::strategy::{Pick, Strategy, TieBreak};
-use conlang_core::verbs::{SegEnv, SegPat};
+use conlang_core::verbs::{Domain, OnConflict, SegEnv, SegMatch, SegOut, SegPat, SegPos, Ward};
 
 use crate::ast::*;
 
@@ -44,10 +44,28 @@ pub enum LoweredStmt {
     MergeAdjacentEqual {
         tier: SymId,
     },
+    Spread {
+        tier: SymId,
+        val: ValId,
+        ward: Ward,
+        blocked_by: Option<FeatBits>,
+        within: Domain,
+        through: bool,
+        on_conflict: OnConflict,
+    },
+    Shift {
+        tier: SymId,
+        n: u32,
+        ward: Ward,
+    },
+    DominateEmpty {
+        level: Level,
+        class: Vec<SymId>,
+        ward: Ward,
+    },
     Rewrite {
-        match_feats: FeatBits,
-        require_onset: bool,
-        subs: Vec<(FeatBits, FeatBits)>,
+        m: SegMatch,
+        out: SegOut,
         env: SegEnv,
     },
 }
@@ -98,10 +116,20 @@ pub enum LowerError {
 
 fn level_of(name: &str) -> Option<Level> {
     match name {
+        "segment" => Some(Level::Segment),
         "mora" => Some(Level::Mora),
         "syllable" => Some(Level::Syllable),
         "foot" => Some(Level::Foot),
         "pword" => Some(Level::Pword),
+        _ => None,
+    }
+}
+
+fn ward_of(name: &str) -> Option<Ward> {
+    match name {
+        "leftward" => Some(Ward::Leftward),
+        "rightward" => Some(Ward::Rightward),
+        "bidirectional" => Some(Ward::Bidirectional),
         _ => None,
     }
 }
@@ -335,30 +363,145 @@ pub fn lower(file: &FileAst) -> Result<Program, LowerError> {
                     }
                     stmts.push(LoweredStmt::MergeAdjacentEqual { tier: t });
                 }
+                Stmt::Spread {
+                    val,
+                    ward,
+                    blocked_by,
+                    within,
+                    through,
+                    on_conflict,
+                } => {
+                    let (tier, vid) = find_val(&env, &tiers, val)
+                        .ok_or_else(|| LowerError::UnknownMelodyValue(val.clone()))?;
+                    let ward = ward_of(ward).ok_or_else(|| unsupported("spread ward"))?;
+                    let blocked = match blocked_by {
+                        None => None,
+                        Some(sel) => match sel.0.as_slice() {
+                            [Element::Matrix(atoms)] => Some(matrix_bits(&names, atoms)?.0),
+                            other => {
+                                return Err(unsupported(&format!("blocked-by {other:?}")))
+                            }
+                        },
+                    };
+                    let within = match within.as_deref() {
+                        None | Some("pword") => Domain::Pword,
+                        Some("stem") => Domain::Stem,
+                        Some(other) => return Err(unsupported(&format!("within {other:?}"))),
+                    };
+                    let on_conflict = match on_conflict.as_deref() {
+                        None | Some("stop") => OnConflict::Stop,
+                        Some(v) => {
+                            let (vt, vv) = find_val(&env, &tiers, v)
+                                .ok_or_else(|| LowerError::UnknownMelodyValue(v.to_owned()))?;
+                            if vt != tier {
+                                return Err(unsupported("on-conflict value not in tier"));
+                            }
+                            OnConflict::Value(vv)
+                        }
+                    };
+                    stmts.push(LoweredStmt::Spread {
+                        tier,
+                        val: vid,
+                        ward,
+                        blocked_by: blocked,
+                        within,
+                        through: *through,
+                        on_conflict,
+                    });
+                }
+                Stmt::Shift { n, unit, ward } => {
+                    let t = tiers.first().ok_or_else(|| unsupported("shift without tier"))?;
+                    if tiers.len() > 1 {
+                        return Err(unsupported("shift with multiple tiers (needs selector)"));
+                    }
+                    if level_of(unit) != Some(t.anchor) {
+                        return Err(unsupported("shift unit differing from tier anchor"));
+                    }
+                    let ward = match ward_of(ward) {
+                        Some(w @ (Ward::Leftward | Ward::Rightward)) => w,
+                        _ => return Err(unsupported("shift ward (leftward|rightward only)")),
+                    };
+                    stmts.push(LoweredStmt::Shift {
+                        tier: t.name,
+                        n: *n,
+                        ward,
+                    });
+                }
+                Stmt::Dominate { sel, target, ward } => {
+                    // sel 形:`<level>&empty`
+                    let mut lvl = None;
+                    let mut saw_empty = false;
+                    for el in &sel.0 {
+                        match el {
+                            Element::LevelRef(l) => lvl = level_of(l),
+                            Element::Named(n) if n == "empty" => saw_empty = true,
+                            other => {
+                                return Err(unsupported(&format!("dominate selector {other:?}")))
+                            }
+                        }
+                    }
+                    let level = lvl.ok_or_else(|| unsupported("dominate without <level>"))?;
+                    if !saw_empty {
+                        return Err(unsupported("dominate without &empty (M0 repair form)"));
+                    }
+                    // target 形:`@class`
+                    let class = match target.0.as_slice() {
+                        [Element::ClassRef(c)] => classes
+                            .get(c)
+                            .cloned()
+                            .ok_or_else(|| LowerError::UnknownName(c.clone()))?,
+                        other => return Err(unsupported(&format!("dominate target {other:?}"))),
+                    };
+                    let ward = match ward_of(ward) {
+                        Some(w @ (Ward::Leftward | Ward::Rightward)) => w,
+                        _ => return Err(unsupported("dominate ward (leftward|rightward only)")),
+                    };
+                    stmts.push(LoweredStmt::DominateEmpty { level, class, ward });
+                }
                 Stmt::Rewrite { from, to, env: e } => {
-                    let mut match_feats = FeatBits::EMPTY;
-                    let mut require_onset = false;
+                    let mut m = SegMatch::default();
                     for el in &from.0 {
                         match el {
                             Element::Matrix(atoms) => {
-                                match_feats = match_feats.union(matrix_bits(&names, atoms)?.0)
+                                m.feats = m.feats.union(matrix_bits(&names, atoms)?.0)
                             }
-                            Element::Named(n) if n == "onset" => require_onset = true,
+                            Element::Named(n) if n == "onset" => m.pos = Some(SegPos::Onset),
+                            Element::Named(n) if n == "coda" => m.pos = Some(SegPos::Coda),
+                            Element::ClassRef(c) => {
+                                // 宣告類別優先;未宣告的 @onset/@coda 為內建位置述語
+                                if let Some(members) = classes.get(c) {
+                                    m.class = Some(members.clone());
+                                } else if c == "onset" {
+                                    m.pos = Some(SegPos::Onset);
+                                } else if c == "coda" {
+                                    m.pos = Some(SegPos::Coda);
+                                } else {
+                                    return Err(LowerError::UnknownName(c.clone()));
+                                }
+                            }
                             other => {
                                 return Err(unsupported(&format!("rewrite match {other:?}")))
                             }
                         }
                     }
-                    let subs = match to.0.as_slice() {
-                        [Element::Matrix(atoms)] => matrix_bits(&names, atoms)?.1,
+                    let out = match to.0.as_slice() {
+                        [Element::Star] => SegOut::Delete,
+                        [Element::Matrix(atoms)] => SegOut::Subs(matrix_bits(&names, atoms)?.1),
                         other => return Err(unsupported(&format!("rewrite output {other:?}"))),
                     };
                     let seg_pat = |sel: &Selector| -> Result<SegPat, LowerError> {
                         match sel.0.as_slice() {
                             [Element::Boundary] => Ok(SegPat::Boundary),
+                            [Element::SylBoundary] => Ok(SegPat::SylBoundary),
                             [Element::Matrix(atoms)] => {
                                 Ok(SegPat::Feats(matrix_bits(&names, atoms)?.0))
                             }
+                            [Element::ClassRef(c)] => Ok(SegPat::Class(
+                                classes
+                                    .get(c)
+                                    .cloned()
+                                    .ok_or_else(|| LowerError::UnknownName(c.clone()))?,
+                            )),
                             other => Err(unsupported(&format!("rewrite env {other:?}"))),
                         }
                     };
@@ -370,9 +513,8 @@ pub fn lower(file: &FileAst) -> Result<Program, LowerError> {
                         },
                     };
                     stmts.push(LoweredStmt::Rewrite {
-                        match_feats,
-                        require_onset,
-                        subs,
+                        m,
+                        out,
                         env: env_lowered,
                     });
                 }

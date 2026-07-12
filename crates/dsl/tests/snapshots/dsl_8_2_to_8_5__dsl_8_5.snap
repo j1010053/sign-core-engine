@@ -1,0 +1,7 @@
+---
+source: crates/dsl/tests/dsl_8_2_to_8_5.rs
+expression: t
+---
+*papapa (stem=[0,4), +ATR on μ1)
+  input              p a p a p a  |  +ATR~μ1
+  atr-spread         p a p a p a  |  +ATR~μ0~μ1

@@ -5,11 +5,17 @@
 
 Autosegmental 音變引擎(M0)。規範上游:《M0 實作參照 v1.0》→《執行語意規格 v0.1》→《語法規格 v0.3》。
 
-## 目前進度:M0 步驟 4 完成 — DSL + CLI 端到端(8.1 全綠)
+## 目前進度:M0 步驟 5 完成 — 範例 8.1–8.5 全數端到端綠燈
 
 ```
 cargo run -p conlang-cli --bin conlang -- examples/8_1_tonogenesis.dsl examples/words.txt
 ```
+
+- **步驟 5**:I13 音段刪除跨層連鎖(SegDelete cascade:Span 平移、mora keep-empty、
+  無核心音節清理、調浮游 D14);verbs 第二批 spread/shift/dominate_empty + rewrite 泛化
+  (@class、coda、`*` 刪除、`.` 音節界);locality 可達上界;DSL 對應語法。
+  範例 8.2(鼻化和諧)、8.3(聲調穩定)、8.4(補償性延長)、8.5(ATR 雙向)全綠
+  (`examples/8_2`–`8_5` + `crates/dsl/tests/dsl_8_2_to_8_5.rs`)。
 
 - `crates/dsl/`(步驟 4):logos lexer(NFC 入口,I6)+ chumsky parser + lowering + executor;
   宣告貼合 Lexurgy(`Feature`/`Symbol`/`Class`)+ 自有 `Melody`;音段規則 `A => B / C _ D`
@@ -50,11 +56,13 @@ cargo build -p conlang-core --target wasm32-unknown-unknown   # 可移植性(I4)
 - **I11**:dock 浮游參考位置=原位投影——左鄰已聯結最大錨點+1 → 右鄰最小錨點−1 → seq 索引;
   各浮游者獨立求 nearest,共同著陸依 D27。
 - **I12**:音段規則通道——`Action::SegRewrite`(替換,長度不變;非第七原語)+ Inventory 反查
-  (無對應=error);音段增刪與跨層連鎖留步驟 5。
+  (無對應=error)。
+- **I13**:音段刪除連鎖——`SegDelete` cascade(Span 平移、mora keep-empty、無核心音節清理、
+  旋律重映射+浮游 D14、stale);I10 遞延解除。
 - **P1–P4**(架構修補層,權威=`docs/架構修補01` §4):Word=臨時韻律域、Grammar Store、
   strata 層級錨定、cophonology 閂。
 
-## 下一步:M0 步驟 5 — verbs 第二批 + locality + stability
+## 下一步:M0 步驟 6 — scan + spellout(M0 收工步)
 
-spread/shift(iterative)、音段增刪的跨層連鎖重編(I10 解除)、locality 上界、
-lazy-reparse 完整化;出口 = 8.2–8.5 綠燈(見《M0 實作參照》§8)。
+Scan 三道鎖 + 序數 + 調簇不透明(D18);spell-out 純函數(C11)+ contour/D27 衝突檢查
++ phrase-level 掛鉤(P3);出口 = 8.6(Bantu)綠燈(見《M0 實作參照》§8)。

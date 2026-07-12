@@ -70,6 +70,9 @@ pub enum Action {
         sym: SymId,
         feats: FeatBits,
     },
+    /// 刪除骨架第 `idx` 個音段,觸發跨層連鎖重編(I13):Span 平移、無核心音節清理、
+    /// 旋律 links 重映射、on-anchor-loss float(D14)、stale 標記。commit 最後套用。
+    SegDelete { idx: usize },
 }
 
 impl Action {
@@ -80,7 +83,10 @@ impl Action {
             | Action::Delink { tier, .. }
             | Action::Insert { tier, .. }
             | Action::Delete { tier, .. } => Some(tier),
-            Action::Dominate { .. } | Action::Release { .. } | Action::SegRewrite { .. } => None,
+            Action::Dominate { .. }
+            | Action::Release { .. }
+            | Action::SegRewrite { .. }
+            | Action::SegDelete { .. } => None,
         }
     }
 
@@ -94,8 +100,8 @@ impl Action {
         matches!(self, Action::Dominate { .. } | Action::Release { .. })
     }
 
-    /// 是否為音段規則通道(I12)。
+    /// 是否為音段規則通道(I12/I13)。
     pub fn is_segmental(&self) -> bool {
-        matches!(self, Action::SegRewrite { .. })
+        matches!(self, Action::SegRewrite { .. } | Action::SegDelete { .. })
     }
 }
