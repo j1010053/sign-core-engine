@@ -85,21 +85,29 @@ phrase-level 空掛鉤);Grammar Store 本體為 M0 後的步驟 8。
 **已完成(M0 步驟 1,commit `bccc837`)**:`crates/core/src/repr/` 表徵模組——intern、feature、
 prosody(I8 拓撲)、melody、word、invariant、notation。本機工具鏈首跑即全綠。
 
-**已完成(M0 步驟 2)**:
+**已完成(M0 步驟 2,commit `2966df0`)**:
 - `lifecycle/`:`Action` 六 variant、`commit`(凍結快照+一次寫入;I10 收攏)、`validate`、
-  `needs_reparse`(A3)、`run`(執行語意 §1 步驟 3–5 編排;步驟 1–2 的 selector 屬 verbs/scan)。
-- `primitives/`:六原語建構器 + proptest 不變量(純函數、守恆、逆元、單調、冪等)。
-- 依賴引入:smallvec(`Autoseg::links`,I3 完結)、thiserror;dev:proptest、insta(insta 步驟 3 起用)。
-- 出口已過:`tests/word_states.rs` 狀態轉換全為原語呼叫(音段層除外,I9),全測試綠 + wasm 綠。
-- 新決策:I9(六原語作用域定界)、I10(commit 重編界定),見 docs/05 §9。
+  `needs_reparse`(A3)、`run`(執行語意 §1 步驟 3–5 編排)。
+- `primitives/`:六原語建構器 + proptest 不變量。新決策 I9/I10(docs/05 §9)。
 
-**下一個任務(M0 步驟 3,見 M0 實作參照 §8)**:
-- `crates/core/src/verbs/` 第一批:insert / dock / fill / merge——**全部組合六原語**,不得另闢狀態
-  (dock=條件 associate、fill=逐 Ø insert+associate、merge=delete+associate)。
-- 需要最小 selector/匹配基礎(Parallel Match 的實作處):tier 內容定址 + Ø 偵測,範圍以 8.1 所需為度。
-- 出口:**範例 8.1(tonogenesis)綠燈**——以規則序列(而非測試手動呼叫原語)從 *ba 推導到 pà,
-  insta 快照對齊每 commit 一狀態。
-- 之後:步驟 4 dsl crate(logos+chumsky;加 `level:` 標記)→ 步驟 5(spread/shift/locality/lazy)→ 步驟 6(scan/spellout + phrase-level 掛鉤)。
+**已完成(M0 步驟 3)**:
+- `strategy/`:統一解析器 `resolve(candidates, reference, strategy)`(D28);內建
+  nearest(+prefer-left/right tie-break,D17)/leftmost/rightmost;自定義註冊留步驟 4+。
+- `verbs/` 第一批:`insert_floating_near`(onset 特徵環境)、`dock`(條件 associate,
+  浮游參考=原位投影 **I11**)、`fill`(逐 Ø insert+associate,D22)、`merge_adjacent_equal`
+  (delete+associate)。全組合原語;動詞做執行語意 §1 步驟 1–2,產 `Vec<Action>` 交 `run`。
+- 出口已過:`tests/tonogenesis_8_1.rs`——8.1 全規則序列 × 四詞(*pa/*ba/*baba/*a),
+  每 commit 一 insta 快照;對立轉移/三分 H/M/Ø/OCP 合併皆有硬斷言。devoicing 為手動
+  音段操作(I9,音段層規則機制隨步驟 4+ 引入)。
+- 新決策:I11(dock 原位投影),見 docs/05 §9。
+
+**下一個任務(M0 步驟 4,見 M0 實作參照 §8)**:
+- `crates/dsl/`:logos lexer(入口 unicode-normalization 正規化,I6)+ chumsky parser
+  → 型別化 AST(引用 core 型別);能解析 8.1 規則檔全文。
+- **P3 插入點**:規則檔語法加 `level: stem|word|phrase` 標記(預設 word;φ/ι/U 為合法層名無行為)。
+- 音段層規則機制(devoicing 類 rewrite)需在此步或步驟 5 定案 commit 通道——屆時提案新 I 決策。
+- `crates/cli/`:讀規則檔+詞表 → 跑 → 輸出(含 trace),串 end-to-end。
+- 之後:步驟 5(spread/shift/locality/lazy-reparse → 8.2–8.5)→ 步驟 6(scan/spellout + phrase-level 掛鉤 → 8.6)。
 
 ## 6. 命名原則(全專案實作規範,凌駕任何單篇審查建議)
 
