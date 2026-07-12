@@ -1,7 +1,7 @@
 # conlang-engine
 
 > **開發者(含 Claude Code)請先讀 `CLAUDE.md`**:專案指引、設計不變式、決策制度、當前任務都在那裡。
-> 規範文件依閱讀順序放在 `docs/01`–`11`(01–05 規範/實作層、06–10 設計層、11 測試索引);`docs/archive/` 為歷史檔勿引用。
+> 規範文件依閱讀順序放在 `docs/01`–`12` + `docs/架構修補01`(01–05 規範/實作層、06–10+12 設計層、11 測試索引、修補01=P 系列決策權威);`docs/archive/` 為歷史檔勿引用。
 
 Autosegmental 音變引擎(M0)。規範上游:《M0 實作參照 v1.0》→《執行語意規格 v0.1》→《語法規格 v0.3》。
 
@@ -37,4 +37,4 @@ cargo build -p conlang-core --target wasm32-unknown-unknown   # 可移植性(I4)
 ## 下一步:M0 步驟 3 — verbs 第一批
 
 insert/dock/fill/merge(全組合原語),出口 = 範例 8.1 綠燈(見《M0 實作參照》§8)。
-另見根目錄 `docs/架構修補01`:對步驟 2–3 零衝擊;步驟 4 加 `level:` 標記、步驟 6 留 phrase-level 掛鉤。
+另見 `docs/架構修補01`(P1–P4):對步驟 2–3 零衝擊;步驟 4 加 `level:` 標記、步驟 6 留 phrase-level 掛鉤。

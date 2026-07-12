@@ -61,6 +61,9 @@ struct Phon { form: PhonForm }        // PhonForm 包裹/引用 M0 的 Word;可�
 ```
 補全=phonotactics+頻率抽樣(有效分佈與 seeded 抽樣見 docs/10);diff=autosegmental 編輯距離;B 掛鉤=`sound-change`(跑 DSL 規則)。**construction 的 phon 可為部分 tier 指定**(模板 CVCVC=骨架+元音 tier),詞根填輔音 tier=M0 association——**非串接構詞天生支援**(Case 17/18)。
 
+- **phon 存底層形 UR(《架構修補01》P1)**:表層形永不儲存,按需導出。
+- **construction 的 phon 增 cophonology 槽(可選;P4 雙來源閂)**:`cophonology: Option<RuleSetRef>`——構式專屬小規則組,僅使用者手動或 `Morphologization` 宏可建,自動演化不得憑空為任意子類建 cophonology(文獻警告:可切分的子模式數量無限)。
+
 **SEM —— sense 集合,指向節點內演化的概念網絡。**
 ```rust
 struct Sem { senses: SmallVec<[SenseId; 1]> }
@@ -131,6 +134,8 @@ struct Component { child: SignId, role: Role,
 2. **非串接/模板 = 單一 sign 的 phon 維內 tier 聯結**:k-t-b 填 CVCVC。**不經 component**,而是 phon 維(M0 `Word`)的 association——詞根是部分 tier 指定的 sign,模板是骨架+元音 tier 的 construction,組合=把詞根輔音聯結到模板骨架(Case 17/18)。
 
 > **實作紅線**:模板構詞**不可**做成串接 component,否則 Semitic 詞法錯誤。component 在 sign **之間**;tier association 在 sign **之內**(phon 維)。你所謂「取模板填詞」精確地說是後者(phon 維 association);複合是前者。
+
+**臨時 Word 的建構(《架構修補01》P1/P3)**:component 組合樹的實體化 = 建構**臨時韻律域**(M0 `Word`,預設 ω)——這正是層疊套用的驅動:逐組合環跑 stem-level(含觸發構式的 cophonology)→ 整詞 word-level → spell-out 跑 phrase-level(循環套用語意見執行語意規格 §2.5)。導出的表層形是 token,僅跨 entrenchment 閾值者固化回 store。
 
 Slot:
 ```rust
