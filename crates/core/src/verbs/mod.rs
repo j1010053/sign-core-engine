@@ -298,6 +298,8 @@ impl SegMatch {
 pub enum SegOut {
     /// `=> [矩陣]`:逐特徵欄位 set_field 改寫((遮罩, 新值位) 序列)。
     Subs(Vec<(FeatBits, FeatBits)>),
+    /// `=> y`:整段替換為指定符號(特徵束由 Inventory 查得;字面規則 `x => h`)。
+    Symbol(SymId),
     /// `=> *`:刪除(I13 連鎖)。
     Delete,
 }
@@ -319,6 +321,14 @@ pub fn rewrite(
         }
         match out {
             SegOut::Delete => actions.push(Action::SegDelete { idx }),
+            SegOut::Symbol(sym) => {
+                let feats = inv.feats_of(*sym).unwrap_or_default();
+                actions.push(Action::SegRewrite {
+                    idx,
+                    sym: *sym,
+                    feats,
+                });
+            }
             SegOut::Subs(subs) => {
                 let mut feats = w.skeleton[idx].feats;
                 for &(mask, value) in subs {

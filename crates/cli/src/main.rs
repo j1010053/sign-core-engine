@@ -6,7 +6,7 @@
 use std::process::ExitCode;
 
 use conlang_core::repr::notation;
-use conlang_dsl::{build_word, compile, run_program};
+use conlang_dsl::{build_word, compile, run_program, surface};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -61,13 +61,20 @@ fn main() -> ExitCode {
         );
         match run_program(&program, w) {
             Ok(steps) => {
-                for s in steps {
+                for s in &steps {
                     let issues = if s.issues.is_empty() {
                         String::new()
                     } else {
                         format!("   [{} issue(s)]", s.issues.len())
                     };
                     println!("  {:<14} {}{}", s.rule, render(&program, &s.word), issues);
+                }
+                if let Some(last) = steps.last() {
+                    match surface(&program, &last.word) {
+                        Some(Ok(sf)) => println!("  {:<14} {}", "spell-out", sf),
+                        Some(Err(e)) => println!("  {:<14} error: {e}", "spell-out"),
+                        None => {}
+                    }
                 }
             }
             Err(e) => {

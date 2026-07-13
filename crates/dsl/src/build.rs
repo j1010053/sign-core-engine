@@ -43,41 +43,76 @@ pub fn build_word(p: &Program, text: &str) -> Result<Word, DslError> {
         }
     }
 
-    let vowels: Vec<&str> = p
-        .classes
-        .get("vowel")
-        .map(|ids| {
-            ids.iter()
-                .filter_map(|&s| p.env.syms.resolve(s))
-                .collect()
-        })
+    // 核心類:Parse 宣告優先(D24 子集),否則退回 `Class vowel` 暫定行為
+    let nucleus_ids: Vec<conlang_core::repr::intern::SymId> = p
+        .parse_cfg
+        .as_ref()
+        .filter(|c| !c.nucleus.is_empty())
+        .map(|c| c.nucleus.clone())
+        .or_else(|| p.classes.get("vowel").cloned())
         .unwrap_or_default();
 
     let mut w = Word::new();
-    let mut syl_start: u32 = 0;
-    let mut last_nucleus: Option<u32> = None;
-    for (i, name) in syms.iter().enumerate() {
-        let i = i as u32;
+    let mut seg_ids = Vec::new();
+    for name in &syms {
         let sym = resolve_symbol(p, name)?;
         let feats = p.env.inv.feats_of(sym).unwrap_or_default();
+        seg_ids.push(sym);
         w.skeleton.push(Seg::new(sym, feats));
-        if vowels.contains(&name.as_str()) {
-            if let Some(pn) = last_nucleus {
-                // 最大 onset:核心間輔音串全歸下一音節 → 界在前核心之後
-                w.prosody.syllables.push(Span::new(syl_start, pn + 1));
-                syl_start = pn + 1;
-            }
-            w.prosody.moras.push(Span::new(i, i + 1));
-            last_nucleus = Some(i);
-        }
     }
     let n = w.skeleton.len() as u32;
-    if n > 0 {
-        w.prosody.syllables.push(Span::new(syl_start, n)); // 末音節(含詞尾 coda)
-    }
-    if last_nucleus.is_none() && n > 0 {
+    let nuclei: Vec<u32> = (0..n)
+        .filter(|&i| nucleus_ids.contains(&seg_ids[i as usize]))
+        .collect();
+    if nuclei.is_empty() && n > 0 {
         return Err(DslError::NoNucleus { word: text });
     }
+
+    // 音節界:核心間輔音串——有 Parse onset 類(`@X?` = 至多一)時僅末一個
+    // (且屬該類)歸下一音節 onset,其餘為前音節 coda;無宣告 = 全歸下一音節(舊行為)。
+    let onset_take = |gap_last: u32| -> u32 {
+        match p.parse_cfg.as_ref().and_then(|c| c.onset.as_ref()) {
+            None => u32::MAX, // 全部
+            Some(cls) => {
+                if cls.contains(&seg_ids[gap_last as usize]) {
+                    1
+                } else {
+                    0
+                }
+            }
+        }
+    };
+    let mut syl_start: u32 = 0;
+    for pair in nuclei.windows(2) {
+        let (prev, next) = (pair[0], pair[1]);
+        let gap_len = next - prev - 1;
+        let take = if gap_len == 0 { 0 } else { onset_take(next - 1).min(gap_len) };
+        let boundary = next - take;
+        w.prosody.syllables.push(Span::new(syl_start, boundary));
+        syl_start = boundary;
+    }
+    if n > 0 {
+        w.prosody.syllables.push(Span::new(syl_start, n));
+    }
+
+    // 莫拉:核心各一;WBP(Parse mora 第二擇一)時,coda 類音段各自帶莫拉
+    let wbp = p.parse_cfg.as_ref().and_then(|c| c.wbp_coda.as_ref());
+    for i in 0..n {
+        if nuclei.contains(&i) {
+            w.prosody.moras.push(Span::new(i, i + 1));
+        } else if let Some(cls) = wbp {
+            // coda 判定:屬 WBP 類、且在其音節內位於某核心之後
+            let in_syl_after_nucleus = w
+                .prosody
+                .syllables
+                .iter()
+                .any(|s| s.contains_idx(i) && nuclei.iter().any(|&nu| s.contains_idx(nu) && nu < i));
+            if cls.contains(&seg_ids[i as usize]) && in_syl_after_nucleus {
+                w.prosody.moras.push(Span::new(i, i + 1));
+            }
+        }
+    }
+
     for t in &p.tiers {
         w.melodies.push(t.clone());
     }

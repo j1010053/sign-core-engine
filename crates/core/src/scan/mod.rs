@@ -17,6 +17,14 @@ pub enum ScanDir {
     FromRight,
 }
 
+/// 枚舉範圍(D4):預設 linked-only;`over all` 時浮游者按**原位**(I11 v2 origin)入列。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Enumerate {
+    #[default]
+    LinkedOnly,
+    All,
+}
+
 /// 一個掃描刻度:`along` 層節點 + 其簇(有序 (seq_idx, val))+ 可停靠錨點。
 #[derive(Debug, Clone)]
 pub struct Tick {
@@ -32,6 +40,7 @@ pub fn ticks(
     tier: SymId,
     along: Level,
     dir: ScanDir,
+    over: Enumerate,
 ) -> Result<Vec<Tick>, EngineError> {
     let t = w.tier(tier).ok_or(EngineError::TierNotFound(tier))?;
     let n_along = w.anchor_count(along) as u32;
@@ -75,6 +84,40 @@ pub fn ticks(
             dock: anchors.first().copied(),
         });
     }
+    // over all(D4):浮游者按原位入列(origin,I11 v2;無 origin 者以 seq 索引近似)
+    if over == Enumerate::All {
+        for (si, a) in t.seq.iter().enumerate() {
+            if !a.is_floating() {
+                continue;
+            }
+            let pos = a.origin.unwrap_or(si as u32);
+            // 錨定層座標 → along 刻度(同層直用;粗掃描找涵蓋節點)
+            let tick_i = if along == t.anchor {
+                pos.min(n_along.saturating_sub(1))
+            } else {
+                let (plo, phi) = match t.anchor {
+                    Level::Segment => (pos, pos + 1),
+                    _ => w
+                        .prosody
+                        .level(t.anchor)
+                        .and_then(|v| v.get(pos as usize))
+                        .map(|s| (s.lo, s.hi))
+                        .unwrap_or((0, 0)),
+                };
+                (0..n_along)
+                    .find(|&i| {
+                        w.prosody
+                            .level(along)
+                            .and_then(|v| v.get(i as usize))
+                            .is_some_and(|s| s.lo <= plo && phi <= s.hi)
+                    })
+                    .unwrap_or(0)
+            };
+            if let Some(tk) = out.get_mut(tick_i as usize) {
+                tk.cluster.push((si, a.val));
+            }
+        }
+    }
     if dir == ScanDir::FromRight {
         out.reverse();
     }
@@ -94,11 +137,12 @@ pub fn assoc_at(
     tier: SymId,
     along: Level,
     dir: ScanDir,
+    over: Enumerate,
     val: ValId,
     sel: TickSel,
 ) -> Result<Vec<Action>, EngineError> {
     let t = w.tier(tier).ok_or(EngineError::TierNotFound(tier))?;
-    let list = ticks(w, tier, along, dir)?;
+    let list = ticks(w, tier, along, dir, over)?;
     let target = match sel {
         TickSel::Nth(n) => list.get((n.max(1) - 1) as usize),
         TickSel::FirstEmpty => list.iter().find(|tk| tk.cluster.is_empty()),
@@ -126,12 +170,13 @@ pub fn value_rewrite(
     tier: SymId,
     along: Level,
     dir: ScanDir,
+    over: Enumerate,
     from: ValId,
     to: ValId,
     pre: Option<ValId>,
 ) -> Result<Vec<Action>, EngineError> {
     let t = w.tier(tier).ok_or(EngineError::TierNotFound(tier))?;
-    let list = ticks(w, tier, along, dir)?;
+    let list = ticks(w, tier, along, dir, over)?;
     let is_val = |tk: &Tick, v: ValId| tk.cluster.len() == 1 && tk.cluster[0].1 == v;
     let mut acts = Vec::new();
     for (i, tk) in list.iter().enumerate() {
@@ -197,6 +242,7 @@ mod tests {
             TONE,
             Level::Syllable,
             ScanDir::FromRight,
+            Enumerate::LinkedOnly,
             H,
             TickSel::Nth(2),
         )
@@ -210,8 +256,17 @@ mod tests {
     #[test]
     fn meeussen_value_rewrite_8_6b() {
         let w = word(2, &[0, 1]); // H~μ0 H~μ1
-        let acts =
-            value_rewrite(&w, TONE, Level::Mora, ScanDir::FromLeft, H, L, Some(H)).unwrap();
+        let acts = value_rewrite(
+            &w,
+            TONE,
+            Level::Mora,
+            ScanDir::FromLeft,
+            Enumerate::LinkedOnly,
+            H,
+            L,
+            Some(H),
+        )
+        .unwrap();
         let w2 = commit(&w, &acts).unwrap();
         let t = w2.tier(TONE).unwrap();
         assert_eq!(t.seq[0].val, H);
@@ -220,9 +275,33 @@ mod tests {
 
         // 間隔 Ø:H Ø H 不觸發(掃描軸相鄰,非「有值相鄰」)
         let w3 = word(3, &[0, 2]);
-        let acts3 =
-            value_rewrite(&w3, TONE, Level::Mora, ScanDir::FromLeft, H, L, Some(H)).unwrap();
+        let acts3 = value_rewrite(
+            &w3,
+            TONE,
+            Level::Mora,
+            ScanDir::FromLeft,
+            Enumerate::LinkedOnly,
+            H,
+            L,
+            Some(H),
+        )
+        .unwrap();
         assert!(acts3.is_empty());
+    }
+
+    /// over all(D4):浮游者按原位入列——原位刻度不再是 Ø。
+    #[test]
+    fn over_all_inserts_floats_at_origin_d4() {
+        let mut w = word(3, &[]);
+        let mut fl = Autoseg::floating(H);
+        fl.origin = Some(1); // 原位 μ1
+        w.tier_mut(TONE).unwrap().seq.push(fl);
+        // linked-only:μ1 是 Ø 刻度 → first-empty = μ0
+        let l = ticks(&w, TONE, Level::Mora, ScanDir::FromLeft, Enumerate::LinkedOnly).unwrap();
+        assert!(l[1].cluster.is_empty());
+        // over all:μ1 刻度含浮游 H
+        let a = ticks(&w, TONE, Level::Mora, ScanDir::FromLeft, Enumerate::All).unwrap();
+        assert_eq!(a[1].cluster.len(), 1);
     }
 
     /// 8.6(c):第一個 Ø 莫拉可定址(空刻度入列,D4)。
@@ -234,6 +313,7 @@ mod tests {
             TONE,
             Level::Mora,
             ScanDir::FromLeft,
+            Enumerate::LinkedOnly,
             H,
             TickSel::FirstEmpty,
         )

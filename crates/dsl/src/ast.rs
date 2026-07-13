@@ -14,12 +14,25 @@ pub enum Decl {
     Class { name: String, members: Vec<String> },
     /// `Prosody mora < syllable < foot < pword`(鏈中未知名 → 註冊自定域,I14)
     Prosody { chain: Vec<String> },
+    /// `Parse mora: @vowel | @vowel :: @cons`(WBP)/ `Parse syllable: @cons? :: @vowel :: @cons?`
+    Parse {
+        level: String,
+        /// 擇一(`|`)→ 各為 `::` 分節的 term 序列。
+        alts: Vec<Vec<ParseTerm>>,
+    },
     /// `Melody tone {H, M, L} anchor mora`
     Melody {
         name: String,
         values: Vec<String>,
         anchor: String,
     },
+}
+
+/// Parse pattern 的一個 term(`@class` + 可選 `?`;D24 有限 pattern language 子集)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseTerm {
+    pub class: String,
+    pub optional: bool,
 }
 
 /// selector 的 element(D15:一切皆 element,`&` 交集)。
@@ -123,6 +136,7 @@ pub struct ScanHead {
     pub along: String,
     pub within: Option<String>,
     pub from: Option<String>,
+    pub over: Option<String>,
 }
 
 /// 序數尾槽(D16;僅 Scan 內)。
@@ -140,9 +154,23 @@ pub struct RuleAst {
     pub stmts: Vec<Stmt>,
 }
 
+/// Spell-out 宣告區塊(C10;語意權威=執行語意 §6)。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SpelloutAst {
+    /// `order tone, nasal`
+    pub order: Vec<String>,
+    /// `empty tone => M`(值 "bare" = 不帶)
+    pub empty: Vec<(String, String)>,
+    /// `floating tone => drop|error`
+    pub floating: Option<String>,
+    /// `contour tone:{H L} => falling`
+    pub contour: Vec<(String, Vec<String>, String)>,
+}
+
 /// 整個規則檔。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FileAst {
     pub decls: Vec<Decl>,
     pub rules: Vec<RuleAst>,
+    pub spellout: Option<SpelloutAst>,
 }

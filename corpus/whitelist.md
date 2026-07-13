@@ -14,6 +14,13 @@
 | `Else:`/`defer`/`cleanup` 階層 | 匯入器映射待補 | docs/02 §13 開放項 |
 | 多值特徵矩陣直接改寫任意特徵 | M0 子集僅欄位 set_field + Inventory 反查 | I12(無對應=error) |
 
+## 黃金測試(步驟 7 執行級確認)
+
+`crates/dsl/tests/lexurgy_golden.rs`:自 core spec 測試(TestRules/TestEnvironment/
+TestBoundaries)萃取三元組,M0 子集(單符號改寫 ± 相鄰環境,$→#)實跑比對——
+**8/8 通過**,含「compound 同時執行 = B5」與「parallel 凍結不自我餵食」兩個語意對齊點;
+17 案超出子集(多符號序列/類/矩陣/量詞/unless)→ M2 匯入器。
+
 ## 逐檔標注(隨 M2 匯入器充實)
 
 | 檔案 | 狀態 | 備註 |

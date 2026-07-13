@@ -2,12 +2,12 @@
 //!
 //! 特徵(+nasal / tone / +ATR)一律由規則檔內的 `insert … near` + `dock` 產生
 //! (擁有者要求:範例自足,不靠測試注入詞彙旋律;I11 v2 原位記憶使其可行)。
-//! 型態括號(8.5)與 weight-by-position 莫拉(8.4)仍由測試注入——屬詞條載入層職責。
+//! 型態括號(8.5)由測試注入(詞條載入層);8.4 的 WBP 莫拉自步驟 7 起由 Parse 宣告產生。
 
 use conlang_core::lifecycle::has_error;
-use conlang_core::repr::prosody::{AnchorRef, Level, Span};
-use conlang_core::repr::word::{Bracket, MorphUnit, Seg, Word};
-use conlang_core::repr::{notation, FeatBits};
+use conlang_core::repr::prosody::{AnchorRef, Level};
+use conlang_core::repr::word::{Bracket, MorphUnit, Word};
+use conlang_core::repr::notation;
 use conlang_dsl::{build_word, compile, run_program, Program};
 
 fn render(p: &Program, w: &Word) -> String {
@@ -72,22 +72,16 @@ fn dsl_8_3_stability_and_redock() {
 }
 
 /// 8.4:coda 脫落 → 空莫拉存活(keep-empty,I13)→ dominate 修復 → 長元音。
-/// (本例無旋律特徵;WBP 莫拉由測試建構,Parse 宣告步驟 6+。)
+/// WBP 莫拉由 `Parse mora: @vowel | @vowel :: @cons` 宣告產生(步驟 7,全 DSL)。
 #[test]
 fn dsl_8_4_compensatory_lengthening() {
     let p = compile(include_str!("../../../examples/8_4_compensatory.dsl")).unwrap();
-    let mut w = Word::new();
-    let sym = |n: &str| {
-        (0..p.env.syms.len() as u32)
-            .map(conlang_core::repr::intern::SymId)
-            .find(|&s| p.env.syms.resolve(s) == Some(n))
-            .unwrap()
-    };
-    w.skeleton.push(Seg::new(sym("a"), FeatBits::EMPTY));
-    w.skeleton.push(Seg::new(sym("k"), FeatBits::EMPTY));
-    w.prosody.syllables.push(Span::new(0, 2));
-    w.prosody.moras.push(Span::new(0, 1));
-    w.prosody.moras.push(Span::new(1, 2));
+    let w = build_word(&p, "ak").unwrap();
+    assert_eq!(
+        notation::render_prosody(&w),
+        "σ0[0,2) μ0[0,1) μ1[1,2)",
+        "Parse 宣告應產生 WBP 莫拉"
+    );
 
     let mut t = String::new();
     let out = derive(&p, "*ak (weight-by-position)", w, &mut t);

@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_debug_implementations)]
 
+pub mod diag;
 pub mod lifecycle;
 pub mod locality;
 pub mod primitives;

@@ -131,9 +131,16 @@ prosody(I8 拓撲)、melody、word、invariant、notation。本機工具鏈首�
 - 出口已過:**8.6 綠燈(`examples/8_6` + `dsl_8_6.rs`)= 範例集 8.1–8.6 全數端到端,
   M0 驗收達成**(六原語+生命週期+CLI 批次導出皆綠)。
 
-**下一個任務(M0 步驟 7 / 尾聲,見 M0 實作參照 §8)**:
-- Lexurgy harness 骨架 + 分歧白名單初版(corpus submodule,不 vendor;I5 哨兵規則)。
-- 收尾補強:Spell-out DSL 宣告區塊(C10)、`over all` 枚舉、`…` 任意距離、
-  Parse 宣告(取代暫定 CV 音節化)、diag/ 分級資料型別(B9)。
-- 之後:步驟 8(修補01)= Grammar Store 容器 + AddRule/Lexicalization 相容模式。
+**已完成(M0 步驟 7 / 尾聲)**:
+- corpus/lexurgy submodule + 白名單(`corpus/whitelist.md`)+ harness 骨架(分類器)。
+- 收尾補強:`diag/`(B9 分級資料;executor 附 B8 noop/reparse info)、Spell-out DSL
+  宣告區塊(C10;CLI 印表層)、scan `over all`(D4 浮游按 origin 入列)、**Parse 宣告**
+  (D24 子集:`Parse mora: @V | @V :: @C` WBP、`Parse syllable: @C? :: @V :: @C?`;
+  8.4 全 DSL 化)、字面符號改寫(`x => h`,SegOut::Symbol)。
+- **Lexurgy 黃金測試(執行級)**:自 core spec 測試萃取三元組,M0 子集 8/8 通過
+  (含 compound=B5、parallel 凍結兩個語意對齊點);17 案 → M2。`…` 任意距離未做(步驟 8+)。
+
+**下一個任務(步驟 8,《架構修補01》)**:Grammar Store 容器(規則具名儲存,按 stage 索引)
++「(Store+詞)→導出」API + AddRule/Lexicalization 相容模式;M2 = 完整 Lexurgy 匯入器
+(多符號/類/矩陣/量詞/Else:/defer)+ Latin→Romance 黃金鏈。
 

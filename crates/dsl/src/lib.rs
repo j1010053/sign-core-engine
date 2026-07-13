@@ -18,7 +18,7 @@ pub mod lower;
 pub mod parser;
 
 pub use build::build_word;
-pub use exec::{run_program, StepRecord};
+pub use exec::{run_program, surface, StepRecord};
 pub use lower::{lower, LowerError, Program};
 
 use conlang_core::lifecycle::EngineError;

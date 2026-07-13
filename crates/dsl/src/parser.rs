@@ -15,7 +15,18 @@ enum Line {
     Decl(Decl),
     RuleHeader(String, Option<Stmt>),
     ScanHeader(ScanHead),
+    SpelloutHeader,
+    SpelloutEntry(SpelloutEntry),
     Stmt(Stmt),
+}
+
+/// Spell-out 區塊內的一行。
+#[derive(Debug, Clone, PartialEq)]
+enum SpelloutEntry {
+    Order(Vec<String>),
+    Empty(String, String),
+    Floating(String, String),
+    Contour(String, Vec<String>, String),
 }
 
 /// 解析錯誤:行號(1 起算)+ 訊息。
@@ -214,6 +225,17 @@ fn decl() -> impl Parser<Tok, Decl, Error = Simple<Tok>> + Clone {
         )
         .map(|(name, members)| Decl::Class { name, members });
 
+    let parse_term = just(Tok::At)
+        .ignore_then(ident())
+        .then(just(Tok::Question).or_not().map(|q| q.is_some()))
+        .map(|(class, optional)| ParseTerm { class, optional });
+    let parse_alt = parse_term.separated_by(just(Tok::Colon).then(just(Tok::Colon))).at_least(1);
+    let parse_decl = kw("Parse")
+        .ignore_then(ident())
+        .then_ignore(just(Tok::Colon))
+        .then(parse_alt.separated_by(just(Tok::Pipe)).at_least(1))
+        .map(|(level, alts)| Decl::Parse { level, alts });
+
     let prosody = kw("Prosody")
         .ignore_then(ident().separated_by(just(Tok::Lt)).at_least(1))
         .map(|chain| Decl::Prosody { chain });
@@ -234,7 +256,7 @@ fn decl() -> impl Parser<Tok, Decl, Error = Simple<Tok>> + Clone {
             anchor,
         });
 
-    choice((feature, symbol, class, prosody, melody))
+    choice((feature, symbol, class, parse_decl, prosody, melody))
 }
 
 // ── 行 → 檔 ──
@@ -246,13 +268,45 @@ fn scan_head() -> impl Parser<Tok, ScanHead, Error = Simple<Tok>> {
         .then(ident())
         .then(kw("within").ignore_then(ident()).or_not())
         .then(kw("from").ignore_then(ident()).or_not())
+        .then(kw("over").ignore_then(ident()).or_not())
         .then_ignore(just(Tok::Colon))
-        .map(|(((tier, along), within), from)| ScanHead {
+        .map(|((((tier, along), within), from), over)| ScanHead {
             tier,
             along,
             within,
             from,
+            over,
         })
+}
+
+fn spellout_entry() -> impl Parser<Tok, SpelloutEntry, Error = Simple<Tok>> {
+    let order = kw("order")
+        .ignore_then(ident().separated_by(just(Tok::Comma)).at_least(1))
+        .map(SpelloutEntry::Order);
+    let empty = kw("empty")
+        .ignore_then(ident())
+        .then_ignore(just(Tok::Arrow))
+        .then(atom())
+        .map(|(t, v)| SpelloutEntry::Empty(t, v));
+    let floating = kw("floating")
+        .ignore_then(ident())
+        .then_ignore(just(Tok::Arrow))
+        .then(ident())
+        .then_ignore(ident().or_not()) // `drop warn` 的尾註容忍
+        .map(|(t, p)| SpelloutEntry::Floating(t, p));
+    let contour = kw("contour")
+        .ignore_then(ident())
+        .then_ignore(just(Tok::Colon))
+        .then(
+            atom()
+                .repeated()
+                .at_least(1)
+                .delimited_by(just(Tok::LBrace), just(Tok::RBrace)),
+        )
+        .then_ignore(just(Tok::Arrow))
+        .then(ident())
+        .map(|((t, vals), name)| SpelloutEntry::Contour(t, vals, name));
+    choice((order, empty, floating, contour))
 }
 
 fn line_parser() -> impl Parser<Tok, Line, Error = Simple<Tok>> {
@@ -268,9 +322,13 @@ fn line_parser() -> impl Parser<Tok, Line, Error = Simple<Tok>> {
         .then(stmt().or_not())
         .map(|(name, inline)| Line::RuleHeader(name, inline));
 
+    let spellout_header = kw("Spell-out").then(just(Tok::Colon)).to(Line::SpelloutHeader);
+
     choice((
         decl().map(Line::Decl),
         scan_head().map(Line::ScanHeader),
+        spellout_header,
+        spellout_entry().map(Line::SpelloutEntry),
         stmt().map(Line::Stmt),
         header,
     ))
@@ -311,6 +369,23 @@ pub fn parse_lines(lines: &[Vec<Tok>]) -> Result<FileAst, ParseError> {
                     stmts,
                 });
             }
+            Line::SpelloutHeader => {
+                file.spellout = Some(SpelloutAst::default());
+            }
+            Line::SpelloutEntry(e) => match file.spellout.as_mut() {
+                None => {
+                    return Err(ParseError {
+                        line: lineno,
+                        msg: "spell-out entry outside `Spell-out:` block".into(),
+                    })
+                }
+                Some(sp) => match e {
+                    SpelloutEntry::Order(v) => sp.order = v,
+                    SpelloutEntry::Empty(t, v) => sp.empty.push((t, v)),
+                    SpelloutEntry::Floating(_t, p) => sp.floating = Some(p),
+                    SpelloutEntry::Contour(t, vals, name) => sp.contour.push((t, vals, name)),
+                },
+            },
             Line::ScanHeader(head) => {
                 let name = format!("Scan({} along {})", head.tier, head.along);
                 file.rules.push(RuleAst {

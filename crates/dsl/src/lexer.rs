@@ -62,6 +62,10 @@ pub enum Tok {
     Minus,
     #[token("#")]
     Hash,
+    #[token("?")]
+    Question,
+    #[token("|")]
+    Pipe,
     #[token("*")]
     Star,
 

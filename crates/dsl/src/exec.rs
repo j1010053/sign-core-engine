@@ -4,6 +4,7 @@
 //! 求 Action,合為一個 commit。VerbClass 依語句組成歸類(讀韻律結構者 Query)。
 //! `level` 標記(P3)在 M0 僅記錄,不改變執行(全部視為 word-level 逐序跑)。
 
+use conlang_core::diag::{self, Diag};
 use conlang_core::lifecycle::{run, Action, EngineError, VerbClass};
 use conlang_core::repr::invariant::InvariantIssue;
 use conlang_core::repr::word::Word;
@@ -17,6 +18,8 @@ pub struct StepRecord {
     pub rule: String,
     pub word: Word,
     pub issues: Vec<InvariantIssue>,
+    /// 分級診斷(B9):Validation 映射 + 規則層事件(B8 noop、lazy 重剖標記)。
+    pub diags: Vec<Diag>,
 }
 
 fn stmt_actions(p: &Program, w: &Word, s: &LoweredStmt) -> Result<Vec<Action>, EngineError> {
@@ -57,17 +60,19 @@ fn stmt_actions(p: &Program, w: &Word, s: &LoweredStmt) -> Result<Vec<Action>, E
             tier,
             along,
             dir,
+            over,
             val,
             sel,
-        } => conlang_core::scan::assoc_at(w, *tier, *along, *dir, *val, *sel),
+        } => conlang_core::scan::assoc_at(w, *tier, *along, *dir, *over, *val, *sel),
         LoweredStmt::ScanValueRewrite {
             tier,
             along,
             dir,
+            over,
             from,
             to,
             pre,
-        } => conlang_core::scan::value_rewrite(w, *tier, *along, *dir, *from, *to, *pre),
+        } => conlang_core::scan::value_rewrite(w, *tier, *along, *dir, *over, *from, *to, *pre),
     }
 }
 
@@ -101,6 +106,13 @@ fn class_of(rule: &LoweredRule) -> VerbClass {
     }
 }
 
+/// 末端拼讀(檔內有 `Spell-out:` 宣告時;C11 純函數)。
+pub fn surface(p: &Program, w: &Word) -> Option<Result<String, EngineError>> {
+    p.spellout
+        .as_ref()
+        .map(|spec| conlang_core::spellout::spell_out(w, &p.env, spec))
+}
+
 /// 對單詞跑整個規則序列;回傳每規則 commit 後的快照紀錄。
 pub fn run_program(p: &Program, input: Word) -> Result<Vec<StepRecord>, EngineError> {
     let mut w = input;
@@ -111,12 +123,21 @@ pub fn run_program(p: &Program, input: Word) -> Result<Vec<StepRecord>, EngineEr
         for s in &rule.stmts {
             actions.extend(stmt_actions(p, &w, s)?);
         }
+        let noop = actions.is_empty();
         let out = run(&w, &actions, class_of(rule))?;
         w = out.word;
+        let mut diags = diag::from_issues(&out.issues);
+        if noop {
+            diags.push(Diag::info(format!("rule {}: no applicable target (noop)", rule.name))); // B8
+        }
+        if out.reparse_pending {
+            diags.push(Diag::info(format!("rule {}: lazy reparse pending", rule.name)));
+        }
         records.push(StepRecord {
             rule: rule.name.clone(),
             word: w.clone(),
             issues: out.issues,
+            diags,
         });
     }
     Ok(records)

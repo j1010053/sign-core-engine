@@ -66,6 +66,18 @@ fn dsl_8_1_end_to_end() {
     assert_eq!(tone(&finals[3]), "M~μ0");
 }
 
+/// Spell-out 區塊(C10)可解析並拼讀(C11 純函數)。
+#[test]
+fn spellout_block_renders_surface_c10() {
+    let p = compile(RULES).unwrap();
+    let w = build_word(&p, "pa").unwrap();
+    let steps = conlang_dsl::run_program(&p, w).unwrap();
+    let sf = conlang_dsl::surface(&p, &steps.last().unwrap().word)
+        .expect("Spell-out declared")
+        .unwrap();
+    assert_eq!(sf, "p a[H]");
+}
+
 /// `stage:` 標記(P3/I14)可解析且預設 word。
 #[test]
 fn stage_marker_parses_with_default_word() {

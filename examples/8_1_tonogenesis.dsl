@@ -24,3 +24,9 @@ devoicing:
 fill-default: fill tone Ø => M within pword
 
 ocp-cleanup: merge adjacent-equal
+
+Spell-out:
+    order tone
+    empty tone => M
+    floating tone => drop
+    contour tone:{H L} => falling

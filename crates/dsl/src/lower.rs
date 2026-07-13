@@ -10,7 +10,8 @@ use conlang_core::repr::feature::FeatBits;
 use conlang_core::repr::intern::{SymId, ValId};
 use conlang_core::repr::melody::MelodyTier;
 use conlang_core::repr::prosody::Level;
-use conlang_core::scan::{ScanDir, TickSel};
+use conlang_core::scan::{Enumerate, ScanDir, TickSel};
+use conlang_core::spellout::{FloatingPolicy, SpelloutSpec};
 use conlang_core::repr::Env;
 use conlang_core::strategy::{Pick, Strategy, TieBreak};
 use conlang_core::verbs::{Domain, InsertProbe, OnConflict, SegEnv, SegMatch, SegOut, SegPat, SegPos, Ward};
@@ -74,6 +75,7 @@ pub enum LoweredStmt {
         tier: SymId,
         along: Level,
         dir: ScanDir,
+        over: Enumerate,
         val: ValId,
         sel: TickSel,
     },
@@ -81,6 +83,7 @@ pub enum LoweredStmt {
         tier: SymId,
         along: Level,
         dir: ScanDir,
+        over: Enumerate,
         from: ValId,
         to: ValId,
         pre: Option<ValId>,
@@ -103,6 +106,21 @@ pub struct Program {
     pub rules: Vec<LoweredRule>,
     /// 類別(如 `vowel`,暫定音節化會用)。
     pub classes: HashMap<String, Vec<SymId>>,
+    /// Spell-out 宣告(C10);None = 檔內未宣告(CLI 不拼讀)。
+    pub spellout: Option<SpelloutSpec>,
+    /// Parse 宣告子集(D24):音節化設定;None = 暫定 CV 音節化。
+    pub parse_cfg: Option<ParseCfg>,
+}
+
+/// Parse 宣告降低結果(M0 子集:onset?::nucleus::coda? + WBP 莫拉)。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ParseCfg {
+    pub nucleus: Vec<SymId>,
+    /// 音節首類(`?` = 至多一個);None = 全部輔音歸下一音節(舊行為)。
+    pub onset: Option<Vec<SymId>>,
+    pub coda: Option<Vec<SymId>>,
+    /// weight-by-position:`Parse mora: @vowel | @vowel :: @X` 之 X 類 coda 自帶莫拉。
+    pub wbp_coda: Option<Vec<SymId>>,
 }
 
 impl Program {
@@ -213,6 +231,7 @@ pub fn lower(file: &FileAst) -> Result<Program, LowerError> {
                 let ids = members.iter().map(|m| env.syms.intern(m)).collect();
                 classes.insert(name.clone(), ids);
             }
+            Decl::Parse { .. } => {} // 第二輪(classes 齊備後)處理
             Decl::Prosody { chain } => {
                 for name in chain {
                     if env.domains.by_name(name).is_none() {
@@ -295,6 +314,11 @@ pub fn lower(file: &FileAst) -> Result<Program, LowerError> {
                 Some("right") => ScanDir::FromRight,
                 Some(o) => return Err(unsupported(&format!("Scan from {o:?}"))),
             };
+            let over = match head.over.as_deref() {
+                None | Some("linked-only") => Enumerate::LinkedOnly,
+                Some("all") => Enumerate::All,
+                Some(o) => return Err(unsupported(&format!("Scan over {o:?}"))),
+            };
             for (k, st) in r.stmts.iter().enumerate() {
                 let lowered = match st {
                     Stmt::ScanAssociate {
@@ -317,6 +341,7 @@ pub fn lower(file: &FileAst) -> Result<Program, LowerError> {
                             tier,
                             along,
                             dir,
+                            over,
                             val: vid,
                             sel,
                         }
@@ -356,6 +381,7 @@ pub fn lower(file: &FileAst) -> Result<Program, LowerError> {
                             tier,
                             along,
                             dir,
+                            over,
                             from: fv,
                             to: tv,
                             pre,
@@ -581,6 +607,12 @@ pub fn lower(file: &FileAst) -> Result<Program, LowerError> {
                     return Err(unsupported("associate with ordinal outside Scan block (D16)"))
                 }
                 Stmt::Rewrite { from, to, env: e } => {
+                    // 字面符號查詢(已宣告 Symbol 的名字 → 單元素類)
+                    let lit = |env: &Env, n: &str| -> Option<SymId> {
+                        (0..env.syms.len() as u32)
+                            .map(SymId)
+                            .find(|&s| env.syms.resolve(s) == Some(n) && env.inv.feats_of(s).is_some())
+                    };
                     let mut m = SegMatch::default();
                     for el in &from.0 {
                         match el {
@@ -589,6 +621,9 @@ pub fn lower(file: &FileAst) -> Result<Program, LowerError> {
                             }
                             Element::Named(n) if n == "onset" => m.pos = Some(SegPos::Onset),
                             Element::Named(n) if n == "coda" => m.pos = Some(SegPos::Coda),
+                            Element::Named(n) if lit(&env, n).is_some() => {
+                                m.class = Some(vec![lit(&env, n).unwrap()])
+                            }
                             Element::ClassRef(c) => {
                                 // 宣告類別優先;未宣告的 @onset/@coda 為內建位置述語
                                 if let Some(members) = classes.get(c) {
@@ -609,6 +644,9 @@ pub fn lower(file: &FileAst) -> Result<Program, LowerError> {
                     let out = match to.0.as_slice() {
                         [Element::Star] => SegOut::Delete,
                         [Element::Matrix(atoms)] => SegOut::Subs(matrix_bits(&names, atoms)?.1),
+                        [Element::Named(n)] if lit(&env, n).is_some() => {
+                            SegOut::Symbol(lit(&env, n).unwrap())
+                        }
                         other => return Err(unsupported(&format!("rewrite output {other:?}"))),
                     };
                     let seg_pat = |sel: &Selector| -> Result<SegPat, LowerError> {
@@ -617,6 +655,9 @@ pub fn lower(file: &FileAst) -> Result<Program, LowerError> {
                             [Element::SylBoundary] => Ok(SegPat::SylBoundary),
                             [Element::Matrix(atoms)] => {
                                 Ok(SegPat::Feats(matrix_bits(&names, atoms)?.0))
+                            }
+                            [Element::Named(n)] if lit(&env, n).is_some() => {
+                                Ok(SegPat::Class(vec![lit(&env, n).unwrap()]))
                             }
                             [Element::ClassRef(c)] => Ok(SegPat::Class(
                                 classes
@@ -649,10 +690,125 @@ pub fn lower(file: &FileAst) -> Result<Program, LowerError> {
         });
     }
 
+    // ── Parse 宣告(D24 子集;需 classes 已齊)──
+    let mut parse_cfg: Option<ParseCfg> = None;
+    for d in &file.decls {
+        let Decl::Parse { level, alts } = d else { continue };
+        let cfg = parse_cfg.get_or_insert_with(ParseCfg::default);
+        let cls = |name: &str| -> Result<Vec<SymId>, LowerError> {
+            classes
+                .get(name)
+                .cloned()
+                .ok_or_else(|| LowerError::UnknownName(name.to_owned()))
+        };
+        match level.as_str() {
+            "mora" => {
+                // 子集:`@V` 與 `@V :: @X`(後者 = WBP)
+                for alt in alts {
+                    match alt.as_slice() {
+                        [n] => cfg.nucleus = cls(&n.class)?,
+                        [n, c] => {
+                            cfg.nucleus = cls(&n.class)?;
+                            cfg.wbp_coda = Some(cls(&c.class)?);
+                        }
+                        _ => {
+                            return Err(LowerError::Unsupported {
+                                rule: "Parse mora".into(),
+                                what: "alternative with >2 terms".into(),
+                            })
+                        }
+                    }
+                }
+            }
+            "syllable" => {
+                // 子集:單一擇一 `@ons? :: @nuc :: @coda?`(1–3 項)
+                let alt = &alts[0];
+                match alt.as_slice() {
+                    [n] => cfg.nucleus = cls(&n.class)?,
+                    [o, n] => {
+                        cfg.onset = Some(cls(&o.class)?);
+                        cfg.nucleus = cls(&n.class)?;
+                    }
+                    [o, n, c] => {
+                        cfg.onset = Some(cls(&o.class)?);
+                        cfg.nucleus = cls(&n.class)?;
+                        cfg.coda = Some(cls(&c.class)?);
+                    }
+                    _ => {
+                        return Err(LowerError::Unsupported {
+                            rule: "Parse syllable".into(),
+                            what: "more than 3 terms".into(),
+                        })
+                    }
+                }
+            }
+            other => {
+                return Err(LowerError::Unsupported {
+                    rule: format!("Parse {other}"),
+                    what: "level not in M0 subset (mora|syllable)".into(),
+                })
+            }
+        }
+    }
+
+    // ── Spell-out 區塊(C10)──
+    let spellout = match &file.spellout {
+        None => None,
+        Some(sp) => {
+            let mut spec = SpelloutSpec::default();
+            for name in &sp.order {
+                spec.order.push(
+                    find_tier(&env, &tiers, name)
+                        .ok_or_else(|| LowerError::UnknownName(name.clone()))?,
+                );
+            }
+            for (tname, v) in &sp.empty {
+                let t = find_tier(&env, &tiers, tname)
+                    .ok_or_else(|| LowerError::UnknownName(tname.clone()))?;
+                let val = if v == "bare" {
+                    None
+                } else {
+                    Some(
+                        find_val(&env, &tiers, v)
+                            .ok_or_else(|| LowerError::UnknownMelodyValue(v.clone()))?
+                            .1,
+                    )
+                };
+                spec.empty.push((t, val));
+            }
+            spec.floating = match sp.floating.as_deref() {
+                None | Some("drop") => FloatingPolicy::Drop,
+                Some("error") => FloatingPolicy::Error,
+                Some(o) => {
+                    return Err(LowerError::Unsupported {
+                        rule: "Spell-out".into(),
+                        what: format!("floating policy {o:?}"),
+                    })
+                }
+            };
+            for (tname, vals, surf) in &sp.contour {
+                let t = find_tier(&env, &tiers, tname)
+                    .ok_or_else(|| LowerError::UnknownName(tname.clone()))?;
+                let mut vids = Vec::new();
+                for v in vals {
+                    vids.push(
+                        find_val(&env, &tiers, v)
+                            .ok_or_else(|| LowerError::UnknownMelodyValue(v.clone()))?
+                            .1,
+                    );
+                }
+                spec.contour.push((t, vids, surf.clone()));
+            }
+            Some(spec)
+        }
+    };
+
     Ok(Program {
         env,
         tiers,
         rules,
         classes,
+        spellout,
+        parse_cfg,
     })
 }
