@@ -10,6 +10,7 @@ use conlang_core::repr::feature::FeatBits;
 use conlang_core::repr::intern::{SymId, ValId};
 use conlang_core::repr::melody::MelodyTier;
 use conlang_core::repr::prosody::Level;
+use conlang_core::scan::{ScanDir, TickSel};
 use conlang_core::repr::Env;
 use conlang_core::strategy::{Pick, Strategy, TieBreak};
 use conlang_core::verbs::{Domain, InsertProbe, OnConflict, SegEnv, SegMatch, SegOut, SegPat, SegPos, Ward};
@@ -68,6 +69,21 @@ pub enum LoweredStmt {
         m: SegMatch,
         out: SegOut,
         env: SegEnv,
+    },
+    ScanAssoc {
+        tier: SymId,
+        along: Level,
+        dir: ScanDir,
+        val: ValId,
+        sel: TickSel,
+    },
+    ScanValueRewrite {
+        tier: SymId,
+        along: Level,
+        dir: ScanDir,
+        from: ValId,
+        to: ValId,
+        pre: Option<ValId>,
     },
 }
 
@@ -262,6 +278,99 @@ pub fn lower(file: &FileAst) -> Result<Program, LowerError> {
             rule: r.name.clone(),
             what: what.to_owned(),
         };
+        // Scan 塊:塊內每條語句各為一條規則(各自 commit)
+        if let Some(head) = &r.scan {
+            let tier = find_tier(&env, &tiers, &head.tier)
+                .ok_or_else(|| LowerError::UnknownName(head.tier.clone()))?;
+            let along = level_of(&head.along)
+                .or_else(|| env.domains.by_name(&head.along))
+                .ok_or_else(|| LowerError::BadAnchor(head.along.clone()))?;
+            if let Some(wb) = &head.within {
+                if wb != "pword" {
+                    return Err(unsupported("Scan within other than pword"));
+                }
+            }
+            let dir = match head.from.as_deref() {
+                None | Some("left") => ScanDir::FromLeft,
+                Some("right") => ScanDir::FromRight,
+                Some(o) => return Err(unsupported(&format!("Scan from {o:?}"))),
+            };
+            for (k, st) in r.stmts.iter().enumerate() {
+                let lowered = match st {
+                    Stmt::ScanAssociate {
+                        val,
+                        target,
+                        ordinal,
+                    } => {
+                        let (vt, vid) = find_val(&env, &tiers, val)
+                            .ok_or_else(|| LowerError::UnknownMelodyValue(val.clone()))?;
+                        if vt != tier {
+                            return Err(unsupported("scan associate value not in tier"));
+                        }
+                        let has_empty = target.0.iter().any(|e| matches!(e, Element::Empty));
+                        let sel = match (ordinal, has_empty) {
+                            (Some(OrdinalAst::Nth(n)), false) => TickSel::Nth(*n),
+                            (Some(OrdinalAst::First), true) | (None, true) => TickSel::FirstEmpty,
+                            _ => return Err(unsupported("scan associate target form")),
+                        };
+                        LoweredStmt::ScanAssoc {
+                            tier,
+                            along,
+                            dir,
+                            val: vid,
+                            sel,
+                        }
+                    }
+                    Stmt::Rewrite { from, to, env: e } => {
+                        let single = |sel: &Selector| -> Option<String> {
+                            match sel.0.as_slice() {
+                                [Element::Named(n)] => Some(n.clone()),
+                                _ => None,
+                            }
+                        };
+                        let f = single(from).ok_or_else(|| unsupported("scan rewrite from"))?;
+                        let t2 = single(to).ok_or_else(|| unsupported("scan rewrite to"))?;
+                        let (ft, fv) = find_val(&env, &tiers, &f)
+                            .ok_or_else(|| LowerError::UnknownMelodyValue(f.clone()))?;
+                        let (_, tv) = find_val(&env, &tiers, &t2)
+                            .ok_or_else(|| LowerError::UnknownMelodyValue(t2.clone()))?;
+                        if ft != tier {
+                            return Err(unsupported("scan rewrite tier mismatch"));
+                        }
+                        let pre = match e {
+                            None => None,
+                            Some(RuleEnv { pre: Some(p), post: None }) => {
+                                let pn =
+                                    single(p).ok_or_else(|| unsupported("scan env form"))?;
+                                Some(
+                                    find_val(&env, &tiers, &pn)
+                                        .ok_or_else(|| {
+                                            LowerError::UnknownMelodyValue(pn.clone())
+                                        })?
+                                        .1,
+                                )
+                            }
+                            Some(_) => return Err(unsupported("scan env shape")),
+                        };
+                        LoweredStmt::ScanValueRewrite {
+                            tier,
+                            along,
+                            dir,
+                            from: fv,
+                            to: tv,
+                            pre,
+                        }
+                    }
+                    other => return Err(unsupported(&format!("in Scan block: {other:?}"))),
+                };
+                rules.push(LoweredRule {
+                    name: format!("{}#{}", r.name, k + 1),
+                    stage: Stage::default(),
+                    stmts: vec![lowered],
+                });
+            }
+            continue;
+        }
         let mut stage = Stage::default();
         let mut stmts = Vec::new();
         for s in &r.stmts {
@@ -467,6 +576,9 @@ pub fn lower(file: &FileAst) -> Result<Program, LowerError> {
                         _ => return Err(unsupported("dominate ward (leftward|rightward only)")),
                     };
                     stmts.push(LoweredStmt::DominateEmpty { level, class, ward });
+                }
+                Stmt::ScanAssociate { .. } => {
+                    return Err(unsupported("associate with ordinal outside Scan block (D16)"))
                 }
                 Stmt::Rewrite { from, to, env: e } => {
                     let mut m = SegMatch::default();

@@ -64,4 +64,8 @@ pub enum EngineError {
     /// 音段規則改寫後的特徵束在音素庫無對應符號(I12,對齊 Lexurgy 行為)。
     #[error("no symbol in inventory for rewritten feature bundle at segment {idx}")]
     NoSymbolForBundle { idx: usize },
+
+    /// spell-out 多承載錨點無 contour 對應(D27)。
+    #[error("multi-bearing anchor at segment {at} on tier {tier:?} has no contour mapping")]
+    ContourUnmapped { tier: SymId, at: usize },
 }

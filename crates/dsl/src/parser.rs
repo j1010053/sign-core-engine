@@ -14,6 +14,7 @@ use crate::lexer::Tok;
 enum Line {
     Decl(Decl),
     RuleHeader(String, Option<Stmt>),
+    ScanHeader(ScanHead),
     Stmt(Stmt),
 }
 
@@ -155,13 +156,31 @@ fn stmt() -> impl Parser<Tok, Stmt, Error = Simple<Tok>> + Clone {
         .ignore_then(ident())
         .map(Stmt::Stage);
 
+    let ordinal = just(Tok::LBrack)
+        .ignore_then(
+            select! { Tok::Int(n) => OrdinalAst::Nth(n) }
+                .or(kw("first").to(OrdinalAst::First)),
+        )
+        .then_ignore(just(Tok::RBrack));
+
+    let scan_assoc = kw("associate")
+        .ignore_then(atom())
+        .then_ignore(just(Tok::ThinArrow))
+        .then(selector())
+        .then(ordinal.or_not())
+        .map(|((val, target), ordinal)| Stmt::ScanAssociate {
+            val,
+            target,
+            ordinal,
+        });
+
     let rewrite = selector()
         .then_ignore(just(Tok::Arrow))
         .then(selector())
         .then(rule_env().or_not())
         .map(|((from, to), env)| Stmt::Rewrite { from, to, env });
 
-    choice((stage, insert, dock, fill, merge, spread, shift, dominate, rewrite))
+    choice((stage, insert, dock, fill, merge, spread, shift, dominate, scan_assoc, rewrite))
 }
 
 // ── 宣告 ──
@@ -220,6 +239,22 @@ fn decl() -> impl Parser<Tok, Decl, Error = Simple<Tok>> + Clone {
 
 // ── 行 → 檔 ──
 
+fn scan_head() -> impl Parser<Tok, ScanHead, Error = Simple<Tok>> {
+    kw("Scan")
+        .ignore_then(ident())
+        .then_ignore(kw("along"))
+        .then(ident())
+        .then(kw("within").ignore_then(ident()).or_not())
+        .then(kw("from").ignore_then(ident()).or_not())
+        .then_ignore(just(Tok::Colon))
+        .map(|(((tier, along), within), from)| ScanHead {
+            tier,
+            along,
+            within,
+            from,
+        })
+}
+
 fn line_parser() -> impl Parser<Tok, Line, Error = Simple<Tok>> {
     let header = ident()
         .try_map(|s, span| {
@@ -235,6 +270,7 @@ fn line_parser() -> impl Parser<Tok, Line, Error = Simple<Tok>> {
 
     choice((
         decl().map(Line::Decl),
+        scan_head().map(Line::ScanHeader),
         stmt().map(Line::Stmt),
         header,
     ))
@@ -269,7 +305,19 @@ pub fn parse_lines(lines: &[Vec<Tok>]) -> Result<FileAst, ParseError> {
                 if let Some(s) = inline {
                     stmts.push(s);
                 }
-                file.rules.push(RuleAst { name, stmts });
+                file.rules.push(RuleAst {
+                    name,
+                    scan: None,
+                    stmts,
+                });
+            }
+            Line::ScanHeader(head) => {
+                let name = format!("Scan({} along {})", head.tier, head.along);
+                file.rules.push(RuleAst {
+                    name,
+                    scan: Some(head),
+                    stmts: Vec::new(),
+                });
             }
             Line::Stmt(s) => match file.rules.last_mut() {
                 Some(r) => r.stmts.push(s),

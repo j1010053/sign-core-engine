@@ -5,7 +5,7 @@
 
 Autosegmental 音變引擎(M0)。規範上游:《M0 實作參照 v1.0》→《執行語意規格 v0.1》→《語法規格 v0.3》。
 
-## 目前進度:M0 步驟 5 完成 — 範例 8.1–8.5 全數端到端綠燈
+## 目前進度:**M0 收工** — 範例集 8.1–8.6 全數端到端綠燈
 
 ```
 cargo run -p conlang-cli --bin conlang -- examples/8_1_tonogenesis.dsl examples/words.txt
@@ -62,7 +62,7 @@ cargo build -p conlang-core --target wasm32-unknown-unknown   # 可移植性(I4)
 - **P1–P4**(架構修補層,權威=`docs/架構修補01` §4):Word=臨時韻律域、Grammar Store、
   strata 層級錨定、cophonology 閂。
 
-## 下一步:M0 步驟 6 — scan + spellout(M0 收工步)
+## 下一步:M0 步驟 7(尾聲)
 
-Scan 三道鎖 + 序數 + 調簇不透明(D18);spell-out 純函數(C11)+ contour/D27 衝突檢查
-+ phrase-level 掛鉤(P3);出口 = 8.6(Bantu)綠燈(見《M0 實作參照》§8)。
+Lexurgy harness 骨架 + 分歧白名單;收尾補強(Spell-out DSL 區塊、over all、
+Parse 宣告、diag/);之後步驟 8 = Grammar Store(《架構修補01》)。

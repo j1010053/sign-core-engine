@@ -120,39 +120,20 @@ prosody(I8 拓撲)、melody、word、invariant、notation。本機工具鏈首�
 - 出口已過:**8.2–8.5 全數端到端綠燈**(`examples/8_2`–`8_5` + `dsl_8_2_to_8_5.rs`)。
   詞彙給定旋律/型態括號/WBP 莫拉由測試注入(詞條載入層職責)。
 
-**下一個任務(M0 步驟 6,見 M0 實作參照 §8)**:
-- `scan/`:三道鎖(along/within/from)+ over linked-only|all、調簇不透明(D18)、
-  序數尾槽、環境沿掃描軸(D20)、`…` 任意距離。
-- `spellout/`:純函數(C11)——order/empty/floating/contour/project;D27 衝突檢查;
-  **phrase-level 規則掛鉤**(P3 插入點,MVP 傳空集)。
-- 出口:**8.6(Bantu 三連發)綠燈**,M0 收工;之後步驟 7 = Lexurgy harness 骨架。
+**已完成(M0 步驟 6,M0 收工)**:
+- `scan/`:三道鎖枚舉(linked-only D4;`over all` 留步驟 7+)、調簇不透明(D18,粗掃描
+  停靠刻度首錨)、序數 `[n]`/`[first]`(D16)、值改寫沿掃描軸(D5/D20,= delete+insert
+  同位同聯結)。DSL:Scan 塊頭 + 塊內 `associate <值> -> <目標>[序數]` 與值改寫;
+  塊內每語句各為一條規則(各自 commit)。
+- `spellout/`:純函數(C11)——order/empty/floating/contour 宣告、D27 多承載無對應=error、
+  長元音 `ː` 投影(8.4 收尾)、phrase-level 掛鉤(P3,M0 空集)。**Spell-out 的 DSL 宣告
+  區塊(C10)未接 parser**——API 層已測,語法接入留步驟 7。
+- 出口已過:**8.6 綠燈(`examples/8_6` + `dsl_8_6.rs`)= 範例集 8.1–8.6 全數端到端,
+  M0 驗收達成**(六原語+生命週期+CLI 批次導出皆綠)。
 
-## 6. 命名原則(全專案實作規範,凌駕任何單篇審查建議)
+**下一個任務(M0 步驟 7 / 尾聲,見 M0 實作參照 §8)**:
+- Lexurgy harness 骨架 + 分歧白名單初版(corpus submodule,不 vendor;I5 哨兵規則)。
+- 收尾補強:Spell-out DSL 宣告區塊(C10)、`over all` 枚舉、`…` 任意距離、
+  Parse 宣告(取代暫定 CV 音節化)、diag/ 分級資料型別(B9)。
+- 之後:步驟 8(修補01)= Grammar Store 容器 + AddRule/Lexicalization 相容模式。
 
-**核心規約:名字服務讀者;操作屬哪一層由「原子性/正交性」決定,不由「是不是語言學術語」決定。**
-
-演化操作分三層,命名各異:
-
-- **L1 純資料原語**(讀者=機器/引擎內部):用**工程名**——`Create` / `Delete` / `Modify` / `Split` / `Merge` / `Reference` / `SetTransparency`。術語在此只添亂。
-- **L2 語言原語**(讀者=懂語言學的規則作者、演化樹 UI):**凡對應一個穩定、正交、單步的語言學慣例,就用慣例名**——`SoundChange` / `Reanalyze` / `Drift` / `DeriveSense` / `Fuse` / `Adopt` / `Entrench` / `Lexicalize`。自造工程名反而逼作者心譯,增加混淆。無對應慣例時才用通用工程動詞(如 `Fuse`)。
-- **L3 理論宏**(讀者=語言學家):用**完整理論術語**——`Grammaticalization` / `Bleaching` / `Univerbation` / `Decategorialization` / `Subjectification`。L3 是資料表(展開成 L1/L2 序列),非 enum variant。
-
-**判定原則**:一個操作進 L2 還是 L3,看它是否「單步且正交」——`Reanalyze` 是(單步結構操作)→ L2 用慣例名;`Bleaching` 不是(= 有方向的 `Drift`,切法因理論而異)→ L3 macro。**術語與否只決定它在所屬層的名字,不決定它屬哪一層。**
-
-推論:`enum ChangeOp` = L1 + L2(小而穩定、正交、原子;L2 多為語言學家一眼認得的慣例名,免心譯);理論標籤全在 L3 資料表,**加新理論只加資料、不改 enum**。macro↔primitive 的雙向映射是儲存的一等資料(演化樹回放要能對使用者顯示術語、對引擎跑資料)。
-
-這條凌駕個別審查的「一律工程名」或「一律術語名」——兩者都錯在忽略讀者分層。同一原則已體現於既有設計:notation 是共同語言、Lexurgy 匯入器做術語轉換、DSL 的 associate(L1 式)vs spread(具名)。
-
-## 7. 工作方式
-
-- **先讀規格再寫碼**:動到某模組前,重讀對應規格章節(§5 的模組↔章節對照在 M0 實作參照 §5)。
-- **動工先查 docs/11**:任一模組動工前,先在測試案例總索引查它的驗收案例(什麼算做對了)。
-- **測試命名對齊規格**:測試名引用範例編號或決策編號(如 `tonogenesis_8_1`、`ncc_soft_constraint_d7`),
-  讓紅燈能直接回溯到規格條文。
-- **notation 是共同語言**:任何表徵狀態的斷言優先用 `notation::render_*` 的字串比對
-  (`"H~μ0~μ1 (L)@2"`),與規格記法一致、與未來 insta 快照銜接。
-- **commit message 前綴**:`M0 stepN:`;若引入新決策:`I9: <一句話> + M0 stepN: …`,
-  並同步更新 `docs/05` 的決策表。
-- **與使用者的語言**:繁體中文(台灣);程式碼註解可中英混用,識別字用英文。
-- **不確定時**:先查決策編號索引(D→docs/02+03、A/B/C→docs/04 §0、I→docs/05 §9、
-  P→架構修補01 §4),查無才發問;發問時附上你建議的方案與其對既有決策的影響。

@@ -102,7 +102,13 @@ pub enum Stmt {
         target: Selector,
         ward: String,
     },
-    /// 音段 rewrite:`<sel> => <sel|*> [/ env]`(貼合 Lexurgy)
+    /// Scan 塊內:`associate <值> -> <目標>[序數]`(D16)
+    ScanAssociate {
+        val: String,
+        target: Selector,
+        ordinal: Option<OrdinalAst>,
+    },
+    /// 音段 rewrite:`<sel> => <sel|*> [/ env]`(貼合 Lexurgy);Scan 塊內同形 = 值改寫
     Rewrite {
         from: Selector,
         to: Selector,
@@ -110,10 +116,27 @@ pub enum Stmt {
     },
 }
 
-/// 具名規則。
+/// Scan 塊頭(D3 三道鎖)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanHead {
+    pub tier: String,
+    pub along: String,
+    pub within: Option<String>,
+    pub from: Option<String>,
+}
+
+/// 序數尾槽(D16;僅 Scan 內)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrdinalAst {
+    Nth(u32),
+    First,
+}
+
+/// 具名規則(`scan` 有值 = Scan 塊;塊內每條語句各為一條規則)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleAst {
     pub name: String,
+    pub scan: Option<ScanHead>,
     pub stmts: Vec<Stmt>,
 }
 

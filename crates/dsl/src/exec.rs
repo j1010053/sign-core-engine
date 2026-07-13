@@ -53,6 +53,21 @@ fn stmt_actions(p: &Program, w: &Word, s: &LoweredStmt) -> Result<Vec<Action>, E
             verbs::dominate_empty(w, *level, class, *ward)
         }
         LoweredStmt::Rewrite { m, out, env } => verbs::rewrite(w, &p.env.inv, m, out, env),
+        LoweredStmt::ScanAssoc {
+            tier,
+            along,
+            dir,
+            val,
+            sel,
+        } => conlang_core::scan::assoc_at(w, *tier, *along, *dir, *val, *sel),
+        LoweredStmt::ScanValueRewrite {
+            tier,
+            along,
+            dir,
+            from,
+            to,
+            pre,
+        } => conlang_core::scan::value_rewrite(w, *tier, *along, *dir, *from, *to, *pre),
     }
 }
 
@@ -75,6 +90,8 @@ fn class_of(rule: &LoweredRule) -> VerbClass {
                 | LoweredStmt::Spread { .. }
                 | LoweredStmt::Shift { .. }
                 | LoweredStmt::Rewrite { .. }
+                | LoweredStmt::ScanAssoc { .. }
+                | LoweredStmt::ScanValueRewrite { .. }
         )
     });
     if reads_prosody {
