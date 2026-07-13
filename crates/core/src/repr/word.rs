@@ -1,4 +1,7 @@
 //! `Word`:單一詞的完整表徵快照(I1:快照 = clone)。
+/// Complete phonological representation operated on by the sound change engine.
+/// Usually corresponds to one prosodic word,
+/// but may temporarily represent larger prosodic domains during phrase-level operations.
 
 use super::feature::FeatBits;
 use super::intern::SymId;
