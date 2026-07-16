@@ -1,8 +1,0 @@
----
-source: crates/dsl/tests/dsl_8_2_to_8_5.rs
-expression: t
----
-*ak (weight-by-position)
-  input              a k
-  coda-loss          a
-  repair-mora        a

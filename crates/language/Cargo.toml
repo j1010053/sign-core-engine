@@ -6,7 +6,7 @@ description = "Language: the synchronic knowledge file (Global/Trait/Sign) with 
 
 [dependencies]
 # P20 依賴方向:language → dsl(→ core);禁反向
-conlang-dsl = { path = "../dsl" }
+tshiatun-dsl = { path = "../../../tshiatun/crates/dsl" }
 thiserror = "2"
 
 [dev-dependencies]

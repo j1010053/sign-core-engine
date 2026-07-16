@@ -185,6 +185,12 @@ verbatim)、`==` 切 Block(P27)、`Name[n]` 引用、`=`/`=>` 二分、`@stage`(
 非 canonical 輸入正規化為不動點、source→AST golden、錯誤定位(行號)。
 規則 env/action 內部與守衛求值的結構化 = 步驟 10(compile pass 需求驅動)。
 
+**引擎分離(2026-07-17,I7 v2)**:core/dsl/cli/examples/corpus 移至獨立 repo
+**`../tshiatun`**(Tshiatūn/切韻;GPL-3.0-or-later;規則檔 `.qy`;bin `tshiatun`;
+14 套件綠、Lexurgy 黃金 8/8、wasm 綠)——P20「獨立可分軟體」的實體化,待 push GitHub。
+本 repo(工作台)自此只含設計文件 + `crates/language`(path 依賴 tshiatun-dsl)。
+引擎相關測試/開發改在 tshiatun repo 進行。
+
 **下一個任務(鳥瞰步驟 10)**:Compile pipeline ①Source→②Expanded(Trait Expansion,
 全 block 完整性)→③Resolved(Name Resolution + Priority 欄位級解析)→④Ordered
 (Stage 排序,P18 dispatch 優先於書寫順序)→⑤Codegen(Compiled Grammar + Compiled Sign);

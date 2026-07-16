@@ -8,7 +8,7 @@
 //!   確定性(區段序固定、具名容器按名排序、規則保序、集合排鍵;I15-d)。
 //!
 //! dsl 域宣告(feature/symbol/class,Lexurgy 形)以**不透明區塊**承載(I15-a,
-//! 裁決 docs/13 §4-1):language 不解析,step 11+ 原樣交給 `conlang_dsl::compile`。
+//! 裁決 docs/13 §4-1):language 不解析,step 11+ 原樣交給 `tshiatun_dsl::compile`。
 //! `RuleId`/`SignId` 不入印出格式,re-parse 依文件序決定性再生(I15-b/P26)。
 //! 依賴方向:`language → dsl`(P20);本 crate 對 dsl 的使用僅限公開型別。
 
@@ -19,7 +19,7 @@ pub mod parser;
 pub mod path;
 pub mod printer;
 
-pub use conlang_dsl::lower::Stage;
+pub use tshiatun_dsl::lower::Stage;
 
 // ── ④ 引用類(P24:Ref 是屬性值,非圖邊)──
 

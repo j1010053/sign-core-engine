@@ -1,9 +1,0 @@
----
-source: crates/dsl/tests/dsl_8_2_to_8_5.rs
-expression: t
----
-*mata
-  input              m a t a
-  nasal-source       m a t a  |  (+nasal)@0
-  dock-nasal         m a t a  |  +nasal~x0
-  nasal-spread       m a t a  |  +nasal~x0~x1
