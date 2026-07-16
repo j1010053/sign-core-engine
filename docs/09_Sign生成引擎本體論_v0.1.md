@@ -88,6 +88,11 @@ struct Prag { frame: Option<FrameId>, discourse: SmallVec<[DiscourseTag; 0]>,
 ```
 不只 register(答審查者第四點):資訊結構(topic/focus)、示證、言者意圖需 frame/discourse/speech_act。**Prag→Morph→Syn 的跨層演化**(敬語,Case 10)以 prag 標記為起點,B 原語逐維遷移。標籤取自受控本體的 prag 分支。
 
+> **修補02/03 銜接**:sign 的 dims 在 compile 前可含 trait 引用(TraitId),compile 後只剩展開值
+> (sign 保留 TraitId 供反向索引,屬 Compile Artifact,不影響語意,P8);Builder 於 adopt 後執行
+> compile 步驟(展開 trait → 最終 sign + Compiled Grammar);construction 的 cophonology 槽(P4)
+> 在 trait 框架下 = 構式引用的 trait phon block。
+
 ## 3. 生成流水線:Need → Generator → Builder → Store【M】
 
 分層(採審查者第五點),**唯讀提議與唯寫修改分離**:

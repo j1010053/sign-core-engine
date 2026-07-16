@@ -7,10 +7,11 @@
 ## 0. 最重要的三件事
 
 1. **規格已凍結,以編號決策為準。** 全部設計爭議都已裁決並編號:D1–D28(語法/本體論)、
-   A1–A4 / B5–B9 / C10–C11(執行語意)、I1–I10(實作層)、P1–P4(架構修補層)。
-   任何實作若與編號決策矛盾,**停下來明確指出衝突**,不要自行變通。若遇到規格未覆蓋的
-   新問題,提出方案並建議編為新的 I 系列決策(I11、I12…),寫進
-   `docs/05_M0實作參照_v1.0.md` §9 的表格後再實作;架構層變更走 P 系列(權威=《架構修補01》§4)。
+   A1–A4 / B5–B9 / C10–C11(執行語意)、I1–I14(實作層,docs/05 §9)、
+   **P1–P28(架構修補層;P1–P19 權威=《架構修補彙整 01–04》§1 總表、P20–P28 權威=《修補05》§11;
+   個別修補文件與彙整出入處以彙整為準;P7 已廢止→P14)**。
+   任何實作若與編號決策矛盾,**停下來明確指出衝突**,不要自行變通。規格未覆蓋的新問題:
+   實作層提案編 I 系列入 docs/05 §9;架構層變更走 P 系列。
 2. **每個開發階段必須以測試出口收尾。** 不存在「做完但沒有測試綠燈」的階段
    (M0 實作參照 §8:每步以哪個範例綠燈為出口)。
 3. **哨兵規則:** 若你發現自己在逐檔/逐函式翻譯 Lexurgy(Kotlin, GPL-3.0)的原始碼,
@@ -35,6 +36,12 @@
 | `11_測試案例集總索引_v0.1.md` | **全專案測試索引**:DSL 範例 8.1–8.6、18 案折磨測試、十實例、Rust 測試、Lexurgy 黑盒的統一映射與狀態;動工任一模組前先查其驗收案例 |
 | `12_邏輯分層架構_v0.1.md` | 四層架構(展示/應用/引擎/資料);引擎分即時+批次兩子層,DSL core crate 跨兩子層共用;應用層(Command/Query API)為下一個設計空白。**設計層** |
 | `架構修補01_共時規則系統與臨時韻律域_v0.1.md` | **P 系列決策權威(P1–P4)**:Word=臨時韻律域、Grammar Store、strata 層級錨定+循環套用、cophonology 閂;對 M0 步驟 2–3 零衝擊,插入點=步驟 4(`stage:` 標記,I14)與步驟 6(phrase-level 掛鉤);修補內容已回寫 docs/01–09、12 |
+| `架構修補02_Trait機制_v0.1.md` | Trait = macro 展開模板(P5–P7;P7 廢止→P14) |
+| `架構修補03_Trait與CompiledGrammar_v0.2.md` | Compiled Grammar 責任分離、Definition/Rule 二分(P8/P9) |
+| `架構修補04_共時／歷時分離與歷時實作分層_v0.1.md` | 共時=編譯器/歷時=直譯器、歷時四層、State(P10–P13) |
+| `架構修補彙整_01-04_v1.0.md` | **P1–P19 權威總表** + 裁決(P14–P19)+ 廢止/更名對照(全庫檢索用) |
+| `架構2.0總鳥瞰_v1.0.md` | **2.0 單一入口**:Language/ChangeSet 雙軌全圖、四條資訊流、Debug 模塊化、**新實作順序(步驟 8–22,M1–M4)** |
+| `架構修補05_Primitive與檔案格式_v0.1.md` | **P20–P28 權威**:DSL 獨立性、IR dump/canonical printer、條件語法(else/Path/tier-adjacency)、四原語、Ref 模型、.lang/.chg 檔案格式 |
 | `archive/` | 已取代的歷史文件,勿引用(各檔頭有橫幅說明) |
 
 ## 2. 不可違反的設計不變式(內化這些,寫每一行程式碼時對照)
@@ -56,7 +63,11 @@
 - **prag 維開放非封閉(07 §5b)**:語用五類是預設標記集非固定入口;語法化的語用入口是 pragmatic strengthening 機制,B 只設一個 `pragmaticalize` 原語。
 - **NCC 是軟約束(D7)**:偵測但預設 warn;`strict-ncc` 可升級。中間態放任合法,出口把關(D27 同哲學)。
 - **sign.phon = 底層形 UR(P1)**:表層形**永不儲存**,由 Grammar Store 共時規則按需導出;`Word` 是臨時韻律域(sign 組合按需建構,預設 ω),非儲存單位。
-- **歷時演化編輯有限儲存(P2)**:演化 = 編輯 Grammar Store(AddRule/LoseRule/Reorder/Invert)與 UR,**永不枚舉無限的組合空間**;「套規則改詞表」僅為 AddRule+Lexicalization 相容模式。
+- **歷時演化編輯有限儲存(P2/P10)**:語言知識只住 **Language**(Global/Trait/Sign);演化 = 直譯器改寫 Language 後重 compile,**永不枚舉無限的組合空間**;歷時不得直接碰 Compiled Grammar/Sign。
+- **共時=編譯器、歷時=直譯器(P10)**:Compile 僅存在於共時側;Compiled Grammar 是可丟棄重算的編譯產物(P8)。
+- **`dsl` crate 不得 import 任何 Language/Sign 型別(P20)**:依賴方向 `changeset → language → dsl`,CI 檢查;dsl 只知 Word。
+- **ID 配發必須決定性(P26)**:純序列性,replay 逐位元可重現;禁隨機/時間戳。
+- **引用是 Ref 屬性值,非圖邊(P24)**:四原語(insert/delete/update/move)在樹上封閉的前提。
 
 ## 3. 實作原則(執行語意 §9,每次 PR 自問)
 
@@ -140,7 +151,17 @@ prosody(I8 拓撲)、melody、word、invariant、notation。本機工具鏈首�
 - **Lexurgy 黃金測試(執行級)**:自 core spec 測試萃取三元組,M0 子集 8/8 通過
   (含 compound=B5、parallel 凍結兩個語意對齊點);17 案 → M2。`…` 任意距離未做(步驟 8+)。
 
-**下一個任務(步驟 8,《架構修補01》)**:Grammar Store 容器(規則具名儲存,按 stage 索引)
-+「(Store+詞)→導出」API + AddRule/Lexicalization 相容模式;M2 = 完整 Lexurgy 匯入器
-(多符號/類/矩陣/量詞/Else:/defer)+ Latin→Romance 黃金鏈。
+**架構 2.0 已定(2026-07-13 讀入)**:修補02–05 + 彙整 + 總鳥瞰納入 repo。
+「Grammar Store 容器」計畫**作廢**——新路線圖 = 《架構2.0總鳥瞰》§4(步驟 8–22):
+- **M1 共時側**:步驟 8(Language 資料結構 + canonical printer/empty root + IR dump,P21/P28)
+  → 9(Language parser:trait/==block/[n]/Definition=/Rule=>/@stage/Path/else)
+  → 10(Compile 五 pass,每 pass dump golden)→ 11(Compiled Grammar;🔑 **雙軌迴歸**:
+  8.1–8.6 兩路徑表層逐字相同,P20)→ 12(臨時 Word 建構 + 循環套用)。
+- **M2 歷時側**:13(Primitive Edit 四原語 P23)→ 14(ChangeSet Interpreter,P26;🔑 歷時貫通)
+  → 15(Atomic Rewrite 12 項展開 golden)→ 16(Evolution_node + Replay)→ 17(Recipe/Goal/Weight DB;🔑 層級介入)。
+- **M3**:18(Need→Generator→Builder)→ 19(E1 + Weight DB)→ 20(State)。**M4**:應用層 + UI。
+- 現有 dsl/core = **P20 的獨立音變 DSL(路徑 A)**,原樣保留為可交付產品;
+  Lexurgy 完整匯入器與 Latin→Romance 黃金鏈仍屬其後續。
+- **設計鏈回填狀態**:CLAUDE.md/docs05 已同步;彙整 §6 與修補05 §12 的逐文件清單
+  對 docs/01/02/04/06/07/08/10/11/12 的回填**待做**(以彙整為單一來源,見 docs/13 盤點)。
 
