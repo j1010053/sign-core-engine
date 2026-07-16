@@ -176,8 +176,17 @@ canonical empty root(P28)、canonical printer(P21 確定性;IR dump = canonical 
 P26 序列性 id(不入印出格式,I15);dsl 域宣告以不透明區塊承載(裁決1);
 `language → dsl` 依賴已掛(P20 方向)。出口過:單元 5 + dump golden(修補05 §10.1 樣例)。
 
-**下一個任務(鳥瞰步驟 9)**:Language Parser——`trait`/`global trait`/`sign` 宣告、
-`==` 切 Block(P27)、`<名>[n]` 引用、Definition `=`/Rule `=>` 二分、`@stage`、Path、
-`else` 鏈(P22);language 擴充 dsl 的條件文法(P20 §1.5);出口 = source→AST golden
-+ **round-trip 恆等**(text→IR→text,P21)。
+**已完成(鳥瞰步驟 9)**:Language Parser(行導向遞降;chumsky 屬 I6 的 DSL 規則語言範圍,
+不及於行/括號結構的 .lang)——dsl 域區依**檔案位置**判定(裁決1:首個 language 構造前
+verbatim)、`==` 切 Block(P27)、`Name[n]` 引用、`=`/`=>` 二分、`@stage`(省略=word)、
+**`else` 鏈**(P22,入 `Rule.else_chain`,printer 同步輸出)、**Path 文法**(修補05 §3.5,
+`path::parse_path`:`.`欄位/`[key]`/`~tier`,Def 路徑驗證+步驟 13 定址複用)。
+出口過:**round-trip 恆等**(canonical 輸入逐位元;id 依文件序決定性再生)、
+非 canonical 輸入正規化為不動點、source→AST golden、錯誤定位(行號)。
+規則 env/action 內部與守衛求值的結構化 = 步驟 10(compile pass 需求驅動)。
+
+**下一個任務(鳥瞰步驟 10)**:Compile pipeline ①Source→②Expanded(Trait Expansion,
+全 block 完整性)→③Resolved(Name Resolution + Priority 欄位級解析)→④Ordered
+(Stage 排序,P18 dispatch 優先於書寫順序)→⑤Codegen(Compiled Grammar + Compiled Sign);
+①–④ 全是合法 Language(progressive lowering),**每 pass 一個 dump golden**(P21)。
 

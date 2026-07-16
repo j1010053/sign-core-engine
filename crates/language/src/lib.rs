@@ -15,6 +15,8 @@
 #![forbid(unsafe_code)]
 #![deny(missing_debug_implementations)]
 
+pub mod parser;
+pub mod path;
 pub mod printer;
 
 pub use conlang_dsl::lower::Stage;
@@ -73,9 +75,12 @@ pub struct Def {
 pub struct Rule {
     /// 穩定 ID(fossilize/generalize 的 move 對象;P25 定址靠它)。
     pub id: RuleId,
-    /// 規則本體原文(`a => ə / _#`),不含 `@stage`。
+    /// 主分支原文(`a => ə / _#`),不含 `@stage` 與 else。
     pub body: String,
     pub stage: Stage,
+    /// `else` 鏈(P22):disjunctive 單趟,第一匹配勝出;分支共享本規則 stage。
+    /// 各分支為原文(`ɐ / _[+cons]`、無條件 `e`);結構化隨步驟 10。
+    pub else_chain: Vec<String>,
 }
 
 /// Block 內項目(P27:Item = Definition | Rule)。
@@ -164,7 +169,14 @@ impl Language {
             id: self.fresh_rule_id(),
             body: body.into(),
             stage,
+            else_chain: Vec::new(),
         }
+    }
+
+    /// 解析 canonical(或使用者)`.lang` 原文(步驟 9);round-trip:
+    /// `Language::parse(src)?.dump()` 對 canonical 輸入恆等(P21)。
+    pub fn parse(src: &str) -> Result<Language, parser::ParseError> {
+        parser::parse(src)
     }
 
     /// 建 sign(id 自動配發)並加入容器。

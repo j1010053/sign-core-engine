@@ -1,0 +1,153 @@
+---
+source: crates/language/tests/roundtrip.rs
+expression: "format!(\"{lang:#?}\")"
+---
+Language {
+    dsl_decls: [
+        "Feature voice(+voice, -voice)",
+        "Symbol m [+sonorant]",
+        "Class vowel {a, e, i, o, u}",
+    ],
+    prosody: [
+        "μ",
+        "σ",
+        "Ft",
+        "ω",
+        "φ",
+        "ι",
+        "U",
+    ],
+    distribution: [
+        (
+            "/k/",
+            "0.15",
+        ),
+        (
+            "/t/",
+            "0.20",
+        ),
+    ],
+    traits: [
+        TraitDef {
+            name: "CorePhonology",
+            global: true,
+            blocks: [
+                Block {
+                    items: [
+                        Rule(
+                            Rule {
+                                id: RuleId(
+                                    0,
+                                ),
+                                body: "a => ə / _#",
+                                stage: Word,
+                                else_chain: [
+                                    "ɐ / _[+cons]",
+                                    "e",
+                                ],
+                            },
+                        ),
+                    ],
+                },
+                Block {
+                    items: [
+                        Rule(
+                            Rule {
+                                id: RuleId(
+                                    1,
+                                ),
+                                body: "n => m / _[+labial]",
+                                stage: Stem,
+                                else_chain: [],
+                            },
+                        ),
+                    ],
+                },
+            ],
+        },
+        TraitDef {
+            name: "VerbCommon",
+            global: false,
+            blocks: [
+                Block {
+                    items: [
+                        Def(
+                            Def {
+                                path: "syn.provides",
+                                value: "VERB",
+                            },
+                        ),
+                        Def(
+                            Def {
+                                path: "syn.requires",
+                                value: "[agent, patient]",
+                            },
+                        ),
+                    ],
+                },
+                Block {
+                    items: [
+                        Rule(
+                            Rule {
+                                id: RuleId(
+                                    2,
+                                ),
+                                body: "valence => 2 / _[+move]",
+                                stage: Word,
+                                else_chain: [],
+                            },
+                        ),
+                    ],
+                },
+            ],
+        },
+    ],
+    signs: [
+        SignDef {
+            id: SignId(
+                0,
+            ),
+            name: "go",
+            items: [
+                TraitUse {
+                    name: "VerbCommon",
+                    block: 1,
+                },
+                Def(
+                    Def {
+                        path: "phon",
+                        value: "/go/",
+                    },
+                ),
+                Def(
+                    Def {
+                        path: "sem.senses",
+                        value: "[ sense s1 { concept = GO } ]",
+                    },
+                ),
+                TraitUse {
+                    name: "VerbCommon",
+                    block: 2,
+                },
+                Def(
+                    Def {
+                        path: "entrenchment",
+                        value: "0.8",
+                    },
+                ),
+                Rule(
+                    Rule {
+                        id: RuleId(
+                            3,
+                        ),
+                        body: "o => ə / _#",
+                        stage: Phrase,
+                        else_chain: [],
+                    },
+                ),
+            ],
+        },
+    ],
+    next_rule: 4,
+    next_sign: 1,
+}

@@ -17,10 +17,17 @@ fn stage_str(s: Stage) -> &'static str {
     }
 }
 
+fn push_rule(out: &mut String, r: &crate::Rule) {
+    out.push_str(&format!("    {} @stage {}\n", r.body, stage_str(r.stage)));
+    for e in &r.else_chain {
+        out.push_str(&format!("        else {e}\n")); // P22:分支共享 stage
+    }
+}
+
 fn push_item(out: &mut String, item: &Item) {
     match item {
         Item::Def(d) => out.push_str(&format!("    {} = {}\n", d.path, d.value)),
-        Item::Rule(r) => out.push_str(&format!("    {} @stage {}\n", r.body, stage_str(r.stage))),
+        Item::Rule(r) => push_rule(out, r),
     }
 }
 
@@ -91,9 +98,7 @@ pub fn print(l: &Language) -> String {
                     s.push_str(&format!("    {name}[{block}]\n"))
                 }
                 SignItem::Def(d) => s.push_str(&format!("    {} = {}\n", d.path, d.value)),
-                SignItem::Rule(r) => {
-                    s.push_str(&format!("    {} @stage {}\n", r.body, stage_str(r.stage)))
-                }
+                SignItem::Rule(r) => push_rule(&mut s, r),
             }
         }
         s.push_str("}\n");
