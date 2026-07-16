@@ -119,6 +119,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "conlang-language"
+version = "0.1.0"
+dependencies = [
+ "conlang-dsl",
+ "insta",
+]
+
+[[package]]
 name = "console"
 version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

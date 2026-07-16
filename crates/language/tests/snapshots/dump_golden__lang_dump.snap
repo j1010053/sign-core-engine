@@ -1,0 +1,36 @@
+---
+source: crates/language/tests/dump_golden.rs
+expression: dump
+---
+Feature voice(+voice, -voice)
+Feature sonorant(+sonorant)
+Symbol m [+sonorant]
+Class vowel {a, e, i, o, u}
+
+prosody = μ σ Ft ω φ ι U
+
+distribution {
+    /k/ = 0.15
+    /t/ = 0.20
+}
+
+global trait CorePhonology {
+    a => ə / _# @stage word
+    ==
+    n => m / _[+labial] @stage stem
+}
+
+trait VerbCommon {
+    syn.provides = VERB
+    syn.requires = [agent, patient]
+    ==
+    valence => 2 / _[+move] @stage word
+}
+
+sign go {
+    VerbCommon[1]
+    phon = /go/
+    sem.senses = [ sense s1 { concept = GO } ]
+    VerbCommon[2]
+    entrenchment = 0.8
+}

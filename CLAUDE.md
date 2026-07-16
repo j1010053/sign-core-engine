@@ -167,5 +167,17 @@ prosody(I8 拓撲)、melody、word、invariant、notation。本機工具鏈首�
   (2) crate 佈局——build_word/循環套用協調在 language crate,engine 側不動,接口
   `language::build_word/compile_phon_rules → dsl::Word/RuleSet → dsl::run` 單向依賴;
   (3) docs 舊文件不逐檔回填,以最新檔案為基準。
-- **步驟 8 前置(擁有者指示)**:先確保 dsl 音變演化引擎可作為**獨立軟體發布**(P20)。
+- **步驟 8 前置(擁有者指示)**:先確保 dsl 音變演化引擎可作為**獨立軟體發布**(P20)——已完成
+  (CLI 詞表′契約、依賴守衛、產品 README,commit `2a7d530`)。
+
+**已完成(鳥瞰步驟 8,M1 開跑)**:`crates/language`——五組 AST 節點(修補05 §10.3:
+Def/Rule(RuleId)/TraitDef(Block 節點,P27)/SignDef/Ref 型別/distribution)、
+canonical empty root(P28)、canonical printer(P21 確定性;IR dump = canonical form)、
+P26 序列性 id(不入印出格式,I15);dsl 域宣告以不透明區塊承載(裁決1);
+`language → dsl` 依賴已掛(P20 方向)。出口過:單元 5 + dump golden(修補05 §10.1 樣例)。
+
+**下一個任務(鳥瞰步驟 9)**:Language Parser——`trait`/`global trait`/`sign` 宣告、
+`==` 切 Block(P27)、`<名>[n]` 引用、Definition `=`/Rule `=>` 二分、`@stage`、Path、
+`else` 鏈(P22);language 擴充 dsl 的條件文法(P20 §1.5);出口 = source→AST golden
++ **round-trip 恆等**(text→IR→text,P21)。
 

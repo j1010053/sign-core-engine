@@ -1,0 +1,12 @@
+[package]
+name = "conlang-language"
+version = "0.1.0"
+edition = "2021"
+description = "Language: the synchronic knowledge file (Global/Trait/Sign) with canonical printer (2.0 step 8)"
+
+[dependencies]
+# P20 依賴方向:language → dsl(→ core);禁反向
+conlang-dsl = { path = "../dsl" }
+
+[dev-dependencies]
+insta = "1"
