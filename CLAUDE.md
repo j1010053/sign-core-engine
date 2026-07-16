@@ -162,6 +162,10 @@ prosody(I8 拓撲)、melody、word、invariant、notation。本機工具鏈首�
 - **M3**:18(Need→Generator→Builder)→ 19(E1 + Weight DB)→ 20(State)。**M4**:應用層 + UI。
 - 現有 dsl/core = **P20 的獨立音變 DSL(路徑 A)**,原樣保留為可交付產品;
   Lexurgy 完整匯入器與 Latin→Romance 黃金鏈仍屬其後續。
-- **設計鏈回填狀態**:CLAUDE.md/docs05 已同步;彙整 §6 與修補05 §12 的逐文件清單
-  對 docs/01/02/04/06/07/08/10/11/12 的回填**待做**(以彙整為單一來源,見 docs/13 盤點)。
+- **三項裁決(2026-07-13,docs/13 §4)**:(1) 語法邊界——feature/symbol/class 留 dsl 域
+  (Lexurgy 形),Language 的 `=` Definition 只管 dsl 不認識的概念,同名靠檔案區域區分;
+  (2) crate 佈局——build_word/循環套用協調在 language crate,engine 側不動,接口
+  `language::build_word/compile_phon_rules → dsl::Word/RuleSet → dsl::run` 單向依賴;
+  (3) docs 舊文件不逐檔回填,以最新檔案為基準。
+- **步驟 8 前置(擁有者指示)**:先確保 dsl 音變演化引擎可作為**獨立軟體發布**(P20)。
 
