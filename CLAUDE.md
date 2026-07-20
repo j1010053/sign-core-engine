@@ -7,9 +7,10 @@
 ## 0. 最重要的三件事
 
 1. **規格已凍結,以編號決策為準。** 全部設計爭議都已裁決並編號:D1–D28(語法/本體論)、
-   A1–A4 / B5–B9 / C10–C11(執行語意)、I1–I14(實作層,docs/05 §9)、
-   **P1–P28(架構修補層;P1–P19 權威=《架構修補彙整 01–04》§1 總表、P20–P28 權威=《修補05》§11;
-   個別修補文件與彙整出入處以彙整為準;P7 已廢止→P14)**。
+   A1–A4 / B5–B9 / C10–C11(執行語意)、I1–I18(實作層,docs/05 §9)、
+   **P1–P44(架構修補層;P1–P19 權威=《架構修補彙整 01–04》§1 總表、P20–P28 權威=《修補05》§11、
+   P29–P37 權威=《修補06 插件服務與DSL API》§8、P38–P44 權威=《修補07 共時四維系統》§9;
+   個別修補文件與彙整出入處以彙整/最新修補為準;P7 已廢止→P14)**。
    任何實作若與編號決策矛盾,**停下來明確指出衝突**,不要自行變通。規格未覆蓋的新問題:
    實作層提案編 I 系列入 docs/05 §9;架構層變更走 P 系列。
 2. **每個開發階段必須以測試出口收尾。** 不存在「做完但沒有測試綠燈」的階段
@@ -42,6 +43,8 @@
 | `架構修補彙整_01-04_v1.0.md` | **P1–P19 權威總表** + 裁決(P14–P19)+ 廢止/更名對照(全庫檢索用) |
 | `架構2.0總鳥瞰_v1.0.md` | **2.0 單一入口**:Language/ChangeSet 雙軌全圖、四條資訊流、Debug 模塊化、**新實作順序(步驟 8–22,M1–M4)** |
 | `架構修補05_Primitive與檔案格式_v0.1.md` | **P20–P28 權威**:DSL 獨立性、IR dump/canonical printer、條件語法(else/Path/tier-adjacency)、四原語、Ref 模型、.lang/.chg 檔案格式 |
+| `架構修補06_插件服務與DSL_API_v0.1.md` | **P29–P37 權威**:插件系統(資料層/程式碼層分離)、外部服務生命週期(ServiceRef→resolve→執行→驗證→History)、音變 DSL 最小對外 API(承 P5/P22 鐵律)。**設計層,實作未排程** |
+| `架構修補07_共時四維系統_v0.1.md` | **P38–P44 權威**:phon/syn/sem/prag 四維獨立(OntologyRegistry)、Defs+typed projection/patch、`belongs`(取代 provides)、valence=slots、construction-as-Sign+slot mapping、Lexurgy 式 Else 三分、四維同步規則;路線圖插入步驟 12a–12e(M1++,M2 前) |
 | `archive/` | 已取代的歷史文件,勿引用(各檔頭有橫幅說明) |
 
 ## 2. 不可違反的設計不變式(內化這些,寫每一行程式碼時對照)
@@ -233,7 +236,20 @@ Lexurgy 匯入器、phrase 支援;零規則缺陷已修)。工作台側:CLI 測�
 cophonology 僅及自身 sign、驅動等價、決定性、三類定位錯誤/顯式拒絕;
 規則語意錨定上游 stages.rs 已驗證模式)。**M1 共時側閉環達成**。
 
-**下一個任務(鳥瞰步驟 13,M2 開跑)**:Primitive Edit 四原語(P23:
-insert/delete/update/move,樹上封閉;Path 定址複用步驟 9 的 path 模組);
-決定性 ID(P26)。其後步驟 14 = ChangeSet Interpreter(🔑 歷時貫通)。
+**M1++ 插入(擁有者定案 2026-07-20,修補07 立 P38–P44)**:進 M2 前先把**共時
+四維系統做穩**(construction grammar 核心 = meaning-form pair,需 syn/sem 落地)。
+路線圖插入步驟 **12a–12e**(修補07 §8):12a 四維 ontology + `belongs` + typed
+projection → 12b construction-as-Sign + slots(🔑 組合造詞)→ 12c construction
+semantics(form-meaning pair)→ 12d 四維同步規則 + Lexurgy 式 Else → 12e typed
+patch **僅介面/欄位**(entrenchment/lexicalization 行為留 M2 後)。關鍵決策:四維
+獨立不共享分類樹(P38)、`Defs` 唯一源 + typed projection/patch(P39)、`belongs`
+取代 provides(P40)、valence=slots(P41)、construction=Sign(P42)、Else 三分
+Matched/Unmatched/Error(P43)、每維規則只改自己那維(P44)。
+
+**下一個任務(鳥瞰步驟 12a)**:四維 ontology + `belongs` + typed projection。
+建 phon/syn/sem/prag 四棵獨立 ontology(OntologyRegistry);`belongs` + 遞迴展開
++ 閉包(去重/循環偵測/本地 vs trait 衝突/來源追蹤);四維 typed projection
+(對 `Defs` 型別化解讀);每維獨立 validation;衝突/循環 diagnostics。出口=
+dims 解析/驗證/round-trip golden + belongs 閉包與診斷。**M2(步驟 13 起)後移至
+12a–12e 之後**。
 
