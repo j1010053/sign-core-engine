@@ -1,0 +1,69 @@
+/* 步驟 12c 驗收:construction semantics(form-meaning pair)。
+   GiveEvent 的 sem 是 frame,role giver/gift 綁 filler 的**語意節點**(非字串);
+   polysemy(book 多義)、synonymy(sofa/couch 同義)合法;BadSem 的 sem role
+   引用不存在 slot → 診斷。分類節點擴充 stdlib。 */
+
+Symbol j
+Symbol o
+Symbol b
+Symbol g
+Symbol i
+Symbol s
+Symbol k
+Symbol x
+
+Class vowel {o, i}
+
+trait ProperNoun:
+    belongs Noun
+
+sign john:
+    belongs ProperNoun
+    phon:
+        /jo/
+    sem:
+        gloss = JOHN
+        ref = individual
+sign book:
+    belongs Noun
+    phon:
+        /bo/
+    sem:
+        gloss = BOOK
+        ref = artifact
+        sense2 = LOGBOOK
+sign sofa:
+    belongs Noun
+    phon:
+        /so/
+    sem:
+        gloss = SEAT
+sign couch:
+    belongs Noun
+    phon:
+        /ko/
+    sem:
+        gloss = SEAT
+
+sign GiveEvent:
+    belongs Transitive
+    syn:
+        slots:
+            agent [Nominal]
+            theme [Nominal]
+    sem:
+        frame = giving
+        giver = {agent}
+        gift = {theme}
+    phon:
+        /gi{agent}{theme}/
+
+sign BadSem:
+    belongs Transitive
+    syn:
+        slots:
+            agent [Nominal]
+    sem:
+        agent-role = {nonexistent}
+    phon:
+        /x{agent}/

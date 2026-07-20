@@ -284,9 +284,19 @@ owner 裁決把 Language 表面語法改為 **colon+縮排**(取代 `{ }`,貼合
 `/…/`。所有 trait 存續 compile。全回歸綠(雙軌 8.1–8.6、德語變位、compile/codegen/
 roundtrip golden 重生);Flow A(共時導出)端到端不變。
 
-**下一個任務(鳥瞰步驟 12c)**:Construction semantics(form-meaning pair)。
-construction + fillers → derived phon/syn/sem/prag;semantic template 引用 filler
-的 semantic projection/node(非字串替換);缺 slot/filler trait 不符/semantic
-reference 無法解析/duplicate-overlap diagnostics/合法 synonymy 與 polysemy。
-(12d 起 syn/sem/prag 規則帶維度標記,printer 的 rule_dim 屆時擴充。)
+**已完成(鳥瞰步驟 12c,I23)**:Construction semantics(form-meaning pair)。
+`sem.rs::SemNode`(遞迴 feature-structure:`fields` 純量 + `roles` role→子節點)=
+**可擴充語意接口**,容納未來複雜語意模型(義項網絡/衍生邊/frame/多義,以新欄位
+擴充不破壞 API)。construction 的 `sem:` 值 `{slot}` → **role 綁 filler 的語意節點**
+(`SemNode::of_sign`,非字串替換),否則純量欄位;derived token 增 `sem` 欄(meaning
+極)。polysemy/synonymy 合法;`SemRefUnknown`(引用非 slot);部分套用 role 暫略;
+不就地改、決定性。出口過:`tests/construction_semantics.rs` 8 案(frame 綁節點、
+form+meaning 同時導出、多義/同義、診斷、部分套用)。
+
+**下一個任務(鳥瞰步驟 12d)**:四維同步規則(P44/P43)。規則分維
+phon/syn/sem/prag(給 `Rule` 加維度標記,printer `rule_dim` 擴充);每維只改自己
+projection + 產生自己 patch;跨維由 construction 協調;**Lexurgy 式 `Else` 三分**
+(Matched/Unmatched/Error,`matched==0` 才進 Else,identity=Matched,逐求值單元;
+收步驟 11 對 language 域規則的 ElseUnsupported 延後);保 matched/changed/diag/
+source-location/deterministic order。之後 12e = typed patch **僅介面/欄位**。
 

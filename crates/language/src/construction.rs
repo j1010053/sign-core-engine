@@ -12,7 +12,8 @@
 //! form-meaning 配對(derived syn/sem/prag)於 12c。
 
 use crate::ontology::OntologyRegistry;
-use crate::{Language, SignDef, SignItem, Slot};
+use crate::sem::{self, SemNode};
+use crate::{Dim, Language, SignDef, SignItem, Slot};
 use tshiatun_dsl::{build_phrase, run_program, surface_phrase, Program};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -43,19 +44,30 @@ pub enum CxgError {
     /// 對未飽和 token(仍有必填 slot 未填)求表層。
     #[error("token still needs required slot(s): {0:?}")]
     Unsaturated(Vec<String>),
+    /// sem role `{ref}` 引用的名稱不是 construction 的 slot(語意引用無法解析)。
+    #[error("construction {construction:?} sem role {role:?} references unknown slot {slot:?}")]
+    SemRefUnknown {
+        construction: String,
+        role: String,
+        slot: String,
+    },
     #[error("engine: {0}")]
     Engine(String),
 }
 
 /// derived token(P42:暫態,不進庫;殘餘 slots = 剩餘 valence)。
+/// **form-meaning pair**(12c):form 極 = `syn_categories` + phon(`phon_form`);
+/// meaning 極 = `sem`([`SemNode`],role 綁 filler 語意節點,可容納未來複雜模型)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DerivedToken {
     pub construction: String,
     /// 依 construction 的 belongs 閉包(derived 是該範疇;如填滿的 PresentVerb 是 Verb)。
     pub syn_categories: Vec<String>,
+    /// **derived 語意**(meaning 極):construction 的 sem 純量欄位 + role→filler 語意。
+    pub sem: SemNode,
     /// 已填:slot 名 → filler UR 內文(保 slot 宣告序)。
     filled: Vec<(String, String)>,
-    /// phon 模板(construction 的 `phon` Def 值)。
+    /// phon 模板(construction 的 `phon` Def 值,已剝 `/…/`)。
     template: String,
     /// 未填 slots(= 剩餘 valence;必填未填 → 未飽和)。
     residual: Vec<Slot>,
@@ -169,6 +181,39 @@ fn template_refs(template: &str) -> Vec<String> {
     out
 }
 
+/// 解析 construction 的 derived 語意(12c form-meaning pair 的 meaning 極)。
+/// construction 的 sem projection 逐欄:值為 `{slot}` → **role 綁 filler 的語意節點**
+/// (非字串替換,修補07 §12c);否則 → 純量欄位。`{ref}` 非 slot → SemRefUnknown;
+/// 引用未填 slot → 該 role 暫略(部分套用)。合法 synonymy/polysemy:不去重、不排他。
+fn resolve_sem(
+    cx: &SignDef,
+    slots: &[Slot],
+    filler_signs: &[(String, &SignDef)],
+    reg: &OntologyRegistry,
+) -> Result<SemNode, CxgError> {
+    let mut node = SemNode::default();
+    for (path, value) in cx.project(Dim::Sem, reg).defs {
+        let field = path.strip_prefix("sem.").unwrap_or(&path).to_owned();
+        match sem::slot_ref(&value) {
+            Some(slot_name) => {
+                if !slots.iter().any(|s| s.name == slot_name) {
+                    return Err(CxgError::SemRefUnknown {
+                        construction: cx.name.clone(),
+                        role: field,
+                        slot: slot_name.to_owned(),
+                    });
+                }
+                if let Some((_, filler)) = filler_signs.iter().find(|(k, _)| k == slot_name) {
+                    node.roles.push((field, SemNode::of_sign(filler, reg)));
+                }
+                // 引用未填(optional/部分)→ role 暫略
+            }
+            None => node.fields.push((field, value)),
+        }
+    }
+    Ok(node)
+}
+
 /// Construction application(P42):construction + fillers → derived token。
 /// 部分套用合法(殘餘 slots = 剩餘 valence);**不就地改任何來源 sign**。
 pub fn apply(
@@ -202,6 +247,7 @@ pub fn apply(
     }
 
     let mut filled: Vec<(String, String)> = Vec::new();
+    let mut filler_signs: Vec<(String, &SignDef)> = Vec::new(); // slot → filler(sem 用)
     for (slot_name, filler_name) in fillers {
         let slot = slots
             .iter()
@@ -229,6 +275,7 @@ pub fn apply(
         let inner =
             ur_inner(filler).ok_or_else(|| CxgError::FillerNoUr((*filler_name).to_owned()))?;
         filled.push((slot.name.clone(), inner));
+        filler_signs.push((slot.name.clone(), filler));
     }
 
     let residual: Vec<Slot> = slots
@@ -237,9 +284,12 @@ pub fn apply(
         .cloned()
         .collect();
 
+    let sem = resolve_sem(cx, &slots, &filler_signs, reg)?;
+
     Ok(DerivedToken {
         construction: construction.to_owned(),
         syn_categories: reg.sign_categories(cx),
+        sem,
         filled,
         template,
         residual,

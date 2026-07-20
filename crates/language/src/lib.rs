@@ -21,6 +21,7 @@ pub mod construction;
 pub mod ontology;
 pub mod parser;
 pub mod projection;
+pub mod sem;
 pub mod word;
 pub mod path;
 pub mod printer;
