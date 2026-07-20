@@ -193,8 +193,17 @@ verbatim)、`==` 切 Block(P27)、`Name[n]` 引用、`=`/`=>` 二分、`@stage`(
 **push GitHub 後須改為遠端 URL 並 `git submodule sync`**。引擎目錄已更名 ASCII `tshiatun`。
 引擎相關測試/開發改在 tshiatun repo 進行。
 
-**下一個任務(鳥瞰步驟 10)**:Compile pipeline ①Source→②Expanded(Trait Expansion,
-全 block 完整性)→③Resolved(Name Resolution + Priority 欄位級解析)→④Ordered
-(Stage 排序,P18 dispatch 優先於書寫順序)→⑤Codegen(Compiled Grammar + Compiled Sign);
-①–④ 全是合法 Language(progressive lowering),**每 pass 一個 dump golden**(P21)。
+**已完成(鳥瞰步驟 10,I16)**:`language::compile`——①Source→②Expanded
+(Trait Expansion:非 global trait 與 TraitUse 消去、引用位置 inline;global trait
+存續為合法 Language 載體;P5 全 block 完整性 = 編譯錯誤)→③Resolved(同 path Def
+文件序**後者勝**=P6 欄位級 priority 的位置語意實現;Rule 不合併不去重)→④Ordered
+(P18:各容器 Rule 槽位間 stem→word→phrase 穩定排序,Def 原地不動;global blocks
+展平單 block)。每 pass 純函數 `Language → Language`(P21 無隱藏狀態,冪等)+
+trait 索引(Compile Artifact,P8)。出口過:**每 pass 一份 dump golden** 且每份產物
+re-parse round-trip 恆等、結構斷言、四類 CompileError、決定性。workbench workspace
+`exclude = ["tshiatun"]`(submodule 自有 workspace,避免 --workspace 外跑其測試)。
+
+**下一個任務(鳥瞰步驟 11)**:⑤Codegen——Compiled Grammar(phon 側 = dsl 可食規則集)
++ Compiled Sign;Grammar Engine 消費 Compiled Grammar。🔑 雙軌回歸:8.1–8.6 以
+Language 檔案跑出的結果須與路徑 A(純 .qy)輸出逐字相同(P20 §1.4)。
 

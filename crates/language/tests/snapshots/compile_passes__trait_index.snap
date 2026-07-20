@@ -1,0 +1,9 @@
+---
+source: crates/language/tests/compile_passes.rs
+expression: "format!(\"{:#?}\", p.trait_index)"
+---
+{
+    "VerbCommon": [
+        "go",
+    ],
+}

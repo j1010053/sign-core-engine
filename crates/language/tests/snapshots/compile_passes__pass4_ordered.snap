@@ -1,0 +1,22 @@
+---
+source: crates/language/tests/compile_passes.rs
+expression: dump
+---
+Feature voice(+voice, -voice)
+
+prosody = μ σ Ft ω φ ι U
+
+global trait CorePhonology {
+    n => m / _[+labial] @stage stem
+    a => ə / _# @stage word
+        else e
+}
+
+sign go {
+    g => k / #_ @stage stem
+    valence => 2 / _[+move] @stage word
+    phon = /go/
+    syn.provides = VERB.motion
+    o => ə / _# @stage phrase
+    entrenchment = 0.8
+}
