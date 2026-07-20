@@ -28,7 +28,7 @@ trait V:
         provides = VERB
 
 sign go:
-    V[1]
+    V[0]
     phon:
         /go/
         o => a / _ @stage phrase

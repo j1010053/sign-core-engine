@@ -63,13 +63,25 @@ fn is_language_head(text: &str) -> bool {
     text.starts_with("prosody =") || text == "distribution:" || container_head(text).is_some()
 }
 
-/// `Name[n]` trait 引用?
-fn trait_use(l: &str) -> Option<(String, u32)> {
-    let open = l.find('[')?;
-    let name = &l[..open];
-    let block: u32 = l[open + 1..].strip_suffix(']')?.parse().ok()?;
-    (!name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-'))
-        .then(|| (name.to_owned(), block))
+/// trait 引用?回傳 (name, block):`None` = 整個 trait(裸 `Name` 或 `Name[]`)、
+/// `Some(n)` = `Name[n]`(0 起算)。
+fn trait_use(l: &str) -> Option<(String, Option<u32>)> {
+    match l.find('[') {
+        // 裸 `Name` = 整個 trait
+        None => ident_ok(l).then(|| (l.to_owned(), None)),
+        Some(open) => {
+            let name = &l[..open];
+            if !ident_ok(name) {
+                return None;
+            }
+            let inside = l[open + 1..].strip_suffix(']')?.trim();
+            if inside.is_empty() {
+                Some((name.to_owned(), None)) // `Name[]` = 整個 trait
+            } else {
+                Some((name.to_owned(), Some(inside.parse().ok()?)))
+            }
+        }
+    }
 }
 
 fn ident_ok(s: &str) -> bool {

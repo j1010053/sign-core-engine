@@ -29,8 +29,8 @@ trait VerbCommon:
         valence => 2 / _[+move] @stage word
 
 sign go:
+    VerbCommon[0]
     VerbCommon[1]
-    VerbCommon[2]
     entrenchment = 0.8
     phon:
         /go/

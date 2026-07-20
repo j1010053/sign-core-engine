@@ -107,11 +107,15 @@ Language {
             items: [
                 TraitUse {
                     name: "VerbCommon",
-                    block: 1,
+                    block: Some(
+                        0,
+                    ),
                 },
                 TraitUse {
                     name: "VerbCommon",
-                    block: 2,
+                    block: Some(
+                        1,
+                    ),
                 },
                 Def(
                     Def {

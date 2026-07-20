@@ -32,8 +32,8 @@ trait VerbCommon:
         arity = 2
 
 sign go:
+    VerbCommon[0]
     VerbCommon[1]
-    VerbCommon[2]
     entrenchment = 0.8
     sem:
         senses = [ sense s1 { concept = GO } ]
@@ -95,8 +95,8 @@ fn source_to_ast_shape() {
     assert_eq!(r.stage, Stage::Word);
 
     let go = lang.sign_named("go").unwrap();
-    assert!(matches!(&go.items[0], SignItem::TraitUse { name, block: 1 } if name == "VerbCommon"));
-    assert!(matches!(&go.items[1], SignItem::TraitUse { name, block: 2 } if name == "VerbCommon"));
+    assert!(matches!(&go.items[0], SignItem::TraitUse { name, block: Some(0) } if name == "VerbCommon"));
+    assert!(matches!(&go.items[1], SignItem::TraitUse { name, block: Some(1) } if name == "VerbCommon"));
     assert!(go
         .items
         .iter()

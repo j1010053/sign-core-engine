@@ -152,8 +152,10 @@ pub struct TraitDef {
 /// sign 內項目:trait 引用位置有語意(P5),故與 Def/Rule 同列保序。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SignItem {
-    /// `VerbCommon[1]`(block 序數 1 起算;全 block 強制顯式,compile 驗證)。
-    TraitUse { name: String, block: u32 },
+    /// trait macro 引用(P5/P27)。`block`:**0 起算**——
+    /// - `Some(n)` = `Name[n]`,只引用第 n 個 block(indexed 須覆蓋全部 block,P5);
+    /// - `None` = **整個 trait**(裸 `Name` 或 `Name[]`,全 block 依序 inline)。
+    TraitUse { name: String, block: Option<u32> },
     /// `belongs Transitive`(P40):sign 掛入某 ontology 節點;閉包由 registry 走。
     Belongs(String),
     /// `slot NAME [Filler]`(可尾綴 `?` = optional;P41 valence=slots,I21)。

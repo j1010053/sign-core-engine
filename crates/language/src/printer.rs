@@ -46,10 +46,13 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                 out.push_str(&format!("    belongs {n}\n"));
             }
         }
-        // 2) Name[n] macro 引用(保序)
+        // 2) trait macro 引用(保序):None = 裸 Name(整個 trait)、Some(n) = Name[n]
         for it in items {
             if let SignItem::TraitUse { name, block } = it {
-                out.push_str(&format!("    {name}[{block}]\n"));
+                match block {
+                    Some(n) => out.push_str(&format!("    {name}[{n}]\n")),
+                    None => out.push_str(&format!("    {name}\n")),
+                }
             }
         }
         // 3) 頂層非維度 Def(保序)

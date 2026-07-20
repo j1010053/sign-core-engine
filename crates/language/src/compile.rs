@@ -77,14 +77,18 @@ pub fn expand_traits(src: &Language) -> Result<Language, CompileError> {
     // inline 至 sign(下方),但 trait 本身不消去(與舊 P5「非 global 消去」不同)。
 
     for sign in &src.signs {
-        // P5 完整性檢查:每個被引用 trait 的 block 集合必須完整
-        let mut used: BTreeMap<&str, Vec<u32>> = BTreeMap::new();
+        // 每個被引用 trait 收集:是否有「整個 trait」引用(None)+ indexed(Some(n),0 起算)
+        let mut used: BTreeMap<&str, (bool, Vec<u32>)> = BTreeMap::new();
         for it in &sign.items {
             if let SignItem::TraitUse { name, block } = it {
-                used.entry(name).or_default().push(*block);
+                let e = used.entry(name).or_default();
+                match block {
+                    None => e.0 = true,
+                    Some(n) => e.1.push(*n),
+                }
             }
         }
-        for (name, blocks) in &used {
+        for (name, (whole, idx)) in &used {
             let t = src
                 .traits
                 .iter()
@@ -93,34 +97,45 @@ pub fn expand_traits(src: &Language) -> Result<Language, CompileError> {
                     sign: sign.name.clone(),
                     name: (*name).to_owned(),
                 })?;
-            for b in blocks {
-                if *b == 0 || *b as usize > t.blocks.len() {
+            // 界限:0 起算,合法 n ∈ [0, len)
+            for n in idx {
+                if *n as usize >= t.blocks.len() {
                     return Err(CompileError::BlockOutOfRange {
                         sign: sign.name.clone(),
                         name: (*name).to_owned(),
-                        block: *b,
+                        block: *n,
                         blocks: t.blocks.len(),
                     });
                 }
             }
-            for want in 1..=t.blocks.len() as u32 {
-                if !blocks.contains(&want) {
-                    return Err(CompileError::IncompleteTraitUse {
-                        sign: sign.name.clone(),
-                        name: (*name).to_owned(),
-                        missing: want,
-                    });
+            // P5 完整性:僅對 indexed 引用強制(整個 trait 引用天然覆蓋全部)
+            if !whole {
+                for want in 0..t.blocks.len() as u32 {
+                    if !idx.contains(&want) {
+                        return Err(CompileError::IncompleteTraitUse {
+                            sign: sign.name.clone(),
+                            name: (*name).to_owned(),
+                            missing: want,
+                        });
+                    }
                 }
             }
         }
-        // inline:引用位置展開(位置即語意,P5)
+        // inline:引用位置展開(位置即語意,P5)。統一 body(I22):block items 即 SignItem
         let mut items = Vec::new();
         for it in &sign.items {
             match it {
                 SignItem::TraitUse { name, block } => {
                     let t = src.traits.iter().find(|t| &t.name == name).expect("checked");
-                    // block items 已是 SignItem(統一 body,I22):直接複製
-                    items.extend(t.blocks[(*block - 1) as usize].items.iter().cloned());
+                    match block {
+                        None => {
+                            // 整個 trait:全 block 依序 inline
+                            for b in &t.blocks {
+                                items.extend(b.items.iter().cloned());
+                            }
+                        }
+                        Some(n) => items.extend(t.blocks[*n as usize].items.iter().cloned()),
+                    }
                 }
                 other => items.push(other.clone()),
             }

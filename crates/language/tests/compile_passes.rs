@@ -23,8 +23,8 @@ trait VerbCommon:
     entrenchment = 0.5
 
 sign go:
+    VerbCommon[0]
     VerbCommon[1]
-    VerbCommon[2]
     syn:
         provides = VERB.motion
     phon:
@@ -150,23 +150,24 @@ fn error_unknown_trait() {
 
 #[test]
 fn error_block_out_of_range() {
-    let l = Language::parse("trait T:\n    syn:\n        a = 1\n\nsign x:\n    T[2]\n").unwrap();
+    // 0 起算:1-block trait 的合法索引只有 0;`T[1]` 越界。
+    let l = Language::parse("trait T:\n    syn:\n        a = 1\n\nsign x:\n    T[1]\n").unwrap();
     assert_eq!(
         compile::expand_traits(&l).unwrap_err(),
         CompileError::BlockOutOfRange {
             sign: "x".into(),
             name: "T".into(),
-            block: 2,
+            block: 1,
             blocks: 1
         }
     );
 }
 
-/// P5:全 block 強制顯式——只用 T[1] 而漏 T[2] 是編譯錯誤。
+/// P5:全 block 強制顯式——2-block trait 只用 `T[0]` 而漏 block 1 = 編譯錯誤。
 #[test]
 fn error_incomplete_trait_use_p5() {
     let l = Language::parse(
-        "trait T:\n    syn:\n        a = 1\n    ==\n    syn:\n        b = 2\n\nsign x:\n    T[1]\n",
+        "trait T:\n    syn:\n        a = 1\n    ==\n    syn:\n        b = 2\n\nsign x:\n    T[0]\n",
     )
     .unwrap();
     assert_eq!(
@@ -174,9 +175,48 @@ fn error_incomplete_trait_use_p5() {
         CompileError::IncompleteTraitUse {
             sign: "x".into(),
             name: "T".into(),
-            missing: 2
+            missing: 1
         }
     );
+}
+
+/// 裸 `T`(整個 trait):**分塊 trait 裸引用 = 全 block 依序 inline**(無 P5 缺塊錯);
+/// 未分塊 trait 寫 `T[]` = 那唯一 block。兩者皆「整個 trait」。
+#[test]
+fn bare_and_empty_brackets_inline_whole_trait() {
+    // 分塊 trait(2 block)裸引用 → 兩 block 全展開,無 IncompleteTraitUse
+    let split = Language::parse(
+        "trait T:\n    syn:\n        a = 1\n    ==\n    syn:\n        b = 2\n\nsign x:\n    T\n",
+    )
+    .unwrap();
+    let e = compile::expand_traits(&split).unwrap();
+    let x = e.sign_named("x").unwrap();
+    let paths: Vec<&str> = x
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            SignItem::Def(d) => Some(d.path.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(paths, ["syn.a", "syn.b"], "裸 T 展開全部 block");
+    assert!(!x.items.iter().any(|i| matches!(i, SignItem::TraitUse { .. })));
+
+    // 未分塊 trait(1 block)寫 `T[]` → 整個 trait(等同裸 T),canonical 印為裸 `T`
+    let unsplit = Language::parse("trait T:\n    syn:\n        a = 1\n\nsign y:\n    T[]\n").unwrap();
+    assert!(unsplit.dump().contains("    T\n"), "T[] 正規化為裸 T:\n{}", unsplit.dump());
+    let y = compile::expand_traits(&unsplit).unwrap();
+    let yp: Vec<&str> = y
+        .sign_named("y")
+        .unwrap()
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            SignItem::Def(d) => Some(d.path.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(yp, ["syn.a"]);
 }
 
 #[test]

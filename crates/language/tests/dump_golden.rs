@@ -71,7 +71,7 @@ fn lang_dump_golden_matches_patch05_sample() {
         vec![
             SignItem::TraitUse {
                 name: "VerbCommon".into(),
-                block: 1,
+                block: Some(0),
             },
             SignItem::Def(Def {
                 path: "phon".into(),
@@ -83,7 +83,7 @@ fn lang_dump_golden_matches_patch05_sample() {
             }),
             SignItem::TraitUse {
                 name: "VerbCommon".into(),
-                block: 2,
+                block: Some(1),
             },
             SignItem::Def(Def {
                 path: "entrenchment".into(),
