@@ -17,21 +17,21 @@ Class vowel {a}
 
 Melody tone {H, L} anchor mora
 
-global trait Core {
-    [+voice]&onset => [-voice] @stage stem
-    insert H floating near mora / onset&[-voice] _ ; dock tone&floating strategy nearest
-    Scan tone along mora within pword from left: H => L / H _
-}
+global trait Core:
+    phon:
+        [+voice]&onset => [-voice] @stage stem
+        insert H floating near mora / onset&[-voice] _ ; dock tone&floating strategy nearest
+        Scan tone along mora within pword from left: H => L / H _
 
-trait V {
-    syn.provides = VERB
-}
+trait V:
+    syn:
+        provides = VERB
 
-sign go {
+sign go:
     V[1]
-    phon = /go/
-    o => a / _ @stage phrase
-}
+    phon:
+        /go/
+        o => a / _ @stage phrase
 ";
 
 fn artifacts() -> codegen::Artifacts {
@@ -112,13 +112,13 @@ Symbol a
 
 Class vowel {a}
 
-global trait Zeta {
-    a => a / _#
-}
+global trait Zeta:
+    phon:
+        a => a / _#
 
-global trait Alpha {
-    a => a / #_
-}
+global trait Alpha:
+    phon:
+        a => a / #_
 ";
     let l = Language::parse(src).unwrap();
     let a = codegen::compile_full(&l).unwrap();
@@ -136,10 +136,10 @@ fn else_chain_is_rejected_explicitly() {
     let src = "\
 Symbol a
 
-global trait G {
-    a => a / _#
+global trait G:
+    phon:
+        a => a / _#
         else a => a
-}
 ";
     let l = Language::parse(src).unwrap();
     let e = codegen::compile_full(&l).unwrap_err();
@@ -155,9 +155,9 @@ fn scan_with_non_word_stage_is_rejected() {
     let src = "\
 Symbol a
 
-global trait G {
-    Scan tone along mora within pword from left: H => L / H _ @stage stem
-}
+global trait G:
+    phon:
+        Scan tone along mora within pword from left: H => L / H _ @stage stem
 ";
     let l = Language::parse(src).unwrap();
     let e = codegen::compile_full(&l).unwrap_err();
@@ -173,9 +173,9 @@ fn invalid_statement_surfaces_dsl_error_with_generated_source() {
     let src = "\
 Symbol a
 
-global trait G {
-    bogus statement that is no dsl verb
-}
+global trait G:
+    phon:
+        bogus statement that is no dsl verb
 ";
     let l = Language::parse(src).unwrap();
     let e = codegen::compile_full(&l).unwrap_err();

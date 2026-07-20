@@ -31,7 +31,6 @@ Language {
         TraitDef {
             name: "CorePhonology",
             global: true,
-            dim: None,
             blocks: [
                 Block {
                     items: [
@@ -69,7 +68,6 @@ Language {
         TraitDef {
             name: "VerbCommon",
             global: false,
-            dim: None,
             blocks: [
                 Block {
                     items: [
@@ -89,14 +87,10 @@ Language {
                 },
                 Block {
                     items: [
-                        Rule(
-                            Rule {
-                                id: RuleId(
-                                    2,
-                                ),
-                                body: "valence => 2 / _[+move]",
-                                stage: Word,
-                                else_chain: [],
+                        Def(
+                            Def {
+                                path: "syn.arity",
+                                value: "2",
                             },
                         ),
                     ],
@@ -115,18 +109,6 @@ Language {
                     name: "VerbCommon",
                     block: 1,
                 },
-                Def(
-                    Def {
-                        path: "phon",
-                        value: "/go/",
-                    },
-                ),
-                Def(
-                    Def {
-                        path: "sem.senses",
-                        value: "[ sense s1 { concept = GO } ]",
-                    },
-                ),
                 TraitUse {
                     name: "VerbCommon",
                     block: 2,
@@ -137,10 +119,22 @@ Language {
                         value: "0.8",
                     },
                 ),
+                Def(
+                    Def {
+                        path: "sem.senses",
+                        value: "[ sense s1 { concept = GO } ]",
+                    },
+                ),
+                Def(
+                    Def {
+                        path: "phon",
+                        value: "/go/",
+                    },
+                ),
                 Rule(
                     Rule {
                         id: RuleId(
-                            3,
+                            2,
                         ),
                         body: "o => ə / _#",
                         stage: Phrase,
@@ -150,6 +144,6 @@ Language {
             ],
         },
     ],
-    next_rule: 4,
+    next_rule: 3,
     next_sign: 1,
 }

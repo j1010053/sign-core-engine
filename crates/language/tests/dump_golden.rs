@@ -31,13 +31,12 @@ fn lang_dump_golden_matches_patch05_sample() {
     l.add_trait(TraitDef {
         name: "CorePhonology".into(),
         global: true,
-        dim: None,
         blocks: vec![
             Block {
-                items: vec![Item::Rule(r1)],
+                items: vec![SignItem::Rule(r1)],
             },
             Block {
-                items: vec![Item::Rule(r2)],
+                items: vec![SignItem::Rule(r2)],
             },
         ],
     });
@@ -47,22 +46,21 @@ fn lang_dump_golden_matches_patch05_sample() {
     l.add_trait(TraitDef {
         name: "VerbCommon".into(),
         global: false,
-        dim: None,
         blocks: vec![
             Block {
                 items: vec![
-                    Item::Def(Def {
+                    SignItem::Def(Def {
                         path: "syn.provides".into(),
                         value: "VERB".into(),
                     }),
-                    Item::Def(Def {
+                    SignItem::Def(Def {
                         path: "syn.requires".into(),
                         value: "[agent, patient]".into(),
                     }),
                 ],
             },
             Block {
-                items: vec![Item::Rule(r3)],
+                items: vec![SignItem::Rule(r3)],
             },
         ],
     });

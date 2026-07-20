@@ -10,9 +10,9 @@ Class vowel {a}
 
 Melody tone {H, L} anchor mora
 
-global trait Phonology {
-    insert H floating near mora / onset&[-voice] _
-    dock tone&floating strategy nearest
-    Scan tone along syllable within pword from right: associate H -> <syl>[2]
-    Scan tone along mora within pword from left: H => L / H _ ; associate H -> mora&Ø[first]
-}
+global trait Phonology:
+    phon:
+        insert H floating near mora / onset&[-voice] _
+        dock tone&floating strategy nearest
+        Scan tone along syllable within pword from right: associate H -> <syl>[2]
+        Scan tone along mora within pword from left: H => L / H _ ; associate H -> mora&Ø[first]

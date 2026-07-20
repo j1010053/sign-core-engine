@@ -13,43 +13,38 @@ Class vowel {a}
 
 Melody tone {H} anchor mora
 
-global trait Phonology {
-    p a => b a @stage stem
-    a => x / _ + a @stage word
-    p => b / _ ## b @stage phrase
-}
+global trait Phonology:
+    phon:
+        p a => b a @stage stem
+        a => x / _ + a @stage word
+        p => b / _ ## b @stage phrase
 
-sign root_pa {
-    phon = /pa/
-}
+sign root_pa:
+    phon:
+        /pa/
 
-sign root_ap {
-    phon = /ap/
-}
+sign root_ap:
+    phon:
+        /ap/
 
-sign suffix_ap {
-    phon = /ap/
-}
+sign suffix_ap:
+    phon:
+        /ap/
 
-sign clitic_x {
-    phon = /ap/
-    a => x / # _ @stage stem
-}
+sign clitic_x:
+    phon:
+        /ap/
+        a => x / # _ @stage stem
 
-sign clitic_tonal {
-    phon = /pa/
-    insert H floating near mora / onset&[-voice] _ @stage stem
-}
+sign clitic_tonal:
+    phon:
+        /pa/
+        insert H floating near mora / onset&[-voice] _ @stage stem
 
-sign clitic_word_rule {
-    phon = /ap/
-    a => x / _ # @stage word
-}
+sign clitic_word_rule:
+    phon:
+        /ap/
+        a => x / _ # @stage word
 
-sign no_ur {
+sign no_ur:
     entrenchment = 0.5
-}
-
-sign bad_ur {
-    phon = pa
-}

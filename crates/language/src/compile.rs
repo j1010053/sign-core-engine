@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::{Item, Language, Rule, SignItem};
+use crate::{Language, Rule, SignItem};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CompileError {
@@ -72,9 +72,9 @@ pub fn expand_traits(src: &Language) -> Result<Language, CompileError> {
     check_names(src)?;
     let mut out = src.clone();
     out.signs.clear();
-    // 非 global macro trait 消失(P5);**ontology trait(dim=Some)存續**——
-    // 是四維分類樹的載體,registry/projection 於編譯後仍須查閱(P40/P38)。
-    out.traits.retain(|t| t.global || t.dim.is_some());
+    // **所有 trait 存續**(修補07 P38 v0.2:trait 是維度中立的分類節點,單一分類樹)——
+    // registry/projection 編譯後仍須查閱其 belongs 邊與繼承 Def;`Name[n]` macro 仍
+    // inline 至 sign(下方),但 trait 本身不消去(與舊 P5「非 global 消去」不同)。
 
     for sign in &src.signs {
         // P5 完整性檢查:每個被引用 trait 的 block 集合必須完整
@@ -119,13 +119,8 @@ pub fn expand_traits(src: &Language) -> Result<Language, CompileError> {
             match it {
                 SignItem::TraitUse { name, block } => {
                     let t = src.traits.iter().find(|t| &t.name == name).expect("checked");
-                    for item in &t.blocks[(*block - 1) as usize].items {
-                        items.push(match item {
-                            Item::Def(d) => SignItem::Def(d.clone()),
-                            Item::Rule(r) => SignItem::Rule(r.clone()),
-                            Item::Belongs(n) => SignItem::Belongs(n.clone()),
-                        });
-                    }
+                    // block items 已是 SignItem(統一 body,I22):直接複製
+                    items.extend(t.blocks[(*block - 1) as usize].items.iter().cloned());
                 }
                 other => items.push(other.clone()),
             }
@@ -183,18 +178,18 @@ pub fn order_stages(resolved: &Language) -> Language {
     }
     let mut out = resolved.clone();
     for t in out.traits.iter_mut() {
-        let mut items: Vec<Item> = t.blocks.drain(..).flat_map(|b| b.items).collect();
+        let mut items: Vec<SignItem> = t.blocks.drain(..).flat_map(|b| b.items).collect();
         let rules = items
             .iter()
             .filter_map(|i| match i {
-                Item::Rule(r) => Some(r.clone()),
-                Item::Def(_) | Item::Belongs(_) => None,
+                SignItem::Rule(r) => Some(r.clone()),
+                _ => None,
             })
             .collect();
         let mut next = sorted_rules(rules);
         for slot in items.iter_mut() {
-            if matches!(slot, Item::Rule(_)) {
-                *slot = Item::Rule(next.next().expect("rule slot count"));
+            if matches!(slot, SignItem::Rule(_)) {
+                *slot = SignItem::Rule(next.next().expect("rule slot count"));
             }
         }
         t.blocks = vec![Block { items }];

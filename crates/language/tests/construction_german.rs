@@ -175,7 +175,7 @@ fn unknown_slot_duplicate_and_non_construction_are_rejected() {
 #[test]
 fn filler_licensing_uses_belongs_closure() {
     let (lang, _art, reg) = setup();
-    let cats = reg.sign_categories(lang.sign_named("sag").unwrap(), conlang_language::Dim::Syn);
+    let cats = reg.sign_categories(lang.sign_named("sag").unwrap());
     assert_eq!(cats, vec!["VerbStem", "Verb", "Predicate"]);
 }
 
@@ -186,7 +186,8 @@ fn fixture_round_trips() {
     let d1 = Language::parse(src).unwrap().dump();
     let d2 = Language::parse(&d1).unwrap().dump();
     assert_eq!(d1, d2);
-    // slot `?` 保留於 canonical
-    assert!(d1.contains("slot prefix [Prefix]?"), "optional `?` 應保留:\n{d1}");
-    assert!(d1.contains("slot stem [VerbStem]\n"), "required 無 `?`");
+    // slot `?` 保留於 canonical(維度區塊 syn: → slots: 內縮排)
+    assert!(d1.contains("prefix [Prefix]?"), "optional `?` 應保留:\n{d1}");
+    assert!(d1.contains("stem [VerbStem]\n"), "required 無 `?`");
+    assert!(d1.contains("    syn:\n        slots:\n"), "slots 在 syn: 區塊下:\n{d1}");
 }

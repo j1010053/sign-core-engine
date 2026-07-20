@@ -6,20 +6,24 @@ Feature voice(+voice, -voice)
 
 prosody = μ σ Ft ω φ ι U
 
-global trait CorePhonology {
-    a => ə / _# @stage word
-        else e
-    ==
-    n => m / _[+labial] @stage stem
-}
+global trait CorePhonology:
+    phon:
+        a => ə / _# @stage word
+        n => m / _# @stage stem
 
-sign go {
-    o => ə / _# @stage phrase
-    syn.provides = VERB
-    valence => 2 / _[+move] @stage word
-    phon = /go/
+trait VerbCommon:
+    syn:
+        provides = VERB
+    ==
     entrenchment = 0.5
-    syn.provides = VERB.motion
-    g => k / #_ @stage stem
+
+sign go:
+    entrenchment = 0.5
     entrenchment = 0.8
-}
+    syn:
+        provides = VERB
+        provides = VERB.motion
+    phon:
+        /go/
+        g => k / #_ @stage stem
+        o => ə / _# @stage phrase

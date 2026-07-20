@@ -9,28 +9,30 @@ Class vowel {a, e, i, o, u}
 
 prosody = μ σ Ft ω φ ι U
 
-distribution {
+distribution:
     /k/ = 0.15
     /t/ = 0.20
-}
 
-global trait CorePhonology {
-    a => ə / _# @stage word
+global trait CorePhonology:
+    phon:
+        a => ə / _# @stage word
     ==
-    n => m / _[+labial] @stage stem
-}
+    phon:
+        n => m / _[+labial] @stage stem
 
-trait VerbCommon {
-    syn.provides = VERB
-    syn.requires = [agent, patient]
+trait VerbCommon:
+    syn:
+        provides = VERB
+        requires = [agent, patient]
     ==
-    valence => 2 / _[+move] @stage word
-}
+    phon:
+        valence => 2 / _[+move] @stage word
 
-sign go {
+sign go:
     VerbCommon[1]
-    phon = /go/
-    sem.senses = [ sense s1 { concept = GO } ]
     VerbCommon[2]
     entrenchment = 0.8
-}
+    phon:
+        /go/
+    sem:
+        senses = [ sense s1 { concept = GO } ]

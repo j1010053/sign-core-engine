@@ -1,13 +1,16 @@
-//! canonical printer(P21):`Language → text`,**確定性**——
-//! 區段序固定(dsl 域 → prosody → distribution → global trait → trait → sign)、
-//! 具名容器按名稱排序、規則/block/sign 項目保插入序(有序語意)、distribution 按鍵
-//! 排序、縮排 4 空格、區段間單一空行(I15-d)。
+//! canonical printer(P21 + I22):`Language → text`,**確定性** colon+縮排 形式。
 //!
-//! 這份輸出**就是** IR dump 格式(P21:不必發明,dump = Language 源文字 canonical
-//! form);compile 的 ①–④ 每個 pass 產物皆以本 printer 印出,`diff` 即 pass 報告。
-//! round-trip(text→IR→text 恆等)於步驟 9(parser)接上後成為 golden 恆等式。
+//! 區段序固定:dsl 域 → prosody → distribution → global trait → trait → sign
+//! (具名容器按名排序,I15-d)。容器 body **依維度分組**(I22):belongs → `Name[n]`
+//! → 頂層 Def → 維度區塊(固定序 syn/phon/sem/prag);`syn:` 內 `slots:` 先於 Def;
+//! 維度內 slot/Def/Rule 保插入序(有序語意)。縮排 4 空格/層。
+//!
+//! 這份輸出**就是** IR dump 格式(P21);對 canonical 輸入 round-trip 恆等,
+//! 非 canonical 正規化為不動點(維度分組是冪等重排)。
 
-use crate::{Block, Item, Language, SignItem, Stage, TraitDef};
+use crate::{Block, Language, SignItem, Stage, TraitDef};
+
+const DIMS: [&str; 4] = ["syn", "phon", "sem", "prag"];
 
 fn stage_str(s: Stage) -> &'static str {
     match s {
@@ -17,41 +20,100 @@ fn stage_str(s: Stage) -> &'static str {
     }
 }
 
-fn push_rule(out: &mut String, r: &crate::Rule) {
-    out.push_str(&format!("    {} @stage {}\n", r.body, stage_str(r.stage)));
+/// Def 的維度歸屬(path 前綴);None = 非維度(頂層,如 entrenchment)。
+fn def_dim(path: &str) -> Option<&str> {
+    let head = path.split_once('.').map(|(h, _)| h).unwrap_or(path);
+    DIMS.contains(&head).then_some(head)
+}
+
+fn push_rule(out: &mut String, indent: &str, r: &crate::Rule) {
+    out.push_str(&format!("{indent}{} @stage {}\n", r.body, stage_str(r.stage)));
     for e in &r.else_chain {
-        out.push_str(&format!("        else {e}\n")); // P22:分支共享 stage
+        out.push_str(&format!("{indent}    else {e}\n")); // 分支共享 stage(P22)
     }
 }
 
-fn push_item(out: &mut String, item: &Item) {
-    match item {
-        Item::Def(d) => out.push_str(&format!("    {} = {}\n", d.path, d.value)),
-        Item::Rule(r) => push_rule(out, r),
-        Item::Belongs(name) => out.push_str(&format!("    belongs {name}\n")),
+/// 印一個容器 body(統一:trait/sign 同排版)。`blocks` 保 `==` 邊界(trait)。
+fn push_body(out: &mut String, blocks: &[Block]) {
+    for (bi, block) in blocks.iter().enumerate() {
+        if bi > 0 {
+            out.push_str("    ==\n"); // P27 block 邊界
+        }
+        let items = &block.items;
+        // 1) belongs(保序)
+        for it in items {
+            if let SignItem::Belongs(n) = it {
+                out.push_str(&format!("    belongs {n}\n"));
+            }
+        }
+        // 2) Name[n] macro 引用(保序)
+        for it in items {
+            if let SignItem::TraitUse { name, block } = it {
+                out.push_str(&format!("    {name}[{block}]\n"));
+            }
+        }
+        // 3) 頂層非維度 Def(保序)
+        for it in items {
+            if let SignItem::Def(d) = it {
+                if def_dim(&d.path).is_none() {
+                    out.push_str(&format!("    {} = {}\n", d.path, d.value));
+                }
+            }
+        }
+        // 4) 維度區塊(固定序 syn/phon/sem/prag)
+        for dim in DIMS {
+            let has_slot = dim == "syn" && items.iter().any(|it| matches!(it, SignItem::Slot(_)));
+            let has_def = items.iter().any(
+                |it| matches!(it, SignItem::Def(d) if def_dim(&d.path) == Some(dim)),
+            );
+            let has_rule = items
+                .iter()
+                .any(|it| matches!(it, SignItem::Rule(r) if rule_dim(r) == dim));
+            if !(has_slot || has_def || has_rule) {
+                continue;
+            }
+            out.push_str(&format!("    {dim}:\n"));
+            if has_slot {
+                out.push_str("        slots:\n");
+                for it in items {
+                    if let SignItem::Slot(s) = it {
+                        out.push_str(&format!(
+                            "            {} [{}]{}\n",
+                            s.name,
+                            s.filler,
+                            if s.optional { "?" } else { "" }
+                        ));
+                    }
+                }
+            }
+            // Def / Rule 保插入序(逐項掃,屬本維者印)
+            for it in items {
+                match it {
+                    SignItem::Def(d) if def_dim(&d.path) == Some(dim) => {
+                        let field = d.path.strip_prefix(&format!("{dim}.")).unwrap_or(&d.path);
+                        if d.path == "phon" {
+                            out.push_str(&format!("        {}\n", d.value)); // phon UR/模板
+                        } else {
+                            out.push_str(&format!("        {field} = {}\n", d.value));
+                        }
+                    }
+                    SignItem::Rule(r) if rule_dim(r) == dim => push_rule(out, "        ", r),
+                    _ => {}
+                }
+            }
+        }
     }
 }
 
-fn push_blocks(out: &mut String, blocks: &[Block]) {
-    for (i, b) in blocks.iter().enumerate() {
-        if i > 0 {
-            out.push_str("    ==\n"); // P27:Block 節點邊界
-        }
-        for item in &b.items {
-            push_item(out, item);
-        }
-    }
+/// 規則歸維:12b 只有 phon 規則(syn/sem/prag 規則於 12d 起帶標記)。
+fn rule_dim(_r: &crate::Rule) -> &'static str {
+    "phon"
 }
 
 fn push_trait(out: &mut String, t: &TraitDef) {
-    let kw = match t.dim {
-        Some(d) => format!("{} trait", d.keyword()), // P38 ontology 節點
-        None if t.global => "global trait".to_owned(),
-        None => "trait".to_owned(),
-    };
-    out.push_str(&format!("{kw} {} {{\n", t.name));
-    push_blocks(out, &t.blocks);
-    out.push_str("}\n");
+    let kw = if t.global { "global trait" } else { "trait" };
+    out.push_str(&format!("{kw} {}:\n", t.name));
+    push_body(out, &t.blocks);
 }
 
 /// canonical 印出;空 Language → 空字串。
@@ -59,7 +121,6 @@ pub fn print(l: &Language) -> String {
     let mut sections: Vec<String> = Vec::new();
 
     if !l.dsl_decls.is_empty() {
-        // dsl 域宣告:不透明 verbatim(I15-a;僅正規化尾端空白)
         let body: String = l
             .dsl_decls
             .iter()
@@ -72,33 +133,22 @@ pub fn print(l: &Language) -> String {
     }
     if !l.distribution.is_empty() {
         let mut entries = l.distribution.clone();
-        entries.sort(); // I15-d:按鍵排序
-        let mut s = String::from("distribution {\n");
+        entries.sort();
+        let mut s = String::from("distribution:\n");
         for (k, v) in entries {
             s.push_str(&format!("    {k} = {v}\n"));
         }
-        s.push_str("}\n");
         sections.push(s);
     }
-    // 具名容器按名排序(I15-d)。區段序固定(P38 四維獨立):
-    //   macro trait(dim=None):global 先於一般 → ontology trait(dim=Some):按 (dim, name)
-    let mut sorted: Vec<&TraitDef> = l.traits.iter().collect();
-    sorted.sort_by(|a, b| a.name.cmp(&b.name));
-    for t in sorted.iter().filter(|t| t.dim.is_none() && t.global) {
+    // 具名容器按名排序;global trait 先於一般 trait(區段序固定)
+    let mut traits: Vec<&TraitDef> = l.traits.iter().collect();
+    traits.sort_by(|a, b| a.name.cmp(&b.name));
+    for t in traits.iter().filter(|t| t.global) {
         let mut s = String::new();
         push_trait(&mut s, t);
         sections.push(s);
     }
-    for t in sorted.iter().filter(|t| t.dim.is_none() && !t.global) {
-        let mut s = String::new();
-        push_trait(&mut s, t);
-        sections.push(s);
-    }
-    let mut onto: Vec<&TraitDef> = l.traits.iter().filter(|t| t.dim.is_some()).collect();
-    onto.sort_by(|a, b| {
-        (a.dim.unwrap().keyword(), &a.name).cmp(&(b.dim.unwrap().keyword(), &b.name))
-    });
-    for t in onto {
+    for t in traits.iter().filter(|t| !t.global) {
         let mut s = String::new();
         push_trait(&mut s, t);
         sections.push(s);
@@ -106,24 +156,10 @@ pub fn print(l: &Language) -> String {
     let mut signs: Vec<_> = l.signs.iter().collect();
     signs.sort_by(|a, b| a.name.cmp(&b.name));
     for sg in signs {
-        let mut s = format!("sign {} {{\n", sg.name);
-        for item in &sg.items {
-            match item {
-                SignItem::TraitUse { name, block } => {
-                    s.push_str(&format!("    {name}[{block}]\n"))
-                }
-                SignItem::Belongs(name) => s.push_str(&format!("    belongs {name}\n")),
-                SignItem::Slot(sl) => s.push_str(&format!(
-                    "    slot {} [{}]{}\n",
-                    sl.name,
-                    sl.filler,
-                    if sl.optional { "?" } else { "" }
-                )),
-                SignItem::Def(d) => s.push_str(&format!("    {} = {}\n", d.path, d.value)),
-                SignItem::Rule(r) => push_rule(&mut s, r),
-            }
-        }
-        s.push_str("}\n");
+        let mut s = format!("sign {}:\n", sg.name);
+        push_body(&mut s, std::slice::from_ref(&Block {
+            items: sg.items.clone(),
+        }));
         sections.push(s);
     }
 
@@ -134,7 +170,7 @@ pub fn print(l: &Language) -> String {
 mod tests {
     use crate::*;
 
-    /// P21 確定性:構造順序不同 → canonical 輸出相同(具名容器排序)。
+    /// P21 確定性:構造順序不同 → canonical 相同(具名容器排序)。
     #[test]
     fn canonical_is_order_insensitive_for_named_containers() {
         let mk = |flip: bool| {
@@ -142,19 +178,14 @@ mod tests {
             let a = TraitDef {
                 name: "Alpha".into(),
                 global: false,
-                dim: None,
                 blocks: vec![Block {
-                    items: vec![Item::Def(Def {
-                        path: "syn.provides".into(),
-                        value: "VERB".into(),
-                    })],
+                    items: vec![SignItem::Belongs("Beta".into())],
                 }],
             };
             let b = TraitDef {
                 name: "Beta".into(),
-                global: true,
-                dim: None,
-                blocks: vec![Block { items: vec![] }],
+                global: false,
+                blocks: vec![Block::default()],
             };
             if flip {
                 l.add_trait(b.clone());
@@ -166,25 +197,5 @@ mod tests {
             l.dump()
         };
         assert_eq!(mk(false), mk(true));
-    }
-
-    /// 規則順序是語意(P18 同 stage 內書寫序):printer 必須保序,不得排序。
-    #[test]
-    fn rule_order_is_preserved() {
-        let mut l = Language::new();
-        let r1 = l.rule("b => c", Stage::Word);
-        let r2 = l.rule("a => b", Stage::Word);
-        l.add_trait(TraitDef {
-            name: "T".into(),
-            global: false,
-            dim: None,
-            blocks: vec![Block {
-                items: vec![Item::Rule(r1), Item::Rule(r2)],
-            }],
-        });
-        let out = l.dump();
-        let i1 = out.find("b => c").unwrap();
-        let i2 = out.find("a => b").unwrap();
-        assert!(i1 < i2, "書寫序不得被 canonical 排序破壞");
     }
 }

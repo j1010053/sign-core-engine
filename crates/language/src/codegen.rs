@@ -16,7 +16,7 @@
 //! 塊頭(Scan 頭文法無冒號),其後語句同上展開。
 
 use crate::compile::{self, CompileError, Pipeline};
-use crate::{Item, Language, Rule, SignItem, Stage};
+use crate::{Language, Rule, SignItem, Stage};
 use tshiatun_dsl::Program;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -151,7 +151,7 @@ pub fn codegen(ordered: &Language) -> Result<(CompiledGrammar, Vec<CompiledSign>
     for t in globals {
         for b in &t.blocks {
             for item in &b.items {
-                if let Item::Rule(r) = item {
+                if let SignItem::Rule(r) = item {
                     emit_rule(&mut src, &mut n, r)?;
                 }
             }

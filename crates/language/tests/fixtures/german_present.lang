@@ -1,6 +1,6 @@
 /* 德語現在式變位系統 — 步驟 12b 驗收(construction + slots)。
    正字形音段(sag- 詞幹 + 人稱後綴);分離前綴 auf- 為 optional slot(?);
-   過去分詞 ge-…-t 環綴以模板字面素材表達。四維 ontology 擴充 stdlib。 */
+   過去分詞 ge-…-t 環綴以模板字面素材表達。分類節點擴充 stdlib。 */
 
 Symbol s
 Symbol a
@@ -13,59 +13,59 @@ Symbol f
 
 Class vowel {a, e, u}
 
-syn trait VerbStem {
+trait VerbStem:
     belongs Verb
-}
-syn trait Suffix {
-}
-syn trait AgrSuffix {
+trait Suffix:
+trait AgrSuffix:
     belongs Suffix
-}
-syn trait Prefix {
-}
+trait Prefix:
 
-sign sag {
+sign sag:
     belongs VerbStem
-    phon = /sag/
-}
-sign suffix_1sg {
+    phon:
+        /sag/
+sign suffix_1sg:
     belongs AgrSuffix
-    phon = /e/
-}
-sign suffix_2sg {
+    phon:
+        /e/
+sign suffix_2sg:
     belongs AgrSuffix
-    phon = /st/
-}
-sign suffix_3sg {
+    phon:
+        /st/
+sign suffix_3sg:
     belongs AgrSuffix
-    phon = /t/
-}
-sign suffix_1pl {
+    phon:
+        /t/
+sign suffix_1pl:
     belongs AgrSuffix
-    phon = /en/
-}
-sign suffix_2pl {
+    phon:
+        /en/
+sign suffix_2pl:
     belongs AgrSuffix
-    phon = /t/
-}
-sign suffix_3pl {
+    phon:
+        /t/
+sign suffix_3pl:
     belongs AgrSuffix
-    phon = /en/
-}
-sign auf {
+    phon:
+        /en/
+sign auf:
     belongs Prefix
-    phon = /auf/
-}
+    phon:
+        /auf/
 
-sign PresentVerb {
+sign PresentVerb:
     belongs Verb
-    slot prefix [Prefix]?
-    slot stem [VerbStem]
-    slot suffix [AgrSuffix]
-    phon = {prefix}{stem}{suffix}
-}
-sign Participle {
+    syn:
+        slots:
+            prefix [Prefix]?
+            stem [VerbStem]
+            suffix [AgrSuffix]
+    phon:
+        /{prefix}{stem}{suffix}/
+sign Participle:
     belongs Verb
-    slot stem [VerbStem]
-    phon = ge{stem}t
-}
+    syn:
+        slots:
+            stem [VerbStem]
+    phon:
+        /ge{stem}t/

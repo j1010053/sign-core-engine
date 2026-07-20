@@ -60,14 +60,20 @@ fn last_wins(pairs: Vec<(String, String)>) -> Vec<(String, String)> {
 
 impl SignDef {
     /// 某維的 typed projection(對 `Defs` 的解讀 + registry 繼承)。
+    /// **分類閉包維度中立**(P38 v0.2 單一樹);`defs` 才依維度過濾。
     pub fn project(&self, dim: Dim, reg: &OntologyRegistry) -> DimProjection {
-        let categories = reg.sign_categories(self, dim);
+        let categories = reg.sign_categories(self); // 維度中立
         // 繼承:閉包 self-first;範疇 Def 是「範疇預設」,越遠祖越先(越易被覆蓋)
         // → 反轉閉包令根祖在前、本地最後 → last_wins 讓本地與近祖勝出(P6)。
         let mut all: Vec<(String, String)> = Vec::new();
         for cat in categories.iter().rev() {
-            if let Some(node) = reg.node(dim, cat) {
-                all.extend(node.defs.iter().cloned());
+            if let Some(node) = reg.node(cat) {
+                all.extend(
+                    node.defs
+                        .iter()
+                        .filter(|(p, _)| path_dim(p) == Some(dim)) // 只取本維 Def
+                        .cloned(),
+                );
             }
         }
         all.extend(local_dim_defs(self, dim)); // 本地在最後 → 覆蓋

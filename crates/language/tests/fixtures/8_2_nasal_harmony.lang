@@ -11,8 +11,8 @@ Class vowel {a}
 
 Melody nasal {+nasal} anchor segment
 
-global trait Phonology {
-    insert +nasal floating near segment / [+nasstop] _
-    dock nasal&floating strategy nearest
-    spread +nasal rightward blocked-by [-sonorant] within pword
-}
+global trait Phonology:
+    phon:
+        insert +nasal floating near segment / [+nasstop] _
+        dock nasal&floating strategy nearest
+        spread +nasal rightward blocked-by [-sonorant] within pword

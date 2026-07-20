@@ -272,8 +272,21 @@ TemplateSlotUnknown(不默默近似)。AST `SignItem::Slot`;parser/printer 擴�
 optional 分離前綴、環綴分詞 gesagt、範疇授權/殘餘 valence/無就地改/round-trip)。
 workbench 73 測試綠;引擎零觸動、wasm 綠。
 
+**語法重設計 + 單一分類樹(2026-07-21,I22;修訂 P38→v0.2、I19/I20 語法面)**:
+owner 裁決把 Language 表面語法改為 **colon+縮排**(取代 `{ }`,貼合 tshiatun/Lexurgy):
+容器頭 `sign/trait/global trait Name:`(**無 `syn trait`**);**統一 body 語法**
+(trait body ≡ sign body,`Item` enum 廢除,Block 持 `Vec<SignItem>`):belongs /
+`Name[n]` / `==` / 頂層 Def / **維度區塊** `syn:`/`phon:`/`sem:`/`prag:`(內
+`field = value` → `dim.field` Def;`phon:` 下 `/…/` = UR/模板、其餘 = phon 規則;
+`syn:` 下 `slots:` → slot 行,`?`=optional)。**分類樹改為單一維度中立樹**
+(P38 v0.2:`trait` 是分類節點,`OntologyRegistry` 單樹,syn/sem/phon/prag 退為
+內容面向);projection 分類閉包中立、Def 按維過濾;construction phon 模板包於
+`/…/`。所有 trait 存續 compile。全回歸綠(雙軌 8.1–8.6、德語變位、compile/codegen/
+roundtrip golden 重生);Flow A(共時導出)端到端不變。
+
 **下一個任務(鳥瞰步驟 12c)**:Construction semantics(form-meaning pair)。
 construction + fillers → derived phon/syn/sem/prag;semantic template 引用 filler
 的 semantic projection/node(非字串替換);缺 slot/filler trait 不符/semantic
 reference 無法解析/duplicate-overlap diagnostics/合法 synonymy 與 polysemy。
+(12d 起 syn/sem/prag 規則帶維度標記,printer 的 rule_dim 屆時擴充。)
 

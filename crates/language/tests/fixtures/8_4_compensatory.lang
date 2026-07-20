@@ -9,7 +9,7 @@ Class cons {k}
 Parse mora: @vowel | @vowel :: @cons
 Parse syllable: @cons? :: @vowel :: @cons?
 
-global trait Phonology {
-    @coda => * / @vowel _ .
-    dominate <mora>&empty -> @vowel leftward
-}
+global trait Phonology:
+    phon:
+        @coda => * / @vowel _ .
+        dominate <mora>&empty -> @vowel leftward

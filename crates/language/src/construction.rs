@@ -12,7 +12,7 @@
 //! form-meaning 配對(derived syn/sem/prag)於 12c。
 
 use crate::ontology::OntologyRegistry;
-use crate::{Dim, Language, SignDef, SignItem, Slot};
+use crate::{Language, SignDef, SignItem, Slot};
 use tshiatun_dsl::{build_phrase, run_program, surface_phrase, Program};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -184,7 +184,13 @@ pub fn apply(
     if slots.is_empty() {
         return Err(CxgError::NotAConstruction(construction.to_owned()));
     }
-    let template = phon_value(cx);
+    // phon 模板包於 `/…/`(I22 phon 表徵);剝外層再代入 `{slot}`。
+    let raw = phon_value(cx);
+    let template = raw
+        .strip_prefix('/')
+        .and_then(|s| s.strip_suffix('/'))
+        .unwrap_or(&raw)
+        .to_owned();
     // 模板引用須 ⊆ slot 名
     for r in template_refs(&template) {
         if !slots.iter().any(|s| s.name == r) {
@@ -211,7 +217,7 @@ pub fn apply(
             .sign_named(filler_name)
             .ok_or_else(|| CxgError::UnknownFiller((*filler_name).to_owned()))?;
         // 授權:filler 的 syn belongs 閉包須含 slot 約束(P40)
-        let cats = reg.sign_categories(filler, Dim::Syn);
+        let cats = reg.sign_categories(filler); // 分類維度中立(P38 v0.2)
         if !cats.iter().any(|c| c == &slot.filler) {
             return Err(CxgError::CategoryMismatch {
                 slot: slot.name.clone(),
@@ -233,7 +239,7 @@ pub fn apply(
 
     Ok(DerivedToken {
         construction: construction.to_owned(),
-        syn_categories: reg.sign_categories(cx, Dim::Syn),
+        syn_categories: reg.sign_categories(cx),
         filled,
         template,
         residual,

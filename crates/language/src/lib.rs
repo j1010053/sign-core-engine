@@ -126,36 +126,25 @@ pub struct Rule {
     pub else_chain: Vec<String>,
 }
 
-/// Block 內項目(P27:Item = Definition | Rule | Belongs)。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Item {
-    Def(Def),
-    Rule(Rule),
-    /// `belongs Name`(P40):分類成員 + 展開來源 + **保留標記**;
-    /// 於 ontology trait 中 = 該節點在同 dim 樹的父邊。位置保序(與 Def/Rule 同列)。
-    Belongs(String),
-}
-
 /// Trait 的 block(P27 選項 A:`==` 是 Block 節點邊界,非分隔 token)。
+/// **統一 body 語法(I22)**:trait body 與 sign body 同型別(`SignItem`)——
+/// belongs / slots / dimension Defs / rules 皆可,trait 只多 `==` 分 block(P27)。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Block {
-    pub items: Vec<Item>,
+    pub items: Vec<SignItem>,
 }
 
 // ── ③ 容器類 ──
 
-/// Trait:兩種角色共用容器——
-/// - **`dim: None`** = sign 內容的 macro 展開模板(P5;`global` = 預設自動引用 P6;
-///   `Name[n]` block-indexed 引用,展開消去引用)。
-/// - **`dim: Some(_)`** = **ontology 分類節點**(P40,修補07 P38):某維分類樹上的
-///   一個範疇,`belongs`(body 的 `Item::Belongs`)= 其父邊;被 `belongs` 引用時
-///   展開其 Defs 且**保留標記**(I19:與 `Name[n]` 並存分工)。
+/// Trait:**維度中立的分類節點 / macro 模板**(修補07 P38 v0.2:單一分類樹)。
+/// - `global = true` = phon-rule macro,預設自動引用(P6),codegen 收入 phon 側;
+/// - 一般 trait = 分類節點(`belongs` 建單一繼承樹)+ 可帶 dimension 內容(繼承給
+///   後代,projection 解析)。`Name[n]` block-indexed macro(P5/P27)仍支援。
+///   **無 `syn trait` 維度標記**(維度是內容面向,非分類樹)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraitDef {
     pub name: String,
     pub global: bool,
-    /// None = phon-rule macro trait(P5);Some(dim) = 該 dim 的 ontology 節點(P40)。
-    pub dim: Option<Dim>,
     pub blocks: Vec<Block>,
 }
 

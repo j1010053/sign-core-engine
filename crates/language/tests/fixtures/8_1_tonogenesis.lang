@@ -16,10 +16,10 @@ Spell-out:
     floating tone => drop
     contour tone:{H L} => falling
 
-global trait Phonology {
-    insert H floating near mora / onset&[-voice] _ ; insert L floating near mora / onset&[+voice] _
-    dock tone&floating strategy nearest
-    [+voice]&onset => [-voice]
-    fill tone Ø => M within pword
-    merge adjacent-equal
-}
+global trait Phonology:
+    phon:
+        insert H floating near mora / onset&[-voice] _ ; insert L floating near mora / onset&[+voice] _
+        dock tone&floating strategy nearest
+        [+voice]&onset => [-voice]
+        fill tone Ø => M within pword
+        merge adjacent-equal

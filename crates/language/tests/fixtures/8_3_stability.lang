@@ -10,9 +10,9 @@ Class vowel {a}
 
 Melody tone {H, L} anchor mora
 
-global trait Phonology {
-    insert H floating near mora / onset&[-voice] _ ; insert L floating near mora / onset&[+voice] _
-    dock tone&floating strategy nearest
-    @vowel => * / _ #
-    dock tone&floating strategy nearest prefer-left
-}
+global trait Phonology:
+    phon:
+        insert H floating near mora / onset&[-voice] _ ; insert L floating near mora / onset&[+voice] _
+        dock tone&floating strategy nearest
+        @vowel => * / _ #
+        dock tone&floating strategy nearest prefer-left

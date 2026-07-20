@@ -118,16 +118,15 @@ fn derivation_is_deterministic_and_stateless() {
 // ── 顯式拒絕/錯誤定位 ──
 
 #[test]
-fn unknown_sign_and_missing_or_malformed_ur_are_located_errors() {
+fn unknown_sign_and_missing_ur_are_located_errors() {
     let a = artifacts();
     let e = word::derive(&a, &PhraseSpec(vec![Component::sign("ghost")])).unwrap_err();
     assert!(matches!(e, WordError::UnknownSign(n) if n == "ghost"));
 
     let e = word::derive(&a, &PhraseSpec(vec![Component::sign("no_ur")])).unwrap_err();
     assert!(matches!(e, WordError::UrMissing(n) if n == "no_ur"));
-
-    let e = word::derive(&a, &PhraseSpec(vec![Component::sign("bad_ur")])).unwrap_err();
-    assert!(matches!(e, WordError::UrMalformed { sign, .. } if sign == "bad_ur"));
+    // 非 `/…/` 的畸形 UR 於新語法(I22)不可經 parser 表達(phon: 只收 `/…/` 為 UR);
+    // WordError::UrMalformed 保留為防禦路徑,不再由 fixture 觸發。
 }
 
 /// P3:cophonology 只界定於 stem 層——word 層局部規則顯式拒絕。
