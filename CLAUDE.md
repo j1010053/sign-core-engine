@@ -216,7 +216,24 @@ codegen 語意測試 10 案(golden/P8/決定性/顯式拒絕);CLI 功能回測 1
 (`tests/cli_functional.rs`,子程序呼叫 tshiatun 二進位,只讀不寫)。
 (零規則丟失輸入詞缺陷已由上游 `520e0c8` 修復;submodule bump 2026-07-20。)
 
-**下一個任務(鳥瞰步驟 12)**:臨時 Word 建構(component 樹,Language 的
-Sign.slots 可手寫組合測試)+ 循環套用(P3);`language::build_word` 協調邏輯
-(docs/13 §4 裁決 2 的接口)消費 Compiled Sign + Compiled Grammar。
+**引擎同步(2026-07-20)**:tshiatun submodule bump `51f1a30` → `520e0c8`
+(上游 wuc-codex:stage=規則可見域、build_phrase `+`/空白縫、convert 子命令、
+Lexurgy 匯入器、phrase 支援;零規則缺陷已修)。工作台側:CLI 測試契約更新
+(`tshiatun` 版本字串、trace `output` 行、零規則=詞表′恆等);examples 經
+`-w` diff 證實內容零變,.lang fixtures 免重移植。
+
+**已完成(鳥瞰步驟 12,I18)**:`language::word`——臨時 Word 建構 + 循環套用。
+`Component::Sign|Ring` 組合樹 → cophonology 前趟(sign 局部 stem 規則於自己
+的葉上跑;M1 子集=音段效果,旋律殘留/非 stem 層顯式拒絕)→ UR 文字
+(`phon = /…/`)以 `+`/空白拼縫 → `dsl::build_phrase`(韻律域+括號)→
+**P3 驅動:Program stage 切片 stem→word→phrase 串跑**(呼叫端驅動,協作規範
+§3-1;展平組合下 ≡ ④ 排序單趟,metamorphic 釘住)→ `surface_phrase`。
+出口過:🔑 **詞根+詞綴組合 → 循環 → 表層 + surface sandhi 首測**
+(`tests/word_compose.rs` 8 案:組合鏈 `pa+ap pa → bx+ab ba`、無組合負例、
+cophonology 僅及自身 sign、驅動等價、決定性、三類定位錯誤/顯式拒絕;
+規則語意錨定上游 stages.rs 已驗證模式)。**M1 共時側閉環達成**。
+
+**下一個任務(鳥瞰步驟 13,M2 開跑)**:Primitive Edit 四原語(P23:
+insert/delete/update/move,樹上封閉;Path 定址複用步驟 9 的 path 模組);
+決定性 ID(P26)。其後步驟 14 = ChangeSet Interpreter(🔑 歷時貫通)。
 

@@ -18,6 +18,7 @@
 pub mod codegen;
 pub mod compile;
 pub mod parser;
+pub mod word;
 pub mod path;
 pub mod printer;
 

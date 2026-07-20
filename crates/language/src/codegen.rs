@@ -77,7 +77,8 @@ fn stage_str(s: Stage) -> &'static str {
 }
 
 /// 一條 ④ 規則 → dsl 規則塊文字。`n` 為合成標籤計數器(決定性,P26 精神)。
-fn emit_rule(out: &mut String, n: &mut u32, r: &Rule) -> Result<(), CodegenError> {
+/// (`pub(crate)`:word 模組的 cophonology 小規則組沿用同一排放,I18。)
+pub(crate) fn emit_rule(out: &mut String, n: &mut u32, r: &Rule) -> Result<(), CodegenError> {
     if !r.else_chain.is_empty() {
         return Err(CodegenError::ElseUnsupported {
             label: format!("r{n}"),

@@ -5,11 +5,12 @@ edition = "2021"
 description = "Language: the synchronic knowledge file (Global/Trait/Sign) with canonical printer (2.0 step 8)"
 
 [dependencies]
-# P20 依賴方向:language → dsl(→ core);禁反向
+# P20 依賴方向:language → dsl(→ core);禁反向。
+# core 直依賴僅為 Word 型別存取(裁決 2 接口 language::build_word → dsl::Word;
+# dsl 未 re-export Word,I18)。
 tshiatun-dsl = { path = "../../tshiatun/crates/dsl" }
+tshiatun-core = { path = "../../tshiatun/crates/core" }
 thiserror = "2"
 
 [dev-dependencies]
 insta = "1"
-# 僅測試用(雙軌迴歸的結構比對/型態括號注入);產品依賴仍只有 dsl(P20)
-tshiatun-core = { path = "../../tshiatun/crates/core" }
