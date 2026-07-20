@@ -31,6 +31,7 @@ fn lang_dump_golden_matches_patch05_sample() {
     l.add_trait(TraitDef {
         name: "CorePhonology".into(),
         global: true,
+        dim: None,
         blocks: vec![
             Block {
                 items: vec![Item::Rule(r1)],
@@ -46,6 +47,7 @@ fn lang_dump_golden_matches_patch05_sample() {
     l.add_trait(TraitDef {
         name: "VerbCommon".into(),
         global: false,
+        dim: None,
         blocks: vec![
             Block {
                 items: vec![

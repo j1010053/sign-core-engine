@@ -72,7 +72,9 @@ pub fn expand_traits(src: &Language) -> Result<Language, CompileError> {
     check_names(src)?;
     let mut out = src.clone();
     out.signs.clear();
-    out.traits.retain(|t| t.global); // 非 global 宣告消失(P5)
+    // 非 global macro trait 消失(P5);**ontology trait(dim=Some)存續**——
+    // 是四維分類樹的載體,registry/projection 於編譯後仍須查閱(P40/P38)。
+    out.traits.retain(|t| t.global || t.dim.is_some());
 
     for sign in &src.signs {
         // P5 完整性檢查:每個被引用 trait 的 block 集合必須完整
@@ -121,6 +123,7 @@ pub fn expand_traits(src: &Language) -> Result<Language, CompileError> {
                         items.push(match item {
                             Item::Def(d) => SignItem::Def(d.clone()),
                             Item::Rule(r) => SignItem::Rule(r.clone()),
+                            Item::Belongs(n) => SignItem::Belongs(n.clone()),
                         });
                     }
                 }
@@ -185,7 +188,7 @@ pub fn order_stages(resolved: &Language) -> Language {
             .iter()
             .filter_map(|i| match i {
                 Item::Rule(r) => Some(r.clone()),
-                Item::Def(_) => None,
+                Item::Def(_) | Item::Belongs(_) => None,
             })
             .collect();
         let mut next = sorted_rules(rules);

@@ -1,0 +1,76 @@
+/* 最小本體(stdlib)— 步驟 12a,I20:本體是資料層 .lang trait,額外引用併入。
+   四棵獨立分類樹(P38);belongs = 同維父邊(P40)。使用者 .lang 可擴充自定範疇,
+   須掛回本體某節點(docs/07 §9)。範疇預設 Def(如 syn.class)由後代繼承、可覆蓋。 */
+
+syn trait Predicate {
+}
+syn trait Verb {
+    belongs Predicate
+    syn.class = verb
+}
+syn trait Intransitive {
+    belongs Verb
+}
+syn trait Transitive {
+    belongs Verb
+}
+syn trait Ditransitive {
+    belongs Transitive
+}
+syn trait Nominal {
+    syn.class = nominal
+}
+syn trait Noun {
+    belongs Nominal
+}
+syn trait Pronoun {
+    belongs Nominal
+}
+syn trait Adposition {
+}
+syn trait Locative {
+    belongs Adposition
+}
+
+sem trait Entity {
+}
+sem trait Physical {
+    belongs Entity
+}
+sem trait Animate {
+    belongs Physical
+}
+sem trait Human {
+    belongs Animate
+}
+sem trait Event {
+}
+sem trait Motion {
+    belongs Event
+}
+sem trait Transfer {
+    belongs Event
+}
+
+prag trait Pragmatic {
+}
+prag trait Illocution {
+    belongs Pragmatic
+}
+prag trait SocialDeixis {
+    belongs Pragmatic
+}
+prag trait InfoStructure {
+    belongs Pragmatic
+}
+prag trait Stance {
+    belongs Pragmatic
+}
+prag trait Deixis {
+    belongs Pragmatic
+}
+
+phon trait Segmental {
+}
+phon trait Suprasegmental {
+}

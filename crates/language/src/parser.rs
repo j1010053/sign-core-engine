@@ -13,7 +13,7 @@
 //! round-trip:對 canonical 輸入,`parse(src).dump() == src`(P21)。
 
 use crate::path::parse_path;
-use crate::{Block, Def, Item, Language, SignItem, Stage, TraitDef};
+use crate::{Block, Def, Dim, Item, Language, SignItem, Stage, TraitDef};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("parse error at line {line}: {msg}")]
@@ -35,6 +35,14 @@ fn is_language_head(l: &str) -> bool {
         || l.starts_with("global trait ")
         || l.starts_with("trait ")
         || l.starts_with("sign ")
+        || dim_trait_head(l).is_some()
+}
+
+/// `<dim> trait Name {` 頭?回傳 dim(P38 ontology trait 標記)。
+fn dim_trait_head(l: &str) -> Option<Dim> {
+    let (kw, rest) = l.split_once(" trait ")?;
+    let _ = rest;
+    Dim::parse(kw)
 }
 
 /// 容器頭:`<kw> Name {` → Name。
@@ -83,6 +91,24 @@ fn parse_item(lang: &mut Language, l: &str, line: usize) -> Result<Item, ParseEr
     } else {
         Ok(Item::Rule(lang.rule(body, stage)))
     }
+}
+
+/// `belongs Name`(P40)?回傳目標 trait 名(單一識別字)。
+/// 攔在 `parse_item` 之前:belongs 無 `=>`/`=`,否則會被誤判為 dsl 動詞規則(I17-a)。
+fn belongs_target(l: &str, line: usize) -> Result<Option<String>, ParseError> {
+    let Some(rest) = l.strip_prefix("belongs ") else {
+        return Ok(None);
+    };
+    let name = rest.trim();
+    if name.is_empty()
+        || name.contains(char::is_whitespace)
+        || !name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(err(line, "`belongs` expects a single trait name"));
+    }
+    Ok(Some(name.to_owned()))
 }
 
 /// `Name[n]` trait 引用?
@@ -144,10 +170,20 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
                 lang.distribution
                     .push((k.trim().to_owned(), v.trim().to_owned()));
             }
-        } else if l.starts_with("global trait ") || l.starts_with("trait ") {
+        } else if l.starts_with("global trait ")
+            || l.starts_with("trait ")
+            || dim_trait_head(l).is_some()
+        {
             let global = l.starts_with("global trait ");
-            let kw = if global { "global trait" } else { "trait" };
-            let name = container_name(l, kw, ln)?.to_owned();
+            let dim = dim_trait_head(l);
+            let kw = if global {
+                "global trait".to_owned()
+            } else if let Some(d) = dim {
+                format!("{} trait", d.keyword())
+            } else {
+                "trait".to_owned()
+            };
+            let name = container_name(l, &kw, ln)?.to_owned();
             let mut blocks = vec![Block::default()];
             i += 1;
             let mut closed = false;
@@ -164,6 +200,14 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
                 }
                 if l2 == "==" {
                     blocks.push(Block::default()); // P27:Block 節點邊界
+                    continue;
+                }
+                if let Some(target) = belongs_target(l2, ln2)? {
+                    blocks
+                        .last_mut()
+                        .expect("nonempty")
+                        .items
+                        .push(Item::Belongs(target));
                     continue;
                 }
                 if let Some(rest) = l2.strip_prefix("else ") {
@@ -185,6 +229,7 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
             lang.add_trait(TraitDef {
                 name,
                 global,
+                dim,
                 blocks,
             });
         } else if l.starts_with("sign ") {
@@ -203,6 +248,10 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
                 if l2.is_empty() {
                     continue;
                 }
+                if let Some(target) = belongs_target(l2, ln2)? {
+                    items.push(SignItem::Belongs(target));
+                    continue;
+                }
                 if let Some((tname, block)) = trait_use(l2) {
                     items.push(SignItem::TraitUse { name: tname, block });
                     continue;
@@ -217,6 +266,7 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
                 match parse_item(&mut lang, l2, ln2)? {
                     Item::Def(d) => items.push(SignItem::Def(d)),
                     Item::Rule(r) => items.push(SignItem::Rule(r)),
+                    Item::Belongs(t) => items.push(SignItem::Belongs(t)),
                 }
             }
             if !closed {

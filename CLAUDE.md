@@ -246,10 +246,23 @@ patch **僅介面/欄位**(entrenchment/lexicalization 行為留 M2 後)。關�
 取代 provides(P40)、valence=slots(P41)、construction=Sign(P42)、Else 三分
 Matched/Unmatched/Error(P43)、每維規則只改自己那維(P44)。
 
-**下一個任務(鳥瞰步驟 12a)**:四維 ontology + `belongs` + typed projection。
-建 phon/syn/sem/prag 四棵獨立 ontology(OntologyRegistry);`belongs` + 遞迴展開
-+ 閉包(去重/循環偵測/本地 vs trait 衝突/來源追蹤);四維 typed projection
-(對 `Defs` 型別化解讀);每維獨立 validation;衝突/循環 diagnostics。出口=
-dims 解析/驗證/round-trip golden + belongs 閉包與診斷。**M2(步驟 13 起)後移至
-12a–12e 之後**。
+**已完成(鳥瞰步驟 12a,I19/I20)**:四維 ontology + `belongs` + typed projection。
+`crates/language/ontology.rs`:`OntologyRegistry`(phon/syn/sem/prag 四棵**獨立**樹,
+名稱空間依 dim 分開)自一組 Language 建成;**最小本體 = 額外引用的 stdlib
+`.lang`**(`std/ontology.lang`,I20 資料層非硬編碼;`std_ontology()`/`with_std()`)。
+`belongs`(P40,`Item::Belongs`/`SignItem::Belongs`,dim-marked `<dim> trait`)閉包
+= nearest-first(pre-order DFS、首見去重、循環安全);與 `Name[n]` macro 並存分工
+(I19:belongs 保留標記、展開由 projection lazy 解析不複製 Def,P39)。
+`projection.rs`:`sign.project(dim,&reg)` = 對 `Defs` 型別化解讀 + 範疇繼承(近祖/
+本地勝,P6);維度正交。建構期四類診斷(未知目標含 sign 級、跨維、循環、重名;
+分級不 panic)。出口過:`tests/ontology.rs` 11 案(stdlib round-trip、閉包語意、
+四維獨立同名、四類診斷、projection 繼承/覆蓋/正交、決定性)。ontology trait 於
+compile 存續(`retain(global || dim.is_some())`)。
+
+**下一個任務(鳥瞰步驟 12b)**:Construction 與 slots。construction-as-Sign(P42)、
+具名 slots(P41 valence=slots)、slot type/trait constraint(filler 的 belongs 閉包
+須含所需 trait,P40)、required 預設 + `optional`、slot filling、construction
+application → derived Sign/token、slot mapping 基本能力、syn validation。🔑 出口=
+實例 1 組合造詞(選構式+填 sign→token→表層)+ 範疇不匹配/配價不符負例。
+slot/construction 表面語法定 I21(貼合 TshiatŪn/Lexurgy,非 YAML 巢狀)。
 

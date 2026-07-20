@@ -28,6 +28,7 @@ fn push_item(out: &mut String, item: &Item) {
     match item {
         Item::Def(d) => out.push_str(&format!("    {} = {}\n", d.path, d.value)),
         Item::Rule(r) => push_rule(out, r),
+        Item::Belongs(name) => out.push_str(&format!("    belongs {name}\n")),
     }
 }
 
@@ -43,7 +44,11 @@ fn push_blocks(out: &mut String, blocks: &[Block]) {
 }
 
 fn push_trait(out: &mut String, t: &TraitDef) {
-    let kw = if t.global { "global trait" } else { "trait" };
+    let kw = match t.dim {
+        Some(d) => format!("{} trait", d.keyword()), // P38 ontology 節點
+        None if t.global => "global trait".to_owned(),
+        None => "trait".to_owned(),
+    };
     out.push_str(&format!("{kw} {} {{\n", t.name));
     push_blocks(out, &t.blocks);
     out.push_str("}\n");
@@ -75,15 +80,25 @@ pub fn print(l: &Language) -> String {
         s.push_str("}\n");
         sections.push(s);
     }
-    // 具名容器按名排序(I15-d);global 先於一般 trait(區段序固定)
+    // 具名容器按名排序(I15-d)。區段序固定(P38 四維獨立):
+    //   macro trait(dim=None):global 先於一般 → ontology trait(dim=Some):按 (dim, name)
     let mut sorted: Vec<&TraitDef> = l.traits.iter().collect();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));
-    for t in sorted.iter().filter(|t| t.global) {
+    for t in sorted.iter().filter(|t| t.dim.is_none() && t.global) {
         let mut s = String::new();
         push_trait(&mut s, t);
         sections.push(s);
     }
-    for t in sorted.iter().filter(|t| !t.global) {
+    for t in sorted.iter().filter(|t| t.dim.is_none() && !t.global) {
+        let mut s = String::new();
+        push_trait(&mut s, t);
+        sections.push(s);
+    }
+    let mut onto: Vec<&TraitDef> = l.traits.iter().filter(|t| t.dim.is_some()).collect();
+    onto.sort_by(|a, b| {
+        (a.dim.unwrap().keyword(), &a.name).cmp(&(b.dim.unwrap().keyword(), &b.name))
+    });
+    for t in onto {
         let mut s = String::new();
         push_trait(&mut s, t);
         sections.push(s);
@@ -97,6 +112,7 @@ pub fn print(l: &Language) -> String {
                 SignItem::TraitUse { name, block } => {
                     s.push_str(&format!("    {name}[{block}]\n"))
                 }
+                SignItem::Belongs(name) => s.push_str(&format!("    belongs {name}\n")),
                 SignItem::Def(d) => s.push_str(&format!("    {} = {}\n", d.path, d.value)),
                 SignItem::Rule(r) => push_rule(&mut s, r),
             }
@@ -120,6 +136,7 @@ mod tests {
             let a = TraitDef {
                 name: "Alpha".into(),
                 global: false,
+                dim: None,
                 blocks: vec![Block {
                     items: vec![Item::Def(Def {
                         path: "syn.provides".into(),
@@ -130,6 +147,7 @@ mod tests {
             let b = TraitDef {
                 name: "Beta".into(),
                 global: true,
+                dim: None,
                 blocks: vec![Block { items: vec![] }],
             };
             if flip {
@@ -153,6 +171,7 @@ mod tests {
         l.add_trait(TraitDef {
             name: "T".into(),
             global: false,
+            dim: None,
             blocks: vec![Block {
                 items: vec![Item::Rule(r1), Item::Rule(r2)],
             }],

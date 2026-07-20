@@ -242,6 +242,7 @@ fn error_duplicate_names() {
     let t = TraitDef {
         name: "T".into(),
         global: false,
+        dim: None,
         blocks: vec![Block::default()],
     };
     l.add_trait(t.clone());

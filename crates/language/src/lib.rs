@@ -17,12 +17,51 @@
 
 pub mod codegen;
 pub mod compile;
+pub mod ontology;
 pub mod parser;
+pub mod projection;
 pub mod word;
 pub mod path;
 pub mod printer;
 
 pub use tshiatun_dsl::lower::Stage;
+
+// ── 共時四維(修補07 P38;四棵獨立 ontology)──
+
+/// 四個彼此獨立的共時維度。ontology trait 以此標記歸屬哪棵分類樹;
+/// **不共享同一棵樹**(P38)——`belongs` 閉包只在同 dim 內走。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Dim {
+    Phon,
+    Syn,
+    Sem,
+    Prag,
+}
+
+impl Dim {
+    /// canonical 關鍵詞(dim-marked trait 頭 + typed projection 路徑前綴)。
+    pub fn keyword(self) -> &'static str {
+        match self {
+            Dim::Phon => "phon",
+            Dim::Syn => "syn",
+            Dim::Sem => "sem",
+            Dim::Prag => "prag",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Dim> {
+        match s {
+            "phon" => Some(Dim::Phon),
+            "syn" => Some(Dim::Syn),
+            "sem" => Some(Dim::Sem),
+            "prag" => Some(Dim::Prag),
+            _ => None,
+        }
+    }
+    /// 四維迭代(registry 建四棵樹用)。
+    pub fn all() -> [Dim; 4] {
+        [Dim::Phon, Dim::Syn, Dim::Sem, Dim::Prag]
+    }
+}
 
 // ── ④ 引用類(P24:Ref 是屬性值,非圖邊)──
 
@@ -86,11 +125,14 @@ pub struct Rule {
     pub else_chain: Vec<String>,
 }
 
-/// Block 內項目(P27:Item = Definition | Rule)。
+/// Block 內項目(P27:Item = Definition | Rule | Belongs)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
     Def(Def),
     Rule(Rule),
+    /// `belongs Name`(P40):分類成員 + 展開來源 + **保留標記**;
+    /// 於 ontology trait 中 = 該節點在同 dim 樹的父邊。位置保序(與 Def/Rule 同列)。
+    Belongs(String),
 }
 
 /// Trait 的 block(P27 選項 A:`==` 是 Block 節點邊界,非分隔 token)。
@@ -101,11 +143,18 @@ pub struct Block {
 
 // ── ③ 容器類 ──
 
-/// Trait = sign 內容的 macro 展開模板(P5);`global: true` = 預設自動引用(P6)。
+/// Trait:兩種角色共用容器——
+/// - **`dim: None`** = sign 內容的 macro 展開模板(P5;`global` = 預設自動引用 P6;
+///   `Name[n]` block-indexed 引用,展開消去引用)。
+/// - **`dim: Some(_)`** = **ontology 分類節點**(P40,修補07 P38):某維分類樹上的
+///   一個範疇,`belongs`(body 的 `Item::Belongs`)= 其父邊;被 `belongs` 引用時
+///   展開其 Defs 且**保留標記**(I19:與 `Name[n]` 並存分工)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraitDef {
     pub name: String,
     pub global: bool,
+    /// None = phon-rule macro trait(P5);Some(dim) = 該 dim 的 ontology 節點(P40)。
+    pub dim: Option<Dim>,
     pub blocks: Vec<Block>,
 }
 
@@ -114,6 +163,8 @@ pub struct TraitDef {
 pub enum SignItem {
     /// `VerbCommon[1]`(block 序數 1 起算;全 block 強制顯式,compile 驗證)。
     TraitUse { name: String, block: u32 },
+    /// `belongs Transitive`(P40):sign 掛入某 ontology 節點;閉包由 registry 走。
+    Belongs(String),
     Def(Def),
     Rule(Rule),
 }
