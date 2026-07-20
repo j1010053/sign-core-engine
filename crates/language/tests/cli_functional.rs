@@ -81,9 +81,9 @@ fn cli_trace_prints_derivation_table() {
     assert!(out.contains("*pa"), "{out}");
     assert!(out.contains("tonogenesis"), "{out}");
     assert!(out.contains("input"), "{out}");
-    assert!(out.contains("⇒"), "{out}");
-    // trace 模式仍以詞表′收尾(每詞一個 ⇒ 行)
-    assert_eq!(out.matches('⇒').count(), 4, "{out}");
+    // trace 模式仍以詞表′收尾(每詞一個 output 行;520e0c8 起取代 ⇒)
+    assert_eq!(out.matches("output").count(), 4, "{out}");
+    assert!(out.contains("output         pa[H]"), "{out}");
 }
 
 #[test]
@@ -93,7 +93,7 @@ fn cli_help_and_version() {
     assert!(stdout(&o).contains("usage:"));
     let o = run(&[&"--version"]);
     assert!(o.status.success());
-    assert!(stdout(&o).starts_with("conlang "));
+    assert!(stdout(&o).starts_with("tshiatun "));
 }
 
 /// 詞表:空行與 `/*` 註解行跳過。
@@ -156,19 +156,12 @@ fn cli_unknown_segment_exit_1() {
     );
 }
 
-// ── 已知缺陷(擁有者裁決 2026-07-20:僅記錄,待 pull 最新版後複查)──
-
-/// **KNOWN DEFECT**:零規則規則檔時,`steps.last().unwrap_or_default()`
-/// (crates/cli/src/main.rs)以空詞取代輸入詞 → 輸出空行而非原詞。
-/// 正確契約應為詞表′恆等(pa → pa)。本測試釘住**現行為**作為缺陷存在的
-/// 證明;tshiatun 修復後本測試會轉紅,屆時改斷言 `"pa\na\n"` 並移除此註記。
+/// 零規則規則檔 = 詞表′恆等(原詞照出)。曾為已知缺陷(空詞取代輸入,
+/// 記於 docs/13 §6),上游 `520e0c8` 修復(`unwrap_or(fallback)`),
+/// 2026-07-20 submodule bump 後翻正為正確契約。
 #[test]
-fn cli_zero_rules_known_defect_loses_input_word() {
+fn cli_zero_rules_is_identity() {
     let o = run(&[&fixture("decls_only.qy"), &fixture("words_a.txt")]);
     assert!(o.status.success());
-    assert_eq!(
-        stdout(&o),
-        "\n\n",
-        "行為改變:若已修復(輸出 pa\\na),請更新本測試與 docs/13 缺陷記錄"
-    );
+    assert_eq!(stdout(&o), "pa\na\n");
 }

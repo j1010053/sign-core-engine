@@ -214,7 +214,7 @@ re-parse round-trip 恆等、結構斷言、四類 CompileError、決定性。wo
 步數;`tests/dual_track.rs` + `tests/fixtures/8_*.lang`)= **共時側 2.0 化完成**;
 codegen 語意測試 10 案(golden/P8/決定性/顯式拒絕);CLI 功能回測 11 案新編
 (`tests/cli_functional.rs`,子程序呼叫 tshiatun 二進位,只讀不寫)。
-已知缺陷(僅記錄,docs/13 §6):CLI 零規則丟失輸入詞(`unwrap_or_default`)。
+(零規則丟失輸入詞缺陷已由上游 `520e0c8` 修復;submodule bump 2026-07-20。)
 
 **下一個任務(鳥瞰步驟 12)**:臨時 Word 建構(component 樹,Language 的
 Sign.slots 可手寫組合測試)+ 循環套用(P3);`language::build_word` 協調邏輯
