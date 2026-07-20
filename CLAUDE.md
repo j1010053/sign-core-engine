@@ -259,10 +259,21 @@ Matched/Unmatched/Error(P43)、每維規則只改自己那維(P44)。
 四維獨立同名、四類診斷、projection 繼承/覆蓋/正交、決定性)。ontology trait 於
 compile 存續(`retain(global || dim.is_some())`)。
 
-**下一個任務(鳥瞰步驟 12b)**:Construction 與 slots。construction-as-Sign(P42)、
-具名 slots(P41 valence=slots)、slot type/trait constraint(filler 的 belongs 閉包
-須含所需 trait,P40)、required 預設 + `optional`、slot filling、construction
-application → derived Sign/token、slot mapping 基本能力、syn validation。🔑 出口=
-實例 1 組合造詞(選構式+填 sign→token→表層)+ 範疇不匹配/配價不符負例。
-slot/construction 表面語法定 I21(貼合 TshiatŪn/Lexurgy,非 YAML 巢狀)。
+**已完成(鳥瞰步驟 12b,I21)**:Construction 與 slots。`construction.rs`:
+construction-as-Sign(P42,帶 ≥1 slot 的 sign)、具名 slots(`slot NAME [Filler]`,
+**optional 尾綴 `?`**,P41 valence=slots)、filler 授權 = filler 的 syn `belongs`
+閉包含 slot 約束(P40 複用 12a)、`apply` → derived token(暫態不進庫;殘餘 slots
+= 剩餘 valence;飽和=無必填未填)、phon 模板(`{slot}` + 字面素材如環綴 `ge{stem}t`)、
+表層經引擎(build_phrase→run→spell-out)、**不就地改來源 sign**(P42)。負例:
+CategoryMismatch/UnknownSlot/DuplicateFill/Unsaturated/NotAConstruction/
+TemplateSlotUnknown(不默默近似)。AST `SignItem::Slot`;parser/printer 擴充
+(`slot`/`?` round-trip)。🔑 出口過:**德語現在式變位系統**
+(`tests/construction_german.rs` 10 案:sage/sagst/sagt/sagen/sagt/sagen 全變位、
+optional 分離前綴、環綴分詞 gesagt、範疇授權/殘餘 valence/無就地改/round-trip)。
+workbench 73 測試綠;引擎零觸動、wasm 綠。
+
+**下一個任務(鳥瞰步驟 12c)**:Construction semantics(form-meaning pair)。
+construction + fillers → derived phon/syn/sem/prag;semantic template 引用 filler
+的 semantic projection/node(非字串替換);缺 slot/filler trait 不符/semantic
+reference 無法解析/duplicate-overlap diagnostics/合法 synonymy 與 polysemy。
 

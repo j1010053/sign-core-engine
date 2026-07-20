@@ -113,6 +113,12 @@ pub fn print(l: &Language) -> String {
                     s.push_str(&format!("    {name}[{block}]\n"))
                 }
                 SignItem::Belongs(name) => s.push_str(&format!("    belongs {name}\n")),
+                SignItem::Slot(sl) => s.push_str(&format!(
+                    "    slot {} [{}]{}\n",
+                    sl.name,
+                    sl.filler,
+                    if sl.optional { "?" } else { "" }
+                )),
                 SignItem::Def(d) => s.push_str(&format!("    {} = {}\n", d.path, d.value)),
                 SignItem::Rule(r) => push_rule(&mut s, r),
             }

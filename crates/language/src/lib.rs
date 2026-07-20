@@ -17,6 +17,7 @@
 
 pub mod codegen;
 pub mod compile;
+pub mod construction;
 pub mod ontology;
 pub mod parser;
 pub mod projection;
@@ -165,8 +166,21 @@ pub enum SignItem {
     TraitUse { name: String, block: u32 },
     /// `belongs Transitive`(P40):sign 掛入某 ontology 節點;閉包由 registry 走。
     Belongs(String),
+    /// `slot NAME [Filler]`(可尾綴 `?` = optional;P41 valence=slots,I21)。
+    /// 帶 ≥1 slot 的 sign = construction(P42);filler 是 syn ontology 範疇約束。
+    Slot(Slot),
     Def(Def),
     Rule(Rule),
+}
+
+/// 一個 argument slot(P41:valence 由 slots 構成,非數字欄位)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Slot {
+    pub name: String,
+    /// filler 必須具備的 syn ontology 範疇(其 `belongs` 閉包須含此名,P40)。
+    pub filler: String,
+    /// `?` 標記 = 非必填(I21;預設必填)。
+    pub optional: bool,
 }
 
 /// Sign:真正的語言單位(phon=UR / sem / syn / prag 稀疏,以 Def 承載)。

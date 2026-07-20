@@ -13,7 +13,7 @@
 //! round-trip:對 canonical 輸入,`parse(src).dump() == src`(P21)。
 
 use crate::path::parse_path;
-use crate::{Block, Def, Dim, Item, Language, SignItem, Stage, TraitDef};
+use crate::{Block, Def, Dim, Item, Language, SignItem, Slot, Stage, TraitDef};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("parse error at line {line}: {msg}")]
@@ -91,6 +91,39 @@ fn parse_item(lang: &mut Language, l: &str, line: usize) -> Result<Item, ParseEr
     } else {
         Ok(Item::Rule(lang.rule(body, stage)))
     }
+}
+
+/// `slot NAME [Filler]`(可尾綴 `?`;P41/I21)?攔在 `parse_item` 之前(無 `=>`/`=`)。
+fn slot_line(l: &str, line: usize) -> Result<Option<Slot>, ParseError> {
+    let Some(rest) = l.strip_prefix("slot ") else {
+        return Ok(None);
+    };
+    let Some(open) = rest.find('[') else {
+        return Err(err(line, "`slot` expects `slot NAME [Filler]`"));
+    };
+    let name = rest[..open].trim();
+    let after = rest[open + 1..].trim_end();
+    let optional = after.ends_with("]?");
+    let Some(inner) = after
+        .strip_suffix("]?")
+        .or_else(|| after.strip_suffix(']'))
+    else {
+        return Err(err(line, "`slot` filler must be `[Trait]` (optional `?`)"));
+    };
+    let filler = inner.trim();
+    let ident_ok = |s: &str| {
+        !s.is_empty()
+            && !s.contains(char::is_whitespace)
+            && s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+    };
+    if !ident_ok(name) || !ident_ok(filler) {
+        return Err(err(line, "slot name and filler must be single identifiers"));
+    }
+    Ok(Some(Slot {
+        name: name.to_owned(),
+        filler: filler.to_owned(),
+        optional,
+    }))
 }
 
 /// `belongs Name`(P40)?回傳目標 trait 名(單一識別字)。
@@ -250,6 +283,10 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
                 }
                 if let Some(target) = belongs_target(l2, ln2)? {
                     items.push(SignItem::Belongs(target));
+                    continue;
+                }
+                if let Some(slot) = slot_line(l2, ln2)? {
+                    items.push(SignItem::Slot(slot));
                     continue;
                 }
                 if let Some((tname, block)) = trait_use(l2) {
