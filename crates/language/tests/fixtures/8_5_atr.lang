@@ -1,0 +1,17 @@
+/* 8.5 ATR 雙向和諧 — Language 檔(路徑 B);語意同 tshiatun/examples/8_5_atr.qy */
+
+Feature atrsrc(+atrsrc)
+
+Symbol p
+Symbol a
+Symbol i [+atrsrc]
+
+Class vowel {a, i}
+
+Melody atr {+ATR} anchor mora
+
+global trait Phonology {
+    insert +ATR floating near mora / [+atrsrc] _
+    dock atr&floating strategy nearest
+    spread +ATR bidirectional within stem on-conflict stop
+}

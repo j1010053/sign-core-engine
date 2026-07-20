@@ -1,0 +1,15 @@
+/* 8.4 補償性延長 — Language 檔(路徑 B);語意同 tshiatun/examples/8_4_compensatory.qy */
+
+Symbol a
+Symbol k
+
+Class vowel {a}
+Class cons {k}
+
+Parse mora: @vowel | @vowel :: @cons
+Parse syllable: @cons? :: @vowel :: @cons?
+
+global trait Phonology {
+    @coda => * / @vowel _ .
+    dominate <mora>&empty -> @vowel leftward
+}

@@ -203,7 +203,20 @@ trait 索引(Compile Artifact,P8)。出口過:**每 pass 一份 dump golden** �
 re-parse round-trip 恆等、結構斷言、四類 CompileError、決定性。workbench workspace
 `exclude = ["tshiatun"]`(submodule 自有 workspace,避免 --workspace 外跑其測試)。
 
-**下一個任務(鳥瞰步驟 11)**:⑤Codegen——Compiled Grammar(phon 側 = dsl 可食規則集)
-+ Compiled Sign;Grammar Engine 消費 Compiled Grammar。🔑 雙軌回歸:8.1–8.6 以
-Language 檔案跑出的結果須與路徑 A(純 .qy)輸出逐字相同(P20 §1.4)。
+**已完成(鳥瞰步驟 11,I17)**:`language::codegen`——⑤Codegen。
+`CompiledGrammar { phon_source, program }`:phon 側 = dsl 可直接吃的規則集原文
+(P20 §1.3;dsl 域宣告 verbatim + global trait 規則,canonical 名稱序 × ④ 序;
+`;` 多語句塊展開為合成標籤 rN: 保 B5;`stage:` 僅 ≠word 時輸出),Program 由
+`tshiatun_dsl::compile` 產出;P8 無 trait/priority 痕跡。`CompiledSign`:③ 後者勝
+欄位 + sign 局部規則(消費者 = 步驟 12)。parser 擴充(I17-a):容器內非 Def 非
+`=>` 行 = 原文 dsl 動詞語句 Rule。顯式拒絕:else 鏈/Scan+stage/dsl 拒收(I17-d)。
+出口過:🔑 **雙軌迴歸 8.1–8.6 全綠**(P20 §1.4,表層逐字 + 逐步 Word 全狀態 +
+步數;`tests/dual_track.rs` + `tests/fixtures/8_*.lang`)= **共時側 2.0 化完成**;
+codegen 語意測試 10 案(golden/P8/決定性/顯式拒絕);CLI 功能回測 11 案新編
+(`tests/cli_functional.rs`,子程序呼叫 tshiatun 二進位,只讀不寫)。
+已知缺陷(僅記錄,docs/13 §6):CLI 零規則丟失輸入詞(`unwrap_or_default`)。
+
+**下一個任務(鳥瞰步驟 12)**:臨時 Word 建構(component 樹,Language 的
+Sign.slots 可手寫組合測試)+ 循環套用(P3);`language::build_word` 協調邏輯
+(docs/13 §4 裁決 2 的接口)消費 Compiled Sign + Compiled Grammar。
 

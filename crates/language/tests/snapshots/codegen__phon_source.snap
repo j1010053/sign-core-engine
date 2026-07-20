@@ -1,0 +1,19 @@
+---
+source: crates/language/tests/codegen.rs
+expression: artifacts().grammar.phon_source
+---
+Feature voice(+voice, -voice)
+Symbol p [-voice]
+Symbol b [+voice]
+Symbol a
+Class vowel {a}
+Melody tone {H, L} anchor mora
+
+r1:
+    stage: stem
+    [+voice]&onset => [-voice]
+r2:
+    insert H floating near mora / onset&[-voice] _
+    dock tone&floating strategy nearest
+Scan tone along mora within pword from left:
+    H => L / H _

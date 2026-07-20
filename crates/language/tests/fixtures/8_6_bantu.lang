@@ -1,0 +1,18 @@
+/* 8.6 Bantu 三連發(Scan)— Language 檔(路徑 B);語意同 tshiatun/examples/8_6_bantu.qy */
+
+Feature voice(+voice, -voice)
+
+Symbol p [-voice]
+Symbol b [+voice]
+Symbol a
+
+Class vowel {a}
+
+Melody tone {H, L} anchor mora
+
+global trait Phonology {
+    insert H floating near mora / onset&[-voice] _
+    dock tone&floating strategy nearest
+    Scan tone along syllable within pword from right: associate H -> <syl>[2]
+    Scan tone along mora within pword from left: H => L / H _ ; associate H -> mora&Ø[first]
+}

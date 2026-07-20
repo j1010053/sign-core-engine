@@ -1,0 +1,25 @@
+/* 8.1 tonogenesis — Language 檔(路徑 B);語意同 tshiatun/examples/8_1_tonogenesis.qy */
+
+Feature voice(+voice, -voice)
+
+Symbol p [-voice]
+Symbol b [+voice]
+Symbol a
+
+Class vowel {a}
+
+Melody tone {H, M, L} anchor mora
+
+Spell-out:
+    order tone
+    empty tone => M
+    floating tone => drop
+    contour tone:{H L} => falling
+
+global trait Phonology {
+    insert H floating near mora / onset&[-voice] _ ; insert L floating near mora / onset&[+voice] _
+    dock tone&floating strategy nearest
+    [+voice]&onset => [-voice]
+    fill tone Ø => M within pword
+    merge adjacent-equal
+}

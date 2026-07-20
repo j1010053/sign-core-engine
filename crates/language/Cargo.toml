@@ -11,3 +11,5 @@ thiserror = "2"
 
 [dev-dependencies]
 insta = "1"
+# 僅測試用(雙軌迴歸的結構比對/型態括號注入);產品依賴仍只有 dsl(P20)
+tshiatun-core = { path = "../../tshiatun/crates/core" }

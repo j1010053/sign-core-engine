@@ -13,7 +13,7 @@
 //! round-trip:對 canonical 輸入,`parse(src).dump() == src`(P21)。
 
 use crate::path::parse_path;
-use crate::{Block, Def, Item, Language, Rule, SignItem, Stage, TraitDef};
+use crate::{Block, Def, Item, Language, SignItem, Stage, TraitDef};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("parse error at line {line}: {msg}")]
@@ -50,23 +50,30 @@ fn container_name<'a>(l: &'a str, kw: &str, line: usize) -> Result<&'a str, Pars
 }
 
 /// 一行 → Def 或 Rule 頭(不含 else 續行)。
+///
+/// 分類(I17-a):先剝尾綴 `@stage X`(省略 = word);含 `=>` = Rule;
+/// 否則含 `=` = Definition(路徑驗證,錯誤有行號);**兩者皆無 = Rule,
+/// body 為原文 dsl 域動詞語句**(insert/dock/fill/merge/spread/dominate/Scan …
+/// ——phon 規則屬 dsl 域,language 不解析其內部,修補05 §1.5)。
 fn parse_item(lang: &mut Language, l: &str, line: usize) -> Result<Item, ParseError> {
-    if l.contains("=>") {
-        // Rule:尾綴 `@stage X`(省略 = word)
-        let (body, stage) = match l.rsplit_once(" @stage ") {
-            Some((b, s)) => {
-                let stage = match s.trim() {
-                    "stem" => Stage::Stem,
-                    "word" => Stage::Word,
-                    "phrase" => Stage::Phrase,
-                    other => return Err(err(line, format!("unknown stage {other:?}"))),
-                };
-                (b.trim(), stage)
-            }
-            None => (l, Stage::Word),
-        };
+    let (body, stage, had_stage) = match l.rsplit_once(" @stage ") {
+        Some((b, s)) => {
+            let stage = match s.trim() {
+                "stem" => Stage::Stem,
+                "word" => Stage::Word,
+                "phrase" => Stage::Phrase,
+                other => return Err(err(line, format!("unknown stage {other:?}"))),
+            };
+            (b.trim(), stage, true)
+        }
+        None => (l, Stage::Word, false),
+    };
+    if body.contains("=>") {
         Ok(Item::Rule(lang.rule(body, stage)))
-    } else if let Some((path, value)) = l.split_once('=') {
+    } else if let Some((path, value)) = body.split_once('=') {
+        if had_stage {
+            return Err(err(line, "`@stage` is not allowed on a Definition"));
+        }
         let path = path.trim();
         parse_path(path).map_err(|e| err(line, e.to_string()))?;
         Ok(Item::Def(Def {
@@ -74,7 +81,7 @@ fn parse_item(lang: &mut Language, l: &str, line: usize) -> Result<Item, ParseEr
             value: value.trim().to_owned(),
         }))
     } else {
-        Err(err(line, format!("expected Definition or Rule, got {l:?}")))
+        Ok(Item::Rule(lang.rule(body, stage)))
     }
 }
 

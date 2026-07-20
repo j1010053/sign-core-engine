@@ -1,0 +1,18 @@
+/* 8.2 鼻化和諧 — Language 檔(路徑 B);語意同 tshiatun/examples/8_2_nasal_harmony.qy */
+
+Feature sonorant(+sonorant, -sonorant)
+Feature nasstop(+nasstop)
+
+Symbol m [+sonorant +nasstop]
+Symbol a [+sonorant]
+Symbol t [-sonorant]
+
+Class vowel {a}
+
+Melody nasal {+nasal} anchor segment
+
+global trait Phonology {
+    insert +nasal floating near segment / [+nasstop] _
+    dock nasal&floating strategy nearest
+    spread +nasal rightward blocked-by [-sonorant] within pword
+}

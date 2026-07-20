@@ -1,0 +1,18 @@
+/* 8.3 聲調穩定 + 重新著陸 — Language 檔(路徑 B);語意同 tshiatun/examples/8_3_stability.qy */
+
+Feature voice(+voice, -voice)
+
+Symbol t [-voice]
+Symbol d [+voice]
+Symbol a
+
+Class vowel {a}
+
+Melody tone {H, L} anchor mora
+
+global trait Phonology {
+    insert H floating near mora / onset&[-voice] _ ; insert L floating near mora / onset&[+voice] _
+    dock tone&floating strategy nearest
+    @vowel => * / _ #
+    dock tone&floating strategy nearest prefer-left
+}

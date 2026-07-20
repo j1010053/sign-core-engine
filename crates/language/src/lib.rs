@@ -15,6 +15,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_debug_implementations)]
 
+pub mod codegen;
 pub mod compile;
 pub mod parser;
 pub mod path;

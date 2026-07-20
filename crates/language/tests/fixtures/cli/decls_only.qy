@@ -1,0 +1,6 @@
+/* 僅宣告、零規則:CLI 應輸出原詞(詞表′恆等);缺陷觀察樣例 */
+
+Symbol p
+Symbol a
+
+Class vowel {a}
