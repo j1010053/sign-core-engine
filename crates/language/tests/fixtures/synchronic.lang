@@ -28,3 +28,26 @@ sign chain:
 sign broken:
     syn:
         this has no arrow
+
+sign else_same:
+    syn:
+        x => a
+            else x => b
+sign then_same:
+    syn:
+        x => a
+            then x => b
+
+sign else_feed:
+    syn:
+        x => 1
+            else y => 2 / x == 1
+sign then_feed:
+    syn:
+        x => 1
+            then y => 2 / x == 1
+
+sign then_noop_first:
+    syn:
+        x => 1 / [Nope]
+            then y => 2

@@ -23,9 +23,12 @@ use tshiatun_dsl::Program;
 pub enum CodegenError {
     #[error(transparent)]
     Compile(#[from] CompileError),
-    /// P22 else 鏈的求值屬 language 擴充文法,dsl 尚無對應——顯式拒絕,不默默丟棄。
-    #[error("rule {label} {body:?}: else-chain not lowerable to phon DSL (P22 evaluation = 步驟 12+)")]
+    /// phon 規則的 else/then 鏈求值屬 dsl 域(dsl 自有 Else:/Then:)——codegen 顯式拒絕,
+    /// 不默默丟棄(synchronic 的 else/then 求值於 syn/sem/prag 規則,I25/I26)。
+    #[error("rule {label} {body:?}: else-chain not lowerable to phon DSL (dsl 自有 Else:)")]
     ElseUnsupported { label: String, body: String },
+    #[error("rule {label} {body:?}: then-chain not lowerable to phon DSL (dsl 自有 Then:)")]
+    ThenUnsupported { label: String, body: String },
     /// dsl 的 Scan 塊不承載 stage 語句(lower 固定 default)——顯式拒絕。
     #[error("Scan rule {body:?} has non-word stage {stage}: dsl Scan blocks carry no stage")]
     ScanStageUnsupported { body: String, stage: &'static str },
@@ -81,6 +84,12 @@ fn stage_str(s: Stage) -> &'static str {
 pub(crate) fn emit_rule(out: &mut String, n: &mut u32, r: &Rule) -> Result<(), CodegenError> {
     if !r.else_chain.is_empty() {
         return Err(CodegenError::ElseUnsupported {
+            label: format!("r{n}"),
+            body: r.body.clone(),
+        });
+    }
+    if !r.then_chain.is_empty() {
+        return Err(CodegenError::ThenUnsupported {
             label: format!("r{n}"),
             body: r.body.clone(),
         });

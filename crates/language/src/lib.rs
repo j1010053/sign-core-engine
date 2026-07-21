@@ -126,9 +126,13 @@ pub struct Rule {
     /// 規則所屬**維度**(I25/P44):由所在維度區塊決定(phon:/syn:/sem:/prag:)。
     /// phon 規則求值於 Word(dsl);syn/sem/prag 規則求值於 Sign projection(12d)。
     pub dim: Dim,
-    /// `else` 鏈(P22/P43):第一匹配勝出;分支共享本規則 stage。各分支為原文。
-    /// syn/sem/prag 規則的 else = Lexurgy 式三分(12d);phon 規則 else 仍屬 dsl 域。
+    /// `else` 鏈(P22/P43,Lexurgy `Else:`):**第一匹配 fallback**——各分支從同一輸入
+    /// 依序試,第一個匹配勝出、其餘不跑(identity=匹配)。各分支為原文,共享本規則 stage。
     pub else_chain: Vec<String>,
+    /// `then` 鏈(I26,Lexurgy `Then:`):**順序組合**——前分支 match/apply/commit 後,
+    /// 下一分支讀更新後狀態;**全分支依序皆跑**(非條件分支)。與 `else_chain` **互斥**
+    /// (平坦層不得混用;混用 = 定位錯誤,巢狀括號屬後續)。
+    pub then_chain: Vec<String>,
 }
 
 /// Trait 的 block(P27 選項 A:`==` 是 Block 節點邊界,非分隔 token)。
@@ -240,6 +244,7 @@ impl Language {
             stage,
             dim,
             else_chain: Vec::new(),
+            then_chain: Vec::new(),
         }
     }
 

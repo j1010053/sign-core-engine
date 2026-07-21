@@ -29,7 +29,10 @@ fn def_dim(path: &str) -> Option<&str> {
 fn push_rule(out: &mut String, indent: &str, r: &crate::Rule) {
     out.push_str(&format!("{indent}{} @stage {}\n", r.body, stage_str(r.stage)));
     for e in &r.else_chain {
-        out.push_str(&format!("{indent}    else {e}\n")); // 分支共享 stage(P22)
+        out.push_str(&format!("{indent}    else {e}\n")); // Lexurgy Else(P43)
+    }
+    for t in &r.then_chain {
+        out.push_str(&format!("{indent}    then {t}\n")); // Lexurgy Then(I26);與 else 互斥
     }
 }
 

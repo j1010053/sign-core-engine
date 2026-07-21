@@ -244,7 +244,20 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             let Some(SignItem::Rule(r)) = blocks.last_mut().unwrap().items.last_mut() else {
                 return Err(err(no, "`else` without a preceding rule"));
             };
+            if !r.then_chain.is_empty() {
+                return Err(err(no, "cannot mix `then` and `else` in one flat rule (use nesting)"));
+            }
             r.else_chain.push(rest.trim().to_owned());
+            continue;
+        }
+        if let Some(rest) = text.strip_prefix("then ") {
+            let Some(SignItem::Rule(r)) = blocks.last_mut().unwrap().items.last_mut() else {
+                return Err(err(no, "`then` without a preceding rule"));
+            };
+            if !r.else_chain.is_empty() {
+                return Err(err(no, "cannot mix `then` and `else` in one flat rule (use nesting)"));
+            }
+            r.then_chain.push(rest.trim().to_owned());
             continue;
         }
         // phon 維:`/…/` = UR/模板 Def;其餘 = phon 規則

@@ -149,6 +149,25 @@ global trait G:
     );
 }
 
+/// phon 規則的 then 鏈屬 dsl 域(dsl 自有 Then:)→ codegen 顯式拒絕(I26)。
+#[test]
+fn then_chain_on_phon_rule_is_rejected() {
+    let src = "\
+Symbol a
+
+global trait G:
+    phon:
+        a => a / _#
+        then a => a
+";
+    let l = Language::parse(src).unwrap();
+    let e = codegen::compile_full(&l).unwrap_err();
+    assert!(
+        matches!(e, CodegenError::ThenUnsupported { ref body, .. } if body == "a => a / _#"),
+        "{e:?}"
+    );
+}
+
 /// Scan 塊在 dsl 不承載 stage → 非 word stage 顯式拒絕。
 #[test]
 fn scan_with_non_word_stage_is_rejected() {

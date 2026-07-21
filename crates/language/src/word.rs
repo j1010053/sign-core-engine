@@ -143,6 +143,7 @@ fn leaf_text(a: &Artifacts, sign: &CompiledSign) -> Result<String, WordError> {
             stage: r.stage,
             dim: crate::Dim::Phon, // cophonology = phon 音段效果(I18)
             else_chain: r.else_chain.clone(),
+            then_chain: Vec::new(),
         };
         codegen::emit_rule(&mut src, &mut n, &rule)?;
     }

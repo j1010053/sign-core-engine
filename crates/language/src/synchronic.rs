@@ -105,8 +105,55 @@ fn guard_matches(guard: &Guard, sign: &SignDef, dim: Dim, reg: &OntologyRegistry
     }
 }
 
-/// 對一個 sign 求值一條規則(主 + else,第一匹配)。回傳紀錄 + 可選 patch。
-fn eval_rule(
+/// 求值**單一分支**(parse + guard + 可選 patch),記其 branch 索引。
+fn eval_one_branch(
+    id: RuleId,
+    bi: usize,
+    branch: &str,
+    sign: &SignDef,
+    dim: Dim,
+    reg: &OntologyRegistry,
+) -> (RuleRecord, Option<DimPatch>) {
+    let mk = |status, changed, branch, diag| RuleRecord {
+        rule_id: id,
+        dim,
+        status,
+        changed,
+        branch,
+        diag,
+    };
+    let dr = match parse_dim_rule(branch) {
+        Ok(d) => d,
+        Err(e) => {
+            return (
+                mk(RuleStatus::Error, false, None, Some(format!("branch {bi}: {e}"))),
+                None,
+            )
+        }
+    };
+    let matched = dr
+        .guard
+        .as_ref()
+        .map_or(true, |g| guard_matches(g, sign, dim, reg));
+    if !matched {
+        return (mk(RuleStatus::Unmatched, false, Some(bi), None), None);
+    }
+    let path = format!("{}.{}", dim.keyword(), dr.field);
+    let old = sign.project(dim, reg).get(&path).map(str::to_owned);
+    let changed = old.as_deref() != Some(dr.value.as_str());
+    (
+        mk(RuleStatus::Matched, changed, Some(bi), None),
+        Some(DimPatch {
+            dim,
+            sets: vec![(path, dr.value)],
+        }),
+    )
+}
+
+/// **Lexurgy `Else`**(P43):主 + else 鏈,**第一匹配 fallback**——第一個 Matched
+/// 勝出(其餘不跑);identity(值未變)算 Matched;Error 立即中止,**不進後續分支**;
+/// 全 Unmatched → 整條 Unmatched。回傳單一紀錄 + 可選 patch(至多套一次)。
+fn eval_else(
     id: RuleId,
     body: &str,
     else_chain: &[String],
@@ -114,48 +161,14 @@ fn eval_rule(
     dim: Dim,
     reg: &OntologyRegistry,
 ) -> (RuleRecord, Option<DimPatch>) {
-    let branches = std::iter::once(body).chain(else_chain.iter().map(String::as_str));
-    for (bi, branch) in branches.enumerate() {
-        let dr = match parse_dim_rule(branch) {
-            Ok(d) => d,
-            Err(e) => {
-                // Error:直接診斷,不進後續分支(P43)
-                return (
-                    RuleRecord {
-                        rule_id: id,
-                        dim,
-                        status: RuleStatus::Error,
-                        changed: false,
-                        branch: None,
-                        diag: Some(format!("branch {bi}: {e}")),
-                    },
-                    None,
-                );
-            }
-        };
-        let matched = dr
-            .guard
-            .as_ref()
-            .map_or(true, |g| guard_matches(g, sign, dim, reg));
-        if matched {
-            let path = format!("{}.{}", dim.keyword(), dr.field);
-            let old = sign.project(dim, reg).get(&path).map(str::to_owned);
-            let changed = old.as_deref() != Some(dr.value.as_str());
-            let patch = DimPatch {
-                dim,
-                sets: vec![(path, dr.value)],
-            };
-            return (
-                RuleRecord {
-                    rule_id: id,
-                    dim,
-                    status: RuleStatus::Matched,
-                    changed,
-                    branch: Some(bi),
-                    diag: None,
-                },
-                Some(patch),
-            );
+    for (bi, branch) in std::iter::once(body)
+        .chain(else_chain.iter().map(String::as_str))
+        .enumerate()
+    {
+        let (rec, patch) = eval_one_branch(id, bi, branch, sign, dim, reg);
+        match rec.status {
+            RuleStatus::Matched | RuleStatus::Error => return (rec, patch),
+            RuleStatus::Unmatched => continue, // 試下一分支
         }
     }
     (
@@ -169,6 +182,32 @@ fn eval_rule(
         },
         None,
     )
+}
+
+/// **Lexurgy `Then`**(I26):主 + then 鏈,**順序組合**——每分支依序在**更新後**狀態
+/// 上跑其 match/apply(前分支 commit 後,下一分支讀新狀態);**全分支皆跑**(非條件
+/// 分支)。回傳演化後 sign + 每分支一筆紀錄(含未匹配分支)。
+fn eval_then(
+    id: RuleId,
+    body: &str,
+    then_chain: &[String],
+    sign: &SignDef,
+    dim: Dim,
+    reg: &OntologyRegistry,
+) -> (SignDef, Vec<RuleRecord>) {
+    let mut cur = sign.clone();
+    let mut records = Vec::new();
+    for (bi, branch) in std::iter::once(body)
+        .chain(then_chain.iter().map(String::as_str))
+        .enumerate()
+    {
+        let (rec, patch) = eval_one_branch(id, bi, branch, &cur, dim, reg);
+        if let Some(p) = patch {
+            cur = apply_patch(&cur, &p);
+        }
+        records.push(rec);
+    }
+    (cur, records)
 }
 
 /// typed patch 套用(P30):`Sign × Patch → Sign'`,**保留原 Sign**;
@@ -198,24 +237,30 @@ pub fn run_sign_dim_rules(
     dim: Dim,
     reg: &OntologyRegistry,
 ) -> (SignDef, Vec<RuleRecord>) {
-    let rules: Vec<(RuleId, String, Vec<String>)> = sign
+    let rules: Vec<crate::Rule> = sign
         .items
         .iter()
         .filter_map(|i| match i {
-            SignItem::Rule(r) if r.dim == dim => {
-                Some((r.id, r.body.clone(), r.else_chain.clone()))
-            }
+            SignItem::Rule(r) if r.dim == dim => Some(r.clone()),
             _ => None,
         })
         .collect();
     let mut cur = sign.clone();
-    let mut records = Vec::with_capacity(rules.len());
-    for (id, body, else_chain) in rules {
-        let (rec, patch) = eval_rule(id, &body, &else_chain, &cur, dim, reg);
-        if let Some(p) = patch {
-            cur = apply_patch(&cur, &p);
+    let mut records = Vec::new();
+    for r in rules {
+        if !r.then_chain.is_empty() {
+            // Lexurgy Then:順序組合,全分支皆跑
+            let (next, recs) = eval_then(r.id, &r.body, &r.then_chain, &cur, dim, reg);
+            cur = next;
+            records.extend(recs);
+        } else {
+            // Lexurgy Else(或無鏈單分支):第一匹配
+            let (rec, patch) = eval_else(r.id, &r.body, &r.else_chain, &cur, dim, reg);
+            if let Some(p) = patch {
+                cur = apply_patch(&cur, &p);
+            }
+            records.push(rec);
         }
-        records.push(rec);
     }
     (cur, records)
 }
