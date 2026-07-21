@@ -1,0 +1,53 @@
+/* 共時語法系統整合(12a–12e 總檢查):
+   單一分類樹 + 四維投影 + construction(form-meaning)+ 同步規則(Else)+ patch + entrenchment。*/
+
+Symbol r
+Symbol u
+Symbol n
+Symbol d
+Symbol o
+Symbol g
+
+Class vowel {u, o}
+
+trait Honorific:
+
+sign run:
+    belongs Verb
+    belongs Motion
+    entrenchment = 0.9
+    syn:
+        class => intransitive / [Verb]
+    sem:
+        gloss = RUN
+    phon:
+        /run/
+sign dog:
+    belongs Noun
+    sem:
+        gloss = DOG
+    phon:
+        /dog/
+sign lord:
+    belongs Noun
+    belongs Honorific
+    sem:
+        gloss = LORD
+    prag:
+        register => formal / [Honorific]
+            else register => neutral
+    phon:
+        /god/
+
+sign Clause:
+    belongs Verb
+    syn:
+        slots:
+            subject [Noun]
+            predicate [Verb]
+    sem:
+        frame = event
+        actor = {subject}
+        action = {predicate}
+    phon:
+        /{subject}{predicate}/

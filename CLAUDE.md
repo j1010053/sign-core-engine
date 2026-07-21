@@ -303,9 +303,17 @@ form+meaning 同時導出、多義/同義、診斷、部分套用)。
 patch);`RuleRecord` 保 status/changed/branch/diag/RuleId。出口過:
 `tests/synchronic_rules.rs` 10 案。延後:完整 P22 守衛文法、跨維協調、phon else。
 
-**下一個任務(鳥瞰步驟 12e)**:typed patch **僅介面 + 資料欄位**(擁有者定案:
-不實作 entrenchment/lexicalization 行為)。四維 patch 類型完備(PhonPatch/SynPatch/
-SemPatch/PragPatch 或統一 `DimPatch` 已在 12d;12e 補其餘維與序列化);
-entrenchment/固化**僅留欄位與介面**,動力學留 M2 後。**M1++ 完成後 = 共時四維
-系統做穩**,再進 M2 歷時(步驟 13 Primitive Edit)。
+**已完成(鳥瞰步驟 12e,I27)= M1++ 閉環**:typed patch 接口 + entrenchment 資料
+欄位(僅介面/欄位,無動力學)。`patch.rs`:`Patch{dim, ops}`(Set upsert/Unset 移除
+本地 Def)+ 具名建構 `Patch::syn()/…` + builder(自動維度前綴 → 型別層隔離)+
+`apply`(Sign×Patch→Sign',保留原 Sign)+ `render`/`parse` 序列化 round-trip。
+`SignDef::entrenchment()`/`with_entrenchment()`(跨維 meta 欄位,無固化動力學,
+留 M2/B)。**共時語法功能總檢查**:`tests/synchronic_system.rs` 整合一份 mini-grammar
+串 12a–12e 全層(分類樹→投影→construction form-meaning→同步規則→patch→Flow A)。
+workbench 115 測試綠、0 警告;引擎零觸動、wasm 綠。
+
+**下一個任務(鳥瞰步驟 13,M2 歷時開跑)**:Primitive Edit 四原語(P23:
+insert/delete/update/move,樹上封閉;Ref 為屬性值 P24;Path 定址複用 path 模組)
++ 決定性 ID(P26)。crate 佈局(新 `changeset` crate vs language 內模組)動工時裁決。
+🔑 其後步驟 14 = ChangeSet Interpreter(改寫 Language→重 compile→表層變 = 歷時貫通)。
 

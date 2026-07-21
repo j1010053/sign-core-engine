@@ -1,7 +1,7 @@
 //! 四維同步規則求值(步驟 12d;修補07 P43/P44,I25)。
 //!
 //! syn/sem/prag 規則求值於 **Sign 的維度 projection**(phon 規則求值於 Word,dsl,
-//! 不在此)。**維度隔離(P44)**:一條 dim 規則只讀寫自己那維(產出該維 [`DimPatch`]),
+//! 不在此)。**維度隔離(P44)**:一條 dim 規則只讀寫自己那維(產出該維 [`Patch`]),
 //! 不碰他維——結構保證(規則在其維度區塊內,寫入 path 自帶維度前綴)。
 //!
 //! **Lexurgy 式 `Else` 三分(P43)**:一條規則 = 主分支 + else 鏈,**第一匹配勝出**:
@@ -14,7 +14,7 @@
 //! 決定性書寫序。
 
 use crate::ontology::OntologyRegistry;
-use crate::{Def, Dim, RuleId, SignDef, SignItem};
+use crate::{Dim, RuleId, SignDef, SignItem};
 
 /// 求值三分(P43)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,14 +24,7 @@ pub enum RuleStatus {
     Error,
 }
 
-/// 某維 typed patch(P30/P39;12e 形式化,12d 產出):dim-scoped Def upsert。
-/// `Sign × Patch → Sign'`([`apply_patch`],保留原 Sign)。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DimPatch {
-    pub dim: Dim,
-    /// full path(含維度前綴)→ 新值 upsert。
-    pub sets: Vec<(String, String)>,
-}
+pub use crate::patch::Patch;
 
 /// 一條規則對一個 sign 的求值紀錄(trace)。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,7 +106,7 @@ fn eval_one_branch(
     sign: &SignDef,
     dim: Dim,
     reg: &OntologyRegistry,
-) -> (RuleRecord, Option<DimPatch>) {
+) -> (RuleRecord, Option<Patch>) {
     let mk = |status, changed, branch, diag| RuleRecord {
         rule_id: id,
         dim,
@@ -143,10 +136,7 @@ fn eval_one_branch(
     let changed = old.as_deref() != Some(dr.value.as_str());
     (
         mk(RuleStatus::Matched, changed, Some(bi), None),
-        Some(DimPatch {
-            dim,
-            sets: vec![(path, dr.value)],
-        }),
+        Some(Patch::for_dim(dim).set(&dr.field, &dr.value)), // 維度隔離:builder 加前綴
     )
 }
 
@@ -160,7 +150,7 @@ fn eval_else(
     sign: &SignDef,
     dim: Dim,
     reg: &OntologyRegistry,
-) -> (RuleRecord, Option<DimPatch>) {
+) -> (RuleRecord, Option<Patch>) {
     for (bi, branch) in std::iter::once(body)
         .chain(else_chain.iter().map(String::as_str))
         .enumerate()
@@ -203,31 +193,11 @@ fn eval_then(
     {
         let (rec, patch) = eval_one_branch(id, bi, branch, &cur, dim, reg);
         if let Some(p) = patch {
-            cur = apply_patch(&cur, &p);
+            cur = p.apply(&cur);
         }
         records.push(rec);
     }
     (cur, records)
-}
-
-/// typed patch 套用(P30):`Sign × Patch → Sign'`,**保留原 Sign**;
-/// upsert 同 path Def(有則改值,無則附加本地 Def)。
-pub fn apply_patch(sign: &SignDef, patch: &DimPatch) -> SignDef {
-    let mut s = sign.clone();
-    for (path, value) in &patch.sets {
-        let existing = s.items.iter_mut().find_map(|it| match it {
-            SignItem::Def(d) if &d.path == path => Some(d),
-            _ => None,
-        });
-        match existing {
-            Some(d) => d.value = value.clone(),
-            None => s.items.push(SignItem::Def(Def {
-                path: path.clone(),
-                value: value.clone(),
-            })),
-        }
-    }
-    s
 }
 
 /// 對一個 sign 跑其**某維**的全部同步規則(書寫序、順序求值,後見前 patch)。
@@ -257,7 +227,7 @@ pub fn run_sign_dim_rules(
             // Lexurgy Else(或無鏈單分支):第一匹配
             let (rec, patch) = eval_else(r.id, &r.body, &r.else_chain, &cur, dim, reg);
             if let Some(p) = patch {
-                cur = apply_patch(&cur, &p);
+                cur = p.apply(&cur);
             }
             records.push(rec);
         }

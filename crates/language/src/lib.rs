@@ -20,6 +20,7 @@ pub mod compile;
 pub mod construction;
 pub mod ontology;
 pub mod parser;
+pub mod patch;
 pub mod projection;
 pub mod sem;
 pub mod synchronic;
