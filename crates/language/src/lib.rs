@@ -22,6 +22,7 @@ pub mod ontology;
 pub mod parser;
 pub mod projection;
 pub mod sem;
+pub mod synchronic;
 pub mod word;
 pub mod path;
 pub mod printer;
@@ -122,8 +123,11 @@ pub struct Rule {
     /// 主分支原文(`a => ə / _#`),不含 `@stage` 與 else。
     pub body: String,
     pub stage: Stage,
-    /// `else` 鏈(P22):disjunctive 單趟,第一匹配勝出;分支共享本規則 stage。
-    /// 各分支為原文(`ɐ / _[+cons]`、無條件 `e`);結構化隨步驟 10。
+    /// 規則所屬**維度**(I25/P44):由所在維度區塊決定(phon:/syn:/sem:/prag:)。
+    /// phon 規則求值於 Word(dsl);syn/sem/prag 規則求值於 Sign projection(12d)。
+    pub dim: Dim,
+    /// `else` 鏈(P22/P43):第一匹配勝出;分支共享本規則 stage。各分支為原文。
+    /// syn/sem/prag 規則的 else = Lexurgy 式三分(12d);phon 規則 else 仍屬 dsl 域。
     pub else_chain: Vec<String>,
 }
 
@@ -223,12 +227,18 @@ impl Language {
         id
     }
 
-    /// 建規則(id 自動配發)。
+    /// 建規則(id 自動配發;預設 phon 維——向後相容既有 phon 規則與測試)。
     pub fn rule(&mut self, body: impl Into<String>, stage: Stage) -> Rule {
+        self.rule_dim(body, stage, Dim::Phon)
+    }
+
+    /// 建規則並指定維度(I25/P44)。
+    pub fn rule_dim(&mut self, body: impl Into<String>, stage: Stage, dim: Dim) -> Rule {
         Rule {
             id: self.fresh_rule_id(),
             body: body.into(),
             stage,
+            dim,
             else_chain: Vec::new(),
         }
     }

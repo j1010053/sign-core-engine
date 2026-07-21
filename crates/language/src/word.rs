@@ -141,6 +141,7 @@ fn leaf_text(a: &Artifacts, sign: &CompiledSign) -> Result<String, WordError> {
             id: RuleId(0), // 不入排放(I15-b);僅為型別完整
             body: r.body.clone(),
             stage: r.stage,
+            dim: crate::Dim::Phon, // cophonology = phon 音段效果(I18)
             else_chain: r.else_chain.clone(),
         };
         codegen::emit_rule(&mut src, &mut n, &rule)?;

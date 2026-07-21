@@ -17,7 +17,7 @@
 //!
 //! round-trip:對 canonical 輸入,`parse(src).dump() == src`(P21)。
 
-use crate::{Block, Def, Language, Rule, SignItem, Slot, Stage, TraitDef};
+use crate::{Block, Def, Dim, Language, Rule, SignItem, Slot, Stage, TraitDef};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("parse error at line {line}: {msg}")]
@@ -124,8 +124,8 @@ fn parse_slot(l: &str, line: usize) -> Result<Slot, ParseError> {
     })
 }
 
-/// 規則行 → Rule(尾綴 `@stage`;body 原文)。
-fn parse_rule(lang: &mut Language, l: &str, line: usize) -> Result<Rule, ParseError> {
+/// 規則行 → Rule(尾綴 `@stage`;body 原文;維度依所在區塊 I25/P44)。
+fn parse_rule(lang: &mut Language, l: &str, line: usize, dim: Dim) -> Result<Rule, ParseError> {
     let (body, stage) = match l.rsplit_once(" @stage ") {
         Some((b, s)) => {
             let stage = match s.trim() {
@@ -138,7 +138,7 @@ fn parse_rule(lang: &mut Language, l: &str, line: usize) -> Result<Rule, ParseEr
         }
         None => (l, Stage::Word),
     };
-    Ok(lang.rule(body, stage))
+    Ok(lang.rule_dim(body, stage, dim))
 }
 
 /// 維度區塊上下文。
@@ -156,6 +156,14 @@ impl DimKw {
             DimKw::Phon => "phon",
             DimKw::Sem => "sem",
             DimKw::Prag => "prag",
+        }
+    }
+    fn to_dim(self) -> Dim {
+        match self {
+            DimKw::Syn => Dim::Syn,
+            DimKw::Phon => Dim::Phon,
+            DimKw::Sem => Dim::Sem,
+            DimKw::Prag => Dim::Prag,
         }
     }
     fn parse(s: &str) -> Option<DimKw> {
@@ -264,7 +272,7 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                 value: value.trim().to_owned(),
             }));
         } else {
-            let r = parse_rule(lang, text, no)?;
+            let r = parse_rule(lang, text, no, dim.to_dim())?;
             blocks.last_mut().unwrap().items.push(SignItem::Rule(r));
         }
     }

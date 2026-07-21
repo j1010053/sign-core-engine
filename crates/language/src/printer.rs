@@ -108,9 +108,14 @@ fn push_body(out: &mut String, blocks: &[Block]) {
     }
 }
 
-/// 規則歸維:12b 只有 phon 規則(syn/sem/prag 規則於 12d 起帶標記)。
-fn rule_dim(_r: &crate::Rule) -> &'static str {
-    "phon"
+/// 規則歸維(I25/P44):由 `Rule.dim` 決定(phon/syn/sem/prag)。
+fn rule_dim(r: &crate::Rule) -> &'static str {
+    match r.dim {
+        crate::Dim::Phon => "phon",
+        crate::Dim::Syn => "syn",
+        crate::Dim::Sem => "sem",
+        crate::Dim::Prag => "prag",
+    }
 }
 
 fn push_trait(out: &mut String, t: &TraitDef) {

@@ -1,0 +1,30 @@
+/* 步驟 12d 驗收:四維同步規則 + Lexurgy 式 Else 三分。
+   prag 敬語交替(register formal/neutral,依 [Honorific]);syn 維度隔離 + 順序求值
+   (b 依賴 a 的先前 patch);identity(已 formal 仍 Matched 不落 else);Error(畸形規則)。 */
+
+trait Honorific:
+
+sign teacher:
+    belongs Honorific
+    prag:
+        register => formal / [Honorific]
+            else register => neutral
+sign dog:
+    prag:
+        register => formal / [Honorific]
+            else register => neutral
+sign king:
+    belongs Honorific
+    prag:
+        register = formal
+        register => formal / [Honorific]
+            else register => neutral
+
+sign chain:
+    syn:
+        a => 1
+        b => 2 / a == 1
+
+sign broken:
+    syn:
+        this has no arrow

@@ -151,8 +151,11 @@ pub fn codegen(ordered: &Language) -> Result<(CompiledGrammar, Vec<CompiledSign>
     for t in globals {
         for b in &t.blocks {
             for item in &b.items {
+                // phon 側只收 phon 規則(P44 維度隔離;syn/sem/prag 規則求值於 Sign,12d)
                 if let SignItem::Rule(r) = item {
-                    emit_rule(&mut src, &mut n, r)?;
+                    if r.dim == crate::Dim::Phon {
+                        emit_rule(&mut src, &mut n, r)?;
+                    }
                 }
             }
         }

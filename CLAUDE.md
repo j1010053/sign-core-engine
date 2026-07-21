@@ -293,10 +293,19 @@ roundtrip golden 重生);Flow A(共時導出)端到端不變。
 不就地改、決定性。出口過:`tests/construction_semantics.rs` 8 案(frame 綁節點、
 form+meaning 同時導出、多義/同義、診斷、部分套用)。
 
-**下一個任務(鳥瞰步驟 12d)**:四維同步規則(P44/P43)。規則分維
-phon/syn/sem/prag(給 `Rule` 加維度標記,printer `rule_dim` 擴充);每維只改自己
-projection + 產生自己 patch;跨維由 construction 協調;**Lexurgy 式 `Else` 三分**
-(Matched/Unmatched/Error,`matched==0` 才進 Else,identity=Matched,逐求值單元;
-收步驟 11 對 language 域規則的 ElseUnsupported 延後);保 matched/changed/diag/
-source-location/deterministic order。之後 12e = typed patch **僅介面/欄位**。
+**已完成(鳥瞰步驟 12d,I25)**:四維同步規則 + Lexurgy 式 Else 三分。
+`Rule.dim` 維度標記(parser 依區塊;printer/codegen 用之,P44 維度隔離:phon 側
+只收 phon 規則)。`synchronic.rs`:syn/sem/prag 規則求值於 Sign projection——
+`field => value [/ guard]`(guard `[Category]`/`field == value`),寫入自帶維度前綴
+(結構隔離);typed `DimPatch`(`Sign × Patch → Sign'`,`apply_patch` 保留原 Sign)。
+**Else 三分(P43)**:Matched(含 identity 值未變仍 Matched、阻 else)/Unmatched
+(matched==0→else)/Error(畸形→診斷不進 else);逐 sign 判定、順序求值(後見前
+patch);`RuleRecord` 保 status/changed/branch/diag/RuleId。出口過:
+`tests/synchronic_rules.rs` 10 案。延後:完整 P22 守衛文法、跨維協調、phon else。
+
+**下一個任務(鳥瞰步驟 12e)**:typed patch **僅介面 + 資料欄位**(擁有者定案:
+不實作 entrenchment/lexicalization 行為)。四維 patch 類型完備(PhonPatch/SynPatch/
+SemPatch/PragPatch 或統一 `DimPatch` 已在 12d;12e 補其餘維與序列化);
+entrenchment/固化**僅留欄位與介面**,動力學留 M2 後。**M1++ 完成後 = 共時四維
+系統做穩**,再進 M2 歷時(步驟 13 Primitive Edit)。
 

@@ -41,6 +41,7 @@ Language {
                                 ),
                                 body: "a => ə / _#",
                                 stage: Word,
+                                dim: Phon,
                                 else_chain: [
                                     "ɐ / _[+cons]",
                                     "e",
@@ -58,6 +59,7 @@ Language {
                                 ),
                                 body: "n => m / _[+labial]",
                                 stage: Stem,
+                                dim: Phon,
                                 else_chain: [],
                             },
                         ),
@@ -142,6 +144,7 @@ Language {
                         ),
                         body: "o => ə / _#",
                         stage: Phrase,
+                        dim: Phon,
                         else_chain: [],
                     },
                 ),
