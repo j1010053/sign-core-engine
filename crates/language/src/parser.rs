@@ -14,6 +14,8 @@
 //! - `prosody = …`、`distribution:`(縮排 `key = value`)為 language 級語句。
 //! dsl 域宣告(Feature/Symbol/Class/Melody/Spell-out/Parse…)= 首個 language 頭
 //! 之前的 verbatim 行(裁決 1)。id 依文件序決定性再生(I15-b/P26)。
+//! **`/* … */` 區塊註解**(貼合 tshiatun dsl)可出現於任意位置(檔首/檔中/行尾/
+//! 跨行),解析前剝除(保留行號);canonical 不保留(IR dump 慣例)。
 //!
 //! round-trip:對 canonical 輸入,`parse(src).dump() == src`(P21)。
 
@@ -292,8 +294,35 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
     Ok(blocks)
 }
 
+/// 剝除 `/* … */` 區塊註解(可跨行、行內、整行;非巢狀,首個 `*/` 結束;未閉合視為
+/// 至檔尾)。**保留換行**以維持行號一致(錯誤定位不漂移);註解內容以空白取代,
+/// 使整行註解成空白行(被 parser 略過)、行尾/行內註解不影響縮排與 token。
+/// 註解於 canonical 不保留(IR dump 慣例)。
+fn strip_comments(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut chars = src.chars().peekable();
+    let mut in_comment = false;
+    while let Some(c) = chars.next() {
+        if in_comment {
+            if c == '*' && chars.peek() == Some(&'/') {
+                chars.next();
+                in_comment = false;
+            } else if c == '\n' {
+                out.push('\n'); // 保留行號
+            }
+        } else if c == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            in_comment = true;
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 pub fn parse(src: &str) -> Result<Language, ParseError> {
     let mut lang = Language::new();
+    let src = strip_comments(src);
     let lines: Vec<Line> = src
         .lines()
         .enumerate()

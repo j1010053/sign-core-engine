@@ -29,6 +29,7 @@ sign broken:
     syn:
         this has no arrow
 
+/* Else vs Then 一致性:同兩分支,Else 只跑第一、Then 兩者依序皆跑 */
 sign else_same:
     syn:
         x => a
