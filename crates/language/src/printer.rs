@@ -94,8 +94,12 @@ fn expression_source(expression: &Expression) -> String {
         Expression::PhonTemplate(template) => template.clone(),
         Expression::EnumValue(value) => value.clone(),
         Expression::SelfSign => "$self".to_owned(),
-        Expression::Slot(slot) => slot.clone(),
-        Expression::Case(_) => "<nested-case>".to_owned(),
+        Expression::Slot(slot) => format!("{{{slot}}}"),
+        // Valid nested cases are emitted structurally by `push_case`.  This
+        // marker is only reachable for an invalid programmatic AST (for
+        // example, a case embedded inside a scalar projection), which the
+        // validator rejects without panicking.
+        Expression::Case(_) => "<invalid-nested-case-position>".to_owned(),
     }
 }
 
@@ -113,10 +117,14 @@ fn push_case(out: &mut String, indent: &str, case: &TypedCase) {
             CaseCondition::Else => "else".to_owned(),
         };
         out.push_str(&format!("{branch_indent}{condition}:\n"));
-        out.push_str(&format!(
-            "{result_indent}{}\n",
-            expression_source(&branch.result)
-        ));
+        if let Expression::Case(nested) = &branch.result {
+            push_case(out, &result_indent, nested);
+        } else {
+            out.push_str(&format!(
+                "{result_indent}{}\n",
+                expression_source(&branch.result)
+            ));
+        }
         for category in &branch.belongs {
             out.push_str(&format!("{result_indent}belongs {category}\n"));
         }
@@ -176,12 +184,19 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                     SignItem::FeatureValue(feature) if feature.dim == parsed_dim
                 ) || matches!(item,
                     SignItem::FeatureRule(rule) if rule.dim == parsed_dim
+                ) || matches!(item,
+                    SignItem::FeatureExpression(expression) if expression.dim == parsed_dim
                 )
             });
             let has_roles = dim == "sem"
-                && items
-                    .iter()
-                    .any(|item| matches!(item, SignItem::RoleDecl(_) | SignItem::RoleBinding(_)));
+                && items.iter().any(|item| {
+                    matches!(
+                        item,
+                        SignItem::RoleDecl(_)
+                            | SignItem::RoleBinding(_)
+                            | SignItem::RoleExpression(_)
+                    )
+                });
             let has_realization = dim == "phon"
                 && items
                     .iter()
@@ -242,6 +257,12 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                         SignItem::FeatureRule(rule) if rule.dim == parsed_dim => {
                             push_rule(out, "            ", rule);
                         }
+                        SignItem::FeatureExpression(expression) if expression.dim == parsed_dim => {
+                            out.push_str(&format!("            {} =>\n", expression.name));
+                            if let Expression::Case(case) = &expression.expression {
+                                push_case(out, "                ", case);
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -258,6 +279,12 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                         )),
                         SignItem::RoleBinding(role) => out
                             .push_str(&format!("            {} = {{{}}}\n", role.name, role.slot)),
+                        SignItem::RoleExpression(role) => {
+                            out.push_str(&format!("            {} =\n", role.name));
+                            if let Expression::Case(case) = &role.expression {
+                                push_case(out, "                ", case);
+                            }
+                        }
                         _ => {}
                     }
                 }

@@ -147,21 +147,28 @@ Slot:
 struct Slot { role: Role, constraint: CatSet }   // 配價;約束取自受控範疇
 ```
 
-## 6. 生命週期:三態型別 + 四結構轉換【M】
+## 6. 生命週期：單一 Sign 的飽和狀態 + 結構轉換【M】
 
-三態是**三個型別**(採審查者第二點,非 enum State 一直 match):
+部分套用不建立另一種實體；它仍是同一個 Sign value，只是保存 required
+free variables、殘餘 constraints 與既有 identity/provenance。補入 argument 只產生同一
+Sign 語義的下一個 immutable value：
 
 ```
-PartialSign(候選/輸入,無 id,不進 store)
-   │ Builder 採納+補全
+SignValue(可未飽和；has_free_variables = true)
+   │ apply_arguments（補入 slot argument；不換 Sign identity）
    ▼
-Sign(進 store,得 id,被 D 快照)  ──split(1→2)/ merge(2→1)/ lose(tombstone)──▶
+SignValue(飽和) ── Builder 採納後成為 source Sign ──▶ Sign store
+                                                     │
+                 split(1→2)/ merge(2→1)/ lose(tombstone)
    ▲
    │ entrench 跨閾值 lexicalize
 Token(組合暫態,不進 store)
 ```
 
-- 只有 `Sign` 進 store/被快照/有 id。候選與 token 在 store 外,生滅不留痕(除非 token 固化升格)。
+- 未飽和／飽和是 `SignValue` 的狀態，不是兩個本體類別；`has_free_variables()` 與
+  `residual_parameters()` 觀察狀態，`apply_arguments()` 繼續套用且不改原值。
+- 只有採納後的 source `Sign` 進 store/被快照；候選與 token 在 store 外，生滅不留痕
+  （除非 token 固化升格）。
 - **lose = tombstone**(標 Obsolete,id 保留供 D diff 與 origin 鏈;化石接口),不真刪——同 M0「空節點合法暫態」的克制。
 - split/merge 生新 id + origin 指回舊 id。
 - **這四轉換 = B 的結構原語(08)= D 的 ChangeEntry**:生命週期、B 原語、D 條目三位一體,同一組操作三個名字。

@@ -1,10 +1,12 @@
 use conlang_changeset::{
-    apply_edit, Anchor, DetachedNode, EditError, LanguageDiffEntry, NodeUpdate, PrimitiveEdit,
-    PrimitiveKind,
+    apply_edit, Anchor, DetachedNode, EditError, LanguageDiff, LanguageDiffEntry, NodeUpdate,
+    PrimitiveEdit, PrimitiveKind,
 };
 use conlang_language::{
-    codegen, word, IdentityNamespace, Language, LanguageDocument, LibrarySpec, NodeId, NodeKind,
-    NodeRef, SignItem,
+    codegen, word, AddressSegment, CaseBranch, CaseCondition, ConstraintPredicate, Expression,
+    IdentityNamespace, Language, LanguageDocument, LibrarySpec, NodeAddress, NodeId, NodeKind,
+    NodeRef, RefTargetV1, SignApplication, SignExpression, SignItem, SignProjection,
+    SourceLocation,
 };
 
 const SOURCE: &str = r#"
@@ -51,6 +53,95 @@ fn child(document: &LanguageDocument, parent: &NodeRef, kind: NodeKind, ordinal:
 fn trait_block(document: &LanguageDocument, name: &str) -> NodeRef {
     let parent = document.ref_for_trait(name).unwrap();
     child(document, &parent, NodeKind::Block, 0)
+}
+
+const V2_SOURCE: &str = r#"schema conlang.lang/v2
+
+trait Atom:
+
+trait Other:
+
+trait Selected:
+
+trait Alternate:
+
+sign wrap:
+    syn:
+        slots:
+            value [*]
+    phon:
+        /{value}+w/
+
+sign alt:
+    syn:
+        slots:
+            value [*]
+    phon:
+        /{value}+a/
+
+sign outer:
+    syn:
+        slots:
+            value [*]
+    phon:
+        /<{value}>/
+
+sign atom:
+    belongs Atom
+    phon:
+        /x/
+    case:
+        $self == [Atom]:
+            wrap({$self})
+            belongs Selected
+        $self == [Other]:
+            outer(wrap({$self}))
+            belongs Alternate
+        else:
+            alt({$self})
+
+sign sequence:
+    syn:
+        slots:
+            left [*]
+            right [*]
+    phon:
+        /{left} {right}/
+    constraints:
+        before(left, right)
+"#;
+
+fn v2_document() -> LanguageDocument {
+    LanguageDocument::import_new_root(V2_SOURCE, "evo:v2-edits").unwrap()
+}
+
+fn sign_case(document: &LanguageDocument, name: &str) -> NodeRef {
+    let sign = document.ref_for_sign(name).unwrap();
+    child(document, &sign, NodeKind::Case, 0)
+}
+
+fn source_case<'a>(document: &'a LanguageDocument, name: &str) -> &'a conlang_language::TypedCase {
+    document
+        .language()
+        .sign_named(name)
+        .unwrap()
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SignItem::SignExpression(expression) => match &expression.expression {
+                Expression::Case(case) => Some(case.as_ref()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .unwrap()
+}
+
+fn direct_application(branch: &CaseBranch) -> SignApplication {
+    match &branch.result {
+        Expression::SignApplication(application) => application.clone(),
+        other => panic!("expected direct application, got {other:?}"),
+    }
 }
 
 #[test]
@@ -389,4 +480,699 @@ fn library_owned_target_is_never_editable() {
 
     assert!(matches!(error, EditError::ExternalTarget(_)));
     assert_eq!(before, document());
+}
+
+#[test]
+fn v2_typed_updates_preserve_case_application_and_constraint_identity() {
+    let before = v2_document();
+    let case = sign_case(&before, "atom");
+    let branch = child(&before, &case, NodeKind::CaseBranch, 0);
+    let application = child(&before, &branch, NodeKind::Application, 0);
+    let sequence = before.ref_for_sign("sequence").unwrap();
+    let constraint = child(&before, &sequence, NodeKind::Constraint, 0);
+
+    let mut replacement_application = direct_application(&source_case(&before, "atom").branches[0]);
+    replacement_application.callee = "alt".to_owned();
+    let application_update = apply_edit(
+        &before,
+        PrimitiveEdit::Update {
+            node: application.clone(),
+            change: NodeUpdate::SignApplication(replacement_application),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        application_update
+            .document
+            .resolve_node(&application)
+            .unwrap()
+            .node
+            .id,
+        application.id
+    );
+    assert!(application_update
+        .document
+        .source()
+        .contains("alt({$self})"));
+    assert!(application_update.record.diff.entries.iter().any(
+        |entry| matches!(entry, LanguageDiffEntry::Updated { after, .. } if after.id == application.id)
+    ));
+
+    let mut replacement_branch = source_case(&before, "atom").branches[0].clone();
+    replacement_branch.belongs = vec!["Alternate".to_owned()];
+    let branch_update = apply_edit(
+        &before,
+        PrimitiveEdit::Update {
+            node: branch.clone(),
+            change: NodeUpdate::CaseBranch(replacement_branch),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        branch_update
+            .document
+            .resolve_node(&branch)
+            .unwrap()
+            .node
+            .id,
+        branch.id
+    );
+    assert_eq!(
+        child(&branch_update.document, &branch, NodeKind::Application, 0).id,
+        application.id,
+        "unchanged result application retains its identity"
+    );
+    assert!(branch_update
+        .document
+        .source()
+        .contains("belongs Alternate"));
+
+    let mut replacement_constraint = before
+        .language()
+        .sign_named("sequence")
+        .unwrap()
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SignItem::Constraint(value) => Some(value.clone()),
+            _ => None,
+        })
+        .unwrap();
+    replacement_constraint.predicate = ConstraintPredicate::Adjacent;
+    let constraint_update = apply_edit(
+        &before,
+        PrimitiveEdit::Update {
+            node: constraint.clone(),
+            change: NodeUpdate::Constraint(replacement_constraint),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        constraint_update
+            .document
+            .resolve_node(&constraint)
+            .unwrap()
+            .node
+            .id,
+        constraint.id
+    );
+    assert!(constraint_update
+        .document
+        .source()
+        .contains("adjacent(left, right)"));
+}
+
+#[test]
+fn case_branch_insert_allocates_nested_expression_subtree_and_delete_removes_it() {
+    let before = v2_document();
+    let case = sign_case(&before, "atom");
+    let fallback = child(&before, &case, NodeKind::CaseBranch, 2);
+    let mut nested = source_case(&before, "atom").branches[1].clone();
+    nested.condition = CaseCondition::Guard("$self == [Selected]".to_owned());
+
+    let inserted = apply_edit(
+        &before,
+        PrimitiveEdit::Insert {
+            parent: case.clone(),
+            anchor: Anchor::Before(fallback.clone()),
+            subtree: DetachedNode::CaseBranch(nested),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap();
+    let allocated = inserted
+        .record
+        .allocated_ids
+        .iter()
+        .filter_map(|id| {
+            inserted
+                .document
+                .identities()
+                .nodes
+                .iter()
+                .find(|entry| &entry.id == id)
+                .map(|entry| (entry.id.clone(), entry.kind))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        allocated
+            .iter()
+            .filter(|(_, kind)| *kind == NodeKind::CaseBranch)
+            .count(),
+        1
+    );
+    assert_eq!(
+        allocated
+            .iter()
+            .filter(|(_, kind)| *kind == NodeKind::Application)
+            .count(),
+        2,
+        "outer(wrap(...)) allocates both application identities"
+    );
+    let inserted_branch_id = allocated
+        .iter()
+        .find(|(_, kind)| *kind == NodeKind::CaseBranch)
+        .unwrap()
+        .0
+        .clone();
+    let inserted_branch = NodeRef::new(inserted_branch_id.clone(), NodeKind::CaseBranch);
+    let outer = child(
+        &inserted.document,
+        &inserted_branch,
+        NodeKind::Application,
+        0,
+    );
+    let inner = child(&inserted.document, &outer, NodeKind::Application, 0);
+    assert_ne!(outer.id, inner.id);
+    assert_eq!(
+        inserted.document.resolve_node(&fallback).unwrap().node.id,
+        fallback.id,
+        "stable fallback anchor survives the insertion"
+    );
+
+    let deleted = apply_edit(
+        &inserted.document,
+        PrimitiveEdit::Delete {
+            node: inserted_branch,
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap();
+    assert!(deleted.record.deleted_ids.contains(&inserted_branch_id));
+    assert!(deleted.record.deleted_ids.contains(&outer.id));
+    assert!(deleted.record.deleted_ids.contains(&inner.id));
+    assert_eq!(
+        deleted.document.resolve_node(&fallback).unwrap().node.id,
+        fallback.id
+    );
+}
+
+#[test]
+fn moving_case_branch_preserves_branch_and_nested_application_identities() {
+    let before = v2_document();
+    let case = sign_case(&before, "atom");
+    let first = child(&before, &case, NodeKind::CaseBranch, 0);
+    let second = child(&before, &case, NodeKind::CaseBranch, 1);
+    let outer = child(&before, &second, NodeKind::Application, 0);
+    let inner = child(&before, &outer, NodeKind::Application, 0);
+
+    let moved = apply_edit(
+        &before,
+        PrimitiveEdit::Move {
+            node: second.clone(),
+            new_parent: case,
+            anchor: Anchor::Before(first),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap();
+
+    assert!(moved.record.moved_ids.contains(&second.id));
+    assert_eq!(
+        child(&moved.document, &second, NodeKind::Application, 0).id,
+        outer.id
+    );
+    assert_eq!(
+        child(&moved.document, &outer, NodeKind::Application, 0).id,
+        inner.id
+    );
+    assert!(moved.record.diff.entries.iter().all(|entry| !matches!(
+        entry,
+        LanguageDiffEntry::Updated { after, .. }
+            if [second.id.clone(), outer.id.clone(), inner.id.clone()].contains(&after.id)
+    )));
+    let (source, manifest) = moved.document.dump_pair().unwrap();
+    assert_eq!(
+        LanguageDocument::open(&source, &manifest).unwrap(),
+        moved.document
+    );
+}
+
+#[test]
+fn invalid_case_update_rolls_back_ast_ids_and_allocator() {
+    let before = v2_document();
+    let case = sign_case(&before, "atom");
+    let branch = child(&before, &case, NodeKind::CaseBranch, 0);
+    let mut invalid = source_case(&before, "atom").branches[0].clone();
+    let Expression::SignApplication(application) = &mut invalid.result else {
+        panic!("fixture branch must return an application")
+    };
+    application.callee = "MissingSign".to_owned();
+
+    let error = apply_edit(
+        &before,
+        PrimitiveEdit::Update {
+            node: branch,
+            change: NodeUpdate::CaseBranch(invalid),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(error, EditError::Validation(_)));
+    assert_eq!(before, v2_document());
+}
+
+#[test]
+fn renaming_a_sign_rewrites_direct_and_nested_application_spellings() {
+    let before = v2_document();
+    let wrap = before.ref_for_sign("wrap").unwrap();
+    let renamed = apply_edit(
+        &before,
+        PrimitiveEdit::Update {
+            node: wrap.clone(),
+            change: NodeUpdate::Rename("wrapper".to_owned()),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        renamed.document.ref_for_sign("wrapper").unwrap().id,
+        wrap.id
+    );
+    assert!(!renamed.document.source().contains("wrap({$self})"));
+    assert!(renamed.document.source().contains("wrapper({$self})"));
+    let (source, manifest) = renamed.document.dump_pair().unwrap();
+    assert_eq!(
+        LanguageDocument::open(&source, &manifest).unwrap(),
+        renamed.document
+    );
+}
+
+#[test]
+fn renaming_a_trait_rewrites_and_rebinds_typed_case_guard_categories() {
+    let before = v2_document();
+    let atom = before.ref_for_trait("Atom").unwrap();
+    let case = sign_case(&before, "atom");
+    let guarded_branch = child(&before, &case, NodeKind::CaseBranch, 0);
+
+    let renamed = apply_edit(
+        &before,
+        PrimitiveEdit::Update {
+            node: atom.clone(),
+            change: NodeUpdate::Rename("Element".to_owned()),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        renamed.document.ref_for_trait("Element").unwrap().id,
+        atom.id
+    );
+    assert!(renamed.document.source().contains("$self == [Element]:"));
+    assert!(!renamed.document.source().contains("$self == [Atom]:"));
+    assert!(renamed.document.identities().refs.iter().any(|binding| {
+        binding.owner == guarded_branch.id
+            && binding.field == "case.guard[0].category"
+            && matches!(
+                &binding.target,
+                RefTargetV1::Local { target } if target.id == atom.id
+            )
+    }));
+    let (source, manifest) = renamed.document.dump_pair().unwrap();
+    assert_eq!(
+        LanguageDocument::open(&source, &manifest).unwrap(),
+        renamed.document
+    );
+}
+
+#[test]
+fn malformed_typed_case_guard_is_rejected_atomically() {
+    let before = v2_document();
+    let case = sign_case(&before, "atom");
+    let branch = child(&before, &case, NodeKind::CaseBranch, 0);
+    let mut invalid = source_case(&before, "atom").branches[0].clone();
+    invalid.condition = CaseCondition::Guard("not a guard".to_owned());
+
+    let error = apply_edit(
+        &before,
+        PrimitiveEdit::Update {
+            node: branch,
+            change: NodeUpdate::CaseBranch(invalid),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, EditError::Validation(_)));
+    assert_eq!(before, v2_document());
+}
+
+#[test]
+fn distribution_update_keeps_identity_through_canonical_reordering() {
+    let before = LanguageDocument::import_new_root(
+        "distribution:\n    alpha = first\n    beta = second\n",
+        "evo:distribution",
+    )
+    .unwrap();
+    let alpha_entry = before
+        .identities()
+        .nodes
+        .iter()
+        .find(|entry| {
+            entry.address == NodeAddress(vec![AddressSegment::Distribution(0)])
+                && entry.kind == NodeKind::Distribution
+        })
+        .unwrap();
+    let beta_entry = before
+        .identities()
+        .nodes
+        .iter()
+        .find(|entry| {
+            entry.address == NodeAddress(vec![AddressSegment::Distribution(1)])
+                && entry.kind == NodeKind::Distribution
+        })
+        .unwrap();
+    let alpha = NodeRef::new(alpha_entry.id.clone(), NodeKind::Distribution);
+    let beta = NodeRef::new(beta_entry.id.clone(), NodeKind::Distribution);
+
+    let outcome = apply_edit(
+        &before,
+        PrimitiveEdit::Update {
+            node: alpha.clone(),
+            change: NodeUpdate::Distribution {
+                key: "zeta".to_owned(),
+                value: "last".to_owned(),
+            },
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap();
+
+    let alpha_address = outcome.document.resolve_node(&alpha).unwrap().address;
+    let beta_address = outcome.document.resolve_node(&beta).unwrap().address;
+    let [AddressSegment::Distribution(alpha_index)] = alpha_address.0.as_slice() else {
+        panic!("updated distribution identity must retain a distribution address")
+    };
+    let [AddressSegment::Distribution(beta_index)] = beta_address.0.as_slice() else {
+        panic!("unchanged distribution identity must retain a distribution address")
+    };
+    assert_eq!(
+        outcome.document.language().distribution[*alpha_index],
+        ("zeta".to_owned(), "last".to_owned())
+    );
+    assert_eq!(
+        outcome.document.language().distribution[*beta_index],
+        ("beta".to_owned(), "second".to_owned())
+    );
+    assert!(outcome.record.diff.entries.iter().any(
+        |entry| matches!(entry, LanguageDiffEntry::Updated { after, .. } if after.id == alpha.id)
+    ));
+    assert!(outcome
+        .record
+        .diff
+        .entries
+        .iter()
+        .all(|entry| !matches!(entry, LanguageDiffEntry::Moved { .. })));
+}
+
+#[test]
+fn diff_observes_projection_and_interpolation_wrapper_changes() {
+    let before = LanguageDocument::import_new_root(
+        r#"schema conlang.lang/v2
+
+sign wrap:
+    syn:
+        slots:
+            value [*]
+    phon:
+        /{value}/
+
+sign root:
+    phon:
+        /r/
+        realization:
+            case:
+                else:
+                    /{wrap({$self}).phon.ret}/
+"#,
+        "evo:projection-diff",
+    )
+    .unwrap();
+    let root = before.ref_for_sign("root").unwrap();
+    let realization = child(&before, &root, NodeKind::Realization, 0);
+    let case = child(&before, &realization, NodeKind::Case, 0);
+    let branch = child(&before, &case, NodeKind::CaseBranch, 0);
+    let (mut language, identities) = before.clone().into_edit_parts();
+    let realization = language
+        .signs
+        .iter_mut()
+        .find(|sign| sign.name == "root")
+        .unwrap()
+        .items
+        .iter_mut()
+        .find_map(|item| match item {
+            SignItem::Realization(value) => Some(value),
+            _ => None,
+        })
+        .unwrap();
+    let result = &mut realization.expression.as_mut().unwrap().branches[0].result;
+    let Expression::PhonInterpolation(application) = result else {
+        panic!("fixture must contain a phon interpolation")
+    };
+    *result = Expression::Projection {
+        value: Box::new(Expression::SignApplication(application.clone())),
+        dimension: SignProjection::Phon,
+    };
+    let after = LanguageDocument::from_edit_parts(language, identities).unwrap();
+
+    let diff = LanguageDiff::between(&before, &after);
+    assert!(diff.entries.iter().any(
+        |entry| matches!(entry, LanguageDiffEntry::Updated { after, .. } if after.id == branch.id)
+    ));
+}
+
+#[test]
+fn slot_rename_rewrites_typed_consumers_and_named_applications() {
+    let before = LanguageDocument::import_new_root(
+        r#"schema conlang.lang/v2
+
+trait LocalEntity:
+
+sign wrap:
+    syn:
+        slots:
+            value [*]
+    phon:
+        /{value}/
+
+sign target:
+    belongs LocalEntity
+    syn:
+        slots:
+            subject [LocalEntity]
+            object [LocalEntity]
+    phon:
+        /{subject} {object}/
+    sem:
+        roles:
+            agent [LocalEntity]
+            agent = {subject}
+    constraints:
+        before(subject, object)
+    case:
+        $slot.subject == [LocalEntity]:
+            wrap({subject})
+        else:
+            $self
+
+sign caller:
+    belongs LocalEntity
+    phon:
+        /caller/
+    case:
+        else:
+            target(subject = {$self})
+"#,
+        "evo:slot-rename",
+    )
+    .unwrap();
+    let target = before.ref_for_sign("target").unwrap();
+    let subject = child(&before, &target, NodeKind::Slot, 0);
+
+    let renamed = apply_edit(
+        &before,
+        PrimitiveEdit::Update {
+            node: subject.clone(),
+            change: NodeUpdate::SlotName("actor".to_owned()),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        renamed.document.resolve_node(&subject).unwrap().node.id,
+        subject.id
+    );
+    let source = renamed.document.source();
+    for expected in [
+        "actor [LocalEntity]",
+        "/{actor} {object}/",
+        "agent = {actor}",
+        "before(actor, object)",
+        "$slot.actor == [LocalEntity]:",
+        "wrap({actor})",
+        "target(actor = {$self})",
+    ] {
+        assert!(source.contains(expected), "missing rewritten {expected:?}");
+    }
+    assert!(!source.contains("$slot.subject"));
+    assert!(!source.contains("target(subject ="));
+    let (source, manifest) = renamed.document.dump_pair().unwrap();
+    assert_eq!(
+        LanguageDocument::open(&source, &manifest).unwrap(),
+        renamed.document
+    );
+}
+
+#[test]
+fn trait_slot_rename_stops_at_an_intermediate_shadow() {
+    let before = LanguageDocument::import_new_root(
+        r#"schema conlang.lang/v2
+
+trait Base:
+    syn:
+        slots:
+            subject [*]
+
+trait Pass:
+    belongs Base
+    phon:
+        /p{subject}/
+
+trait Shadow:
+    belongs Base
+    syn:
+        slots:
+            subject [*]
+    phon:
+        /s{subject}/
+
+trait Leaf:
+    belongs Shadow
+    phon:
+        /l{subject}/
+"#,
+        "evo:trait-slot-shadow",
+    )
+    .unwrap();
+    let base = before.ref_for_trait("Base").unwrap();
+    let block = child(&before, &base, NodeKind::Block, 0);
+    let subject = child(&before, &block, NodeKind::Slot, 0);
+
+    let renamed = apply_edit(
+        &before,
+        PrimitiveEdit::Update {
+            node: subject.clone(),
+            change: NodeUpdate::SlotName("actor".to_owned()),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        renamed.document.resolve_node(&subject).unwrap().node.id,
+        subject.id
+    );
+    let source = renamed.document.source();
+    assert!(source.contains("actor [*]"));
+    assert!(source.contains("/p{actor}/"));
+    assert!(source.contains("subject [*]"));
+    assert!(source.contains("/s{subject}/"));
+    assert!(source.contains("/l{subject}/"));
+}
+
+#[test]
+fn nested_case_identity_survives_branch_move_and_canonical_reopen() {
+    let before = LanguageDocument::import_new_root(
+        r#"schema conlang.lang/v2
+
+trait Atom:
+trait Other:
+
+sign wrap:
+    syn:
+        slots:
+            value [*]
+    phon:
+        /{value}/
+
+sign atom:
+    belongs Atom
+    phon:
+        /x/
+    case:
+        $self == [Atom]:
+            case:
+                $self == [Other]:
+                    wrap({$self})
+                $self == [Atom]:
+                    wrap({$self})
+        else:
+            $self
+"#,
+        "evo:nested-case",
+    )
+    .unwrap();
+    let atom = before.ref_for_sign("atom").unwrap();
+    let outer_case = child(&before, &atom, NodeKind::Case, 0);
+    let outer_branch = child(&before, &outer_case, NodeKind::CaseBranch, 0);
+    let inner_case = child(&before, &outer_branch, NodeKind::Case, 0);
+    let first = child(&before, &inner_case, NodeKind::CaseBranch, 0);
+    let second = child(&before, &inner_case, NodeKind::CaseBranch, 1);
+    let first_application = child(&before, &first, NodeKind::Application, 0);
+
+    let moved = apply_edit(
+        &before,
+        PrimitiveEdit::Move {
+            node: first.clone(),
+            new_parent: inner_case.clone(),
+            anchor: Anchor::After(second),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        moved.document.resolve_node(&inner_case).unwrap().node.id,
+        inner_case.id
+    );
+    assert_eq!(
+        moved.document.resolve_node(&first).unwrap().node.id,
+        first.id
+    );
+    assert_eq!(
+        moved
+            .document
+            .resolve_node(&first_application)
+            .unwrap()
+            .node
+            .id,
+        first_application.id
+    );
+    assert!(moved.document.source().matches("case:").count() >= 2);
+    let (source, manifest) = moved.document.dump_pair().unwrap();
+    assert_eq!(
+        LanguageDocument::open(&source, &manifest).unwrap(),
+        moved.document
+    );
+}
+
+#[test]
+fn detached_expression_item_kind_matches_identity_root_kind() {
+    let application = SignApplication {
+        callee: "wrap".to_owned(),
+        arguments: Vec::new(),
+        source: SourceLocation::line(1),
+    };
+    let item = DetachedNode::Item(SignItem::SignExpression(SignExpression {
+        expression: Expression::SignApplication(application),
+        source: SourceLocation::line(1),
+    }));
+
+    assert_eq!(item.kind(), NodeKind::Application);
 }

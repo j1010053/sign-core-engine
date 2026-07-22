@@ -330,9 +330,15 @@ stable NodeId/Ref binding，`conlang-changeset` 實作 immutable checked
 insert/delete/update/move、stable Anchor、LanguageDiff 與 PrimitiveRecord；
 `check_language` 已從 codegen 前抽出供 compile/edit 共用。詳見 docs/20。
 
-**步驟 14 已完成（2026-07-22）**：identity v2 mixed namespaces、Primitive-only
-`.chg` parse/resolve/canonical stable-NodeRef dump、statement transaction、base／manifest／
-library lock、deterministic replay、ChangeSession lazy compile。共時封板介面補齊 derived-token
-downward slot feature forwarding、DeepTokenState baseline 重跑與 OccurrenceRecord；教學與可執行
-fixture 在 docs/21，契約證據在 docs/22。
+**步驟 13 語義／API 契約已再封板（2026-07-22）**：V2 Application／Case／CaseBranch／Constraint 亦納入
+stable identity、typed resolver 與四原語；未飽和 application 仍是同一 `SignValue`，以
+`apply_arguments` 補入自由參數；未飽和只是一個 `SignValue` 狀態，不是獨立實體。
+slot／trait rename 會重寫 typed consumers，巢狀 typed case 可 round-trip、執行、定址與
+Primitive Edit。功能回歸為根 workspace 251/251、Tshiatūn 157/157；完整本機工具閘門
+仍為基礎設施 exit 2，未宣稱 release gate exit 0；證據見 docs/20、docs/23。
+
+**步驟 14 尚未封板**：identity mixed namespace、Primitive-only `.chg`、statement
+transaction、replay 與 lazy compile 的程式碼只視為 preview，不是目前 release／相容性
+聲明。舊檔不要求直接 replay；V1 `.lang` reader 只為明示遷移暫時 frozen。preview 契約見
+docs/22，完成 Step 14 與相容性測試後才能重新標為完成。
 

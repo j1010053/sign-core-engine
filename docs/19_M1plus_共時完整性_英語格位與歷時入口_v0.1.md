@@ -1,7 +1,8 @@
 # M1+ 共時完整性、英語格位與歷時入口（v0.1）
 
-> **狀態**：Step 13 source interface 與 Step 14 Primitive-only ChangeSet 已分別由
-> docs/20、docs/22 實作；本文保留需求推導與共時邊界。`syn: slot_features:` 現可對
+> **狀態**：Step 13 source interface／Primitive Edit 已由 docs/20 再封板；Step 14
+> Primitive-only ChangeSet 仍是 docs/22 的 preview，未列入相容性或 release 聲明。
+> 本文保留需求推導與共時邊界。`syn: slot_features:` 現可對
 > stored sign 與 derived token 執行 occurrence-local constraint、由 deep/base 狀態重跑
 > Syn→Sem→Prag，再重選 realization。Atomic Rewrite、Recipe、Goal、Evolution node 與
 > History 仍不在本階段。
@@ -40,9 +41,9 @@ Goal -> Recipe candidates -> AtomicRewrite -> PrimitiveEdit -> Language'
      -> recompile -> Compiled Grammar' -> runtime -> Surface'
 ```
 
-上三層只展開、最底層才執行。Step 14 已實作 Primitive-only ChangeSet interpreter；
-Goal、Recipe、Atomic Rewrite 仍未實作。本文件主要說明它們共同依賴的
-`PrimitiveEdit -> Language'` 邊界。
+上三層只展開、最底層才執行。本次封板終點是 Step 13 的
+`PrimitiveEdit -> Language'`；Step 14 interpreter 現有程式碼只視為 preview。
+Goal、Recipe、Atomic Rewrite 仍未實作。
 
 ---
 
@@ -84,16 +85,17 @@ token、provenance/trace、serialization、公共 API 與擴大回歸。結果�
 | ontology／effective Sign | 通過 | 修正 generic Def 與 typed feature 的單一優先序、繼承 slot 可見性、非-global std trait 驗證及 warning 保留；循環、重名、衝突皆為 coded diagnostic。 |
 | 四維 construction/runtime | 通過 | filler rules → construction → Syn/Sem/Prag token rules → pure phon input → Tshiatūn；Sem projection、optional slot 與 enum runtime domain 已補反例。 |
 | English direct stored-filler case | 通過（窄契約） | 動詞 assignment → occurrence `slot_features` → 同一 `she` sign 的 `she/her` realization；snapshot、source immutability、SlotMap rename、衝突與決定性皆驗證。 |
-| occurrence assignment trace | 部分完成 | binding 的 source line、結果 snapshot 與 filler source provenance 均保留；`SystemDerivation` 尚無一筆 first-class record 直接串起 predicate assignment、binding 與 target occurrence。 |
-| derived-token feature forwarding | 未完成 | 外層不能把新 occurrence constraint 向下送入已形成的 derived token；目前明確拒絕，不靜默產生錯誤 surface。 |
-| contextual filler rules | 未完成 | occurrence feature 注入後不重跑 filler 的 Syn/Sem/Prag 規則，只重選 read-only phon realization。 |
+| occurrence assignment trace | 通過 | `OccurrenceRecord` 串起 slot path、probe／committed rules、typed cases、constraints、filler source provenance 與 realization。 |
+| derived-token feature forwarding | 通過 | 外層 occurrence constraint 從 derived token 的 `DeepTokenState` 重建；原 token、SignId 與 provenance 不變。 |
+| contextual filler rules | 通過 | occurrence feature 原子注入後，以共用 pipeline 重跑 Syn→Sem→Prag ordinary rules、Feature／Role case，再重新選 realization。 |
 | typed Patch 嚴格性 | 部分完成 | `try_set`／`try_unset`／parser 為 fallible；便利 API `set`／`unset` 對動態非法 path 仍會 panic。`diff` 保證 local dimension 的觀察值相等，不保證 AST 表示、重複項與原順序逐位元相同。 |
 | valence 契約 | 部分完成 | construction runtime 以 typed slots／residual slots 為 valence；generic Def 仍可寫入 legacy `syn.valence = 2`，validator 尚未禁止它冒充可執行 valence。 |
 | phon source trace | 部分完成 | compiled global phon source map 可回到 rule／branch `.lang` 行；推導時動態排放的 sign-local phon rules 尚未把新 source map 接回 `SystemDerivation`。 |
-| 本機完整閘門 | 基礎設施未齊 | language 179/179、Tshiatūn 157/157、MSVC rustfmt check 通過；GNU preflight 因缺 rustfmt、Clippy、WASM target 正確回報 exit 2，不能宣稱全閘門 exit 0。 |
+| 本機完整閘門 | 基礎設施未齊 | 根 workspace 251/251（language 220、changeset 31）、Tshiatūn 157/157、default-toolchain rustfmt 與 GNU check 通過；Clippy 已安裝於 MSVC toolchain，但該環境缺 MSVC linker／Windows SDK libraries，可正常測試的 GNU toolchain 則沒有其專屬 rustfmt／Clippy components；另缺 WASM target且有既存 dirty Tshiatūn worktree，故完整 gate 正確回報 exit 2，不能宣稱 exit 0。 |
 
-因此目前可說「M1/M1++ 主 runtime 與本輪英語格位窄契約回歸綠燈」，不能說「所有
-M1+ 擴充與進入歷時所需 source interface 已封板」。
+本表源自 Step 13 前的稽核，現已回填 2026-07-22 封板結果：derived-token forwarding、
+contextual filler rules、V2 expression identity 與四原語均有反例證據；仍不能據此宣稱
+Step 14 replay 已封板。
 
 ---
 
@@ -355,7 +357,7 @@ surface realization。
 這些規則使「動詞分配格」與「名詞實現格」可以分開：前者是 lexical/constructional
 licensing，後者是 token-local realization；兩者都不把使用事件誤存成語言知識。
 
-### 5.7 Step 14 封板後的 occurrence 語義
+### 5.7 Step 13 前置工程已完成的 occurrence 語義
 
 `slot_features` 現在同時支援 stored sign 與 derived-token filler。每個 derived token
 私下保存 composition 後、context 與 token rules 前的 deep baseline；外層 occurrence
@@ -387,7 +389,7 @@ Clippy lint 與 WASM build 綁定到實際可用的 linker／target，基礎設�
 | 四 Primitive | immutable、fallible `Insert`／`Delete`／`Update`／`Move` 只改 caller `Language` | 已完成：`conlang-changeset` |
 | `check_language` | 無副作用、獨立於 codegen 的 AST/source invariant diagnostics | 已完成並由 compile path 復用 |
 | Language diff/trace | stable-ID 對齊的 before/after、anchor、validation result | 已完成：`LanguageDiff`／`PrimitiveRecord` |
-| ChangeSet | ChangeSet-owned allocator、statement transaction、replay、lazy recompile | 已完成：`conlang.changeset/v1` 與 identity sidecar v2 |
+| ChangeSet | ChangeSet-owned allocator、statement transaction、replay、lazy recompile | Step 14 preview；未納入本次封板或舊檔相容性承諾 |
 
 ### Step 13a：先建立 source interface
 
@@ -403,12 +405,13 @@ Clippy lint 與 WASM build 綁定到實際可用的 linker／target，基礎設�
 每種 primitive 都要證明 `Language -> Language'`；同時斷言未被 target 的 node ID
 不變、source dump 可再 parse、`check_language` 成功，以及修改後可重新 compile。
 
-### Step 14：ChangeSet interpreter（已完成）
+### Step 14：ChangeSet interpreter（preview，尚未封板）
 
-本步加入 ChangeSet-owned allocator、statement transaction、commit 後
-`check_document`、dirty/lazy compile、serialized ChangeSet 與 deterministic replay。成功出口是
-caller Language 經 ChangeSet 變為 `Language'`，重新 compile 後可以觀察到相應的
-共時差異；不是直接改 compiled program。
+本步預定加入 ChangeSet-owned allocator、statement transaction、commit 後
+`check_document`、dirty/lazy compile、serialized ChangeSet 與 deterministic replay。
+現有實作是 preview；完成出口仍須證明 caller Language 經 ChangeSet 變為 `Language'`，
+重新 compile 後可觀察相應共時差異，且相容性矩陣全綠。舊檔不要求直接 replay：
+V1 `.lang` reader 只保留到明示遷移，ChangeSet 應釘住遷移後的 V2 source／identity digest。
 
 ### Step 15 以後：上層歷時功能
 
@@ -440,5 +443,5 @@ source interface 之上。sense/derivation-edge、完整 component graph、entre
 - [x] std/natural/plugin package source 沒有被 caller 的歷時 edit 直接覆寫。
 
 Step 13 source-edit 與上述兩個共時 context 缺口均已完成；Step 14 的 statement
-transaction、ChangeSet replay 與 lazy compile 見 docs/22。此清單不代表語法化、語意漂移、
-語言接觸或完整英語形態學已完成。
+transaction、ChangeSet replay 與 lazy compile 仍是 docs/22 preview。此清單不代表
+Step 14、語法化、語意漂移、語言接觸或完整英語形態學已完成。

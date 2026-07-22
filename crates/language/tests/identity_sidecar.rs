@@ -1,6 +1,6 @@
 use conlang_language::{
-    check_document, compile_system_ref, IdentityError, IdentityNamespace, LanguageDocument,
-    LibrarySpec, NodeKind, IDENTITY_SCHEMA_V1, IDENTITY_SCHEMA_V2,
+    check_document, compile_system_ref, AddressSegment, IdentityError, IdentityNamespace, Language,
+    LanguageDocument, LibrarySpec, NodeKind, RefTargetV1, IDENTITY_SCHEMA_V1, IDENTITY_SCHEMA_V2,
 };
 
 const SOURCE: &str = r#"
@@ -118,4 +118,163 @@ fn fork_preserves_ancestor_ids_and_adds_an_active_allocator() {
     assert!(child.owns(&dog.id));
     assert_eq!(child.identities().allocators.len(), 2);
     assert!(child.fork("evo:child").is_err());
+}
+
+const V2_EXPRESSION_SOURCE: &str = r#"schema conlang.lang/v2
+
+trait Entity:
+
+trait Marked:
+
+sign atom:
+    belongs Entity
+    phon:
+        /a/
+
+sign Wrap:
+    syn:
+        slots:
+            value [*]
+    phon:
+        /{value}/
+
+sign Outer:
+    syn:
+        slots:
+            value [*]
+    phon:
+        /<{value}>/
+
+sign root:
+    belongs Entity
+    syn:
+        slots:
+            actor [Entity]
+        feature:
+            number = enum(singular, plural)
+            number =>
+                case:
+                    else:
+                        singular
+    sem:
+        roles:
+            actor [Entity]
+            actor =
+                case:
+                    else:
+                        atom()
+    phon:
+        /{actor}/
+        realization:
+            case:
+                else:
+                    /{Outer(value = Wrap(value = {$self})).phon.ret}/
+    case:
+        else:
+            Outer(value = Wrap(value = {$self}))
+            belongs Marked
+"#;
+
+#[test]
+fn v2_expression_nodes_have_recursive_unique_stable_addresses() {
+    let document =
+        LanguageDocument::import_new_root(V2_EXPRESSION_SOURCE, "evo:expressions").unwrap();
+    let nodes = &document.identities().nodes;
+
+    assert_eq!(
+        nodes
+            .iter()
+            .filter(|node| node.kind == NodeKind::Case)
+            .count(),
+        4
+    );
+    assert_eq!(
+        nodes
+            .iter()
+            .filter(|node| node.kind == NodeKind::CaseBranch)
+            .count(),
+        4
+    );
+    assert_eq!(
+        nodes
+            .iter()
+            .filter(|node| node.kind == NodeKind::Application)
+            .count(),
+        5
+    );
+    assert_eq!(
+        nodes
+            .iter()
+            .filter(|node| {
+                node.address
+                    .0
+                    .iter()
+                    .any(|segment| matches!(segment, AddressSegment::ApplicationArguments(0)))
+            })
+            .count(),
+        2
+    );
+
+    let mut addresses = nodes
+        .iter()
+        .map(|node| node.address.clone())
+        .collect::<Vec<_>>();
+    addresses.sort();
+    assert!(addresses.windows(2).all(|pair| pair[0] != pair[1]));
+
+    let application_refs = document
+        .identities()
+        .refs
+        .iter()
+        .filter(|binding| binding.field == "application.callee")
+        .count();
+    assert_eq!(application_refs, 5);
+    assert!(document
+        .identities()
+        .refs
+        .iter()
+        .any(|binding| binding.field == "case.belongs[0]"));
+
+    let (source, manifest) = document.dump_pair().unwrap();
+    assert_eq!(
+        LanguageDocument::open(&source, &manifest).unwrap(),
+        document
+    );
+}
+
+#[test]
+fn expression_refs_keep_target_ids_across_display_rename_and_reopen() {
+    let document =
+        LanguageDocument::import_new_root(V2_EXPRESSION_SOURCE, "evo:rename-expressions").unwrap();
+    let wrap_id = document.ref_for_sign("Wrap").unwrap().id;
+    let marked_id = document.ref_for_trait("Marked").unwrap().id;
+    let source = document
+        .source()
+        .replace("trait Marked:", "trait Decorated:")
+        .replace("belongs Marked", "belongs Decorated")
+        .replace("sign Wrap:", "sign Wrapper:")
+        .replace("Wrap(value", "Wrapper(value");
+    let language = Language::parse(&source).unwrap();
+    let (_, identities) = document.into_edit_parts();
+    let renamed = LanguageDocument::from_edit_parts(language, identities).unwrap();
+
+    assert_eq!(renamed.ref_for_sign("Wrapper").unwrap().id, wrap_id);
+    assert_eq!(renamed.ref_for_trait("Decorated").unwrap().id, marked_id);
+    assert!(renamed.identities().refs.iter().any(|binding| {
+        binding.field == "application.callee"
+            && matches!(
+                &binding.target,
+                RefTargetV1::Local { target } if target.id == wrap_id
+            )
+    }));
+    assert!(renamed.identities().refs.iter().any(|binding| {
+        binding.field == "case.belongs[0]"
+            && matches!(
+                &binding.target,
+                RefTargetV1::Local { target } if target.id == marked_id
+            )
+    }));
+
+    let (source, manifest) = renamed.dump_pair().unwrap();
+    assert_eq!(LanguageDocument::open(&source, &manifest).unwrap(), renamed);
 }

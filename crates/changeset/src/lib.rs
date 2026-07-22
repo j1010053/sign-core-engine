@@ -3,6 +3,11 @@
 //! This crate depends on the synchronic language model, never the reverse.
 //! It edits only a caller-owned [`LanguageDocument`]; compiled/effective
 //! language state and runtime derived tokens are deliberately absent here.
+//!
+//! ```
+//! use conlang_changeset::Anchor;
+//! assert_ne!(Anchor::Start, Anchor::End);
+//! ```
 
 #![forbid(unsafe_code)]
 #![deny(missing_debug_implementations)]
@@ -10,12 +15,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use conlang_language::{
-    check_document, compile_document, sha256_hex, AddressSegment, Block, CompileSystemError,
-    CompiledSystem, Def, Dim, FeatureDecl, FeatureValue, IdentityError, IdentityManifestV2,
-    Language, LanguageDocument, LibraryId, LibrarySpec, NodeAddress, NodeEntryV1, NodeId, NodeKind,
-    NodeRef, Realization, RealizationBranch, RoleBinding, RoleDecl, Rule, Severity, SignDef,
-    SignItem, Slot, SlotConstraint, SlotFeatureBinding, SlotMapOp, Stage, TraitDef,
-    ValidationReport,
+    check_document, compile_document, sha256_hex, AddressSegment, BinaryConstraint, Block,
+    CaseBranch, CompileSystemError, CompiledSystem, Def, Dim, Expression, FeatureDecl,
+    FeatureValue, IdentityError, IdentityManifestV2, Language, LanguageDocument, LibraryId,
+    LibrarySpec, NodeAddress, NodeEntryV1, NodeId, NodeKind, NodeRef, Realization,
+    RealizationBranch, RoleBinding, RoleDecl, Rule, Severity, SignApplication, SignArgumentValue,
+    SignDef, SignItem, Slot, SlotConstraint, SlotFeatureBinding, SlotMapOp, Stage, TraitDef,
+    TypedCase, ValidationReport,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +45,7 @@ pub enum DetachedNode {
     RuleElseBranch(String),
     RuleThenBranch(String),
     RealizationBranch(RealizationBranch),
+    CaseBranch(CaseBranch),
 }
 
 impl DetachedNode {
@@ -54,6 +61,7 @@ impl DetachedNode {
             DetachedNode::RuleElseBranch(_) => NodeKind::RuleElseBranch,
             DetachedNode::RuleThenBranch(_) => NodeKind::RuleThenBranch,
             DetachedNode::RealizationBranch(_) => NodeKind::RealizationBranch,
+            DetachedNode::CaseBranch(_) => NodeKind::CaseBranch,
         }
     }
 }
@@ -85,6 +93,9 @@ pub enum NodeUpdate {
     RoleBinding(RoleBinding),
     RealizationTemplate(String),
     RealizationGuard(Option<String>),
+    CaseBranch(CaseBranch),
+    SignApplication(SignApplication),
+    Constraint(BinaryConstraint),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,8 +201,15 @@ fn sibling_ranks(
     let mut sequences: BTreeMap<(Option<NodeId>, u8), Vec<&NodeSnapshot>> = BTreeMap::new();
     for (id, snapshot) in snapshots {
         if common.contains(id) {
+            let tag = sequence_tag(&snapshot.address);
+            // Distribution, Trait, and Sign order is a canonical-printing
+            // concern, not a semantic Move. A rename/key update may change
+            // their rendered order while every node retains the same parent.
+            if matches!(tag, 3..=5) {
+                continue;
+            }
             sequences
-                .entry((snapshot.parent.clone(), sequence_tag(&snapshot.address)))
+                .entry((snapshot.parent.clone(), tag))
                 .or_default()
                 .push(snapshot);
         }
@@ -222,6 +240,7 @@ fn sequence_tag(address: &NodeAddress) -> u8 {
         Some(AddressSegment::CaseExpression) => 11,
         Some(AddressSegment::CaseBranches(_)) => 12,
         Some(AddressSegment::CaseResult) => 13,
+        Some(AddressSegment::ApplicationArguments(_)) => 14,
     }
 }
 
@@ -423,6 +442,7 @@ enum ListKey {
     RuleElse,
     RuleThen,
     Realization,
+    CaseBranches,
 }
 
 fn segment(key: ListKey, index: usize) -> AddressSegment {
@@ -436,6 +456,7 @@ fn segment(key: ListKey, index: usize) -> AddressSegment {
         ListKey::RuleElse => AddressSegment::RuleElse(index),
         ListKey::RuleThen => AddressSegment::RuleThen(index),
         ListKey::Realization => AddressSegment::RealizationBranches(index),
+        ListKey::CaseBranches => AddressSegment::CaseBranches(index),
     }
 }
 
@@ -450,6 +471,7 @@ fn segment_index(value: &AddressSegment, key: ListKey) -> Option<usize> {
         | (ListKey::RuleElse, AddressSegment::RuleElse(index))
         | (ListKey::RuleThen, AddressSegment::RuleThen(index))
         | (ListKey::Realization, AddressSegment::RealizationBranches(index)) => Some(*index),
+        (ListKey::CaseBranches, AddressSegment::CaseBranches(index)) => Some(*index),
         _ => None,
     }
 }
@@ -536,6 +558,20 @@ fn allocate_id(manifest: &mut IdentityManifestV2) -> Result<NodeId, EditError> {
     ))
 }
 
+fn finish_edit(
+    language: Language,
+    manifest: IdentityManifestV2,
+) -> Result<LanguageDocument, EditError> {
+    // The source tree is authoritative after an edit. Reparse its canonical
+    // spelling so source locations move with their nodes; otherwise a moved
+    // branch would dump/reopen with different line provenance despite having
+    // the same stable identity manifest.
+    let canonical = language.dump();
+    let language = Language::parse(&canonical)
+        .map_err(|error| EditError::Identity(IdentityError::Parse(error.to_string())))?;
+    LanguageDocument::from_edit_parts(language, manifest).map_err(EditError::from)
+}
+
 fn insert(
     source: LanguageDocument,
     parent_ref: &NodeRef,
@@ -550,7 +586,7 @@ fn insert(
     }
     insert_payload(&mut language, &parent, index, subtree)?;
     allocate_inserted_subtree(&language, &mut manifest, &address, Some(parent.id.clone()))?;
-    LanguageDocument::from_edit_parts(language, manifest).map_err(EditError::from)
+    finish_edit(language, manifest)
 }
 
 fn insertion_site(
@@ -596,6 +632,12 @@ fn insertion_site(
         (NodeKind::Realization, NodeKind::RealizationBranch) => {
             let realization = realization_at(language, &parent.address)?;
             (ListKey::Realization, realization.branches.len(), None)
+        }
+        (NodeKind::Case, NodeKind::CaseBranch) => {
+            let case = case_at(language, &parent.address).ok_or_else(|| {
+                EditError::FieldMismatch("case parent address is stale".to_owned())
+            })?;
+            (ListKey::CaseBranches, case.branches.len(), None)
         }
         (NodeKind::Language, NodeKind::Prosody) if language.prosody.is_empty() => {
             if !matches!(anchor, Anchor::End) {
@@ -767,6 +809,11 @@ fn insert_payload(
                 .branches
                 .insert(index, value)
         }
+        DetachedNode::CaseBranch(value) if parent.kind == NodeKind::Case => {
+            case_at_mut(language, &parent.address)?
+                .branches
+                .insert(index, value)
+        }
         other => {
             return Err(EditError::ParentKind {
                 child: other.kind(),
@@ -847,6 +894,30 @@ fn child_addresses(
             for index in 0..realization_at(language, address)?.branches.len() {
                 children.push(address.child(AddressSegment::RealizationBranches(index)));
             }
+            if realization_at(language, address)?.expression.is_some() {
+                children.push(address.child(AddressSegment::CaseExpression));
+            }
+        }
+        NodeKind::Case => {
+            let case = case_at(language, address)
+                .ok_or_else(|| EditError::FieldMismatch("case address is stale".to_owned()))?;
+            for index in 0..case.branches.len() {
+                children.push(address.child(AddressSegment::CaseBranches(index)));
+            }
+        }
+        NodeKind::CaseBranch => {
+            let branch = case_branch_at(language, address)?;
+            if expression_node_kind(&branch.result).is_some() {
+                children.push(address.child(AddressSegment::CaseResult));
+            }
+        }
+        NodeKind::Application => {
+            let application = application_at(language, address)?;
+            for (index, argument) in application.arguments.iter().enumerate() {
+                if matches!(argument.value, SignArgumentValue::Application(_)) {
+                    children.push(address.child(AddressSegment::ApplicationArguments(index)));
+                }
+            }
         }
         _ => {}
     }
@@ -874,7 +945,7 @@ fn delete(source: LanguageDocument, node_ref: &NodeRef) -> Result<LanguageDocume
     if let Some((key, index)) = list_position {
         shift_list(&mut manifest, &parent_address, key, index + 1, -1);
     }
-    LanguageDocument::from_edit_parts(language, manifest).map_err(EditError::from)
+    finish_edit(language, manifest)
 }
 
 fn delete_payload(language: &mut Language, node: &NodeEntryV1) -> Result<(), EditError> {
@@ -926,6 +997,9 @@ fn delete_nested_payload(
                 .branches
                 .remove(*index);
         }
+        Some(AddressSegment::CaseBranches(index)) => {
+            case_at_mut(language, &address)?.branches.remove(*index);
+        }
         _ => {
             return Err(EditError::FieldMismatch(
                 "unsupported delete address".to_owned(),
@@ -945,11 +1019,22 @@ fn update(
     let old_group = item_at_address(&language, &node.address).map(item_group);
     let explicit_ref_field = update_payload(&mut language, &node, change)?;
     if let Some(field) = explicit_ref_field {
-        manifest
-            .refs
-            .retain(|binding| !(binding.owner == node.id && binding.field == field));
+        manifest.refs.retain(|binding| {
+            if binding.owner != node.id {
+                return true;
+            }
+            if field == "case.references" {
+                !binding.field.starts_with("case.")
+            } else {
+                binding.field != field
+            }
+        });
     }
-    if matches!(node.kind, NodeKind::Sign | NodeKind::Trait) {
+    sync_identity_descendants(&language, &mut manifest, &node)?;
+    if matches!(
+        node.kind,
+        NodeKind::Sign | NodeKind::Trait | NodeKind::Distribution
+    ) {
         reorder_named_container(&mut language, &mut manifest, &node)?;
     } else if let Some(old_group) = old_group {
         let new_group = item_at_address(&language, &node.address)
@@ -959,7 +1044,75 @@ fn update(
             reorder_item(&mut language, &mut manifest, &node, new_group)?;
         }
     }
-    LanguageDocument::from_edit_parts(language, manifest).map_err(EditError::from)
+    finish_edit(language, manifest)
+}
+
+/// Reconcile expression descendants after a typed update while retaining the
+/// identity of every unchanged `(address, kind)` node. Newly introduced
+/// nested applications/cases receive IDs from the active allocator, and
+/// removed descendants lose both their node entries and owned references.
+fn sync_identity_descendants(
+    language: &Language,
+    manifest: &mut IdentityManifestV2,
+    root: &NodeEntryV1,
+) -> Result<(), EditError> {
+    let mut reusable = BTreeMap::new();
+    let mut removed_ids = BTreeSet::new();
+    manifest.nodes.retain(|entry| {
+        let descendant = entry.address.starts_with(&root.address) && entry.address != root.address;
+        if descendant {
+            reusable.insert((entry.address.clone(), entry.kind), entry.id.clone());
+            removed_ids.insert(entry.id.clone());
+            false
+        } else {
+            true
+        }
+    });
+    let mut reused = BTreeSet::new();
+    for address in child_addresses(language, &root.address, root.kind)? {
+        restore_identity_subtree(
+            language,
+            manifest,
+            &reusable,
+            &mut reused,
+            &address,
+            root.id.clone(),
+        )?;
+    }
+    removed_ids.retain(|id| !reused.contains(id));
+    manifest
+        .refs
+        .retain(|binding| !removed_ids.contains(&binding.owner));
+    Ok(())
+}
+
+fn restore_identity_subtree(
+    language: &Language,
+    manifest: &mut IdentityManifestV2,
+    reusable: &BTreeMap<(NodeAddress, NodeKind), NodeId>,
+    reused: &mut BTreeSet<NodeId>,
+    address: &NodeAddress,
+    parent: NodeId,
+) -> Result<(), EditError> {
+    let kind = kind_at(language, address).ok_or_else(|| {
+        EditError::FieldMismatch(format!("updated child at {address:?} is not addressable"))
+    })?;
+    let id = if let Some(id) = reusable.get(&(address.clone(), kind)) {
+        reused.insert(id.clone());
+        id.clone()
+    } else {
+        allocate_id(manifest)?
+    };
+    manifest.nodes.push(NodeEntryV1 {
+        id: id.clone(),
+        kind,
+        parent: Some(parent),
+        address: address.clone(),
+    });
+    for child in child_addresses(language, address, kind)? {
+        restore_identity_subtree(language, manifest, reusable, reused, &child, id.clone())?;
+    }
+    Ok(())
 }
 
 fn update_payload(
@@ -1032,7 +1185,10 @@ fn update_payload(
             Ok(None)
         }
         (NodeKind::Slot, NodeUpdate::SlotName(value)) => {
-            slot_at_mut(language, &node.address)?.name = value;
+            let old = slot_at_mut(language, &node.address)?.name.clone();
+            let scope = slot_rename_scope(language, node, &old)?;
+            slot_at_mut(language, &node.address)?.name = value.clone();
+            rewrite_slot_consumers(language, &scope, &old, &value);
             Ok(None)
         }
         (NodeKind::Slot, NodeUpdate::SlotConstraint(value)) => {
@@ -1085,6 +1241,18 @@ fn update_payload(
             realization_branch_at_mut(language, &node.address)?.guard = value;
             Ok(None)
         }
+        (NodeKind::CaseBranch, NodeUpdate::CaseBranch(value)) => {
+            *case_branch_at_mut(language, &node.address)? = value;
+            Ok(Some("case.references".to_owned()))
+        }
+        (NodeKind::Application, NodeUpdate::SignApplication(value)) => {
+            *application_at_mut(language, &node.address)? = value;
+            Ok(Some("application.callee".to_owned()))
+        }
+        (NodeKind::Constraint, NodeUpdate::Constraint(value)) => {
+            *item_at_address_mut(language, &node.address)? = SignItem::Constraint(value);
+            Ok(None)
+        }
         _ => Err(field_mismatch(node, "update variant")),
     }
 }
@@ -1102,6 +1270,16 @@ fn reorder_named_container(
     node: &NodeEntryV1,
 ) -> Result<(), EditError> {
     let (key, old_index, new_index) = match node.address.0.as_slice() {
+        [AddressSegment::Distribution(index)] => {
+            let value = language.distribution.remove(*index);
+            let new_index = language
+                .distribution
+                .iter()
+                .position(|item| item > &value)
+                .unwrap_or(language.distribution.len());
+            language.distribution.insert(new_index, value);
+            (ListKey::Distribution, *index, new_index)
+        }
         [AddressSegment::Signs(index)] => {
             let value = language.signs.remove(*index);
             let new_index = language
@@ -1235,7 +1413,7 @@ fn move_node(
         &new_address,
         &current_parent.id,
     );
-    LanguageDocument::from_edit_parts(language, manifest).map_err(EditError::from)
+    finish_edit(language, manifest)
 }
 
 fn detached_at(language: &Language, node: &NodeEntryV1) -> Result<DetachedNode, EditError> {
@@ -1270,6 +1448,14 @@ fn detached_at(language: &Language, node: &NodeEntryV1) -> Result<DetachedNode, 
                         realization_at(language, &parent)?.branches[*index].clone(),
                     ))
                 }
+                Some(AddressSegment::CaseBranches(index)) => Ok(DetachedNode::CaseBranch(
+                    case_at(language, &parent)
+                        .ok_or_else(|| field_mismatch(node, "move"))?
+                        .branches
+                        .get(*index)
+                        .cloned()
+                        .ok_or_else(|| field_mismatch(node, "move"))?,
+                )),
                 _ => Err(field_mismatch(node, "move")),
             }
         }
@@ -1307,12 +1493,13 @@ fn address_list_position(address: &NodeAddress) -> Result<(ListKey, usize), Edit
         AddressSegment::RuleElse(index) => (ListKey::RuleElse, *index),
         AddressSegment::RuleThen(index) => (ListKey::RuleThen, *index),
         AddressSegment::RealizationBranches(index) => (ListKey::Realization, *index),
+        AddressSegment::CaseBranches(index) => (ListKey::CaseBranches, *index),
         AddressSegment::Prosody
         | AddressSegment::CaseExpression
         | AddressSegment::CaseResult
-        | AddressSegment::CaseBranches(_) => {
+        | AddressSegment::ApplicationArguments(_) => {
             return Err(EditError::FieldMismatch(
-                "node is not an editable legacy sequence element".to_owned(),
+                "node is not an editable semantic sequence element".to_owned(),
             ))
         }
     };
@@ -1331,7 +1518,15 @@ fn item_kind(item: &SignItem) -> NodeKind {
         SignItem::RoleDecl(_) => NodeKind::RoleDeclaration,
         SignItem::RoleBinding(_) => NodeKind::RoleBinding,
         SignItem::Realization(_) => NodeKind::Realization,
-        SignItem::SignExpression(_) => NodeKind::Case,
+        SignItem::SignExpression(expression) => {
+            expression_node_kind(&expression.expression).unwrap_or(NodeKind::Case)
+        }
+        SignItem::FeatureExpression(expression) => {
+            expression_node_kind(&expression.expression).unwrap_or(NodeKind::Case)
+        }
+        SignItem::RoleExpression(expression) => {
+            expression_node_kind(&expression.expression).unwrap_or(NodeKind::Case)
+        }
         SignItem::Constraint(_) => NodeKind::Constraint,
         SignItem::FeatureRule(_) => NodeKind::FeatureRule,
         SignItem::Def(_) => NodeKind::Definition,
@@ -2544,8 +2739,11 @@ fn item_group(item: &SignItem) -> u16 {
         SignItem::SlotFeatureBinding(_) => dim_base(Dim::Syn) + 1,
         SignItem::FeatureDecl(value) => dim_base(value.dim) + 2,
         SignItem::FeatureValue(value) => dim_base(value.dim) + 2,
+        SignItem::FeatureExpression(value) => dim_base(value.dim) + 2,
         SignItem::FeatureRule(rule) => dim_base(rule.dim) + 2,
-        SignItem::RoleDecl(_) | SignItem::RoleBinding(_) => dim_base(Dim::Sem) + 3,
+        SignItem::RoleDecl(_) | SignItem::RoleBinding(_) | SignItem::RoleExpression(_) => {
+            dim_base(Dim::Sem) + 3
+        }
         SignItem::Realization(_) => dim_base(Dim::Phon) + 3,
         SignItem::Def(def) => dim_base(def_dimension(&def.path).unwrap_or(Dim::Syn)) + 4,
         SignItem::Rule(rule) => dim_base(rule.dim) + 4,
@@ -2608,13 +2806,32 @@ fn kind_at(language: &Language, address: &NodeAddress) -> Option<NodeKind> {
                 {
                     Some(NodeKind::RealizationBranch)
                 }
-                AddressSegment::CaseExpression => Some(NodeKind::Case),
+                AddressSegment::CaseExpression => realization_at(language, &parent)
+                    .ok()?
+                    .expression
+                    .as_ref()
+                    .map(|_| NodeKind::Case),
                 AddressSegment::CaseBranches(index) => {
                     let case_parent = NodeAddress(path[..path.len() - 1].to_vec());
                     let case = case_at(language, &case_parent)?;
                     (*index < case.branches.len()).then_some(NodeKind::CaseBranch)
                 }
-                AddressSegment::CaseResult => Some(NodeKind::Application),
+                AddressSegment::CaseResult => {
+                    let branch_parent = NodeAddress(path[..path.len() - 1].to_vec());
+                    case_branch_at(language, &branch_parent)
+                        .ok()
+                        .and_then(|branch| expression_node_kind(&branch.result))
+                }
+                AddressSegment::ApplicationArguments(index) => {
+                    let application_parent = NodeAddress(path[..path.len() - 1].to_vec());
+                    application_at(language, &application_parent)
+                        .ok()
+                        .and_then(|application| application.arguments.get(*index))
+                        .and_then(|argument| match argument.value {
+                            SignArgumentValue::Application(_) => Some(NodeKind::Application),
+                            _ => None,
+                        })
+                }
                 _ => None,
             }
         }
@@ -2625,22 +2842,333 @@ fn case_at<'a>(
     language: &'a Language,
     address: &NodeAddress,
 ) -> Option<&'a conlang_language::TypedCase> {
-    match address.0.as_slice() {
-        [AddressSegment::Signs(sign), AddressSegment::Items(item)] => {
-            match language.signs.get(*sign)?.items.get(*item)? {
-                SignItem::SignExpression(expression) => match &expression.expression {
-                    conlang_language::Expression::Case(case) => Some(case),
-                    _ => None,
-                },
-                _ => None,
-            }
+    let (item_address, tail) = split_item_address(address)?;
+    let item = item_at_address(language, &item_address)?;
+    let (case, tail) = root_case(item, tail)?;
+    case_at_tail(case, tail)
+}
+
+fn case_at_mut<'a>(
+    language: &'a mut Language,
+    address: &NodeAddress,
+) -> Result<&'a mut TypedCase, EditError> {
+    let (item_address, tail) = split_item_address(address)
+        .ok_or_else(|| EditError::FieldMismatch("expected case address".to_owned()))?;
+    let item = item_at_address_mut(language, &item_address)?;
+    let (case, tail) = root_case_mut(item, tail)
+        .ok_or_else(|| EditError::FieldMismatch("expected case address".to_owned()))?;
+    case_at_tail_mut(case, tail)
+        .ok_or_else(|| EditError::FieldMismatch("case address is stale".to_owned()))
+}
+
+fn case_branch_at<'a>(
+    language: &'a Language,
+    address: &NodeAddress,
+) -> Result<&'a CaseBranch, EditError> {
+    let parent = address.parent().ok_or(EditError::RootImmutable)?;
+    let Some(AddressSegment::CaseBranches(index)) = address.0.last() else {
+        return Err(EditError::FieldMismatch(
+            "expected case branch address".to_owned(),
+        ));
+    };
+    case_at(language, &parent)
+        .and_then(|case| case.branches.get(*index))
+        .ok_or_else(|| EditError::FieldMismatch("case branch address is stale".to_owned()))
+}
+
+fn case_branch_at_mut<'a>(
+    language: &'a mut Language,
+    address: &NodeAddress,
+) -> Result<&'a mut CaseBranch, EditError> {
+    let parent = address.parent().ok_or(EditError::RootImmutable)?;
+    let Some(AddressSegment::CaseBranches(index)) = address.0.last() else {
+        return Err(EditError::FieldMismatch(
+            "expected case branch address".to_owned(),
+        ));
+    };
+    case_at_mut(language, &parent)?
+        .branches
+        .get_mut(*index)
+        .ok_or_else(|| EditError::FieldMismatch("case branch address is stale".to_owned()))
+}
+
+fn application_at<'a>(
+    language: &'a Language,
+    address: &NodeAddress,
+) -> Result<&'a SignApplication, EditError> {
+    let (item_address, tail) = split_item_address(address)
+        .ok_or_else(|| EditError::FieldMismatch("expected application address".to_owned()))?;
+    let item = item_at_address(language, &item_address)
+        .ok_or_else(|| EditError::FieldMismatch("application item is stale".to_owned()))?;
+    if let Some(application) = root_application(item, tail) {
+        return Ok(application);
+    }
+    let (case, tail) = root_case(item, tail)
+        .ok_or_else(|| EditError::FieldMismatch("expected application address".to_owned()))?;
+    application_at_case_tail(case, tail)
+        .ok_or_else(|| EditError::FieldMismatch("application address is stale".to_owned()))
+}
+
+fn application_at_mut<'a>(
+    language: &'a mut Language,
+    address: &NodeAddress,
+) -> Result<&'a mut SignApplication, EditError> {
+    let (item_address, tail) = split_item_address(address)
+        .ok_or_else(|| EditError::FieldMismatch("expected application address".to_owned()))?;
+    let item = item_at_address_mut(language, &item_address)?;
+    match item {
+        SignItem::SignExpression(expression) => {
+            return application_at_expression_tail_mut(&mut expression.expression, tail)
+                .ok_or_else(|| {
+                    EditError::FieldMismatch("application address is stale".to_owned())
+                });
         }
-        [AddressSegment::Signs(sign), AddressSegment::Items(item), AddressSegment::CaseExpression] => {
-            match language.signs.get(*sign)?.items.get(*item)? {
-                SignItem::Realization(realization) => realization.expression.as_ref(),
-                _ => None,
-            }
+        SignItem::FeatureExpression(expression) => {
+            return application_at_expression_tail_mut(&mut expression.expression, tail)
+                .ok_or_else(|| {
+                    EditError::FieldMismatch("application address is stale".to_owned())
+                });
         }
+        SignItem::RoleExpression(expression) => {
+            return application_at_expression_tail_mut(&mut expression.expression, tail)
+                .ok_or_else(|| {
+                    EditError::FieldMismatch("application address is stale".to_owned())
+                });
+        }
+        _ => {}
+    }
+    let (case, tail) = root_case_mut(item, tail)
+        .ok_or_else(|| EditError::FieldMismatch("expected application address".to_owned()))?;
+    application_at_case_tail_mut(case, tail)
+        .ok_or_else(|| EditError::FieldMismatch("application address is stale".to_owned()))
+}
+
+fn root_application<'a>(
+    item: &'a SignItem,
+    tail: &[AddressSegment],
+) -> Option<&'a SignApplication> {
+    match item {
+        SignItem::SignExpression(expression) => {
+            application_at_expression_tail(&expression.expression, tail)
+        }
+        SignItem::FeatureExpression(expression) => {
+            application_at_expression_tail(&expression.expression, tail)
+        }
+        SignItem::RoleExpression(expression) => {
+            application_at_expression_tail(&expression.expression, tail)
+        }
+        _ => None,
+    }
+}
+
+fn split_item_address(address: &NodeAddress) -> Option<(NodeAddress, &[AddressSegment])> {
+    let item_index = address
+        .0
+        .iter()
+        .position(|segment| matches!(segment, AddressSegment::Items(_)))?;
+    let split = item_index + 1;
+    Some((
+        NodeAddress(address.0[..split].to_vec()),
+        &address.0[split..],
+    ))
+}
+
+fn root_case<'a, 'b>(
+    item: &'a SignItem,
+    tail: &'b [AddressSegment],
+) -> Option<(&'a TypedCase, &'b [AddressSegment])> {
+    match item {
+        SignItem::SignExpression(expression) => {
+            expression_case(&expression.expression).map(|case| (case, tail))
+        }
+        SignItem::FeatureExpression(expression) => {
+            expression_case(&expression.expression).map(|case| (case, tail))
+        }
+        SignItem::RoleExpression(expression) => {
+            expression_case(&expression.expression).map(|case| (case, tail))
+        }
+        SignItem::Realization(realization) => match tail.split_first() {
+            Some((AddressSegment::CaseExpression, rest)) => {
+                realization.expression.as_ref().map(|case| (case, rest))
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn root_case_mut<'a, 'b>(
+    item: &'a mut SignItem,
+    tail: &'b [AddressSegment],
+) -> Option<(&'a mut TypedCase, &'b [AddressSegment])> {
+    match item {
+        SignItem::SignExpression(expression) => {
+            expression_case_mut(&mut expression.expression).map(|case| (case, tail))
+        }
+        SignItem::FeatureExpression(expression) => {
+            expression_case_mut(&mut expression.expression).map(|case| (case, tail))
+        }
+        SignItem::RoleExpression(expression) => {
+            expression_case_mut(&mut expression.expression).map(|case| (case, tail))
+        }
+        SignItem::Realization(realization) => match tail.split_first() {
+            Some((AddressSegment::CaseExpression, rest)) => {
+                realization.expression.as_mut().map(|case| (case, rest))
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn expression_case(expression: &Expression) -> Option<&TypedCase> {
+    match expression {
+        Expression::Case(case) => Some(case),
+        Expression::Projection { value, .. } => expression_case(value),
+        _ => None,
+    }
+}
+
+fn expression_case_mut(expression: &mut Expression) -> Option<&mut TypedCase> {
+    match expression {
+        Expression::Case(case) => Some(case),
+        Expression::Projection { value, .. } => expression_case_mut(value),
+        _ => None,
+    }
+}
+
+fn case_at_tail<'a>(case: &'a TypedCase, tail: &[AddressSegment]) -> Option<&'a TypedCase> {
+    if tail.is_empty() {
+        return Some(case);
+    }
+    let [AddressSegment::CaseBranches(index), AddressSegment::CaseResult, rest @ ..] = tail else {
+        return None;
+    };
+    expression_case_at_tail(&case.branches.get(*index)?.result, rest)
+}
+
+fn expression_case_at_tail<'a>(
+    expression: &'a Expression,
+    tail: &[AddressSegment],
+) -> Option<&'a TypedCase> {
+    match expression {
+        Expression::Case(case) => case_at_tail(case, tail),
+        Expression::Projection { value, .. } => expression_case_at_tail(value, tail),
+        _ => None,
+    }
+}
+
+fn case_at_tail_mut<'a>(
+    case: &'a mut TypedCase,
+    tail: &[AddressSegment],
+) -> Option<&'a mut TypedCase> {
+    if tail.is_empty() {
+        return Some(case);
+    }
+    let [AddressSegment::CaseBranches(index), AddressSegment::CaseResult, rest @ ..] = tail else {
+        return None;
+    };
+    expression_case_at_tail_mut(&mut case.branches.get_mut(*index)?.result, rest)
+}
+
+fn expression_case_at_tail_mut<'a>(
+    expression: &'a mut Expression,
+    tail: &[AddressSegment],
+) -> Option<&'a mut TypedCase> {
+    match expression {
+        Expression::Case(case) => case_at_tail_mut(case, tail),
+        Expression::Projection { value, .. } => expression_case_at_tail_mut(value, tail),
+        _ => None,
+    }
+}
+
+fn application_at_case_tail<'a>(
+    case: &'a TypedCase,
+    tail: &[AddressSegment],
+) -> Option<&'a SignApplication> {
+    let [AddressSegment::CaseBranches(index), AddressSegment::CaseResult, rest @ ..] = tail else {
+        return None;
+    };
+    application_at_expression_tail(&case.branches.get(*index)?.result, rest)
+}
+
+fn application_at_expression_tail<'a>(
+    expression: &'a Expression,
+    tail: &[AddressSegment],
+) -> Option<&'a SignApplication> {
+    match expression {
+        Expression::SignApplication(application) | Expression::PhonInterpolation(application) => {
+            application_at_tail(application, tail)
+        }
+        Expression::Projection { value, .. } => application_at_expression_tail(value, tail),
+        Expression::Case(case) => application_at_case_tail(case, tail),
+        _ => None,
+    }
+}
+
+fn application_at_tail<'a>(
+    application: &'a SignApplication,
+    tail: &[AddressSegment],
+) -> Option<&'a SignApplication> {
+    if tail.is_empty() {
+        return Some(application);
+    }
+    let [AddressSegment::ApplicationArguments(index), rest @ ..] = tail else {
+        return None;
+    };
+    match &application.arguments.get(*index)?.value {
+        SignArgumentValue::Application(nested) => application_at_tail(nested, rest),
+        _ => None,
+    }
+}
+
+fn application_at_case_tail_mut<'a>(
+    case: &'a mut TypedCase,
+    tail: &[AddressSegment],
+) -> Option<&'a mut SignApplication> {
+    let [AddressSegment::CaseBranches(index), AddressSegment::CaseResult, rest @ ..] = tail else {
+        return None;
+    };
+    application_at_expression_tail_mut(&mut case.branches.get_mut(*index)?.result, rest)
+}
+
+fn application_at_expression_tail_mut<'a>(
+    expression: &'a mut Expression,
+    tail: &[AddressSegment],
+) -> Option<&'a mut SignApplication> {
+    match expression {
+        Expression::SignApplication(application) | Expression::PhonInterpolation(application) => {
+            application_at_tail_mut(application, tail)
+        }
+        Expression::Projection { value, .. } => application_at_expression_tail_mut(value, tail),
+        Expression::Case(case) => application_at_case_tail_mut(case, tail),
+        _ => None,
+    }
+}
+
+fn application_at_tail_mut<'a>(
+    application: &'a mut SignApplication,
+    tail: &[AddressSegment],
+) -> Option<&'a mut SignApplication> {
+    if tail.is_empty() {
+        return Some(application);
+    }
+    let [AddressSegment::ApplicationArguments(index), rest @ ..] = tail else {
+        return None;
+    };
+    match &mut application.arguments.get_mut(*index)?.value {
+        SignArgumentValue::Application(nested) => application_at_tail_mut(nested, rest),
+        _ => None,
+    }
+}
+
+fn expression_node_kind(expression: &Expression) -> Option<NodeKind> {
+    match expression {
+        Expression::SignApplication(_) | Expression::PhonInterpolation(_) => {
+            Some(NodeKind::Application)
+        }
+        Expression::Projection { value, .. } => expression_node_kind(value),
+        Expression::Case(_) => Some(NodeKind::Case),
         _ => None,
     }
 }
@@ -2836,6 +3364,360 @@ fn set_rule_branch(
     Ok(())
 }
 
+#[derive(Debug)]
+struct SlotRenameScope {
+    trait_indices: BTreeSet<usize>,
+    sign_indices: BTreeSet<usize>,
+    callee_names: BTreeSet<String>,
+}
+
+fn slot_rename_scope(
+    language: &Language,
+    node: &NodeEntryV1,
+    old: &str,
+) -> Result<SlotRenameScope, EditError> {
+    let mut scope = SlotRenameScope {
+        trait_indices: BTreeSet::new(),
+        sign_indices: BTreeSet::new(),
+        callee_names: BTreeSet::new(),
+    };
+    match node.address.0.as_slice() {
+        [AddressSegment::Signs(sign), AddressSegment::Items(_)] => {
+            scope.sign_indices.insert(*sign);
+            scope
+                .callee_names
+                .insert(language.signs[*sign].name.clone());
+        }
+        [AddressSegment::Traits(trait_index), AddressSegment::Blocks(_), AddressSegment::Items(_)] =>
+        {
+            let target = language.traits[*trait_index].name.clone();
+            let (registry, _) = conlang_language::ontology::OntologyRegistry::build(&[language]);
+            for (index, trait_def) in language.traits.iter().enumerate() {
+                let probe = SignDef {
+                    id: conlang_language::SignId::synthetic(),
+                    name: "__slot_rename_probe".to_owned(),
+                    items: vec![SignItem::Belongs(trait_def.name.clone())],
+                };
+                let inherited_owner = registry
+                    .inheritance_order(&probe)
+                    .iter()
+                    .filter_map(|source| {
+                        registry.node(&source.trait_name).and_then(|node| {
+                            node.items
+                                .iter()
+                                .any(
+                                    |item| matches!(item, SignItem::Slot(slot) if slot.name == old),
+                                )
+                                .then_some(source.trait_name.clone())
+                        })
+                    })
+                    .next_back();
+                // Rewrite only consumers whose effective slot is the node
+                // being renamed.  A descendant may inherit through an
+                // intermediate trait that shadows the same slot name; merely
+                // checking its own body would incorrectly rewrite that
+                // descendant's references to the shadowing declaration.
+                if inherited_owner.as_deref() == Some(target.as_str()) {
+                    scope.trait_indices.insert(index);
+                }
+            }
+            for (index, sign) in language.signs.iter().enumerate() {
+                let local_shadow = sign
+                    .items
+                    .iter()
+                    .any(|item| matches!(item, SignItem::Slot(slot) if slot.name == old));
+                let inheritance = registry.inheritance_order(sign);
+                let inherited_owner = inheritance
+                    .iter()
+                    .filter_map(|source| {
+                        registry.node(&source.trait_name).and_then(|node| {
+                            node.items
+                                .iter()
+                                .any(
+                                    |item| matches!(item, SignItem::Slot(slot) if slot.name == old),
+                                )
+                                .then_some(source.trait_name.clone())
+                        })
+                    })
+                    .next_back();
+                if !local_shadow && inherited_owner.as_deref() == Some(target.as_str()) {
+                    scope.sign_indices.insert(index);
+                    scope.callee_names.insert(sign.name.clone());
+                }
+            }
+        }
+        _ => return Err(field_mismatch(node, "slot owner")),
+    }
+    Ok(scope)
+}
+
+fn rewrite_slot_consumers(language: &mut Language, scope: &SlotRenameScope, old: &str, new: &str) {
+    for index in &scope.trait_indices {
+        for block in &mut language.traits[*index].blocks {
+            rewrite_local_slot_refs_in_items(&mut block.items, old, new);
+        }
+    }
+    for index in &scope.sign_indices {
+        rewrite_local_slot_refs_in_items(&mut language.signs[*index].items, old, new);
+    }
+    for trait_def in &mut language.traits {
+        for block in &mut trait_def.blocks {
+            rewrite_application_parameters_in_items(
+                &mut block.items,
+                &scope.callee_names,
+                old,
+                new,
+            );
+        }
+    }
+    for sign in &mut language.signs {
+        rewrite_application_parameters_in_items(&mut sign.items, &scope.callee_names, old, new);
+    }
+}
+
+fn rewrite_local_slot_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
+    for item in items {
+        match item {
+            SignItem::Slot(_) | SignItem::FeatureDecl(_) | SignItem::FeatureValue(_) => {}
+            SignItem::SlotFeatureBinding(binding) => {
+                if binding.slot == old {
+                    binding.slot = new.to_owned();
+                }
+                binding.value = rewrite_slot_accesses(&binding.value, old, new);
+            }
+            SignItem::SlotMap(operation) => match operation {
+                SlotMapOp::Preserve { slot }
+                | SlotMapOp::Rename { slot, .. }
+                | SlotMapOp::AutoFill { slot, .. }
+                | SlotMapOp::Internalize { slot }
+                | SlotMapOp::Optional { slot, .. }
+                    if slot == old =>
+                {
+                    *slot = new.to_owned();
+                }
+                _ => {}
+            },
+            SignItem::RoleBinding(binding) if binding.slot == old => {
+                binding.slot = new.to_owned();
+            }
+            SignItem::Constraint(constraint) => {
+                constraint.left = rewrite_slot_operand(&constraint.left, old, new);
+                constraint.right = rewrite_slot_operand(&constraint.right, old, new);
+            }
+            SignItem::Rule(rule) | SignItem::FeatureRule(rule) => {
+                rule.body = rewrite_slot_accesses(&rule.body, old, new);
+                for branch in &mut rule.else_chain {
+                    *branch = rewrite_slot_accesses(branch, old, new);
+                }
+                for branch in &mut rule.then_chain {
+                    *branch = rewrite_slot_accesses(branch, old, new);
+                }
+            }
+            SignItem::Def(def) => {
+                def.value = rewrite_slot_template(&def.value, old, new);
+                def.value = rewrite_slot_accesses(&def.value, old, new);
+            }
+            SignItem::Realization(realization) => {
+                for branch in &mut realization.branches {
+                    branch.template = rewrite_slot_template(&branch.template, old, new);
+                    if let Some(guard) = &mut branch.guard {
+                        *guard = rewrite_slot_accesses(guard, old, new);
+                    }
+                }
+                if let Some(case) = &mut realization.expression {
+                    rewrite_local_slot_refs_in_case(case, old, new);
+                }
+            }
+            SignItem::SignExpression(expression) => {
+                rewrite_local_slot_refs_in_expression(&mut expression.expression, old, new)
+            }
+            SignItem::FeatureExpression(expression) => {
+                rewrite_local_slot_refs_in_expression(&mut expression.expression, old, new)
+            }
+            SignItem::RoleExpression(expression) => {
+                rewrite_local_slot_refs_in_expression(&mut expression.expression, old, new)
+            }
+            SignItem::TraitUse { .. }
+            | SignItem::Belongs(_)
+            | SignItem::RoleDecl(_)
+            | SignItem::RoleBinding(_) => {}
+        }
+    }
+}
+
+fn rewrite_local_slot_refs_in_case(case: &mut TypedCase, old: &str, new: &str) {
+    if let Some(scrutinee) = &mut case.scrutinee {
+        *scrutinee = rewrite_slot_operand(scrutinee, old, new);
+        *scrutinee = rewrite_slot_accesses(scrutinee, old, new);
+    }
+    for branch in &mut case.branches {
+        if let conlang_language::CaseCondition::Guard(guard) = &mut branch.condition {
+            *guard = rewrite_slot_accesses(guard, old, new);
+        }
+        rewrite_local_slot_refs_in_expression(&mut branch.result, old, new);
+    }
+}
+
+fn rewrite_local_slot_refs_in_expression(expression: &mut Expression, old: &str, new: &str) {
+    match expression {
+        Expression::SignApplication(application) | Expression::PhonInterpolation(application) => {
+            rewrite_local_slot_refs_in_application(application, old, new)
+        }
+        Expression::Projection { value, .. } => {
+            rewrite_local_slot_refs_in_expression(value, old, new)
+        }
+        Expression::PhonTemplate(template) => *template = rewrite_slot_template(template, old, new),
+        Expression::Slot(slot) if slot == old => *slot = new.to_owned(),
+        Expression::Case(case) => rewrite_local_slot_refs_in_case(case, old, new),
+        Expression::EnumValue(_) | Expression::SelfSign | Expression::Slot(_) => {}
+    }
+}
+
+fn rewrite_local_slot_refs_in_application(application: &mut SignApplication, old: &str, new: &str) {
+    for argument in &mut application.arguments {
+        match &mut argument.value {
+            SignArgumentValue::Slot(slot) if slot == old => *slot = new.to_owned(),
+            SignArgumentValue::Application(nested) => {
+                rewrite_local_slot_refs_in_application(nested, old, new)
+            }
+            SignArgumentValue::SelfSign | SignArgumentValue::Slot(_) => {}
+        }
+    }
+}
+
+fn rewrite_application_parameters_in_items(
+    items: &mut [SignItem],
+    callees: &BTreeSet<String>,
+    old: &str,
+    new: &str,
+) {
+    for item in items {
+        match item {
+            SignItem::SignExpression(expression) => rewrite_application_parameters_in_expression(
+                &mut expression.expression,
+                callees,
+                old,
+                new,
+            ),
+            SignItem::FeatureExpression(expression) => {
+                rewrite_application_parameters_in_expression(
+                    &mut expression.expression,
+                    callees,
+                    old,
+                    new,
+                )
+            }
+            SignItem::RoleExpression(expression) => rewrite_application_parameters_in_expression(
+                &mut expression.expression,
+                callees,
+                old,
+                new,
+            ),
+            SignItem::Realization(realization) => {
+                if let Some(case) = &mut realization.expression {
+                    for branch in &mut case.branches {
+                        rewrite_application_parameters_in_expression(
+                            &mut branch.result,
+                            callees,
+                            old,
+                            new,
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn rewrite_application_parameters_in_expression(
+    expression: &mut Expression,
+    callees: &BTreeSet<String>,
+    old: &str,
+    new: &str,
+) {
+    match expression {
+        Expression::SignApplication(application) | Expression::PhonInterpolation(application) => {
+            rewrite_application_parameters(application, callees, old, new)
+        }
+        Expression::Projection { value, .. } => {
+            rewrite_application_parameters_in_expression(value, callees, old, new)
+        }
+        Expression::Case(case) => {
+            for branch in &mut case.branches {
+                rewrite_application_parameters_in_expression(&mut branch.result, callees, old, new);
+            }
+        }
+        Expression::PhonTemplate(_)
+        | Expression::EnumValue(_)
+        | Expression::SelfSign
+        | Expression::Slot(_) => {}
+    }
+}
+
+fn rewrite_application_parameters(
+    application: &mut SignApplication,
+    callees: &BTreeSet<String>,
+    old: &str,
+    new: &str,
+) {
+    if callees.contains(&application.callee) {
+        for argument in &mut application.arguments {
+            if argument.name.as_deref() == Some(old) {
+                argument.name = Some(new.to_owned());
+            }
+        }
+    }
+    for argument in &mut application.arguments {
+        if let SignArgumentValue::Application(nested) = &mut argument.value {
+            rewrite_application_parameters(nested, callees, old, new);
+        }
+    }
+}
+
+fn rewrite_slot_operand(source: &str, old: &str, new: &str) -> String {
+    if source == old {
+        return new.to_owned();
+    }
+    source
+        .strip_prefix(old)
+        .filter(|rest| rest.starts_with('.'))
+        .map(|rest| format!("{new}{rest}"))
+        .unwrap_or_else(|| source.to_owned())
+}
+
+fn rewrite_slot_template(source: &str, old: &str, new: &str) -> String {
+    source.replace(&format!("{{{old}}}"), &format!("{{{new}}}"))
+}
+
+fn rewrite_slot_accesses(source: &str, old: &str, new: &str) -> String {
+    let needle = format!("$slot.{old}");
+    let mut output = String::with_capacity(source.len());
+    let mut cursor = 0;
+    while let Some(offset) = source[cursor..].find(&needle) {
+        let start = cursor + offset;
+        let end = start + needle.len();
+        let boundary = source[end..]
+            .chars()
+            .next()
+            .is_none_or(|character| character == '.' || !is_identifier_character(character));
+        output.push_str(&source[cursor..start]);
+        if boundary {
+            output.push_str("$slot.");
+            output.push_str(new);
+        } else {
+            output.push_str(&source[start..end]);
+        }
+        cursor = end;
+    }
+    output.push_str(&source[cursor..]);
+    output
+}
+
+fn is_identifier_character(character: char) -> bool {
+    character.is_alphanumeric() || matches!(character, '_' | '-' | ':' | '/')
+}
+
 fn realization_branch_at_mut<'a>(
     language: &'a mut Language,
     address: &NodeAddress,
@@ -2872,8 +3754,50 @@ fn rewrite_sign_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
             SignItem::Def(def) if def.path == "origin" && def.value == format!("sign({old})") => {
                 def.value = format!("sign({new})")
             }
+            SignItem::SignExpression(expression) => {
+                rewrite_sign_refs_in_expression(&mut expression.expression, old, new)
+            }
+            SignItem::FeatureExpression(expression) => {
+                rewrite_sign_refs_in_expression(&mut expression.expression, old, new)
+            }
+            SignItem::RoleExpression(expression) => {
+                rewrite_sign_refs_in_expression(&mut expression.expression, old, new)
+            }
+            SignItem::Realization(realization) => {
+                if let Some(case) = &mut realization.expression {
+                    rewrite_sign_refs_in_case(case, old, new);
+                }
+            }
             _ => {}
         }
+    }
+}
+
+fn rewrite_sign_refs_in_expression(expression: &mut Expression, old: &str, new: &str) {
+    match expression {
+        Expression::SignApplication(application) | Expression::PhonInterpolation(application) => {
+            rewrite_sign_refs_in_application(application, old, new)
+        }
+        Expression::Projection { value, .. } => rewrite_sign_refs_in_expression(value, old, new),
+        Expression::Case(case) => rewrite_sign_refs_in_case(case, old, new),
+        _ => {}
+    }
+}
+
+fn rewrite_sign_refs_in_application(application: &mut SignApplication, old: &str, new: &str) {
+    if application.callee == old {
+        application.callee = new.to_owned();
+    }
+    for argument in &mut application.arguments {
+        if let SignArgumentValue::Application(nested) = &mut argument.value {
+            rewrite_sign_refs_in_application(nested, old, new);
+        }
+    }
+}
+
+fn rewrite_sign_refs_in_case(case: &mut TypedCase, old: &str, new: &str) {
+    for branch in &mut case.branches {
+        rewrite_sign_refs_in_expression(&mut branch.result, old, new);
     }
 }
 
@@ -2902,9 +3826,95 @@ fn rewrite_trait_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
                 }
             }
             SignItem::RoleDecl(role) if role.constraint == old => role.constraint = new.to_owned(),
+            SignItem::SignExpression(expression) => {
+                rewrite_trait_refs_in_expression(&mut expression.expression, old, new)
+            }
+            SignItem::FeatureExpression(expression) => {
+                rewrite_trait_refs_in_expression(&mut expression.expression, old, new)
+            }
+            SignItem::RoleExpression(expression) => {
+                rewrite_trait_refs_in_expression(&mut expression.expression, old, new)
+            }
+            SignItem::Realization(realization) => {
+                if let Some(case) = &mut realization.expression {
+                    rewrite_trait_refs_in_case(case, old, new);
+                }
+            }
             _ => {}
         }
     }
+}
+
+fn rewrite_trait_refs_in_expression(expression: &mut Expression, old: &str, new: &str) {
+    match expression {
+        Expression::Projection { value, .. } => rewrite_trait_refs_in_expression(value, old, new),
+        Expression::Case(case) => rewrite_trait_refs_in_case(case, old, new),
+        _ => {}
+    }
+}
+
+fn rewrite_trait_refs_in_case(case: &mut TypedCase, old: &str, new: &str) {
+    let compares_phon_category = case
+        .scrutinee
+        .as_deref()
+        .and_then(|value| value.split_once('.'))
+        .is_some_and(|(_, projection)| projection == "phon");
+    for branch in &mut case.branches {
+        match &mut branch.condition {
+            conlang_language::CaseCondition::Guard(guard) => {
+                *guard = rewrite_bracketed_category(guard, old, new);
+            }
+            conlang_language::CaseCondition::Equals(category)
+                if compares_phon_category && category == old =>
+            {
+                *category = new.to_owned();
+            }
+            conlang_language::CaseCondition::Equals(_) | conlang_language::CaseCondition::Else => {}
+        }
+        for belongs in &mut branch.belongs {
+            if belongs == old {
+                *belongs = new.to_owned();
+            }
+        }
+        rewrite_trait_refs_in_expression(&mut branch.result, old, new);
+    }
+}
+
+fn rewrite_bracketed_category(source: &str, old: &str, new: &str) -> String {
+    source
+        .split("&&")
+        .map(str::trim)
+        .map(|conjunct| {
+            let category = conjunct
+                .strip_prefix('[')
+                .and_then(|value| value.strip_suffix(']'))
+                .or_else(|| {
+                    let (field, value) = conjunct.split_once("==")?;
+                    let field = field.trim();
+                    let category_valued = field == "$self"
+                        || field
+                            .strip_prefix("$slot.")
+                            .is_some_and(|slot| !slot.contains('.'));
+                    category_valued.then(|| value.trim()).and_then(|value| {
+                        value
+                            .strip_prefix('[')
+                            .and_then(|value| value.strip_suffix(']'))
+                    })
+                })
+                .map(str::trim);
+            if category == Some(old) {
+                match (conjunct.find('['), conjunct.rfind(']')) {
+                    (Some(open), Some(close)) if open < close => {
+                        format!("{}[{new}]{}", &conjunct[..open], &conjunct[close + 1..])
+                    }
+                    _ => conjunct.to_owned(),
+                }
+            } else {
+                conjunct.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" && ")
 }
 
 fn snapshots(document: &LanguageDocument) -> BTreeMap<NodeId, NodeSnapshot> {
@@ -2956,6 +3966,21 @@ fn debug_value(language: &Language, entry: &NodeEntryV1) -> String {
                     rule.body, rule.stage, rule.dim
                 ),
                 SignItem::Realization(_) => "Realization".to_owned(),
+                SignItem::SignExpression(expression) => expression_case(&expression.expression)
+                    .map(case_header_value)
+                    .unwrap_or_else(|| expression_value(&expression.expression)),
+                SignItem::FeatureExpression(expression) => format!(
+                    "FeatureExpression(dim={:?},name={:?},value={})",
+                    expression.dim,
+                    expression.name,
+                    expression_value(&expression.expression)
+                ),
+                SignItem::RoleExpression(expression) => format!(
+                    "RoleExpression(name={:?},value={})",
+                    expression.name,
+                    expression_value(&expression.expression)
+                ),
+                SignItem::Constraint(constraint) => constraint_value(constraint),
                 item => format!("{item:?}"),
             }
         }
@@ -2980,8 +4005,110 @@ fn debug_value(language: &Language, entry: &NodeEntryV1) -> String {
                         .ok()
                         .and_then(|value| value.branches.get(*index))
                 ),
+                Some(AddressSegment::CaseExpression) => case_at(language, &entry.address)
+                    .map(case_header_value)
+                    .unwrap_or_else(|| "<unavailable>".to_owned()),
+                Some(AddressSegment::CaseBranches(_)) => case_branch_at(language, &entry.address)
+                    .map(case_branch_value)
+                    .unwrap_or_else(|_| "<unavailable>".to_owned()),
+                Some(AddressSegment::CaseResult) => match entry.kind {
+                    NodeKind::Application => application_at(language, &entry.address)
+                        .map(application_value)
+                        .unwrap_or_else(|_| "<unavailable>".to_owned()),
+                    NodeKind::Case => case_at(language, &entry.address)
+                        .map(case_header_value)
+                        .unwrap_or_else(|| "<unavailable>".to_owned()),
+                    _ => "<unavailable>".to_owned(),
+                },
+                Some(AddressSegment::ApplicationArguments(_)) => {
+                    application_at(language, &entry.address)
+                        .map(application_value)
+                        .unwrap_or_else(|_| "<unavailable>".to_owned())
+                }
                 _ => "<unavailable>".to_owned(),
             }
         }
+    }
+}
+
+fn constraint_value(constraint: &BinaryConstraint) -> String {
+    format!(
+        "Constraint(predicate={:?},left={:?},right={:?})",
+        constraint.predicate, constraint.left, constraint.right
+    )
+}
+
+fn case_header_value(case: &TypedCase) -> String {
+    format!(
+        "Case(expected={:?},scrutinee={:?})",
+        case.expected, case.scrutinee
+    )
+}
+
+fn case_branch_value(branch: &CaseBranch) -> String {
+    let result = expression_structure_value(&branch.result);
+    format!(
+        "CaseBranch(condition={:?},belongs={:?},result={result})",
+        branch.condition, branch.belongs
+    )
+}
+
+fn expression_structure_value(expression: &Expression) -> String {
+    match expression {
+        Expression::SignApplication(_) => "node(Application)".to_owned(),
+        Expression::PhonInterpolation(_) => "PhonInterpolation(node(Application))".to_owned(),
+        Expression::Projection { value, dimension } => format!(
+            "Projection({dimension:?},{})",
+            expression_structure_value(value)
+        ),
+        Expression::Case(_) => "node(Case)".to_owned(),
+        _ => expression_value(expression),
+    }
+}
+
+fn application_value(application: &SignApplication) -> String {
+    let arguments = application
+        .arguments
+        .iter()
+        .map(|argument| {
+            let value = match &argument.value {
+                SignArgumentValue::SelfSign => "$self".to_owned(),
+                SignArgumentValue::Slot(slot) => format!("slot({slot:?})"),
+                SignArgumentValue::Application(_) => "node(Application)".to_owned(),
+            };
+            format!("{:?}={value}", argument.name)
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "Application(callee={:?},arguments=[{arguments}])",
+        application.callee
+    )
+}
+
+fn expression_value(expression: &Expression) -> String {
+    match expression {
+        Expression::SignApplication(application) => application_value(application),
+        Expression::PhonInterpolation(application) => {
+            format!("PhonInterpolation({})", application_value(application))
+        }
+        Expression::Projection { value, dimension } => {
+            format!("Projection({dimension:?},{})", expression_value(value))
+        }
+        Expression::PhonTemplate(value) => format!("PhonTemplate({value:?})"),
+        Expression::EnumValue(value) => format!("EnumValue({value:?})"),
+        Expression::SelfSign => "$self".to_owned(),
+        Expression::Slot(value) => format!("slot({value:?})"),
+        Expression::Case(case) => case_header_value(case),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_anchor_variants_are_distinct() {
+        assert_ne!(Anchor::Start, Anchor::End);
     }
 }

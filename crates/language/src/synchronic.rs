@@ -5,7 +5,10 @@
 use crate::construction::{slots_of, FillerSnapshot};
 use crate::ontology::OntologyRegistry;
 use crate::path::parse_path;
-use crate::{Def, Dim, RuleId, RuleNamespace, SignDef, SignItem, Slot, SourceLocation};
+use crate::{
+    CaseCondition, Def, Dim, Expression, RuleId, RuleNamespace, SignDef, SignItem, Slot,
+    SourceLocation,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleStatus {
@@ -946,6 +949,125 @@ pub fn run_sign_dim_rules(
 ) -> (SignDef, Vec<RuleRecord>) {
     let slots = slots_of(sign);
     run_dim_rules(sign, dim, registry, &[], &slots)
+}
+
+/// Evaluate V2 enum-valued cases on a stored Sign.  Construction occurrence
+/// evaluation uses this same transition after each dimension's ordinary
+/// rules, so a Sign behaves identically whether evaluated directly or used as
+/// a filler.  The function is deliberately dimension-local and never writes
+/// another pole.
+pub(crate) fn run_sign_feature_expressions(
+    sign: &SignDef,
+    dim: Dim,
+    registry: &OntologyRegistry,
+) -> Result<SignDef, String> {
+    fn scalar(sign: &SignDef, path: &str, registry: &OntologyRegistry) -> Option<String> {
+        let path = path.strip_prefix("$self.").unwrap_or(path);
+        let (dimension, _) = path.split_once('.')?;
+        let dimension = Dim::parse(dimension)?;
+        sign.project(dimension, registry)
+            .defs
+            .into_iter()
+            .rev()
+            .find(|(candidate, _)| candidate == path)
+            .map(|(_, value)| value)
+    }
+
+    let expressions = sign
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SignItem::FeatureExpression(expression) if expression.dim == dim => {
+                Some(expression.clone())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut current = sign.clone();
+    for expression in expressions {
+        let declaration = current.items.iter().rev().find_map(|item| match item {
+            SignItem::FeatureDecl(declaration)
+                if declaration.dim == dim && declaration.name == expression.name =>
+            {
+                Some(declaration)
+            }
+            _ => None,
+        });
+        let Some(declaration) = declaration else {
+            return Err(format!(
+                "FEATURE_EXPRESSION_UNDECLARED: {}.{}",
+                dim.keyword(),
+                expression.name
+            ));
+        };
+        let Expression::Case(case) = &expression.expression else {
+            return Err(format!(
+                "FEATURE_EXPRESSION_NOT_CASE: {}.{}",
+                dim.keyword(),
+                expression.name
+            ));
+        };
+        let mut selected = None;
+        for branch in &case.branches {
+            let matched = match &branch.condition {
+                CaseCondition::Else => true,
+                CaseCondition::Guard(guard) => {
+                    let (status, _, _, error) = evaluate_sign_guard(&current, guard, registry);
+                    match status {
+                        RuleStatus::Matched => true,
+                        RuleStatus::Unmatched => false,
+                        RuleStatus::Error => {
+                            return Err(error.unwrap_or_else(|| {
+                                format!("CASE_GUARD_ERROR: guard {guard:?} failed")
+                            }))
+                        }
+                    }
+                }
+                CaseCondition::Equals(expected) => {
+                    let scrutinee = case.scrutinee.as_deref().ok_or_else(|| {
+                        "CASE_SCRUTINEE_MISSING: equality case has no scrutinee".to_owned()
+                    })?;
+                    scalar(&current, scrutinee, registry).as_deref() == Some(expected.as_str())
+                }
+            };
+            if !matched {
+                continue;
+            }
+            let Expression::EnumValue(value) = &branch.result else {
+                return Err(format!(
+                    "CASE_BRANCH_TYPE_MISMATCH: {}.{} must return an enum value",
+                    dim.keyword(),
+                    expression.name
+                ));
+            };
+            if !declaration.values.contains(value) {
+                return Err(format!(
+                    "FEATURE_EXPRESSION_VALUE_OUT_OF_DOMAIN: {value:?} is outside enum({})",
+                    declaration.values.join(", ")
+                ));
+            }
+            selected = Some(value.clone());
+            break;
+        }
+        if let Some(value) = selected {
+            current = Patch::for_dim(dim)
+                .set(&expression.name, &value)
+                .apply(&current);
+        } else if scalar(
+            &current,
+            &format!("{}.{}", dim.keyword(), expression.name),
+            registry,
+        )
+        .is_none()
+        {
+            return Err(format!(
+                "CASE_DEFAULT_MISSING: {}.{} has no matching branch and no base value",
+                dim.keyword(),
+                expression.name
+            ));
+        }
+    }
+    Ok(current)
 }
 
 fn token_sign(token: &crate::construction::DerivedToken) -> SignDef {

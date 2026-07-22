@@ -3,8 +3,8 @@
 
 use crate::codegen::{self, Artifacts, CodegenError};
 use crate::construction::{
-    self, BoundFiller, CxgError, DerivedToken, Filler, OccurrenceRecord, SlotFiller, SlotMap,
-    SlotMapOp,
+    self, BoundFiller, CxgError, DerivedToken, FillerProvenance, OccurrenceRecord, SlotFiller,
+    SlotMap, SlotMapOp,
 };
 use crate::diagnostic::{Diagnostic, DiagnosticSource, Severity, SourceLocation, ValidationReport};
 use crate::library::{self, LibraryId, LibraryLoadError, LibrarySpec};
@@ -42,6 +42,8 @@ pub enum SystemError {
     PhonRuntime(String),
     #[error("derivation feature {dim:?}.{name} is undeclared")]
     UndeclaredDerivationFeature { dim: Dim, name: String },
+    #[error("typed features are not supported in the {dim:?} dimension")]
+    UnsupportedFeatureDimension { dim: Dim },
     #[error("derivation feature {dim:?}.{name} value {value:?} is outside enum({domain})")]
     DerivationFeatureOutOfDomain {
         dim: Dim,
@@ -69,14 +71,53 @@ pub enum SystemError {
         category: String,
         candidates: Vec<String>,
     },
+    #[error("NO_MATCHING_CONSTRUCTION: category {category:?} has no compatible candidate")]
+    NoMatchingConstruction { category: String },
     #[error("unknown candidate {0}")]
     UnknownCandidate(SignId),
     #[error("all candidate entrenchment weights are zero")]
     ZeroCandidateWeight,
     #[error("invalid Sign expression: {0}")]
     InvalidSignExpression(String),
+    #[error("CASE_DEFAULT_MISSING: {context} has no matching branch and no base value")]
+    CaseDefaultMissing { context: String },
     #[error("Sign application cycle: {0:?}")]
     SignApplicationCycle(Vec<String>),
+}
+
+/// Errors in this closed list mean that a matched case branch attempted a
+/// more-specific Sign application whose hard typed constraints cannot be
+/// satisfied by the current value. They may fall through to the next branch;
+/// malformed grammar, unknown paths, evaluator failures, and purity errors
+/// must remain fatal and therefore do not belong here.
+fn is_case_blocking_constraint(error: &SystemError) -> bool {
+    matches!(
+        error,
+        SystemError::UndeclaredDerivationFeature { .. }
+            | SystemError::DerivationFeatureOutOfDomain { .. }
+            | SystemError::DerivationFeatureConflict { .. }
+            | SystemError::Construction(
+                CxgError::CategoryMismatch { .. }
+                    | CxgError::ResidualConstraintConflict { .. }
+                    | CxgError::MissingRoles { .. }
+                    | CxgError::RoleCategoryMismatch { .. }
+                    | CxgError::SlotFeatureUndeclared { .. }
+                    | CxgError::SlotFeatureSourceMissing { .. }
+                    | CxgError::SlotFeatureOutOfDomain { .. }
+                    | CxgError::SlotFeatureConflict { .. }
+                    | CxgError::ConstraintDomainMismatch { .. }
+                    | CxgError::ConstraintEqualityConflict { .. }
+                    | CxgError::ConstraintOrderConflict { .. }
+            )
+    )
+}
+
+fn is_candidate_compatibility_mismatch(error: &SystemError) -> bool {
+    is_case_blocking_constraint(error)
+        || matches!(
+            error,
+            SystemError::Construction(CxgError::UnknownSlot { .. } | CxgError::Unsaturated(_))
+        )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -125,12 +166,21 @@ pub struct PhonRealization {
     pub source: SourceLocation,
     pub slot_reads: Vec<SlotRead>,
     pub self_reads: Vec<SelfRead>,
+    /// Typed phon cases, including recursively evaluated branches.
+    pub cases: Vec<CaseRecord>,
+    /// Rules executed by nested full-Sign applications used by phon projection.
+    pub nested_rules: Vec<UnitRuleRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignEvaluation {
     pub sign: SignDef,
     pub records: Vec<RuleRecord>,
+    /// Unevaluated local source used when a Sign-valued case adds a trait.
+    /// Keeping it separate prevents inherited rules from being replayed over
+    /// values already committed by an earlier Syn -> Sem -> Prag pass.
+    source_sign: SignDef,
+    context: DerivationContext,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,28 +189,16 @@ pub enum SignValue {
     Applied(DerivedToken),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PartialSign {
-    token: DerivedToken,
-}
-
-impl PartialSign {
-    pub fn token(&self) -> &DerivedToken {
-        &self.token
-    }
-
-    pub fn parameters(&self) -> Vec<crate::SignParameter> {
-        self.token
-            .residual_slots()
-            .iter()
-            .map(crate::SignParameter::from)
-            .collect()
-    }
-}
-
 impl SignValue {
-    pub fn is_partial(&self) -> bool {
-        matches!(self, Self::Applied(token) if !token.is_saturated())
+    /// Saturation is a state of a Sign value, never a separate entity type.
+    pub fn is_saturated(&self) -> bool {
+        self.residual_parameters()
+            .iter()
+            .all(|parameter| parameter.optional)
+    }
+
+    pub fn has_free_variables(&self) -> bool {
+        !self.is_saturated()
     }
 
     pub fn residual_parameters(&self) -> Vec<crate::SignParameter> {
@@ -181,11 +219,9 @@ impl SignValue {
         }
     }
 
-    pub fn partial(&self) -> Option<PartialSign> {
+    pub fn token(&self) -> Option<&DerivedToken> {
         match self {
-            Self::Applied(token) if !token.is_saturated() => Some(PartialSign {
-                token: token.clone(),
-            }),
+            Self::Applied(token) => Some(token),
             _ => None,
         }
     }
@@ -254,6 +290,8 @@ pub struct SystemDerivation {
     pub diagnostics: Vec<Diagnostic>,
     pub realization: PhonRealization,
     pub occurrences: Vec<OccurrenceRecord>,
+    /// Typed feature/role/Sign cases in their committed evaluation order.
+    pub cases: Vec<CaseRecord>,
 }
 
 #[derive(Debug, Clone)]
@@ -392,6 +430,17 @@ fn validate_typed_schemas(
     registry: &OntologyRegistry,
     report: &mut ValidationReport,
 ) {
+    fn expression_leaves<'a>(expression: &'a Expression, output: &mut Vec<&'a Expression>) {
+        match expression {
+            Expression::Case(case) => {
+                for branch in &case.branches {
+                    expression_leaves(&branch.result, output);
+                }
+            }
+            expression => output.push(expression),
+        }
+    }
+
     fn slot_feature_read(value: &str) -> Option<(&str, &str)> {
         let mut parts = value.split('.');
         match (
@@ -551,6 +600,31 @@ fn validate_typed_schemas(
     }));
 
     for (owner, effective) in candidates {
+        for item in &effective.items {
+            let dim = match item {
+                SignItem::FeatureDecl(feature) => Some(feature.dim),
+                SignItem::FeatureValue(feature) => Some(feature.dim),
+                SignItem::FeatureExpression(feature) => Some(feature.dim),
+                _ => None,
+            };
+            if let Some(dim @ (Dim::Phon | Dim::Prag)) = dim {
+                report.push(
+                    Diagnostic::new(
+                        Severity::Error,
+                        "FEATURE_DIMENSION_UNSUPPORTED",
+                        format!(
+                            "{owner:?} declares or writes a typed feature in unsupported {} dimension",
+                            dim.keyword()
+                        ),
+                    )
+                    .with_sources(vec![DiagnosticSource {
+                        owner: owner.clone(),
+                        path: Some(format!("{}.feature", dim.keyword())),
+                        location: SourceLocation::unknown(),
+                    }]),
+                );
+            }
+        }
         let slots = construction::slots_of(&effective);
         let declarations = effective
             .items
@@ -774,6 +848,68 @@ fn validate_typed_schemas(
                 Some(_) => {}
             }
         }
+        for expression in effective.items.iter().filter_map(|item| match item {
+            SignItem::FeatureExpression(expression) => Some(expression),
+            _ => None,
+        }) {
+            let key = (expression.dim, expression.name.clone());
+            let Some(declaration) = declarations.get(&key) else {
+                report.push(
+                    Diagnostic::new(
+                        Severity::Error,
+                        "FEATURE_EXPRESSION_UNDECLARED",
+                        format!(
+                            "{owner:?} assigns undeclared {} feature {:?} with a typed case",
+                            expression.dim.keyword(),
+                            expression.name
+                        ),
+                    )
+                    .with_sources(vec![DiagnosticSource {
+                        owner: owner.clone(),
+                        path: Some(format!("{}.{}", expression.dim.keyword(), expression.name)),
+                        location: expression.source,
+                    }]),
+                );
+                continue;
+            };
+            let Expression::Case(_) = &expression.expression else {
+                report.push(Diagnostic::new(
+                    Severity::Error,
+                    "FEATURE_EXPRESSION_NOT_CASE",
+                    format!("{owner:?} feature expression must contain a typed case"),
+                ));
+                continue;
+            };
+            let mut leaves = Vec::new();
+            expression_leaves(&expression.expression, &mut leaves);
+            for leaf in leaves {
+                if let Expression::EnumValue(value) = leaf {
+                    if !declaration.values.contains(value) {
+                        report.push(
+                            Diagnostic::new(
+                                Severity::Error,
+                                "FEATURE_EXPRESSION_VALUE_OUT_OF_DOMAIN",
+                                format!(
+                                    "{owner:?} feature case returns {value:?} outside enum({}) for {}.{}",
+                                    declaration.values.join(", "),
+                                    expression.dim.keyword(),
+                                    expression.name
+                                ),
+                            )
+                            .with_sources(vec![DiagnosticSource {
+                                owner: owner.clone(),
+                                path: Some(format!(
+                                    "{}.{}",
+                                    expression.dim.keyword(),
+                                    expression.name
+                                )),
+                                location: expression.source,
+                            }]),
+                        );
+                    }
+                }
+            }
+        }
         for rule in effective.items.iter().filter_map(|item| match item {
             SignItem::FeatureRule(rule) => Some(rule),
             _ => None,
@@ -853,6 +989,59 @@ fn validate_typed_schemas(
                 _ => None,
             })
             .collect::<BTreeMap<_, _>>();
+        for expression in effective.items.iter().filter_map(|item| match item {
+            SignItem::RoleExpression(expression) => Some(expression),
+            _ => None,
+        }) {
+            if !role_declarations.contains_key(&expression.name) {
+                report.push(
+                    Diagnostic::new(
+                        Severity::Error,
+                        "ROLE_EXPRESSION_UNDECLARED",
+                        format!(
+                            "{owner:?} assigns undeclared semantic role {:?} with a typed case",
+                            expression.name
+                        ),
+                    )
+                    .with_sources(vec![DiagnosticSource {
+                        owner: owner.clone(),
+                        path: Some(format!("sem.roles.{}", expression.name)),
+                        location: expression.source,
+                    }]),
+                );
+            }
+            let Expression::Case(_) = &expression.expression else {
+                report.push(Diagnostic::new(
+                    Severity::Error,
+                    "ROLE_EXPRESSION_NOT_CASE",
+                    format!("{owner:?} role expression must contain a typed case"),
+                ));
+                continue;
+            };
+            let mut leaves = Vec::new();
+            expression_leaves(&expression.expression, &mut leaves);
+            for leaf in leaves {
+                if let Expression::Slot(slot) = leaf {
+                    if !slots.iter().any(|candidate| &candidate.name == slot) {
+                        report.push(
+                            Diagnostic::new(
+                                Severity::Error,
+                                "ROLE_EXPRESSION_UNKNOWN_SLOT",
+                                format!(
+                                    "{owner:?} role {:?} case returns unknown slot {slot:?}",
+                                    expression.name
+                                ),
+                            )
+                            .with_sources(vec![DiagnosticSource {
+                                owner: owner.clone(),
+                                path: Some(format!("sem.roles.{}", expression.name)),
+                                location: expression.source,
+                            }]),
+                        );
+                    }
+                }
+            }
+        }
         for role in role_declarations.values() {
             if !registry.has(&role.constraint) {
                 report.push(
@@ -926,46 +1115,58 @@ fn validate_typed_schemas(
                     }
                 }
                 for branch in &case.branches {
-                    let template = match &branch.result {
-                        Expression::PhonTemplate(template) => template,
-                        Expression::PhonInterpolation(_) => continue,
-                        _ => {
+                    let mut pending = vec![&branch.result];
+                    while let Some(result) = pending.pop() {
+                        let template = match result {
+                            Expression::PhonTemplate(template) => template,
+                            Expression::PhonInterpolation(_) => continue,
+                            Expression::Case(nested) => {
+                                pending.extend(nested.branches.iter().map(|branch| &branch.result));
+                                continue;
+                            }
+                            _ => {
+                                report.push(Diagnostic::new(
+                                    Severity::Error,
+                                    "CASE_BRANCH_TYPE_MISMATCH",
+                                    format!("{owner:?} phon case branch does not return Phon"),
+                                ));
+                                continue;
+                            }
+                        };
+                        let inner = template
+                            .strip_prefix('/')
+                            .and_then(|value| value.strip_suffix('/'));
+                        if inner.is_none() {
                             report.push(Diagnostic::new(
                                 Severity::Error,
-                                "CASE_BRANCH_TYPE_MISMATCH",
-                                format!("{owner:?} phon case branch does not return Phon"),
+                                "REALIZATION_INVALID_TEMPLATE",
+                                format!(
+                                    "{owner:?} phon case must return a complete `/.../` template"
+                                ),
                             ));
                             continue;
                         }
-                    };
-                    let inner = template
-                        .strip_prefix('/')
-                        .and_then(|value| value.strip_suffix('/'));
-                    if inner.is_none() {
-                        report.push(Diagnostic::new(
-                            Severity::Error,
-                            "REALIZATION_INVALID_TEMPLATE",
-                            format!("{owner:?} phon case must return a complete `/.../` template"),
-                        ));
-                        continue;
-                    }
-                    match template_references(inner.unwrap()) {
-                        Ok(references) => {
-                            for reference in references {
-                                if !slots.iter().any(|slot| slot.name == reference) {
-                                    report.push(Diagnostic::new(
-                                        Severity::Error,
-                                        "REALIZATION_UNKNOWN_SLOT",
-                                        format!("{owner:?} realization refers to unknown slot {reference:?}"),
-                                    ));
+                        let Some(inner) = inner else {
+                            continue;
+                        };
+                        match template_references(inner) {
+                            Ok(references) => {
+                                for reference in references {
+                                    if !slots.iter().any(|slot| slot.name == reference) {
+                                        report.push(Diagnostic::new(
+                                            Severity::Error,
+                                            "REALIZATION_UNKNOWN_SLOT",
+                                            format!("{owner:?} realization refers to unknown slot {reference:?}"),
+                                        ));
+                                    }
                                 }
                             }
+                            Err(error) => report.push(Diagnostic::new(
+                                Severity::Error,
+                                "REALIZATION_INVALID_TEMPLATE",
+                                format!("{owner:?} realization template: {error}"),
+                            )),
                         }
-                        Err(error) => report.push(Diagnostic::new(
-                            Severity::Error,
-                            "REALIZATION_INVALID_TEMPLATE",
-                            format!("{owner:?} realization template: {error}"),
-                        )),
                     }
                 }
             }
@@ -999,7 +1200,10 @@ fn validate_typed_schemas(
                     ));
                     continue;
                 }
-                match template_references(inner.unwrap()) {
+                let Some(inner) = inner else {
+                    continue;
+                };
+                match template_references(inner) {
                     Ok(references) => {
                         for reference in references {
                             if !slots.iter().any(|slot| slot.name == reference) {
@@ -1145,12 +1349,36 @@ fn validate_fp_expressions(
                 application_and_nested(application, output);
             }
             Expression::Projection { value, .. } => applications(value, output),
-            Expression::Case(case) => {
-                for branch in &case.branches {
-                    applications(&branch.result, output);
-                }
-            }
+            // Nested cases are visited by the enclosing validation queue, so
+            // only inspect direct branch expressions here.
+            Expression::Case(_) => {}
             _ => {}
+        }
+    }
+
+    fn expression_matches_type(expression: &Expression, expected: &crate::ExpressionType) -> bool {
+        match (expression, expected) {
+            (Expression::SignApplication(_), crate::ExpressionType::Sign)
+            | (Expression::SelfSign, crate::ExpressionType::Sign)
+            | (Expression::PhonInterpolation(_), crate::ExpressionType::Phon)
+            | (Expression::PhonTemplate(_), crate::ExpressionType::Phon)
+            | (Expression::EnumValue(_), crate::ExpressionType::Feature { .. })
+            | (Expression::Slot(_), crate::ExpressionType::Role { .. }) => true,
+            (
+                Expression::Projection {
+                    value,
+                    dimension: crate::SignProjection::Phon,
+                },
+                crate::ExpressionType::Phon,
+            ) => matches!(value.as_ref(), Expression::SignApplication(_)),
+            (Expression::Case(nested), expected) => {
+                &nested.expected == expected
+                    && nested
+                        .branches
+                        .iter()
+                        .all(|branch| expression_matches_type(&branch.result, expected))
+            }
+            _ => false,
         }
     }
 
@@ -1175,22 +1403,69 @@ fn validate_fp_expressions(
     for local in &language.signs {
         let effective = registry.effective_sign(local);
         let local_parameters = construction::parameters_of(&effective);
+        let local_slots = construction::slots_of(&effective);
         let mut cases = effective
             .items
             .iter()
             .filter_map(|item| match item {
                 SignItem::SignExpression(expression) => match &expression.expression {
-                    Expression::Case(case) => Some(case.as_ref()),
+                    Expression::Case(case) => {
+                        Some((case.as_ref(), crate::ExpressionType::Sign, "sign"))
+                    }
                     _ => None,
                 },
-                SignItem::Realization(realization) => realization.expression.as_ref(),
+                SignItem::Realization(realization) => realization
+                    .expression
+                    .as_ref()
+                    .map(|case| (case, crate::ExpressionType::Phon, "phon.realization")),
+                SignItem::FeatureExpression(expression) => match &expression.expression {
+                    Expression::Case(case) => Some((
+                        case.as_ref(),
+                        crate::ExpressionType::Feature {
+                            dim: expression.dim,
+                            name: expression.name.clone(),
+                        },
+                        "feature",
+                    )),
+                    _ => None,
+                },
+                SignItem::RoleExpression(expression) => match &expression.expression {
+                    Expression::Case(case) => Some((
+                        case.as_ref(),
+                        crate::ExpressionType::Role {
+                            name: expression.name.clone(),
+                        },
+                        "sem.roles",
+                    )),
+                    _ => None,
+                },
                 _ => None,
             })
             .collect::<Vec<_>>();
-        for case in cases.drain(..) {
+        let mut case_index = 0;
+        while case_index < cases.len() {
+            let (case, site_type, site) = cases[case_index].clone();
+            case_index += 1;
+            if case.expected != site_type {
+                report.push(Diagnostic::new(
+                    Severity::Error,
+                    "CASE_CONTEXT_TYPE_MISMATCH",
+                    format!(
+                        "sign {:?} has {:?} case in {site} context expecting {:?}",
+                        local.name, case.expected, site_type
+                    ),
+                ));
+            }
             let mut saw_else = false;
             for branch in &case.branches {
                 if matches!(branch.condition, CaseCondition::Else) {
+                    if saw_else {
+                        report.push(Diagnostic::new(
+                            Severity::Error,
+                            "CASE_MULTIPLE_ELSE",
+                            format!("sign {:?} has more than one case else branch", local.name),
+                        ));
+                    }
                     saw_else = true;
                 } else if saw_else {
                     report.push(Diagnostic::new(
@@ -1198,6 +1473,57 @@ fn validate_fp_expressions(
                         "CASE_BRANCH_AFTER_ELSE",
                         format!("sign {:?} has a case branch after else", local.name),
                     ));
+                }
+                match &branch.condition {
+                    CaseCondition::Guard(guard) => {
+                        for conjunct in guard.split("&&").map(str::trim) {
+                            if let Err(error) = synchronic::validate_realization_guard(
+                                conjunct,
+                                registry,
+                                &local_slots,
+                            ) {
+                                report.push(
+                                    Diagnostic::new(
+                                        Severity::Error,
+                                        "CASE_INVALID_GUARD",
+                                        format!("sign {:?}: {error}", local.name),
+                                    )
+                                    .with_sources(vec![
+                                        DiagnosticSource {
+                                            owner: local.name.clone(),
+                                            path: Some(site.to_owned()),
+                                            location: branch.source,
+                                        },
+                                    ]),
+                                );
+                            }
+                        }
+                    }
+                    CaseCondition::Equals(category)
+                        if case
+                            .scrutinee
+                            .as_deref()
+                            .and_then(|value| value.split_once('.'))
+                            .is_some_and(|(_, projection)| projection == "phon")
+                            && !registry.has(category) =>
+                    {
+                        report.push(
+                            Diagnostic::new(
+                                Severity::Error,
+                                "CASE_UNKNOWN_CATEGORY",
+                                format!(
+                                    "sign {:?} case compares phon against unknown trait {category:?}",
+                                    local.name
+                                ),
+                            )
+                            .with_sources(vec![DiagnosticSource {
+                                owner: local.name.clone(),
+                                path: Some(site.to_owned()),
+                                location: branch.source,
+                            }]),
+                        );
+                    }
+                    CaseCondition::Equals(_) | CaseCondition::Else => {}
                 }
                 if !matches!(case.expected, crate::ExpressionType::Sign)
                     && !branch.belongs.is_empty()
@@ -1207,6 +1533,32 @@ fn validate_fp_expressions(
                         "CASE_BELONGS_TYPE_MISMATCH",
                         format!("sign {:?} uses belongs in a non-Sign case", local.name),
                     ));
+                }
+                if !expression_matches_type(&branch.result, &site_type) {
+                    report.push(
+                        Diagnostic::new(
+                            Severity::Error,
+                            "CASE_BRANCH_TYPE_MISMATCH",
+                            format!(
+                                "sign {:?} case in {site} returns {:?}, expected {:?}",
+                                local.name, branch.result, site_type
+                            ),
+                        )
+                        .with_sources(vec![DiagnosticSource {
+                            owner: local.name.clone(),
+                            path: Some(site.to_owned()),
+                            location: branch.source,
+                        }]),
+                    );
+                }
+                for category in &branch.belongs {
+                    if !registry.has(category) {
+                        report.push(Diagnostic::new(
+                            Severity::Error,
+                            "CASE_UNKNOWN_MEMBERSHIP",
+                            format!("sign {:?} case adds unknown trait {category:?}", local.name),
+                        ));
+                    }
                 }
                 let mut branch_calls = Vec::new();
                 applications(&branch.result, &mut branch_calls);
@@ -1286,6 +1638,9 @@ fn validate_fp_expressions(
                             }
                         }
                     }
+                }
+                if let Expression::Case(nested) = &branch.result {
+                    cases.push((nested.as_ref(), site_type.clone(), site));
                 }
             }
         }
@@ -1984,32 +2339,33 @@ impl CompiledSystem {
     }
 
     pub fn evaluate_sign(&self, name: &str) -> Result<SignEvaluation, SystemError> {
-        let local = self
-            .effective_language
-            .sign_named(name)
-            .ok_or_else(|| SystemError::UnknownSign(name.to_owned()))?;
-        let mut sign = self.ontology.effective_sign(local);
-        let mut records = Vec::new();
-        for dim in [Dim::Syn, Dim::Sem, Dim::Prag] {
-            let (next, pass) = synchronic::run_sign_dim_rules(&sign, dim, &self.ontology);
-            sign = next;
-            records.extend(pass);
-        }
-        Ok(SignEvaluation { sign, records })
+        self.evaluate_sign_with_context_internal(name, &DerivationContext::new())
+            .map(|(evaluation, _)| evaluation)
     }
 
-    pub fn evaluate_sign_with_context(
+    fn evaluate_sign_with_context_internal(
         &self,
         name: &str,
         context: &DerivationContext,
-    ) -> Result<SignEvaluation, SystemError> {
+    ) -> Result<(SignEvaluation, Vec<CaseRecord>), SystemError> {
         let local = self
             .effective_language
             .sign_named(name)
             .ok_or_else(|| SystemError::UnknownSign(name.to_owned()))?;
+        self.evaluate_source_sign_with_context(local, context)
+    }
+
+    fn evaluate_source_sign_with_context(
+        &self,
+        local: &SignDef,
+        context: &DerivationContext,
+    ) -> Result<(SignEvaluation, Vec<CaseRecord>), SystemError> {
         let mut sign = self.ontology.effective_sign(local);
         for ((dim, feature), value) in context.features() {
-            let declaration = sign.items.iter().find_map(|item| match item {
+            if !matches!(dim, Dim::Syn | Dim::Sem) {
+                return Err(SystemError::UnsupportedFeatureDimension { dim: *dim });
+            }
+            let declaration = sign.items.iter().rev().find_map(|item| match item {
                 SignItem::FeatureDecl(declaration)
                     if declaration.dim == *dim && declaration.name == *feature =>
                 {
@@ -2054,12 +2410,183 @@ impl CompiledSystem {
             }
         }
         let mut records = Vec::new();
+        let mut cases = Vec::new();
         for dim in [Dim::Syn, Dim::Sem, Dim::Prag] {
             let (next, pass) = synchronic::run_sign_dim_rules(&sign, dim, &self.ontology);
             sign = next;
             records.extend(pass);
+            sign = self.apply_sign_feature_expressions(sign, dim, &mut cases)?;
         }
-        Ok(SignEvaluation { sign, records })
+        Self::check_sign_context(&sign, context, &self.ontology)?;
+        Ok((
+            SignEvaluation {
+                sign,
+                records,
+                source_sign: local.clone(),
+                context: context.clone(),
+            },
+            cases,
+        ))
+    }
+
+    pub fn evaluate_sign_with_context(
+        &self,
+        name: &str,
+        context: &DerivationContext,
+    ) -> Result<SignEvaluation, SystemError> {
+        self.evaluate_sign_with_context_internal(name, context)
+            .map(|(evaluation, _)| evaluation)
+    }
+
+    fn case_condition_matches(
+        &self,
+        value: &SignValue,
+        case: &TypedCase,
+        condition: &CaseCondition,
+    ) -> Result<bool, SystemError> {
+        match condition {
+            CaseCondition::Else => Ok(true),
+            CaseCondition::Guard(guard) => self.case_guard_matches(value, guard),
+            CaseCondition::Equals(expected) => self.case_equals_matches(
+                value,
+                case.scrutinee.as_deref().ok_or_else(|| {
+                    SystemError::InvalidSignExpression(
+                        "equality case is missing its scrutinee".to_owned(),
+                    )
+                })?,
+                expected,
+            ),
+        }
+    }
+
+    fn apply_sign_feature_expressions(
+        &self,
+        mut sign: SignDef,
+        dim: Dim,
+        records: &mut Vec<CaseRecord>,
+    ) -> Result<SignDef, SystemError> {
+        let expressions = sign
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                SignItem::FeatureExpression(expression) if expression.dim == dim => {
+                    Some(expression.clone())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for expression in expressions {
+            let Expression::Case(case) = &expression.expression else {
+                return Err(SystemError::InvalidSignExpression(format!(
+                    "{}.{} feature expression must be a typed case",
+                    dim.keyword(),
+                    expression.name
+                )));
+            };
+            let declaration = sign.items.iter().rev().find_map(|item| match item {
+                SignItem::FeatureDecl(declaration)
+                    if declaration.dim == dim && declaration.name == expression.name =>
+                {
+                    Some(declaration)
+                }
+                _ => None,
+            });
+            let Some(declaration) = declaration else {
+                return Err(SystemError::UndeclaredDerivationFeature {
+                    dim,
+                    name: expression.name.clone(),
+                });
+            };
+            let current = SignValue::Stored(SignEvaluation {
+                sign: sign.clone(),
+                records: Vec::new(),
+                source_sign: sign.clone(),
+                context: DerivationContext::new(),
+            });
+            let base = Self::scalar_from_value(
+                &current,
+                &format!("{}.{}", dim.keyword(), expression.name),
+            )
+            .map(str::to_owned);
+            let selected = self.evaluate_feature_case(
+                &current,
+                case,
+                dim,
+                &expression.name,
+                &declaration.values,
+                base,
+                records,
+            )?;
+            if let Some(value) = selected {
+                sign = synchronic::Patch::for_dim(dim)
+                    .set(&expression.name, &value)
+                    .apply(&sign);
+            } else {
+                return Err(SystemError::CaseDefaultMissing {
+                    context: format!("{}.{}", dim.keyword(), expression.name),
+                });
+            }
+        }
+        Ok(sign)
+    }
+
+    fn evaluate_feature_case(
+        &self,
+        current: &SignValue,
+        case: &TypedCase,
+        dim: Dim,
+        name: &str,
+        domain: &[String],
+        base: Option<String>,
+        records: &mut Vec<CaseRecord>,
+    ) -> Result<Option<String>, SystemError> {
+        for (index, branch) in case.branches.iter().enumerate() {
+            if !self.case_condition_matches(current, case, &branch.condition)? {
+                records.push(CaseRecord {
+                    branch: index,
+                    status: CaseBranchStatus::Unmatched,
+                    source: branch.source,
+                    diagnostic_code: None,
+                });
+                continue;
+            }
+            let value = match &branch.result {
+                Expression::EnumValue(value) => Some(value.clone()),
+                Expression::Case(nested) => self.evaluate_feature_case(
+                    current,
+                    nested,
+                    dim,
+                    name,
+                    domain,
+                    base.clone(),
+                    records,
+                )?,
+                _ => {
+                    return Err(SystemError::InvalidSignExpression(format!(
+                        "feature case {}.{name} returned a non-enum expression",
+                        dim.keyword()
+                    )))
+                }
+            };
+            if let Some(value) = &value {
+                if !domain.contains(value) {
+                    return Err(SystemError::DerivationFeatureOutOfDomain {
+                        dim,
+                        name: name.to_owned(),
+                        value: value.clone(),
+                        domain: domain.join(", "),
+                    });
+                }
+            }
+            records.push(CaseRecord {
+                branch: index,
+                status: CaseBranchStatus::Matched,
+                source: branch.source,
+                diagnostic_code: None,
+            });
+            return Ok(value);
+        }
+        Ok(base)
     }
 
     fn case_guard_matches(&self, value: &SignValue, guard: &str) -> Result<bool, SystemError> {
@@ -2158,11 +2685,77 @@ impl CompiledSystem {
         Ok(Self::scalar_from_value(value, scrutinee) == Some(expected))
     }
 
+    fn contextual_base_sign(&self, evaluation: &SignEvaluation) -> Result<SignDef, SystemError> {
+        let mut base = self.ontology.effective_sign(&evaluation.source_sign);
+        for ((dim, name), value) in evaluation.context.features() {
+            if !matches!(dim, Dim::Syn | Dim::Sem) {
+                return Err(SystemError::UnsupportedFeatureDimension { dim: *dim });
+            }
+            let declaration = base.items.iter().rev().find_map(|item| match item {
+                SignItem::FeatureDecl(feature) if feature.dim == *dim && feature.name == *name => {
+                    Some(feature)
+                }
+                _ => None,
+            });
+            let Some(declaration) = declaration else {
+                return Err(SystemError::UndeclaredDerivationFeature {
+                    dim: *dim,
+                    name: name.clone(),
+                });
+            };
+            if !declaration.values.contains(value) {
+                return Err(SystemError::DerivationFeatureOutOfDomain {
+                    dim: *dim,
+                    name: name.clone(),
+                    value: value.clone(),
+                    domain: declaration.values.join(", "),
+                });
+            }
+            let path = format!("{}.{}", dim.keyword(), name);
+            let actual = base
+                .project(*dim, &self.ontology)
+                .defs
+                .iter()
+                .find(|(candidate, _)| candidate == &path)
+                .map(|(_, actual)| actual.clone());
+            match actual.as_deref() {
+                Some(actual) if actual != value => {
+                    return Err(SystemError::DerivationFeatureConflict {
+                        dim: *dim,
+                        name: name.clone(),
+                        expected: value.clone(),
+                        actual: actual.to_owned(),
+                    })
+                }
+                Some(_) => {}
+                None => {
+                    base = synchronic::Patch::for_dim(*dim)
+                        .set(name, value)
+                        .apply(&base);
+                }
+            }
+        }
+        Ok(base)
+    }
+
+    fn bound_filler_from_value(&self, value: &SignValue) -> Result<BoundFiller, SystemError> {
+        match value {
+            SignValue::Stored(evaluation) => Ok(BoundFiller::Owned {
+                committed: evaluation.sign.clone(),
+                base: self.contextual_base_sign(evaluation)?,
+                provenance: FillerProvenance::StoredSign(evaluation.source_sign.name.clone()),
+            }),
+            SignValue::Applied(token) => Ok(BoundFiller::Derived(Box::new(token.clone()))),
+        }
+    }
+
     fn apply_sign_application(
         &self,
         current: &SignValue,
         application: &SignApplication,
         stack: &[String],
+        rules: &mut Vec<UnitRuleRecord>,
+        cases: &mut Vec<CaseRecord>,
     ) -> Result<SignValue, SystemError> {
         if stack.iter().any(|name| name == &application.callee) {
             let mut cycle = stack.to_vec();
@@ -2175,7 +2768,8 @@ impl CompiledSystem {
             .ok_or_else(|| SystemError::UnknownSign(application.callee.clone()))?;
         let effective = self.ontology.effective_sign(local);
         let parameters = construction::parameters_of(&effective);
-        let mut bindings = Vec::<(String, Option<SignValue>)>::new();
+        let mut bindings = Vec::<(String, Option<BoundFiller>)>::new();
+        let mut application_mapping = SlotMap::identity();
         let mut next_stack = stack.to_vec();
         next_stack.push(application.callee.clone());
         for argument in &application.arguments {
@@ -2201,77 +2795,190 @@ impl CompiledSystem {
                 )));
             }
             let value = match &argument.value {
-                SignArgumentValue::SelfSign => Some(current.clone()),
+                SignArgumentValue::SelfSign => Some(self.bound_filler_from_value(current)?),
                 SignArgumentValue::Slot(slot) => match current {
-                    SignValue::Stored(_) => None,
-                    SignValue::Applied(token) => token
-                        .bound_fillers()
-                        .iter()
-                        .find(|(name, _)| name == slot)
-                        .map(|(_, filler)| match filler {
-                            BoundFiller::Stored(name) => {
-                                self.evaluate_sign(name).map(SignValue::Stored)
+                    SignValue::Stored(_) => {
+                        if slot != &name {
+                            application_mapping = application_mapping.rename(&name, slot);
+                        }
+                        None
+                    }
+                    SignValue::Applied(token) => {
+                        if let Some((_, filler)) = token
+                            .bound_fillers()
+                            .iter()
+                            .find(|(bound, _)| bound == slot)
+                        {
+                            Some(filler.clone())
+                        } else if token
+                            .residual_slots()
+                            .iter()
+                            .any(|parameter| parameter.name == *slot)
+                        {
+                            // A free variable from an already-applied Sign is
+                            // passed by alias, not silently replaced by the
+                            // callee's parameter name.
+                            if slot != &name {
+                                application_mapping = application_mapping.rename(&name, slot);
                             }
-                            BoundFiller::Owned(sign) => Ok(SignValue::Stored(SignEvaluation {
-                                sign: sign.clone(),
-                                records: Vec::new(),
-                            })),
-                            BoundFiller::Derived(token) => {
-                                Ok(SignValue::Applied((**token).clone()))
-                            }
-                        })
-                        .transpose()?,
+                            None
+                        } else {
+                            return Err(SystemError::InvalidSignExpression(format!(
+                                "unknown slot variable {slot:?} in applied Sign {:?}",
+                                token.construction
+                            )));
+                        }
+                    }
                 },
                 SignArgumentValue::Application(nested) => {
-                    Some(self.apply_sign_application(current, nested, &next_stack)?)
+                    let nested =
+                        self.apply_sign_application(current, nested, &next_stack, rules, cases)?;
+                    Some(self.bound_filler_from_value(&nested)?)
                 }
             };
             bindings.push((name, value));
         }
 
-        let mut runtime = self.effective_language.clone();
-        let mut owned_names = Vec::with_capacity(bindings.len());
-        let mut owned_signs = Vec::new();
-        for (index, (_, value)) in bindings.iter().enumerate() {
-            if let Some(SignValue::Stored(evaluation)) = value {
-                let mut sign = evaluation.sign.clone();
-                sign.name = format!(
-                    "#application-{}-{index}-{}",
-                    application.callee,
-                    current.sign_id()
-                );
-                owned_names.push(Some(sign.name.clone()));
-                runtime.signs.push(sign.clone());
-                owned_signs.push(sign);
-            } else {
-                owned_names.push(None);
-            }
-        }
-        let fillers = bindings
-            .iter()
-            .zip(&owned_names)
-            .filter_map(|((name, value), owned_name)| {
-                let filler = match value.as_ref()? {
-                    SignValue::Stored(_) => Filler::Sign(owned_name.as_deref()?),
-                    SignValue::Applied(token) => Filler::Token(token),
-                };
-                Some(SlotFiller {
-                    slot: name.as_str(),
-                    filler,
-                })
-            })
+        let committed = bindings
+            .into_iter()
+            .filter_map(|(name, value)| value.map(|value| (name, value)))
             .collect::<Vec<_>>();
-        let mut token = construction::apply_with(
-            &runtime,
+        let mut token = construction::resume_with(
+            &self.effective_language,
             &self.ontology,
             &application.callee,
-            &fillers,
-            &SlotMap::identity(),
+            &committed,
+            &[],
+            &application_mapping,
         )?;
-        for sign in &owned_signs {
-            token.preserve_owned_filler(&sign.name, sign);
+        if let SignValue::Applied(source) = current {
+            let mut inherited_context = DerivationContext::new();
+            for ((dim, name), value) in source.context_features() {
+                inherited_context = inherited_context.feature(*dim, name.clone(), value.clone());
+            }
+            token = self.apply_context(token, &inherited_context)?;
         }
-        Ok(SignValue::Applied(token))
+        self.evaluate_applied_sign(token, &next_stack, rules, cases)
+    }
+
+    fn evaluate_applied_sign(
+        &self,
+        token: DerivedToken,
+        stack: &[String],
+        rules: &mut Vec<UnitRuleRecord>,
+        cases: &mut Vec<CaseRecord>,
+    ) -> Result<SignValue, SystemError> {
+        let expressions = token
+            .rule_sign
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                SignItem::SignExpression(expression) => Some(expression.expression.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let (token, token_rules, token_cases) = self.run_token_rules(token)?;
+        rules.extend(token_rules);
+        cases.extend(token_cases);
+        let mut value = SignValue::Applied(token);
+        for expression in expressions {
+            let Expression::Case(case) = expression else {
+                return Err(SystemError::InvalidSignExpression(
+                    "Sign body expression must return Sign".to_owned(),
+                ));
+            };
+            value = self.evaluate_sign_case(value, &case, cases, stack, rules)?;
+        }
+        Ok(value)
+    }
+
+    fn rebuild_applied_with_source(
+        &self,
+        source: &DerivedToken,
+        source_sign: SignDef,
+        stack: &[String],
+        rules: &mut Vec<UnitRuleRecord>,
+        cases: &mut Vec<CaseRecord>,
+    ) -> Result<SignValue, SystemError> {
+        let mut runtime = self.effective_language.clone();
+        if let Some(existing) = runtime
+            .signs
+            .iter_mut()
+            .find(|candidate| candidate.name == source_sign.name)
+        {
+            *existing = source_sign.clone();
+        } else {
+            runtime.signs.push(source_sign.clone());
+        }
+        let mut token = construction::resume_with(
+            &runtime,
+            &self.ontology,
+            &source_sign.name,
+            source.bound_fillers(),
+            &[],
+            source.invocation_mapping(),
+        )?;
+        let mut context = DerivationContext::new();
+        for ((dim, name), value) in source.context_features() {
+            context = context.feature(*dim, name.clone(), value.clone());
+        }
+        token = self.apply_context(token, &context)?;
+        let value = self.evaluate_applied_sign(token, stack, rules, cases)?;
+        if let SignValue::Applied(token) = &value {
+            Self::check_context(token, &context)?;
+        }
+        Ok(value)
+    }
+
+    fn apply_case_memberships(
+        &self,
+        result: SignValue,
+        memberships: &[String],
+        records: &mut Vec<CaseRecord>,
+        stack: &[String],
+        rules: &mut Vec<UnitRuleRecord>,
+    ) -> Result<SignValue, SystemError> {
+        if memberships.is_empty() {
+            return Ok(result);
+        }
+        for category in memberships {
+            if !self.ontology.has(category) {
+                return Err(SystemError::InvalidSignExpression(format!(
+                    "unknown branch membership {category:?}"
+                )));
+            }
+        }
+        match result {
+            SignValue::Stored(evaluation) => {
+                let mut source = evaluation.source_sign.clone();
+                for category in memberships {
+                    if !source
+                        .items
+                        .iter()
+                        .any(|item| matches!(item, SignItem::Belongs(value) if value == category))
+                    {
+                        source.items.push(SignItem::Belongs(category.clone()));
+                    }
+                }
+                let (evaluation, membership_cases) =
+                    self.evaluate_source_sign_with_context(&source, &evaluation.context)?;
+                records.extend(membership_cases);
+                Ok(SignValue::Stored(evaluation))
+            }
+            SignValue::Applied(token) => {
+                let mut source = token.source_sign().clone();
+                for category in memberships {
+                    if !source
+                        .items
+                        .iter()
+                        .any(|item| matches!(item, SignItem::Belongs(value) if value == category))
+                    {
+                        source.items.push(SignItem::Belongs(category.clone()));
+                    }
+                }
+                self.rebuild_applied_with_source(&token, source, stack, rules, records)
+            }
+        }
     }
 
     fn evaluate_sign_case(
@@ -2280,21 +2987,10 @@ impl CompiledSystem {
         case: &TypedCase,
         records: &mut Vec<CaseRecord>,
         stack: &[String],
+        rules: &mut Vec<UnitRuleRecord>,
     ) -> Result<SignValue, SystemError> {
         for (index, branch) in case.branches.iter().enumerate() {
-            let matches = match &branch.condition {
-                CaseCondition::Else => true,
-                CaseCondition::Guard(guard) => self.case_guard_matches(&current, guard)?,
-                CaseCondition::Equals(expected) => self.case_equals_matches(
-                    &current,
-                    case.scrutinee.as_deref().ok_or_else(|| {
-                        SystemError::InvalidSignExpression(
-                            "equality case is missing its scrutinee".to_owned(),
-                        )
-                    })?,
-                    expected,
-                )?,
-            };
+            let matches = self.case_condition_matches(&current, case, &branch.condition)?;
             if !matches {
                 records.push(CaseRecord {
                     branch: index,
@@ -2306,20 +3002,19 @@ impl CompiledSystem {
             }
             let result = match &branch.result {
                 Expression::SignApplication(application) => {
-                    self.apply_sign_application(&current, application, stack)
+                    self.apply_sign_application(&current, application, stack, rules, records)
                 }
                 Expression::SelfSign => Ok(current.clone()),
+                Expression::Case(nested) => {
+                    self.evaluate_sign_case(current.clone(), nested, records, stack, rules)
+                }
                 other => Err(SystemError::InvalidSignExpression(format!(
                     "Sign case returned non-Sign expression {other:?}"
                 ))),
             };
-            let mut result = match result {
+            let result = match result {
                 Ok(value) => value,
-                Err(SystemError::Construction(
-                    CxgError::CategoryMismatch { .. }
-                    | CxgError::ConstraintEqualityConflict { .. }
-                    | CxgError::ConstraintOrderConflict { .. },
-                )) => {
+                Err(error) if is_case_blocking_constraint(&error) => {
                     records.push(CaseRecord {
                         branch: index,
                         status: CaseBranchStatus::MoreSpecificBlocked,
@@ -2330,28 +3025,8 @@ impl CompiledSystem {
                 }
                 Err(error) => return Err(error),
             };
-            for category in &branch.belongs {
-                if !self.ontology.has(category) {
-                    return Err(SystemError::InvalidSignExpression(format!(
-                        "unknown branch membership {category:?}"
-                    )));
-                }
-                match &mut result {
-                    SignValue::Stored(evaluation) => {
-                        if !evaluation.sign.items.iter().any(
-                            |item| matches!(item, SignItem::Belongs(value) if value == category),
-                        ) {
-                            evaluation
-                                .sign
-                                .items
-                                .push(SignItem::Belongs(category.clone()));
-                        }
-                    }
-                    SignValue::Applied(token) => {
-                        token.add_membership(category.clone(), &self.ontology)
-                    }
-                }
-            }
+            let result =
+                self.apply_case_memberships(result, &branch.belongs, records, stack, rules)?;
             records.push(CaseRecord {
                 branch: index,
                 status: CaseBranchStatus::Matched,
@@ -2371,7 +3046,7 @@ impl CompiledSystem {
         name: &str,
         context: &DerivationContext,
     ) -> Result<SignExpressionEvaluation, SystemError> {
-        let evaluated = self.evaluate_sign_with_context(name, context)?;
+        let (evaluated, mut cases) = self.evaluate_sign_with_context_internal(name, context)?;
         let expressions = evaluated
             .sign
             .items
@@ -2381,8 +3056,13 @@ impl CompiledSystem {
                 _ => None,
             })
             .collect::<Vec<_>>();
+        // The context constrains the requested deep Sign. A Sign-valued case
+        // may return a different construction whose public feature shape is
+        // intentionally different (for example, an inflectional wrapper
+        // around `$self`), so the result need not re-export every feature.
+        Self::check_sign_context(&evaluated.sign, context, &self.ontology)?;
         let mut value = SignValue::Stored(evaluated);
-        let mut cases = Vec::new();
+        let mut rules = Vec::new();
         let stack = vec![name.to_owned()];
         for expression in expressions {
             let Expression::Case(case) = expression else {
@@ -2390,51 +3070,9 @@ impl CompiledSystem {
                     "Sign body expression must return Sign".to_owned(),
                 ));
             };
-            value = self.evaluate_sign_case(value, &case, &mut cases, &stack)?;
+            value = self.evaluate_sign_case(value, &case, &mut cases, &stack, &mut rules)?;
         }
         Ok(SignExpressionEvaluation { value, cases })
-    }
-
-    fn prepared_fillers<'a>(
-        &self,
-        construction: &str,
-        fillers: &[SlotFiller<'a>],
-        mapping: &SlotMap,
-    ) -> Result<(Language, Vec<UnitRuleRecord>), SystemError> {
-        let mut runtime = self.effective_language.clone();
-        let mut names: Vec<&str> = fillers
-            .iter()
-            .filter_map(|fill| match fill.filler {
-                Filler::Sign(name) => Some(name),
-                Filler::Token(_) => None,
-            })
-            .collect();
-        let local = self
-            .effective_language
-            .sign_named(construction)
-            .ok_or_else(|| CxgError::UnknownConstruction(construction.to_owned()))?;
-        let effective = self.ontology.effective_sign(local);
-        let effective_mapping = construction::slot_map_of(&effective).and(mapping);
-        for operation in effective_mapping.ops() {
-            if let SlotMapOp::AutoFill { filler, .. } = operation {
-                names.push(filler);
-            }
-        }
-        names.sort_unstable();
-        names.dedup();
-        let mut trace = Vec::new();
-        for name in names {
-            let evaluated = self.evaluate_sign(name)?;
-            let Some(slot) = runtime.signs.iter_mut().find(|sign| sign.name == name) else {
-                return Err(SystemError::UnknownSign(name.to_owned()));
-            };
-            *slot = evaluated.sign;
-            trace.extend(evaluated.records.into_iter().map(|record| UnitRuleRecord {
-                unit: name.to_owned(),
-                record,
-            }));
-        }
-        Ok((runtime, trace))
     }
 
     pub fn apply_construction<'a>(
@@ -2443,7 +3081,6 @@ impl CompiledSystem {
         fillers: &[SlotFiller<'a>],
         mapping: &SlotMap,
     ) -> Result<DerivedToken, SystemError> {
-        let _ = self.prepared_fillers(construction, fillers, mapping)?;
         construction::apply_with(
             &self.effective_language,
             &self.ontology,
@@ -2454,42 +3091,147 @@ impl CompiledSystem {
         .map_err(SystemError::from)
     }
 
-    /// Supply additional arguments to the same Sign function.  Previously
-    /// bound occurrences are replayed from immutable owned values; the
-    /// original PartialSign is never modified.
-    pub fn resume_partial<'a>(
+    fn apply_arguments_to_token<'a>(
         &self,
-        partial: &PartialSign,
+        source: &DerivedToken,
         additional: &[SlotFiller<'a>],
-    ) -> Result<SignValue, SystemError> {
-        let mut runtime = self.effective_language.clone();
-        for (_, filler) in partial.token.bound_fillers() {
-            if let BoundFiller::Owned(sign) = filler {
-                runtime.signs.push(sign.clone());
+    ) -> Result<DerivedToken, SystemError> {
+        let mut supplied = BTreeSet::new();
+        for filler in additional {
+            if !supplied.insert(filler.slot) {
+                return Err(SystemError::Construction(CxgError::DuplicateFill(
+                    filler.slot.to_owned(),
+                )));
             }
         }
-        let mut fillers = partial
-            .token
-            .bound_fillers()
+
+        let own_names = source
+            .own_residual_slots()
             .iter()
-            .map(|(slot, filler)| SlotFiller {
-                slot: slot.as_str(),
-                filler: match filler {
-                    BoundFiller::Stored(name) => Filler::Sign(name.as_str()),
-                    BoundFiller::Owned(sign) => Filler::Sign(sign.name.as_str()),
-                    BoundFiller::Derived(token) => Filler::Token(token),
-                },
-            })
+            .map(|slot| slot.name.as_str())
+            .collect::<BTreeSet<_>>();
+        let own_additional = additional
+            .iter()
+            .copied()
+            .filter(|filler| own_names.contains(filler.slot))
             .collect::<Vec<_>>();
-        fillers.extend(additional.iter().copied());
-        let token = construction::apply_with(
+        let mut consumed = own_additional
+            .iter()
+            .map(|filler| filler.slot)
+            .collect::<BTreeSet<_>>();
+
+        let mut rebound = source.bound_fillers().to_vec();
+        for (_, filler) in &mut rebound {
+            let BoundFiller::Derived(nested) = filler else {
+                continue;
+            };
+            let nested_names = nested
+                .residual_slots()
+                .iter()
+                .map(|slot| slot.name.as_str())
+                .collect::<BTreeSet<_>>();
+            let nested_additional = additional
+                .iter()
+                .copied()
+                .filter(|argument| nested_names.contains(argument.slot))
+                .collect::<Vec<_>>();
+            if nested_additional.is_empty() {
+                continue;
+            }
+            consumed.extend(nested_additional.iter().map(|argument| argument.slot));
+            **nested = self.apply_arguments_to_token(nested, &nested_additional)?;
+        }
+        if let Some(unknown) = additional
+            .iter()
+            .find(|filler| !consumed.contains(filler.slot))
+        {
+            return Err(SystemError::Construction(CxgError::UnknownSlot {
+                construction: source.construction.clone(),
+                slot: unknown.slot.to_owned(),
+            }));
+        }
+
+        let mut runtime = self.effective_language.clone();
+        if let Some(existing) = runtime
+            .signs
+            .iter_mut()
+            .find(|candidate| candidate.name == source.source_sign().name)
+        {
+            *existing = source.source_sign().clone();
+        } else {
+            runtime.signs.push(source.source_sign().clone());
+        }
+        let mut token = construction::resume_with(
             &runtime,
             &self.ontology,
-            &partial.token.construction,
-            &fillers,
-            partial.token.invocation_mapping(),
+            &source.construction,
+            &rebound,
+            &own_additional,
+            source.invocation_mapping(),
         )?;
-        Ok(SignValue::Applied(token))
+        let mut context = DerivationContext::new();
+        for ((dim, name), value) in source.context_features() {
+            context = context.feature(*dim, name.clone(), value.clone());
+        }
+        token = self.apply_context(token, &context)?;
+        let mut rules = Vec::new();
+        let mut cases = Vec::new();
+        let stack = vec![source.construction.clone()];
+        let value = self.evaluate_applied_sign(token, &stack, &mut rules, &mut cases)?;
+        let SignValue::Applied(token) = value else {
+            return Err(SystemError::InvalidSignExpression(
+                "supplying arguments must return an applied Sign".to_owned(),
+            ));
+        };
+        Self::check_context(&token, &context)?;
+        Ok(token)
+    }
+
+    /// Apply more named arguments to a Sign value. An unsaturated Sign stays
+    /// an ordinary Sign value with free variables and residual constraints;
+    /// the input value is immutable.
+    pub fn apply_arguments<'a>(
+        &self,
+        sign: &SignValue,
+        additional: &[SlotFiller<'a>],
+    ) -> Result<SignValue, SystemError> {
+        match sign {
+            SignValue::Stored(evaluation) => {
+                let mut runtime = self.effective_language.clone();
+                if let Some(existing) = runtime
+                    .signs
+                    .iter_mut()
+                    .find(|candidate| candidate.name == evaluation.sign.name)
+                {
+                    *existing = evaluation.source_sign.clone();
+                } else {
+                    runtime.signs.push(evaluation.source_sign.clone());
+                }
+                let mut token = construction::apply_with(
+                    &runtime,
+                    &self.ontology,
+                    &evaluation.sign.name,
+                    additional,
+                    &SlotMap::identity(),
+                )?;
+                token = self.apply_context(token, &evaluation.context)?;
+                let mut rules = Vec::new();
+                let mut cases = Vec::new();
+                let value = self.evaluate_applied_sign(
+                    token,
+                    std::slice::from_ref(&evaluation.sign.name),
+                    &mut rules,
+                    &mut cases,
+                )?;
+                if let SignValue::Applied(token) = &value {
+                    Self::check_context(token, &evaluation.context)?;
+                }
+                Ok(value)
+            }
+            SignValue::Applied(token) => self
+                .apply_arguments_to_token(token, additional)
+                .map(SignValue::Applied),
+        }
     }
 
     pub fn recontextualize_token(
@@ -2516,7 +3258,7 @@ impl CompiledSystem {
         }
         let token = token.reset_to_deep();
         let token = self.apply_context(token, &merged)?;
-        let (token, records) = self.run_token_rules(token);
+        let (token, records, _) = self.run_token_rules(token)?;
         Self::check_context(&token, &merged)?;
         Ok((
             token,
@@ -2524,17 +3266,62 @@ impl CompiledSystem {
         ))
     }
 
-    fn run_token_rules(&self, mut token: DerivedToken) -> (DerivedToken, Vec<UnitRuleRecord>) {
-        let mut trace = Vec::new();
-        for dim in [Dim::Syn, Dim::Sem, Dim::Prag] {
-            let (next, records) = synchronic::run_token_dim_rules(&token, dim, &self.ontology);
-            token = next;
-            trace.extend(records.into_iter().map(|record| UnitRuleRecord {
-                unit: token.construction.clone(),
+    fn run_token_rules(
+        &self,
+        token: DerivedToken,
+    ) -> Result<(DerivedToken, Vec<UnitRuleRecord>, Vec<CaseRecord>), SystemError> {
+        let unit = token.construction.clone();
+        let (token, records, occurrence_cases) =
+            construction::evaluate_token_pipeline(token, &self.ontology).map_err(|error| {
+                match error {
+                    construction::TokenExpressionError::UndeclaredFeature { dim, name } => {
+                        SystemError::UndeclaredDerivationFeature { dim, name }
+                    }
+                    construction::TokenExpressionError::FeatureOutOfDomain {
+                        dim,
+                        name,
+                        value,
+                        domain,
+                    } => SystemError::DerivationFeatureOutOfDomain {
+                        dim,
+                        name,
+                        value,
+                        domain,
+                    },
+                    construction::TokenExpressionError::CaseDefaultMissing { context } => {
+                        SystemError::CaseDefaultMissing { context }
+                    }
+                    construction::TokenExpressionError::Invalid(message) => {
+                        SystemError::InvalidSignExpression(message)
+                    }
+                    construction::TokenExpressionError::Construction(error) => {
+                        SystemError::Construction(error)
+                    }
+                }
+            })?;
+        let trace = records
+            .into_iter()
+            .map(|record| UnitRuleRecord {
+                unit: unit.clone(),
                 record,
-            }));
-        }
-        (token, trace)
+            })
+            .collect();
+        let cases = occurrence_cases
+            .into_iter()
+            .map(|record| CaseRecord {
+                branch: record.branch,
+                status: match record.status {
+                    construction::OccurrenceCaseStatus::Matched => CaseBranchStatus::Matched,
+                    construction::OccurrenceCaseStatus::Unmatched => CaseBranchStatus::Unmatched,
+                    construction::OccurrenceCaseStatus::MoreSpecificBlocked => {
+                        CaseBranchStatus::MoreSpecificBlocked
+                    }
+                },
+                source: record.source,
+                diagnostic_code: record.diagnostic_code,
+            })
+            .collect();
+        Ok((token, trace, cases))
     }
 
     fn token_feature<'a>(token: &'a DerivedToken, dim: Dim, name: &str) -> Option<&'a str> {
@@ -2555,12 +3342,22 @@ impl CompiledSystem {
         context: &DerivationContext,
     ) -> Result<DerivedToken, SystemError> {
         for ((dim, name), value) in context.features() {
-            let declaration = token.rule_sign.items.iter().find_map(|item| match item {
-                SignItem::FeatureDecl(feature) if feature.dim == *dim && feature.name == *name => {
-                    Some(feature)
-                }
-                _ => None,
-            });
+            if !matches!(dim, Dim::Syn | Dim::Sem) {
+                return Err(SystemError::UnsupportedFeatureDimension { dim: *dim });
+            }
+            let declaration = token
+                .rule_sign
+                .items
+                .iter()
+                .rev()
+                .find_map(|item| match item {
+                    SignItem::FeatureDecl(feature)
+                        if feature.dim == *dim && feature.name == *name =>
+                    {
+                        Some(feature)
+                    }
+                    _ => None,
+                });
             let Some(declaration) = declaration else {
                 return Err(SystemError::UndeclaredDerivationFeature {
                     dim: *dim,
@@ -2604,20 +3401,120 @@ impl CompiledSystem {
         Ok(output)
     }
 
-    fn check_context(token: &DerivedToken, context: &DerivationContext) -> Result<(), SystemError> {
+    fn check_sign_context(
+        sign: &SignDef,
+        context: &DerivationContext,
+        ontology: &OntologyRegistry,
+    ) -> Result<(), SystemError> {
         for ((dim, name), expected) in context.features() {
-            if let Some(actual) = Self::token_feature(token, *dim, name) {
-                if actual != expected {
-                    return Err(SystemError::DerivationFeatureConflict {
-                        dim: *dim,
-                        name: name.clone(),
-                        expected: expected.clone(),
-                        actual: actual.to_owned(),
-                    });
-                }
+            if !matches!(dim, Dim::Syn | Dim::Sem) {
+                return Err(SystemError::UnsupportedFeatureDimension { dim: *dim });
+            }
+            let path = format!("{}.{}", dim.keyword(), name);
+            let projection = sign.project(*dim, ontology);
+            let actual = projection
+                .defs
+                .iter()
+                .find(|(candidate, _)| candidate == &path)
+                .map(|(_, value)| value.as_str());
+            if actual != Some(expected.as_str()) {
+                return Err(SystemError::DerivationFeatureConflict {
+                    dim: *dim,
+                    name: name.clone(),
+                    expected: expected.clone(),
+                    actual: actual.unwrap_or("<missing>").to_owned(),
+                });
             }
         }
         Ok(())
+    }
+
+    fn check_context(token: &DerivedToken, context: &DerivationContext) -> Result<(), SystemError> {
+        for ((dim, name), expected) in context.features() {
+            if !matches!(dim, Dim::Syn | Dim::Sem) {
+                return Err(SystemError::UnsupportedFeatureDimension { dim: *dim });
+            }
+            let actual = Self::token_feature(token, *dim, name);
+            if actual != Some(expected.as_str()) {
+                return Err(SystemError::DerivationFeatureConflict {
+                    dim: *dim,
+                    name: name.clone(),
+                    expected: expected.clone(),
+                    actual: actual.unwrap_or("<missing>").to_owned(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn evaluate_phon_case(
+        &self,
+        token: &DerivedToken,
+        case: &TypedCase,
+        default: &str,
+        cases: &mut Vec<CaseRecord>,
+        nested_rules: &mut Vec<UnitRuleRecord>,
+    ) -> Result<(String, Option<usize>, SourceLocation), SystemError> {
+        let current = SignValue::Applied(token.clone());
+        for (index, branch) in case.branches.iter().enumerate() {
+            if !self.case_condition_matches(&current, case, &branch.condition)? {
+                cases.push(CaseRecord {
+                    branch: index,
+                    status: CaseBranchStatus::Unmatched,
+                    source: branch.source,
+                    diagnostic_code: None,
+                });
+                continue;
+            }
+            let input = match &branch.result {
+                Expression::PhonTemplate(template) => token.expand_phon_template(template)?,
+                Expression::PhonInterpolation(application) => {
+                    // `$self` inside its own phon projection denotes the
+                    // finalized deep Sign, not a recursive realization call.
+                    let projection_base = SignValue::Applied(token.as_phon_projection_base());
+                    let mut application_cases = Vec::new();
+                    let nested = self.apply_sign_application(
+                        &projection_base,
+                        application,
+                        std::slice::from_ref(&token.construction),
+                        nested_rules,
+                        &mut application_cases,
+                    )?;
+                    cases.extend(application_cases);
+                    let SignValue::Applied(nested) = nested else {
+                        return Err(SystemError::InvalidSignExpression(
+                            "phon projection did not produce an applied Sign".to_owned(),
+                        ));
+                    };
+                    if !nested.is_saturated() {
+                        return Err(SystemError::Construction(CxgError::Unsaturated(
+                            nested.missing_required(),
+                        )));
+                    }
+                    let realization = self.realize_phon(&nested)?;
+                    cases.extend(realization.cases);
+                    nested_rules.extend(realization.nested_rules);
+                    realization.input.into_inner()
+                }
+                Expression::Case(nested) => {
+                    self.evaluate_phon_case(token, nested, default, cases, nested_rules)?
+                        .0
+                }
+                other => {
+                    return Err(SystemError::InvalidSignExpression(format!(
+                        "phon case returned non-Phon expression {other:?}"
+                    )))
+                }
+            };
+            cases.push(CaseRecord {
+                branch: index,
+                status: CaseBranchStatus::Matched,
+                source: branch.source,
+                diagnostic_code: None,
+            });
+            return Ok((input, Some(index), branch.source));
+        }
+        Ok((default.to_owned(), None, SourceLocation::unknown()))
     }
 
     pub fn realize_phon(&self, token: &DerivedToken) -> Result<PhonRealization, SystemError> {
@@ -2626,42 +3523,27 @@ impl CompiledSystem {
             _ => None,
         });
         let mut selected = None;
-        let mut selected_expression = None;
         let mut slot_reads = Vec::new();
         let mut self_reads = Vec::new();
+        let mut cases = Vec::new();
+        let mut nested_rules = Vec::new();
+        let default = token.phon_form()?;
+        let mut typed = None;
         if let Some(realization) = realization {
             if let Some(case) = &realization.expression {
-                let value = SignValue::Applied(token.clone());
-                for (index, branch) in case.branches.iter().enumerate() {
-                    let matches = match &branch.condition {
-                        CaseCondition::Else => true,
-                        CaseCondition::Guard(guard) => self.case_guard_matches(&value, guard)?,
-                        CaseCondition::Equals(expected) => self.case_equals_matches(
-                            &value,
-                            case.scrutinee.as_deref().ok_or_else(|| {
-                                SystemError::InvalidSignExpression(
-                                    "phon case equality is missing its scrutinee".to_owned(),
-                                )
-                            })?,
-                            expected,
-                        )?,
-                    };
-                    if matches {
-                        selected_expression = Some((index, branch));
-                        break;
-                    }
-                }
+                typed = Some(self.evaluate_phon_case(
+                    token,
+                    case,
+                    &default,
+                    &mut cases,
+                    &mut nested_rules,
+                )?);
             }
-            for (index, branch) in
-                realization
-                    .branches
-                    .iter()
-                    .enumerate()
-                    .take(if selected_expression.is_none() {
-                        usize::MAX
-                    } else {
-                        0
-                    })
+            for (index, branch) in realization
+                .branches
+                .iter()
+                .enumerate()
+                .take(if typed.is_none() { usize::MAX } else { 0 })
             {
                 if let Some(guard) = &branch.guard {
                     let (status, slots, self_values, error) =
@@ -2688,38 +3570,8 @@ impl CompiledSystem {
                 }
             }
         }
-        let (input, branch, source) = if let Some((index, selected)) = selected_expression {
-            let input = match &selected.result {
-                Expression::PhonTemplate(template) => token.expand_phon_template(template)?,
-                Expression::PhonInterpolation(application) => {
-                    // `$self` inside its own phon projection denotes the
-                    // already-finalized deep Sign, not a request to enter the
-                    // same realization expression recursively.
-                    let current = SignValue::Applied(token.as_phon_projection_base());
-                    let nested = self.apply_sign_application(
-                        &current,
-                        application,
-                        std::slice::from_ref(&token.construction),
-                    )?;
-                    let SignValue::Applied(nested) = nested else {
-                        return Err(SystemError::InvalidSignExpression(
-                            "phon projection did not produce an applied Sign".to_owned(),
-                        ));
-                    };
-                    if !nested.is_saturated() {
-                        return Err(SystemError::Construction(CxgError::Unsaturated(
-                            nested.missing_required(),
-                        )));
-                    }
-                    self.realize_phon(&nested)?.input.into_inner()
-                }
-                other => {
-                    return Err(SystemError::InvalidSignExpression(format!(
-                        "phon case returned non-Phon expression {other:?}"
-                    )))
-                }
-            };
-            (input, Some(index), selected.source)
+        let (input, branch, source) = if let Some(result) = typed {
+            result
         } else if let Some((index, selected)) = selected {
             (
                 token.expand_phon_template(&selected.template)?,
@@ -2727,7 +3579,7 @@ impl CompiledSystem {
                 selected.source,
             )
         } else {
-            (token.phon_form()?, None, SourceLocation::unknown())
+            (default, None, SourceLocation::unknown())
         };
         if input.contains("$self")
             || input.contains("$slot")
@@ -2743,6 +3595,8 @@ impl CompiledSystem {
             source,
             slot_reads,
             self_reads,
+            cases,
+            nested_rules,
         })
     }
 
@@ -2800,14 +3654,42 @@ impl CompiledSystem {
                 fillers,
                 mapping,
             );
-            let Ok(token) = applied else {
-                // Slot/category/constraint incompatibility removes a
-                // candidate; it never grants another candidate an implicit
-                // priority win.
-                continue;
+            let token = match applied {
+                Ok(token) => token,
+                Err(error) => {
+                    let error = SystemError::Construction(error);
+                    if is_candidate_compatibility_mismatch(&error) {
+                        continue;
+                    }
+                    return Err(error);
+                }
             };
-            if self.apply_context(token, context).is_err() {
+            let token = match self.apply_context(token, context) {
+                Ok(token) => token,
+                Err(error) if is_candidate_compatibility_mismatch(&error) => continue,
+                Err(error) => return Err(error),
+            };
+            let mut rules = Vec::new();
+            let mut cases = Vec::new();
+            let stack = vec![sign.name.clone()];
+            let value = match self.evaluate_applied_sign(token, &stack, &mut rules, &mut cases) {
+                Ok(value) => value,
+                Err(error) if is_candidate_compatibility_mismatch(&error) => continue,
+                Err(error) => return Err(error),
+            };
+            let SignValue::Applied(token) = value else {
+                return Err(SystemError::InvalidSignExpression(format!(
+                    "candidate {:?} did not evaluate to an applied Sign",
+                    sign.name
+                )));
+            };
+            if !token.is_saturated() {
                 continue;
+            }
+            match Self::check_context(&token, context) {
+                Ok(()) => {}
+                Err(error) if is_candidate_compatibility_mismatch(&error) => continue,
+                Err(error) => return Err(error),
             }
             let entrenchment = effective
                 .items
@@ -2862,14 +3744,24 @@ impl CompiledSystem {
                     .ok_or_else(|| SystemError::UnknownCandidate(id.clone()))?
             }
             CandidateSelector::SampleEntrenchment { seed } => {
-                let total: f64 = candidates
+                // Normalize before summing. Individually finite weights can
+                // overflow when added (for example, 1e308 + 1e308), which
+                // would otherwise make every draw infinite and force the
+                // fallback candidate. Scaling preserves all weight ratios and
+                // bounds the total by the number of candidates.
+                let max_weight = candidates
                     .candidates
                     .iter()
                     .map(|candidate| candidate.entrenchment)
-                    .sum();
-                if total <= 0.0 {
+                    .fold(0.0_f64, f64::max);
+                if max_weight <= 0.0 {
                     return Err(SystemError::ZeroCandidateWeight);
                 }
+                let scaled_total: f64 = candidates
+                    .candidates
+                    .iter()
+                    .map(|candidate| candidate.entrenchment / max_weight)
+                    .sum();
                 // SplitMix64 is small, stable and entirely specified here;
                 // the exact draw is therefore replayable across platforms.
                 let mut state = seed.wrapping_add(0x9e3779b97f4a7c15);
@@ -2877,16 +3769,17 @@ impl CompiledSystem {
                 state = (state ^ (state >> 27)).wrapping_mul(0x94d049bb133111eb);
                 state ^= state >> 31;
                 let unit = (state >> 11) as f64 / ((1u64 << 53) as f64);
-                let mut draw = unit * total;
+                let mut draw = unit * scaled_total;
                 candidates
                     .candidates
                     .iter()
                     .filter(|candidate| candidate.entrenchment > 0.0)
                     .find(|candidate| {
-                        if draw < candidate.entrenchment {
+                        let scaled_weight = candidate.entrenchment / max_weight;
+                        if draw < scaled_weight {
                             true
                         } else {
-                            draw -= candidate.entrenchment;
+                            draw -= scaled_weight;
                             false
                         }
                     })
@@ -2897,7 +3790,7 @@ impl CompiledSystem {
                             .rev()
                             .find(|candidate| candidate.entrenchment > 0.0)
                     })
-                    .expect("positive total guarantees a candidate")
+                    .ok_or(SystemError::ZeroCandidateWeight)?
             }
         };
         Ok(CandidateSelectionTrace {
@@ -2922,7 +3815,12 @@ impl CompiledSystem {
         context: DerivationContext,
     ) -> Result<SystemDerivation, SystemError> {
         let candidates = self.derive_candidates(category, fillers, mapping, &context)?;
-        if candidates.candidates.len() != 1 {
+        if candidates.candidates.is_empty() {
+            return Err(SystemError::NoMatchingConstruction {
+                category: category.to_owned(),
+            });
+        }
+        if candidates.candidates.len() > 1 {
             return Err(SystemError::AmbiguousConstruction {
                 category: category.to_owned(),
                 candidates: candidates
@@ -2942,7 +3840,6 @@ impl CompiledSystem {
         mapping: &SlotMap,
         context: DerivationContext,
     ) -> Result<SystemDerivation, SystemError> {
-        let _ = self.prepared_fillers(construction, fillers, mapping)?;
         let mut token = construction::apply_with(
             &self.effective_language,
             &self.ontology,
@@ -2950,7 +3847,7 @@ impl CompiledSystem {
             fillers,
             mapping,
         )?;
-        let occurrences = token.take_occurrence_records();
+        let mut occurrences = token.take_occurrence_records();
         let mut rules = occurrences
             .iter()
             .flat_map(|occurrence| {
@@ -2965,12 +3862,66 @@ impl CompiledSystem {
             })
             .collect::<Vec<_>>();
         let token = self.apply_context(token, &context)?;
-        let (mut token, token_records) = self.run_token_rules(token);
-        rules.extend(token_records);
+        let mut cases = occurrences
+            .iter()
+            .flat_map(|occurrence| occurrence.cases.iter())
+            .map(|record| CaseRecord {
+                branch: record.branch,
+                status: match record.status {
+                    construction::OccurrenceCaseStatus::Matched => CaseBranchStatus::Matched,
+                    construction::OccurrenceCaseStatus::Unmatched => CaseBranchStatus::Unmatched,
+                    construction::OccurrenceCaseStatus::MoreSpecificBlocked => {
+                        CaseBranchStatus::MoreSpecificBlocked
+                    }
+                },
+                source: record.source,
+                diagnostic_code: record.diagnostic_code,
+            })
+            .collect::<Vec<_>>();
+        let stack = vec![construction.to_owned()];
+        let value = self.evaluate_applied_sign(token, &stack, &mut rules, &mut cases)?;
+        let SignValue::Applied(mut token) = value else {
+            return Err(SystemError::InvalidSignExpression(
+                "a saturated construction must evaluate to an applied Sign".to_owned(),
+            ));
+        };
         Self::check_context(&token, &context)?;
+        let final_occurrences = token.take_occurrence_records();
+        rules.extend(final_occurrences.iter().flat_map(|occurrence| {
+            occurrence
+                .committed_rules
+                .iter()
+                .cloned()
+                .map(|record| UnitRuleRecord {
+                    unit: occurrence.slot_path.clone(),
+                    record,
+                })
+        }));
+        cases.extend(
+            final_occurrences
+                .iter()
+                .flat_map(|occurrence| occurrence.cases.iter())
+                .map(|record| CaseRecord {
+                    branch: record.branch,
+                    status: match record.status {
+                        construction::OccurrenceCaseStatus::Matched => CaseBranchStatus::Matched,
+                        construction::OccurrenceCaseStatus::Unmatched => {
+                            CaseBranchStatus::Unmatched
+                        }
+                        construction::OccurrenceCaseStatus::MoreSpecificBlocked => {
+                            CaseBranchStatus::MoreSpecificBlocked
+                        }
+                    },
+                    source: record.source,
+                    diagnostic_code: record.diagnostic_code,
+                }),
+        );
+        occurrences.extend(final_occurrences);
 
         let program = self.phon_program(&token)?;
         let realization = self.realize_phon(&token)?;
+        rules.extend(realization.nested_rules.iter().cloned());
+        cases.extend(realization.cases.iter().cloned());
         token.record_realized_phon_input(realization.input.as_str().to_owned());
         let word = tshiatun_dsl::build_phrase(&program, realization.input.as_str())
             .map_err(|error| SystemError::PhonRuntime(error.to_string()))?;
@@ -3011,6 +3962,7 @@ impl CompiledSystem {
             diagnostics,
             realization,
             occurrences,
+            cases,
         })
     }
 }

@@ -2,13 +2,22 @@ use conlang_language::construction::{SlotFiller, SlotMap};
 use conlang_language::system::{
     compile_system, CandidateSelector, DerivationContext, SignValue, SystemError,
 };
-use conlang_language::{CompileSystemError, Dim, Language, LanguageDocument, LanguageSchema};
+use conlang_language::{
+    CompileSystemError, Dim, FeatureDecl, Language, LanguageDocument, LanguageSchema, SignItem,
+    SourceLocation,
+};
 
 const FP_SOURCE: &str = r#"schema conlang.lang/v2
 
 trait TestVerb:
 
 trait ThirdSingular:
+    syn:
+        feature:
+            number = enum(singular, plural)
+            number = singular
+            person = enum(first, second, third)
+            person = third
 
 trait FiniteVerb:
 
@@ -178,21 +187,33 @@ sign Agreement:
 }
 
 #[test]
-fn partial_sign_can_be_resumed_without_mutating_the_original() {
+fn unsaturated_sign_can_receive_arguments_without_becoming_another_entity() {
     let language = Language::parse(
         r#"schema conlang.lang/v2
 
 trait Piece:
+    syn:
+        feature:
+            mark = enum(left, right)
 
 trait Pair:
+    syn:
+        feature:
+            selected = enum(left, right)
 
 sign left:
     belongs Piece
+    syn:
+        feature:
+            mark = left
     phon:
         /L/
 
 sign right:
     belongs Piece
+    syn:
+        feature:
+            mark = right
     phon:
         /R/
 
@@ -202,6 +223,8 @@ sign Pairing:
         slots:
             first [Piece]
             second [Piece]
+        feature:
+            selected => $slot.second.syn.mark
     phon:
         /{first} {second}/
 
@@ -216,21 +239,102 @@ sign seed:
     )
     .unwrap();
     let system = compile_system(language).unwrap();
+    let stored = system
+        .evaluate_sign_expression("Pairing", &DerivationContext::new())
+        .unwrap()
+        .value;
+    assert!(matches!(stored, SignValue::Stored(_)));
+    assert!(stored.has_free_variables());
+    assert_eq!(stored.residual_parameters().len(), 2);
     let value = system
         .evaluate_sign_expression("seed", &DerivationContext::new())
         .unwrap()
         .value;
-    let partial = value.partial().expect("one required parameter remains");
-    assert_eq!(partial.parameters()[0].name, "second");
+    assert!(value.has_free_variables());
+    assert_eq!(value.residual_parameters()[0].name, "second");
+    let original_id = value.sign_id().clone();
     let resumed = system
-        .resume_partial(&partial, &[SlotFiller::sign("second", "right")])
+        .apply_arguments(&value, &[SlotFiller::sign("second", "right")])
         .unwrap();
     let SignValue::Applied(token) = resumed else {
         panic!("resume returns the completed Sign")
     };
     assert!(token.is_saturated());
     assert_eq!(token.phon_form().unwrap(), "S R");
-    assert_eq!(partial.parameters()[0].name, "second");
+    assert_eq!(
+        token
+            .syn
+            .iter()
+            .find(|(path, _)| path == "syn.selected")
+            .map(|(_, value)| value.as_str()),
+        Some("right"),
+        "rules that were Unmatched while the Sign was partial must rerun after saturation"
+    );
+    assert_eq!(value.residual_parameters()[0].name, "second");
+    assert_eq!(value.sign_id(), &original_id);
+}
+
+#[test]
+fn nested_unsaturated_signs_export_named_variables_and_resume_immutably() {
+    let language = Language::parse(
+        r#"schema conlang.lang/v2
+
+trait NestedPiece:
+
+sign value:
+    belongs NestedPiece
+    phon:
+        /V/
+
+sign Inner:
+    syn:
+        slots:
+            stem [NestedPiece]
+    phon:
+        /{stem}/
+
+sign Pair:
+    syn:
+        slots:
+            left [*]
+            right [*]
+    phon:
+        /{left} {right}/
+
+sign seed:
+    phon:
+        /S/
+    case:
+        else:
+            Pair(left = Inner(), right = Inner())
+"#,
+    )
+    .unwrap();
+    let system = compile_system(language).unwrap();
+    let value = system
+        .evaluate_sign_expression("seed", &DerivationContext::new())
+        .unwrap()
+        .value;
+    assert!(value.has_free_variables());
+    assert_eq!(
+        value
+            .residual_parameters()
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect::<Vec<_>>(),
+        ["stem"]
+    );
+    let completed = system
+        .apply_arguments(&value, &[SlotFiller::sign("stem", "value")])
+        .unwrap();
+    let SignValue::Applied(completed) = completed else {
+        panic!("resuming the same Sign value must produce an applied Sign")
+    };
+    assert_eq!(completed.phon_form().unwrap(), "V V");
+    assert!(
+        value.has_free_variables(),
+        "the input Sign remains immutable"
+    );
 }
 
 #[test]
@@ -309,6 +413,66 @@ sign B:
         )
         .unwrap();
     assert_eq!(first, second);
+}
+
+#[test]
+fn entrenchment_sampling_normalizes_finite_weights_before_they_overflow() {
+    let system = compile_system(Language::parse(FP_SOURCE).unwrap()).unwrap();
+    let first_id = conlang_language::SignId::local(10_000);
+    let second_id = conlang_language::SignId::local(10_001);
+    let candidates = conlang_language::CandidateSet {
+        category: "OverflowingCompetition".to_owned(),
+        candidates: vec![
+            conlang_language::ConstructionCandidate {
+                id: first_id.clone(),
+                name: "HugeFirst".to_owned(),
+                entrenchment: 1.7e308,
+            },
+            conlang_language::ConstructionCandidate {
+                id: second_id.clone(),
+                name: "HugeSecond".to_owned(),
+                entrenchment: 8.5e307,
+            },
+        ],
+    };
+    let raw_total: f64 = candidates
+        .candidates
+        .iter()
+        .map(|candidate| candidate.entrenchment)
+        .sum();
+    assert!(
+        raw_total.is_infinite(),
+        "the regression requires raw overflow"
+    );
+
+    let first_draw = system
+        .select_candidate(
+            &candidates,
+            CandidateSelector::SampleEntrenchment { seed: 3 },
+            None,
+        )
+        .unwrap();
+    let second_draw = system
+        .select_candidate(
+            &candidates,
+            CandidateSelector::SampleEntrenchment { seed: 0 },
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(first_draw.selected, first_id);
+    assert_eq!(second_draw.selected, second_id);
+    assert_eq!(
+        first_draw,
+        system
+            .select_candidate(
+                &candidates,
+                CandidateSelector::SampleEntrenchment { seed: 3 },
+                None,
+            )
+            .unwrap(),
+        "the same seed must remain replayable",
+    );
 }
 
 #[test]
@@ -452,4 +616,714 @@ sign B:
         .diagnostics()
         .iter()
         .any(|diagnostic| diagnostic.code == "APPLICATION_CYCLE"));
+}
+
+#[test]
+fn feature_and_role_cases_execute_in_the_dimension_pipeline() {
+    let language = Language::parse(
+        r#"schema conlang.lang/v2
+
+Symbol a
+Symbol l
+Symbol p
+Symbol h
+Symbol b
+Symbol e
+Symbol t
+Class vowel {a, e}
+
+trait ChoiceEntity:
+    belongs Semantic
+
+trait ChoiceAtom:
+    belongs ChoiceEntity
+
+trait ChoiceFrame:
+    belongs SemanticFrame
+
+sign alpha:
+    belongs ChoiceAtom
+    phon:
+        /alpha/
+
+sign beta:
+    belongs ChoiceAtom
+    phon:
+        /beta/
+
+sign Chooser:
+    belongs ChoiceFrame
+    syn:
+        slots:
+            first [ChoiceAtom]
+            second [ChoiceAtom]
+        feature:
+            number = enum(singular, plural)
+            selection = enum(first, second)
+    sem:
+        feature:
+            boundedness = enum(bounded, unbounded)
+            boundedness =>
+                case:
+                    $self.syn.number == plural:
+                        unbounded
+                    else:
+                        bounded
+        roles:
+            agent [ChoiceEntity]
+            agent =
+                case:
+                    $self.syn.selection == first:
+                        {first}
+                    else:
+                        {second}
+    phon:
+        /{first} {second}/
+"#,
+    )
+    .unwrap();
+    let canonical = language.dump();
+    assert_eq!(Language::parse(&canonical).unwrap().dump(), canonical);
+    let system = compile_system(language).unwrap();
+    let derivation = system
+        .derive_with_context(
+            "Chooser",
+            &[
+                SlotFiller::sign("first", "alpha"),
+                SlotFiller::sign("second", "beta"),
+            ],
+            &SlotMap::identity(),
+            DerivationContext::new()
+                .feature(Dim::Syn, "number", "plural")
+                .feature(Dim::Syn, "selection", "first"),
+        )
+        .unwrap();
+    assert_eq!(
+        derivation.token.sem.features.get("boundedness"),
+        Some(&"unbounded".to_owned())
+    );
+    assert_eq!(
+        derivation.token.sem.role("agent").unwrap().source.sign,
+        "alpha"
+    );
+    assert!(derivation
+        .cases
+        .iter()
+        .any(|record| record.status == conlang_language::CaseBranchStatus::Matched));
+}
+
+#[test]
+fn feature_case_without_branch_or_base_reports_the_typed_default_error() {
+    let language = Language::parse(
+        r#"schema conlang.lang/v2
+
+Symbol x
+
+trait Unit:
+
+sign x:
+    belongs Unit
+    phon:
+        /x/
+
+sign MissingDefault:
+    syn:
+        slots:
+            value [Unit]
+        feature:
+            trigger = enum(on, off)
+    sem:
+        feature:
+            result = enum(yes, no)
+            result =>
+                case:
+                    $self.syn.trigger == on:
+                        yes
+    phon:
+        /{value}/
+"#,
+    )
+    .unwrap();
+    let system = compile_system(language).unwrap();
+    let error = system
+        .derive_with_context(
+            "MissingDefault",
+            &[SlotFiller::sign("value", "x")],
+            &SlotMap::identity(),
+            DerivationContext::new().feature(Dim::Syn, "trigger", "off"),
+        )
+        .unwrap_err();
+    assert!(matches!(error, SystemError::CaseDefaultMissing { .. }));
+}
+
+#[test]
+fn public_derive_executes_sign_level_case_and_nested_sign_rules() {
+    let language = Language::parse(
+        r#"schema conlang.lang/v2
+
+Symbol p
+Symbol r
+Symbol e
+Symbol x
+Class vowel {e, x}
+
+trait Unit:
+
+trait Wrapped:
+
+sign x:
+    belongs Unit
+    phon:
+        /x/
+
+sign Prefix:
+    belongs Wrapped
+    syn:
+        slots:
+            base [*]
+        feature:
+            apply = enum(no, yes)
+            committed = enum(no, yes)
+            committed => yes
+    phon:
+        /pre {base}/
+
+sign Root:
+    syn:
+        slots:
+            value [Unit]
+        feature:
+            apply = enum(no, yes)
+    phon:
+        /{value}/
+    case:
+        $self.syn.apply == yes:
+            Prefix({$self})
+"#,
+    )
+    .unwrap();
+    let system = compile_system(language).unwrap();
+    let derivation = system
+        .derive_with_context(
+            "Root",
+            &[SlotFiller::sign("value", "x")],
+            &SlotMap::identity(),
+            DerivationContext::new().feature(Dim::Syn, "apply", "yes"),
+        )
+        .unwrap();
+    assert_eq!(derivation.surface, "pre x");
+    assert_eq!(
+        derivation
+            .token
+            .syn
+            .iter()
+            .find(|(path, _)| path == "syn.apply")
+            .map(|(_, value)| value.as_str()),
+        Some("yes"),
+        "a Sign application must preserve its derivation constraints"
+    );
+    assert_eq!(
+        derivation
+            .token
+            .syn
+            .iter()
+            .find(|(path, _)| path == "syn.committed")
+            .map(|(_, value)| value.as_str()),
+        Some("yes")
+    );
+    assert!(derivation
+        .token
+        .syn_categories
+        .iter()
+        .any(|category| category == "Wrapped"));
+    assert_eq!(
+        derivation
+            .cases
+            .iter()
+            .filter(|record| record.status == conlang_language::CaseBranchStatus::Matched)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn feature_case_rejects_a_sign_valued_branch_during_compile() {
+    let language = Language::parse(
+        r#"schema conlang.lang/v2
+
+sign Helper:
+    phon:
+        /h/
+
+sign Invalid:
+    syn:
+        feature:
+            value = enum(one, two)
+            value =>
+                case:
+                    else:
+                        Helper()
+    phon:
+        /x/
+"#,
+    )
+    .unwrap();
+    let CompileSystemError::Validation(report) = compile_system(language).unwrap_err() else {
+        panic!("a Sign-valued feature branch must fail static type checking")
+    };
+    assert!(report
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "CASE_BRANCH_TYPE_MISMATCH"));
+}
+
+#[test]
+fn programmatic_ast_rejects_typed_features_outside_syn_and_sem() {
+    let mut language = Language::new();
+    language.add_sign(
+        "invalid_prag_feature",
+        vec![SignItem::FeatureDecl(FeatureDecl {
+            dim: Dim::Prag,
+            name: "register".to_owned(),
+            values: vec!["formal".to_owned(), "informal".to_owned()],
+            source: SourceLocation::unknown(),
+        })],
+    );
+    let CompileSystemError::Validation(report) = compile_system(language).unwrap_err() else {
+        panic!("an unsupported feature dimension must fail validation")
+    };
+    assert!(report
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "FEATURE_DIMENSION_UNSUPPORTED"));
+}
+
+#[test]
+fn nested_case_leaves_are_statically_type_checked() {
+    let language = Language::parse(
+        r#"schema conlang.lang/v2
+
+sign invalid:
+    syn:
+        feature:
+            trigger = enum(on, off)
+            result = enum(yes, no)
+            result =>
+                case:
+                    $self.syn.trigger == on:
+                        case:
+                            else:
+                                outside_domain
+                    else:
+                        no
+    phon:
+        /x/
+"#,
+    )
+    .unwrap();
+    let CompileSystemError::Validation(report) = compile_system(language).unwrap_err() else {
+        panic!("a nested enum leaf outside its declared domain must fail at compile time")
+    };
+    assert!(report
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "FEATURE_EXPRESSION_VALUE_OUT_OF_DOMAIN"));
+}
+
+#[test]
+fn nested_cases_round_trip_and_execute_in_feature_role_and_phon_positions() {
+    let language = Language::parse(
+        r#"schema conlang.lang/v2
+
+Symbol x
+Class vowel {x}
+
+trait NestedEntity:
+    belongs Semantic
+
+trait NestedFrame:
+    belongs SemanticFrame
+
+trait NestedUnit:
+    belongs NestedEntity
+
+sign x:
+    belongs NestedUnit
+    phon:
+        /x/
+
+sign NestedChoice:
+    belongs NestedFrame
+    syn:
+        slots:
+            value [NestedUnit]
+        feature:
+            trigger = enum(on, off)
+    sem:
+        feature:
+            outcome = enum(yes, no)
+            outcome =>
+                case:
+                    $self.syn.trigger == on:
+                        case:
+                            $self.syn.trigger == on:
+                                yes
+                            else:
+                                no
+                    else:
+                        no
+        roles:
+            agent [NestedEntity]
+            agent =
+                case:
+                    $self.syn.trigger == on:
+                        case:
+                            else:
+                                {value}
+                    else:
+                        {value}
+    phon:
+        /{value}/
+        realization:
+            case:
+                $self.syn.trigger == on:
+                    case:
+                        $self.syn.trigger == on:
+                            /x {value}/
+                        else:
+                            /never/
+                else:
+                    /{value}/
+"#,
+    )
+    .unwrap();
+    let canonical = language.dump();
+    assert_eq!(Language::parse(&canonical).unwrap().dump(), canonical);
+    assert!(!canonical.contains("<nested-case>"));
+
+    let system = compile_system(language).unwrap();
+    let derivation = system
+        .derive_with_context(
+            "NestedChoice",
+            &[SlotFiller::sign("value", "x")],
+            &SlotMap::identity(),
+            DerivationContext::new().feature(Dim::Syn, "trigger", "on"),
+        )
+        .unwrap();
+    assert_eq!(derivation.surface, "x x");
+    assert_eq!(
+        derivation
+            .token
+            .sem
+            .features
+            .get("outcome")
+            .map(String::as_str),
+        Some("yes")
+    );
+    assert_eq!(derivation.token.sem.role("agent").unwrap().source.sign, "x");
+    assert!(
+        derivation.cases.len() >= 6,
+        "nested branch trace is retained"
+    );
+    assert!(derivation.realization.cases.len() >= 2);
+}
+
+#[test]
+fn nested_sign_case_returns_the_inner_sign_expression() {
+    let language = Language::parse(
+        r#"schema conlang.lang/v2
+
+Symbol w
+Symbol r
+Symbol a
+Symbol p
+Symbol e
+Symbol d
+Symbol x
+Class vowel {a, e, x}
+
+trait NestedAtom:
+
+sign x:
+    belongs NestedAtom
+    phon:
+        /x/
+
+sign Wrapper:
+    syn:
+        slots:
+            base [*]
+    phon:
+        /wrapped {base}/
+
+sign Root:
+    syn:
+        slots:
+            value [NestedAtom]
+    phon:
+        /{value}/
+    case:
+        else:
+            case:
+                else:
+                    Wrapper({$self})
+"#,
+    )
+    .unwrap();
+    let system = compile_system(language).unwrap();
+    let derivation = system
+        .derive(
+            "Root",
+            &[SlotFiller::sign("value", "x")],
+            &SlotMap::identity(),
+        )
+        .unwrap();
+    assert_eq!(derivation.surface, "wrapped x");
+    assert!(derivation.cases.len() >= 2);
+    assert!(derivation
+        .occurrences
+        .iter()
+        .any(|occurrence| occurrence.slot_path == "base"));
+}
+
+#[test]
+fn stored_filler_runs_the_same_feature_case_pipeline_before_composition() {
+    let language = Language::parse(
+        r#"schema conlang.lang/v2
+
+Symbol m
+Class vowel {m}
+
+trait CaseUnit:
+    belongs Semantic
+
+sign marked:
+    belongs CaseUnit
+    syn:
+        feature:
+            trigger = enum(on, off)
+            trigger = on
+    sem:
+        feature:
+            outcome = enum(yes, no)
+            outcome =>
+                case:
+                    $self.syn.trigger == on:
+                        yes
+                    else:
+                        no
+    phon:
+        /m/
+
+sign Holder:
+    syn:
+        slots:
+            item [CaseUnit]
+    phon:
+        /{item}/
+"#,
+    )
+    .unwrap();
+    let system = compile_system(language).unwrap();
+    let derivation = system
+        .derive(
+            "Holder",
+            &[SlotFiller::sign("item", "marked")],
+            &SlotMap::identity(),
+        )
+        .unwrap();
+    assert_eq!(
+        derivation.token.fillers[0].sem.features.get("outcome"),
+        Some(&"yes".to_owned())
+    );
+}
+
+#[test]
+fn sign_case_membership_materializes_the_complete_trait_contract() {
+    let language = Language::parse(
+        r#"schema conlang.lang/v2
+
+Symbol s
+Symbol a
+Class vowel {a}
+
+trait ContractEntity:
+    belongs Semantic
+
+trait ContractAtom:
+    belongs ContractEntity
+
+trait EnrichedContract:
+    belongs SemanticFrame
+    syn:
+        slots:
+            adjunct [ContractAtom]
+        inherited = yes
+        feature:
+            committed = enum(no, yes)
+            committed => yes
+    sem:
+        roles:
+            theme [ContractEntity]
+            theme = {adjunct}
+    phon:
+        realization:
+            /{adjunct}/ / $self.syn.committed == yes
+
+sign seed:
+    belongs ContractAtom
+    phon:
+        /s/
+
+sign adjunct:
+    belongs ContractAtom
+    phon:
+        /a/
+
+sign Wrapper:
+    syn:
+        slots:
+            stem [ContractAtom]
+    phon:
+        /{stem}/
+
+sign stored_root:
+    belongs ContractAtom
+    phon:
+        /s/
+    case:
+        else:
+            $self
+            belongs EnrichedContract
+
+sign root:
+    belongs ContractAtom
+    phon:
+        /s/
+    case:
+        else:
+            Wrapper({$self})
+            belongs EnrichedContract
+"#,
+    )
+    .unwrap();
+    let system = compile_system(language).unwrap();
+    let stored = system
+        .evaluate_sign_expression("stored_root", &DerivationContext::new())
+        .unwrap()
+        .value;
+    let SignValue::Stored(stored) = &stored else {
+        panic!("a self branch must remain a stored Sign")
+    };
+    assert_eq!(
+        stored
+            .sign
+            .project(Dim::Syn, &system.ontology)
+            .defs
+            .iter()
+            .find(|(path, _)| path == "syn.inherited")
+            .map(|(_, value)| value.as_str()),
+        Some("yes")
+    );
+    assert_eq!(
+        stored
+            .sign
+            .project(Dim::Syn, &system.ontology)
+            .defs
+            .iter()
+            .find(|(path, _)| path == "syn.committed")
+            .map(|(_, value)| value.as_str()),
+        Some("yes")
+    );
+    assert_eq!(
+        stored.sign.id,
+        system.language().sign_named("stored_root").unwrap().id
+    );
+    assert_eq!(
+        stored
+            .sign
+            .items
+            .iter()
+            .filter(|item| matches!(item, conlang_language::SignItem::RoleDecl(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        stored
+            .sign
+            .items
+            .iter()
+            .filter(|item| matches!(item, conlang_language::SignItem::Realization(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        conlang_language::construction::parameters_of(&stored.sign)
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect::<Vec<_>>(),
+        ["adjunct"]
+    );
+
+    let value = system
+        .evaluate_sign_expression("root", &DerivationContext::new())
+        .unwrap()
+        .value;
+    let SignValue::Applied(partial) = &value else {
+        panic!("the case branch must return the refined applied Sign")
+    };
+    let wrapper_id = system.language().sign_named("Wrapper").unwrap().id.clone();
+    assert_eq!(partial.construction_id, wrapper_id);
+    assert_eq!(
+        partial
+            .syn
+            .iter()
+            .find(|(path, _)| path == "syn.inherited")
+            .map(|(_, value)| value.as_str()),
+        Some("yes"),
+        "the inherited Syn Def must enter the rebuilt deep state"
+    );
+    assert_eq!(
+        partial
+            .syn
+            .iter()
+            .find(|(path, _)| path == "syn.committed")
+            .map(|(_, value)| value.as_str()),
+        Some("yes"),
+        "the inherited rule must execute exactly on the rebuilt baseline"
+    );
+    assert_eq!(
+        value
+            .residual_parameters()
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect::<Vec<_>>(),
+        ["adjunct"],
+        "a required slot introduced by branch membership remains a Sign variable"
+    );
+    assert!(partial
+        .sem
+        .types
+        .iter()
+        .any(|category| category == "EnrichedContract"));
+
+    let completed = system
+        .apply_arguments(&value, &[SlotFiller::sign("adjunct", "adjunct")])
+        .unwrap();
+    let SignValue::Applied(completed) = completed else {
+        panic!("supplying the inherited slot must saturate the same Sign")
+    };
+    assert_eq!(completed.construction_id, wrapper_id);
+    assert_eq!(completed.provenance.construction, "Wrapper");
+    assert!(completed.is_saturated());
+    assert_eq!(
+        completed.sem.role("theme").unwrap().source.sign,
+        "adjunct",
+        "the inherited role schema and binding must execute after saturation"
+    );
+    assert_eq!(
+        system.realize_phon(&completed).unwrap().input.as_str(),
+        "a",
+        "the inherited realization must remain executable after resume"
+    );
 }

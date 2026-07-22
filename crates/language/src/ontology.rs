@@ -235,8 +235,10 @@ impl OntologyRegistry {
         let mut inherited_slot_features = Vec::new();
         let mut inherited_rules = Vec::new();
         let mut inherited_features = Vec::new();
+        let mut inherited_feature_expressions = Vec::new();
         let mut inherited_role_decls = Vec::new();
         let mut inherited_role_bindings = Vec::new();
+        let mut inherited_role_expressions = Vec::new();
         let mut inherited_realizations = Vec::new();
         let mut inherited_expressions = Vec::new();
         let mut inherited_constraints = Vec::new();
@@ -258,8 +260,14 @@ impl OntologyRegistry {
                         SignItem::FeatureValue(feature) => {
                             inherited_values.push(SignItem::FeatureValue(feature.clone()))
                         }
+                        SignItem::FeatureExpression(expression) => {
+                            inherited_feature_expressions.push(expression.clone())
+                        }
                         SignItem::RoleDecl(role) => inherited_role_decls.push(role.clone()),
                         SignItem::RoleBinding(role) => inherited_role_bindings.push(role.clone()),
+                        SignItem::RoleExpression(expression) => {
+                            inherited_role_expressions.push(expression.clone())
+                        }
                         SignItem::Realization(realization) => {
                             inherited_realizations.push(realization.clone())
                         }
@@ -300,12 +308,20 @@ impl OntologyRegistry {
             SignItem::FeatureDecl(feature) => Some(feature.clone()),
             _ => None,
         });
+        let local_feature_expressions = sign.items.iter().filter_map(|item| match item {
+            SignItem::FeatureExpression(expression) => Some(expression.clone()),
+            _ => None,
+        });
         let local_role_decls = sign.items.iter().filter_map(|item| match item {
             SignItem::RoleDecl(role) => Some(role.clone()),
             _ => None,
         });
         let local_role_bindings = sign.items.iter().filter_map(|item| match item {
             SignItem::RoleBinding(role) => Some(role.clone()),
+            _ => None,
+        });
+        let local_role_expressions = sign.items.iter().filter_map(|item| match item {
+            SignItem::RoleExpression(expression) => Some(expression.clone()),
             _ => None,
         });
         let local_realizations = sign.items.iter().filter_map(|item| match item {
@@ -371,6 +387,20 @@ impl OntologyRegistry {
         let mut features: Vec<_> = features.into_values().collect();
         features.sort_by_key(|(index, _)| *index);
 
+        let mut feature_expressions = BTreeMap::new();
+        for (index, expression) in inherited_feature_expressions
+            .into_iter()
+            .chain(local_feature_expressions)
+            .enumerate()
+        {
+            feature_expressions.insert(
+                (expression.dim, expression.name.clone()),
+                (index, expression),
+            );
+        }
+        let mut feature_expressions: Vec<_> = feature_expressions.into_values().collect();
+        feature_expressions.sort_by_key(|(index, _)| *index);
+
         let mut role_decls = BTreeMap::new();
         for (index, role) in inherited_role_decls
             .into_iter()
@@ -392,6 +422,17 @@ impl OntologyRegistry {
         }
         let mut role_bindings: Vec<_> = role_bindings.into_values().collect();
         role_bindings.sort_by_key(|(index, _)| *index);
+
+        let mut role_expressions = BTreeMap::new();
+        for (index, expression) in inherited_role_expressions
+            .into_iter()
+            .chain(local_role_expressions)
+            .enumerate()
+        {
+            role_expressions.insert(expression.name.clone(), (index, expression));
+        }
+        let mut role_expressions: Vec<_> = role_expressions.into_values().collect();
+        role_expressions.sort_by_key(|(index, _)| *index);
 
         let realization = inherited_realizations
             .into_iter()
@@ -428,6 +469,11 @@ impl OntologyRegistry {
                 .map(|(_, feature)| SignItem::FeatureDecl(feature)),
         );
         items.extend(
+            feature_expressions
+                .into_iter()
+                .map(|(_, expression)| SignItem::FeatureExpression(expression)),
+        );
+        items.extend(
             role_decls
                 .into_iter()
                 .map(|(_, role)| SignItem::RoleDecl(role)),
@@ -436,6 +482,11 @@ impl OntologyRegistry {
             role_bindings
                 .into_iter()
                 .map(|(_, role)| SignItem::RoleBinding(role)),
+        );
+        items.extend(
+            role_expressions
+                .into_iter()
+                .map(|(_, expression)| SignItem::RoleExpression(expression)),
         );
         if let Some(realization) = realization {
             items.push(SignItem::Realization(realization));

@@ -1,7 +1,9 @@
-use conlang_language::construction::{SlotFiller, SlotMap};
+use conlang_language::construction::{OccurrenceCaseStatus, SlotFiller, SlotMap};
 use conlang_language::{compile_system, CompileSystemError, Dim, Language};
 
-const PRELUDE: &str = r#"Symbol a
+const PRELUDE: &str = r#"schema conlang.lang/v2
+
+Symbol a
 Class vowel {a}
 
 trait LocalCaseBearer:
@@ -200,7 +202,20 @@ sign InnerNominal:
     sem:
         feature:
             interpreted_case = enum(nominative, accusative)
-            interpreted_case => $self.syn.case
+            interpreted_case =>
+                case:
+                    $self.syn.case == accusative:
+                        accusative
+                    else:
+                        nominative
+        roles:
+            argument [Entity]
+            argument =
+                case:
+                    $self.syn.case == accusative:
+                        {{stem}}
+                    else:
+                        {{stem}}
     prag:
         discourse_case => $self.sem.interpreted_case
     phon:
@@ -252,6 +267,7 @@ sign OuterCase:
         target.scalar(Dim::Prag, "discourse_case"),
         Some("accusative")
     );
+    assert_eq!(target.sem.role("argument").unwrap().source.sign, "stem");
     assert_eq!(outer.surface, "aaa");
     assert!(inner.token.syn.iter().all(|(path, _)| path != "syn.case"));
     let occurrence = outer
@@ -261,13 +277,23 @@ sign OuterCase:
         .unwrap();
     assert!(occurrence.reevaluated);
     assert_eq!(occurrence.realization.as_deref(), Some("aa"));
+    assert!(occurrence.cases.iter().any(|record| {
+        record.target == "sem.feature.interpreted_case"
+            && record.branch == 0
+            && record.status == OccurrenceCaseStatus::Matched
+    }));
+    assert!(occurrence.cases.iter().any(|record| {
+        record.target == "sem.role.argument"
+            && record.branch == 0
+            && record.status == OccurrenceCaseStatus::Matched
+    }));
     assert!(
         occurrence
             .committed_rules
             .iter()
             .filter(|record| record.status == conlang_language::synchronic::RuleStatus::Matched)
             .count()
-            >= 2
+            >= 1
     );
     assert_eq!(
         occurrence.constraints,

@@ -163,6 +163,7 @@ pub enum AddressSegment {
     CaseExpression,
     CaseBranches(usize),
     CaseResult,
+    ApplicationArguments(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default)]
@@ -540,6 +541,7 @@ impl LanguageDocument {
         mut language: Language,
         mut identities: IdentityManifestV2,
     ) -> Result<LanguageDocument, IdentityError> {
+        canonicalize_named_containers(&mut language, &mut identities);
         validate_shape(&language, &identities)?;
         bind_runtime_ids(&mut language, &identities.nodes)?;
         let previous_refs: BTreeMap<_, _> = identities
@@ -578,6 +580,102 @@ impl LanguageDocument {
             language,
             identities,
         })
+    }
+}
+
+/// The canonical printer orders named top-level containers.  A rename can
+/// therefore move a Trait or Sign in canonical source even though its stable
+/// identity did not move semantically.  Keep the in-memory AST and every
+/// descendant address in lockstep before validating or persisting the edit.
+fn canonicalize_named_containers(language: &mut Language, identities: &mut IdentityManifestV2) {
+    // `Language::dump()` sorts distribution entries.  Keep the editable AST
+    // and its stable addresses in the same order before hashing or reopening;
+    // otherwise an update that changes a key can silently bind two existing
+    // NodeIds to each other's entries after the canonical source is reparsed.
+    let mut distribution_order = (0..language.distribution.len()).collect::<Vec<_>>();
+    distribution_order.sort_by(|left, right| {
+        (&language.distribution[*left], *left).cmp(&(&language.distribution[*right], *right))
+    });
+    let mut distribution_new_index = vec![0; distribution_order.len()];
+    for (new_index, old_index) in distribution_order.iter().copied().enumerate() {
+        distribution_new_index[old_index] = new_index;
+    }
+    if distribution_order
+        .iter()
+        .copied()
+        .enumerate()
+        .any(|(new, old)| new != old)
+    {
+        let old = language.distribution.clone();
+        language.distribution = distribution_order
+            .iter()
+            .map(|index| old[*index].clone())
+            .collect();
+    }
+
+    let mut trait_order = (0..language.traits.len()).collect::<Vec<_>>();
+    trait_order.sort_by(|left, right| {
+        let left_trait = &language.traits[*left];
+        let right_trait = &language.traits[*right];
+        (!left_trait.global, &left_trait.name, *left).cmp(&(
+            !right_trait.global,
+            &right_trait.name,
+            *right,
+        ))
+    });
+    let mut trait_new_index = vec![0; trait_order.len()];
+    for (new_index, old_index) in trait_order.iter().copied().enumerate() {
+        trait_new_index[old_index] = new_index;
+    }
+    if trait_order
+        .iter()
+        .copied()
+        .enumerate()
+        .any(|(new, old)| new != old)
+    {
+        let old = language.traits.clone();
+        language.traits = trait_order
+            .iter()
+            .map(|index| old[*index].clone())
+            .collect();
+    }
+
+    let mut sign_order = (0..language.signs.len()).collect::<Vec<_>>();
+    sign_order.sort_by(|left, right| {
+        let left_sign = &language.signs[*left];
+        let right_sign = &language.signs[*right];
+        (&left_sign.name, *left).cmp(&(&right_sign.name, *right))
+    });
+    let mut sign_new_index = vec![0; sign_order.len()];
+    for (new_index, old_index) in sign_order.iter().copied().enumerate() {
+        sign_new_index[old_index] = new_index;
+    }
+    if sign_order
+        .iter()
+        .copied()
+        .enumerate()
+        .any(|(new, old)| new != old)
+    {
+        let old = language.signs.clone();
+        language.signs = sign_order.iter().map(|index| old[*index].clone()).collect();
+    }
+
+    for entry in &mut identities.nodes {
+        let Some(first) = entry.address.0.first_mut() else {
+            continue;
+        };
+        match first {
+            AddressSegment::Distribution(index) if *index < distribution_new_index.len() => {
+                *index = distribution_new_index[*index];
+            }
+            AddressSegment::Traits(index) if *index < trait_new_index.len() => {
+                *index = trait_new_index[*index];
+            }
+            AddressSegment::Signs(index) if *index < sign_new_index.len() => {
+                *index = sign_new_index[*index];
+            }
+            _ => {}
+        }
     }
 }
 
@@ -680,11 +778,27 @@ fn item_kind(item: &SignItem) -> NodeKind {
         SignItem::RoleDecl(_) => NodeKind::RoleDeclaration,
         SignItem::RoleBinding(_) => NodeKind::RoleBinding,
         SignItem::Realization(_) => NodeKind::Realization,
-        SignItem::SignExpression(_) => NodeKind::Case,
+        SignItem::SignExpression(expression) => expression_root_kind(&expression.expression),
+        SignItem::FeatureExpression(expression) => expression_root_kind(&expression.expression),
+        SignItem::RoleExpression(expression) => expression_root_kind(&expression.expression),
         SignItem::Constraint(_) => NodeKind::Constraint,
         SignItem::FeatureRule(_) => NodeKind::FeatureRule,
         SignItem::Def(_) => NodeKind::Definition,
         SignItem::Rule(_) => NodeKind::Rule,
+    }
+}
+
+fn expression_root_kind(expression: &crate::Expression) -> NodeKind {
+    match expression {
+        crate::Expression::SignApplication(_) | crate::Expression::PhonInterpolation(_) => {
+            NodeKind::Application
+        }
+        crate::Expression::Projection { value, .. } => expression_root_kind(value),
+        crate::Expression::Case(_) => NodeKind::Case,
+        // The three expression-bearing SignItem variants currently lower
+        // only typed cases.  Keep a deterministic node kind for a future
+        // scalar expression until a generic Expression NodeKind is added.
+        _ => NodeKind::Case,
     }
 }
 
@@ -715,12 +829,84 @@ fn enumerate_item_children(
     next: &mut u64,
     entries: &mut Vec<NodeEntryV1>,
 ) {
-    fn application_in(expression: &crate::Expression) -> Option<&crate::SignApplication> {
+    fn enumerate_application_children(
+        application: &crate::SignApplication,
+        address: &NodeAddress,
+        parent: &NodeId,
+        namespace: &str,
+        next: &mut u64,
+        entries: &mut Vec<NodeEntryV1>,
+    ) {
+        for (index, argument) in application.arguments.iter().enumerate() {
+            let crate::SignArgumentValue::Application(nested) = &argument.value else {
+                continue;
+            };
+            let nested_address = address.child(AddressSegment::ApplicationArguments(index));
+            let nested_id = push_entry(
+                entries,
+                namespace,
+                next,
+                NodeKind::Application,
+                Some(parent.clone()),
+                nested_address.clone(),
+            );
+            enumerate_application_children(
+                nested,
+                &nested_address,
+                &nested_id,
+                namespace,
+                next,
+                entries,
+            );
+        }
+    }
+
+    fn enumerate_expression_node(
+        expression: &crate::Expression,
+        address: &NodeAddress,
+        parent: &NodeId,
+        namespace: &str,
+        next: &mut u64,
+        entries: &mut Vec<NodeEntryV1>,
+    ) {
         match expression {
-            crate::Expression::SignApplication(application) => Some(application),
-            crate::Expression::PhonInterpolation(application) => Some(application),
-            crate::Expression::Projection { value, .. } => application_in(value),
-            _ => None,
+            crate::Expression::SignApplication(application)
+            | crate::Expression::PhonInterpolation(application) => {
+                let application_id = push_entry(
+                    entries,
+                    namespace,
+                    next,
+                    NodeKind::Application,
+                    Some(parent.clone()),
+                    address.clone(),
+                );
+                enumerate_application_children(
+                    application,
+                    address,
+                    &application_id,
+                    namespace,
+                    next,
+                    entries,
+                );
+            }
+            crate::Expression::Projection { value, .. } => {
+                // A projection is a typed view of its input rather than an
+                // independently editable node.  The underlying expression
+                // therefore occupies the projection's address.
+                enumerate_expression_node(value, address, parent, namespace, next, entries);
+            }
+            crate::Expression::Case(case) => {
+                let case_id = push_entry(
+                    entries,
+                    namespace,
+                    next,
+                    NodeKind::Case,
+                    Some(parent.clone()),
+                    address.clone(),
+                );
+                enumerate_case(case, address, &case_id, namespace, next, entries);
+            }
+            _ => {}
         }
     }
 
@@ -742,16 +928,46 @@ fn enumerate_item_children(
                 Some(parent.clone()),
                 branch_address.clone(),
             );
-            if application_in(&branch.result).is_some() {
-                push_entry(
-                    entries,
+            enumerate_expression_node(
+                &branch.result,
+                &branch_address.child(AddressSegment::CaseResult),
+                &branch_id,
+                namespace,
+                next,
+                entries,
+            );
+        }
+    }
+
+    fn enumerate_root_expression_children(
+        expression: &crate::Expression,
+        address: &NodeAddress,
+        parent: &NodeId,
+        namespace: &str,
+        next: &mut u64,
+        entries: &mut Vec<NodeEntryV1>,
+    ) {
+        match expression {
+            crate::Expression::SignApplication(application)
+            | crate::Expression::PhonInterpolation(application) => {
+                enumerate_application_children(
+                    application,
+                    address,
+                    parent,
                     namespace,
                     next,
-                    NodeKind::Application,
-                    Some(branch_id),
-                    branch_address.child(AddressSegment::CaseResult),
+                    entries,
                 );
             }
+            crate::Expression::Projection { value, .. } => {
+                enumerate_root_expression_children(
+                    value, address, parent, namespace, next, entries,
+                );
+            }
+            crate::Expression::Case(case) => {
+                enumerate_case(case, address, parent, namespace, next, entries);
+            }
+            _ => {}
         }
     }
 
@@ -805,11 +1021,30 @@ fn enumerate_item_children(
                 enumerate_case(case, &case_address, &case_id, namespace, next, entries);
             }
         }
-        SignItem::SignExpression(expression) => {
-            if let crate::Expression::Case(case) = &expression.expression {
-                enumerate_case(case, address, parent, namespace, next, entries);
-            }
-        }
+        SignItem::SignExpression(expression) => enumerate_root_expression_children(
+            &expression.expression,
+            address,
+            parent,
+            namespace,
+            next,
+            entries,
+        ),
+        SignItem::FeatureExpression(expression) => enumerate_root_expression_children(
+            &expression.expression,
+            address,
+            parent,
+            namespace,
+            next,
+            entries,
+        ),
+        SignItem::RoleExpression(expression) => enumerate_root_expression_children(
+            &expression.expression,
+            address,
+            parent,
+            namespace,
+            next,
+            entries,
+        ),
         _ => {}
     }
 }
@@ -1141,6 +1376,168 @@ fn item_at<'a>(language: &'a Language, address: &NodeAddress) -> Option<&'a Sign
     }
 }
 
+fn entry_at<'a>(
+    entries: &'a [NodeEntryV1],
+    address: &NodeAddress,
+    kind: NodeKind,
+) -> Option<&'a NodeEntryV1> {
+    entries
+        .iter()
+        .find(|entry| entry.kind == kind && &entry.address == address)
+}
+
+fn collect_application_refs(
+    application: &crate::SignApplication,
+    address: &NodeAddress,
+    owner: &NodeId,
+    entries: &[NodeEntryV1],
+    signs: &BTreeMap<String, NodeId>,
+    refs: &mut Vec<RefBindingV1>,
+) {
+    refs.push(RefBindingV1 {
+        owner: owner.clone(),
+        field: "application.callee".to_owned(),
+        target: reference_target(&application.callee, NodeKind::Sign, signs),
+    });
+    for (index, argument) in application.arguments.iter().enumerate() {
+        let crate::SignArgumentValue::Application(nested) = &argument.value else {
+            continue;
+        };
+        let nested_address = address.child(AddressSegment::ApplicationArguments(index));
+        let Some(nested_entry) = entry_at(entries, &nested_address, NodeKind::Application) else {
+            continue;
+        };
+        collect_application_refs(
+            nested,
+            &nested_address,
+            &nested_entry.id,
+            entries,
+            signs,
+            refs,
+        );
+    }
+}
+
+fn collect_expression_refs(
+    expression: &crate::Expression,
+    address: &NodeAddress,
+    root_owner: Option<&NodeId>,
+    entries: &[NodeEntryV1],
+    traits: &BTreeMap<String, NodeId>,
+    signs: &BTreeMap<String, NodeId>,
+    refs: &mut Vec<RefBindingV1>,
+) {
+    match expression {
+        crate::Expression::SignApplication(application)
+        | crate::Expression::PhonInterpolation(application) => {
+            let owner = root_owner.cloned().or_else(|| {
+                entry_at(entries, address, NodeKind::Application).map(|entry| entry.id.clone())
+            });
+            if let Some(owner) = owner {
+                collect_application_refs(application, address, &owner, entries, signs, refs);
+            }
+        }
+        crate::Expression::Projection { value, .. } => {
+            collect_expression_refs(value, address, root_owner, entries, traits, signs, refs)
+        }
+        crate::Expression::Case(case) => {
+            collect_case_refs(case, address, root_owner, entries, traits, signs, refs)
+        }
+        _ => {}
+    }
+}
+
+fn collect_case_refs(
+    case: &crate::TypedCase,
+    address: &NodeAddress,
+    root_owner: Option<&NodeId>,
+    entries: &[NodeEntryV1],
+    traits: &BTreeMap<String, NodeId>,
+    signs: &BTreeMap<String, NodeId>,
+    refs: &mut Vec<RefBindingV1>,
+) {
+    if root_owner.is_none() && entry_at(entries, address, NodeKind::Case).is_none() {
+        return;
+    }
+    for (branch_index, branch) in case.branches.iter().enumerate() {
+        let branch_address = address.child(AddressSegment::CaseBranches(branch_index));
+        let Some(branch_entry) = entry_at(entries, &branch_address, NodeKind::CaseBranch) else {
+            continue;
+        };
+        for (belongs_index, category) in branch.belongs.iter().enumerate() {
+            refs.push(RefBindingV1 {
+                owner: branch_entry.id.clone(),
+                field: format!("case.belongs[{belongs_index}]"),
+                target: reference_target(category, NodeKind::Trait, traits),
+            });
+        }
+        match &branch.condition {
+            crate::CaseCondition::Guard(guard) => {
+                for (guard_index, category) in guard_category_references(guard) {
+                    refs.push(RefBindingV1 {
+                        owner: branch_entry.id.clone(),
+                        field: format!("case.guard[{guard_index}].category"),
+                        target: reference_target(&category, NodeKind::Trait, traits),
+                    });
+                }
+            }
+            crate::CaseCondition::Equals(category)
+                if case
+                    .scrutinee
+                    .as_deref()
+                    .and_then(|value| value.split_once('.'))
+                    .is_some_and(|(_, projection)| projection == "phon") =>
+            {
+                refs.push(RefBindingV1 {
+                    owner: branch_entry.id.clone(),
+                    field: "case.equals.category".to_owned(),
+                    target: reference_target(category, NodeKind::Trait, traits),
+                });
+            }
+            crate::CaseCondition::Equals(_) | crate::CaseCondition::Else => {}
+        }
+        collect_expression_refs(
+            &branch.result,
+            &branch_address.child(AddressSegment::CaseResult),
+            None,
+            entries,
+            traits,
+            signs,
+            refs,
+        );
+    }
+}
+
+/// Extract category-valued conjuncts from the closed guard grammar.  Scalar
+/// equality conjuncts intentionally produce no Trait Ref.
+fn guard_category_references(source: &str) -> Vec<(usize, String)> {
+    source
+        .split("&&")
+        .enumerate()
+        .filter_map(|(index, conjunct)| {
+            let conjunct = conjunct.trim();
+            let category = conjunct
+                .strip_prefix('[')
+                .and_then(|value| value.strip_suffix(']'))
+                .or_else(|| {
+                    let (field, value) = conjunct.split_once("==")?;
+                    let field = field.trim();
+                    let category_valued = field == "$self"
+                        || field
+                            .strip_prefix("$slot.")
+                            .is_some_and(|slot| !slot.contains('.'));
+                    category_valued.then(|| value.trim()).and_then(|value| {
+                        value
+                            .strip_prefix('[')
+                            .and_then(|value| value.strip_suffix(']'))
+                    })
+                })?
+                .trim();
+            (!category.is_empty()).then(|| (index, category.to_owned()))
+        })
+        .collect()
+}
+
 fn collect_refs(language: &Language, entries: &[NodeEntryV1]) -> Vec<RefBindingV1> {
     let (traits, signs) = node_ids_by_name(language, entries);
     let mut refs = Vec::new();
@@ -1188,6 +1585,48 @@ fn collect_refs(language: &Language, entries: &[NodeEntryV1]) -> Vec<RefBindingV
                 field,
                 target,
             });
+        }
+        match item {
+            SignItem::SignExpression(expression) => collect_expression_refs(
+                &expression.expression,
+                &entry.address,
+                Some(&entry.id),
+                entries,
+                &traits,
+                &signs,
+                &mut refs,
+            ),
+            SignItem::FeatureExpression(expression) => collect_expression_refs(
+                &expression.expression,
+                &entry.address,
+                Some(&entry.id),
+                entries,
+                &traits,
+                &signs,
+                &mut refs,
+            ),
+            SignItem::RoleExpression(expression) => collect_expression_refs(
+                &expression.expression,
+                &entry.address,
+                Some(&entry.id),
+                entries,
+                &traits,
+                &signs,
+                &mut refs,
+            ),
+            SignItem::Realization(Realization {
+                expression: Some(case),
+                ..
+            }) => collect_case_refs(
+                case,
+                &entry.address.child(AddressSegment::CaseExpression),
+                None,
+                entries,
+                &traits,
+                &signs,
+                &mut refs,
+            ),
+            _ => {}
         }
     }
     refs.sort_by(|left, right| (&left.owner, &left.field).cmp(&(&right.owner, &right.field)));
@@ -1285,5 +1724,108 @@ mod tests {
             sha256_hex(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[test]
+    fn nested_case_projection_and_application_arguments_have_distinct_addresses() {
+        let mut language = Language::parse(
+            r#"schema conlang.lang/v2
+
+sign root:
+    phon:
+        /r/
+    case:
+        else:
+            $self
+"#,
+        )
+        .unwrap();
+        let expression = language.signs[0]
+            .items
+            .iter_mut()
+            .find_map(|item| match item {
+                SignItem::SignExpression(expression) => Some(expression),
+                _ => None,
+            })
+            .unwrap();
+        let inner = crate::SignApplication {
+            callee: "Inner".to_owned(),
+            arguments: vec![crate::SignArgument {
+                name: None,
+                value: crate::SignArgumentValue::SelfSign,
+            }],
+            source: crate::SourceLocation::line(7),
+        };
+        let outer = crate::SignApplication {
+            callee: "Outer".to_owned(),
+            arguments: vec![crate::SignArgument {
+                name: Some("value".to_owned()),
+                value: crate::SignArgumentValue::Application(Box::new(inner)),
+            }],
+            source: crate::SourceLocation::line(7),
+        };
+        let nested = crate::TypedCase {
+            expected: crate::ExpressionType::Sign,
+            scrutinee: None,
+            branches: vec![crate::CaseBranch {
+                condition: crate::CaseCondition::Else,
+                result: crate::Expression::Projection {
+                    value: Box::new(crate::Expression::SignApplication(outer)),
+                    dimension: crate::SignProjection::Syn,
+                },
+                belongs: Vec::new(),
+                source: crate::SourceLocation::line(7),
+            }],
+            source: crate::SourceLocation::line(7),
+        };
+        let crate::Expression::Case(case) = &mut expression.expression else {
+            panic!("fixture root is a case")
+        };
+        case.branches[0].result = crate::Expression::Case(Box::new(nested));
+
+        let mut next = 0;
+        let nodes = enumerate_nodes(&language, "evo:nested", &mut next);
+        let addresses = nodes
+            .iter()
+            .filter(|node| {
+                matches!(
+                    node.kind,
+                    NodeKind::Case | NodeKind::CaseBranch | NodeKind::Application
+                )
+            })
+            .map(|node| (node.kind, node.address.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            addresses
+                .iter()
+                .filter(|(kind, _)| *kind == NodeKind::Case)
+                .count(),
+            2
+        );
+        assert_eq!(
+            addresses
+                .iter()
+                .filter(|(kind, _)| *kind == NodeKind::CaseBranch)
+                .count(),
+            2
+        );
+        assert_eq!(
+            addresses
+                .iter()
+                .filter(|(kind, _)| *kind == NodeKind::Application)
+                .count(),
+            2
+        );
+        assert!(addresses.iter().any(|(_, address)| {
+            address
+                .0
+                .ends_with(&[AddressSegment::ApplicationArguments(0)])
+        }));
+        let mut unique = addresses
+            .iter()
+            .map(|(_, address)| address.clone())
+            .collect::<Vec<_>>();
+        unique.sort();
+        assert!(unique.windows(2).all(|pair| pair[0] != pair[1]));
     }
 }

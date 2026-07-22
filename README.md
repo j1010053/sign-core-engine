@@ -50,18 +50,21 @@ submodule 掛於 `tshiatun/`(GPL-3.0-or-later,規則檔 `.qy`,bin `tshiatun`)。
 M1+ 的 `syn: slot_features:` 現同時支援 stored sign 與 derived-token filler：所有 RHS
 讀 frozen probe，完整驗證後才原子注入 occurrence constraints；stored sign 從 effective
 base、derived token 從 deep baseline 重跑 Syn→Sem→Prag，再重選 realization，且不改寫
-來源 sign/token。stable source identity／typed resolver 由 Step 13 提供，Step 14 再加入
-mixed namespace 與 replay。完整稽核與邊界見 docs/19、docs/21–22。
+來源 sign/token。stable source identity／typed resolver 與 V2 expression node 身分由
+Step 13 提供；ChangeSet replay 仍是 Step 14。完整稽核與邊界見 docs/19–20、docs/23。
 
-**Step 13 source interface 與 Primitive Edit 已完成**：caller `.lang` 搭配版本化
-identity sidecar，提供 stable `NodeId`／typed resolver／四原語／`check_language`／
-Language diff 與 trace；詳見 docs/20。
+**Step 13 source interface 與 Primitive Edit 的語義／API 契約已封板**：caller `.lang` 搭配版本化
+identity sidecar，為 V1 節點及 V2 Application／Case／CaseBranch／Constraint 提供 stable
+`NodeId`／typed resolver；四原語、`check_language`、Language diff 與 trace 均只修改
+caller source。slot／trait rename 會重寫 typed consumers，巢狀 case 亦可 round-trip、定址與
+移動。2026-07-22 根 workspace 251/251、Tshiatūn 157/157 通過；完整工具閘門仍因
+本機工具鏈與既存 dirty submodule 回傳 exit 2，未宣稱 release gate exit 0；詳見 docs/20。
 
-**Step 14 Primitive-only ChangeSet 已實作**：identity sidecar 升為 v2 mixed namespace；
-`.chg` 提供 parse→resolve→stable-NodeRef dump、statement transaction、library/base lock、
-deterministic replay 與 dirty/lazy `compile_document`。共時 runtime 同時補齊 derived-token
-downward `slot_features`、deep-baseline filler rule 重跑及 `OccurrenceRecord`。語法教學見
-docs/21，契約與證據見 docs/22。
+**Step 14 尚未封板**：repo 內已有 Primitive-only `.chg`、statement transaction、
+replay 與 lazy compile 的 preview；preview 測試會隨 workspace regression 執行，但不構成
+Step 14 相容性或 release 聲明。
+舊檔不保證可直接 replay；下一階段須以 Step 13 的 stable source identity 重新完成
+ChangeSet 契約與擴大回歸。preview 規格見 docs/22。
 
 ## `.lang` 語法一瞥(colon+縮排,I22)
 

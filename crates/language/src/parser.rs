@@ -24,10 +24,10 @@
 use crate::path::parse_path;
 use crate::{
     BinaryConstraint, Block, CaseBranch, CaseCondition, ConstraintPredicate, Def, Dim, Expression,
-    ExpressionType, FeatureDecl, FeatureValue, Language, LanguageSchema, Realization,
-    RealizationBranch, RoleBinding, RoleDecl, Rule, SignApplication, SignArgument,
-    SignArgumentValue, SignExpression, SignItem, SignProjection, Slot, SlotConstraint,
-    SlotFeatureBinding, SlotMapOp, SourceLocation, Stage, TraitDef, TypedCase,
+    ExpressionType, FeatureDecl, FeatureExpression, FeatureValue, Language, LanguageSchema,
+    Realization, RealizationBranch, RoleBinding, RoleDecl, RoleExpression, Rule, SignApplication,
+    SignArgument, SignArgumentValue, SignExpression, SignItem, SignProjection, Slot,
+    SlotConstraint, SlotFeatureBinding, SlotMapOp, SourceLocation, Stage, TraitDef, TypedCase,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -208,6 +208,17 @@ fn parse_expression(
     if matches!(expected, ExpressionType::Feature { .. }) && ident_ok(source) {
         return Ok(Expression::EnumValue(source.to_owned()));
     }
+    if matches!(expected, ExpressionType::Role { .. }) {
+        if let Some(slot) = source
+            .strip_prefix('{')
+            .and_then(|value| value.strip_suffix('}'))
+            .map(str::trim)
+        {
+            if ident_ok(slot) {
+                return Ok(Expression::Slot(slot.to_owned()));
+            }
+        }
+    }
     Err(err(
         line,
         format!("expression {source:?} does not have the expected {expected:?} type"),
@@ -282,8 +293,15 @@ fn parse_typed_case(
             return Err(err(branch.no, "case branch requires a result expression"));
         }
         let result_line = &body[index];
-        let result = parse_expression(&result_line.text, &expected, result_line.no)?;
-        index += 1;
+        let result = if result_line.text.starts_with("case") {
+            let (nested, next) = parse_typed_case(body, index, expected.clone())?;
+            index = next;
+            Expression::Case(Box::new(nested))
+        } else {
+            let result = parse_expression(&result_line.text, &expected, result_line.no)?;
+            index += 1;
+            result
+        };
         let mut belongs = Vec::new();
         while index < body.len() && body[index].indent > branch_indent {
             let line = &body[index];
@@ -748,6 +766,43 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                 rule.branch_sources.push(SourceLocation::line(no));
                 continue;
             }
+            if let Some(name) = text.strip_suffix("=>").map(str::trim) {
+                if !lang.is_v2() {
+                    return Err(err(no, "typed feature expression requires V2"));
+                }
+                if !ident_ok(name) {
+                    return Err(err(no, "feature expression target must be an identifier"));
+                }
+                let Some(next_line) = body.get(index) else {
+                    return Err(err(no, "feature expression requires a typed case"));
+                };
+                if next_line.indent <= ind
+                    || !(next_line.text == "case:"
+                        || (next_line.text.starts_with("case ") && next_line.text.ends_with(':')))
+                {
+                    return Err(err(
+                        no,
+                        "feature expression requires an indented typed case",
+                    ));
+                }
+                let expected = ExpressionType::Feature {
+                    dim: dim.to_dim(),
+                    name: name.to_owned(),
+                };
+                let (case, next) = parse_typed_case(body, index, expected)?;
+                blocks
+                    .last_mut()
+                    .unwrap()
+                    .items
+                    .push(SignItem::FeatureExpression(FeatureExpression {
+                        dim: dim.to_dim(),
+                        name: name.to_owned(),
+                        source: SourceLocation::line(no),
+                        expression: Expression::Case(Box::new(case)),
+                    }));
+                index = next;
+                continue;
+            }
             if text.contains("=>") {
                 let rule = parse_rule(lang, text, no, dim.to_dim())?;
                 blocks
@@ -818,6 +873,42 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             if let Some((name, value)) = text.split_once('=') {
                 let name = name.trim();
                 let value = value.trim();
+                if value.is_empty() {
+                    if !lang.is_v2() {
+                        return Err(err(no, "typed role expression requires V2"));
+                    }
+                    if !ident_ok(name) {
+                        return Err(err(no, "role expression target must be an identifier"));
+                    }
+                    let Some(next_line) = body.get(index) else {
+                        return Err(err(no, "role expression requires a typed case"));
+                    };
+                    if next_line.indent <= ind
+                        || !(next_line.text == "case:"
+                            || (next_line.text.starts_with("case ")
+                                && next_line.text.ends_with(':')))
+                    {
+                        return Err(err(no, "role expression requires an indented typed case"));
+                    }
+                    let (case, next) = parse_typed_case(
+                        body,
+                        index,
+                        ExpressionType::Role {
+                            name: name.to_owned(),
+                        },
+                    )?;
+                    blocks
+                        .last_mut()
+                        .unwrap()
+                        .items
+                        .push(SignItem::RoleExpression(RoleExpression {
+                            name: name.to_owned(),
+                            source: SourceLocation::line(no),
+                            expression: Expression::Case(Box::new(case)),
+                        }));
+                    index = next;
+                    continue;
+                }
                 let Some(slot) = value.strip_prefix('{').and_then(|v| v.strip_suffix('}')) else {
                     return Err(err(no, "role binding must be `NAME = {slot}`"));
                 };

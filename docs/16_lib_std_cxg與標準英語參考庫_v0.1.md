@@ -122,13 +122,13 @@ Slot／Rule／construction-applicability 原語。原始 value、抽象 schema�
 | source/config | `lib/*/*/{code,data,config}` | config kind/ID/dependency/export 驗證 |
 | parser/IR | `SlotConstraint`、typed `feature:`、`roles:`、`realization:`、`$self` | enum/role/realization round-trip；unknown slot/path 拒絕 |
 | selection | `LibraryCatalog::select` | 未選 English 不可見；選後有效語言可見；循環/停用/未知拒絕 |
-| transition | frozen `FillerSnapshot` + sequential token Patch + `DerivationContext` + direct stored `slot_features` occurrence clone | Then feeding、optional Else、unify conflict、filler immutability、`she`／`her` case realization、context conflict；derived-token forwarding／filler-rule 重跑另列缺口 |
+| transition | frozen probe + deep-baseline occurrence rebuild + sequential token Patch + `DerivationContext` | Then feeding、optional Else、unify conflict、filler immutability、`she`／`her` case realization、context conflict；stored 與 derived-token forwarding 都從 baseline 重跑 filler rules／typed cases，再選 realization |
 | observation | `DerivedToken`、`RuleRecord`、`SystemDerivation`、`PhonRealization` | 四維狀態、self/slot reads、package、line、provenance、pure phon input、surface 同時斷言 |
 | public API | `compile_with_libraries` | 12 English constructions與八 realization trait 均走真實 phon runtime |
 | determinism | catalog/order/derive repeat | effective dump、token、RuleRecord與surface兩次完全相同 |
 
 主要證據位於 `tests/library_cxg_english.rs`、`tests/slot_feature_bindings.rs` 與
-`tests/sem_roles_realization.rs`；本輪 language workspace **179/179**、Tshiatūn
+`tests/sem_roles_realization.rs`；2026-07-22 Step 13 語義／API 封板為根 workspace **251/251**（language 220、changeset 31）、Tshiatūn
 **157/157** 通過。既有 M1++、Grambank、construction與 Tshiatūn 雙軌測試仍為回歸
 護欄。這些證據只覆蓋已列出的共時範圍，不是 M1+ 完整封板。完整 Sem/phon runtime
 契約見 `docs/18_sem_roles_self_phon_realization_v1.md`。歷時入口、caller-only source

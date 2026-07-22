@@ -135,7 +135,7 @@ if ($script:Rustup) {
     if (-not $LintInfo.host) { Add-Gap "lint toolchain unavailable: $LintToolchain" }
     else {
         if (-not (Test-Component $LintToolchain "rustfmt")) { Add-Gap "rustfmt missing for lint toolchain $LintToolchain" }
-        if (-not (Test-Component $LintToolchain "clippy")) { Add-Gap "Clippy missing for lint toolchain $LintToolchain" }
+        if (-not (Test-Component $LintToolchain "clippy")) { Add-Gap "selected lint toolchain has no Clippy component: $LintToolchain" }
         if (Test-Component $LintToolchain "rustfmt") {
             $LintInfo.rustfmt = (@(& $script:Rustup run $LintToolchain rustfmt --version 2>$null) -join "`n")
         }

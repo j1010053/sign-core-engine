@@ -14,6 +14,12 @@
 //! (I15-b/P26、修補06 §1.2)。
 //! 依賴方向:`language → dsl`(P20);本 crate 對 dsl 的使用僅限公開型別。
 
+//! # Minimal document
+//!
+//! ```
+//! let language = conlang_language::Language::new();
+//! assert_eq!(language.dump(), "");
+//! ```
 #![forbid(unsafe_code)]
 #![deny(missing_debug_implementations)]
 
@@ -37,7 +43,7 @@ pub mod synchronic;
 pub mod system;
 pub mod word;
 
-pub use construction::OccurrenceRecord;
+pub use construction::{OccurrenceCaseRecord, OccurrenceCaseStatus, OccurrenceRecord};
 pub use diagnostic::{Diagnostic, DiagnosticSource, Severity, SourceLocation, ValidationReport};
 pub use identity::{
     sha256_hex, AddressSegment, AstNode, EditableField, IdentityAllocatorV2, IdentityError,
@@ -58,9 +64,8 @@ pub use system::{
     check_document, check_language, check_language_with_libraries, compile_document,
     compile_system, compile_system_ref, compile_with_libraries, compile_with_libraries_ref,
     CandidateSelectionTrace, CandidateSelector, CandidateSet, CaseBranchStatus, CaseRecord,
-    CompileSystemError, CompiledSystem, ConstructionCandidate, DerivationContext, PartialSign,
-    PhonRealization, RealizedPhonInput, SignExpressionEvaluation, SignValue, SystemDerivation,
-    SystemError,
+    CompileSystemError, CompiledSystem, ConstructionCandidate, DerivationContext, PhonRealization,
+    RealizedPhonInput, SignExpressionEvaluation, SignValue, SystemDerivation, SystemError,
 };
 pub use tshiatun_dsl::lower::Stage;
 
@@ -432,6 +437,24 @@ pub struct SignExpression {
     pub source: SourceLocation,
 }
 
+/// A V2 typed expression assigned to a declared enum feature. The expression
+/// is evaluated in the dimension's normal Syn -> Sem -> Prag order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeatureExpression {
+    pub dim: Dim,
+    pub name: String,
+    pub expression: Expression,
+    pub source: SourceLocation,
+}
+
+/// A V2 expression selecting the Sign that fills a semantic role.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoleExpression {
+    pub name: String,
+    pub expression: Expression,
+    pub source: SourceLocation,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConstraintPredicate {
     Equal,
@@ -526,9 +549,11 @@ pub enum SignItem {
     SlotMap(SlotMapOp),
     FeatureDecl(FeatureDecl),
     FeatureValue(FeatureValue),
+    FeatureExpression(FeatureExpression),
     SlotFeatureBinding(SlotFeatureBinding),
     RoleDecl(RoleDecl),
     RoleBinding(RoleBinding),
+    RoleExpression(RoleExpression),
     Realization(Realization),
     SignExpression(SignExpression),
     Constraint(BinaryConstraint),

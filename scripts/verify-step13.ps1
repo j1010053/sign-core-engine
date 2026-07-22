@@ -52,7 +52,8 @@ function Invoke-Gate {
     $Discovered = $Passed + $Failed + $Ignored
     $Exit = $ProcessExit
     $IsTest = $Name -in @(
-        "identity-targeted", "primitive-targeted", "workspace-full", "tshiatun-full"
+        "fp-targeted", "runtime-targeted", "identity-targeted", "primitive-targeted",
+        "workspace-full", "tshiatun-full"
     )
     if ($IsTest -and ($Matches.Count -eq 0 -or $Discovered -eq 0 -or $Ignored -ne 0 -or $Filtered -ne 0)) {
         $Exit = 1
@@ -120,7 +121,7 @@ if ($Rustup) {
     if ($LASTEXITCODE -ne 0) { Add-Gap "Rust toolchain unavailable: $Toolchain" }
     else {
         if (-not (Test-Installed $Components "rustfmt-")) { Add-Gap "rustfmt missing for $Toolchain" }
-        if (-not (Test-Installed $Components "clippy-")) { Add-Gap "Clippy missing for $Toolchain" }
+        if (-not (Test-Installed $Components "clippy-")) { Add-Gap "selected toolchain has no Clippy component: $Toolchain" }
         $Targets = @(& $Rustup target list --installed --toolchain $Toolchain 2>$null)
         if ($Targets -notcontains "wasm32-unknown-unknown") { Add-Gap "WASM target missing" }
     }
@@ -158,6 +159,8 @@ $FailedGate = $false
 $Gates = @(
     @{ Name = "rustfmt"; Args = $Prefix + @("fmt", "--all", "--", "--check") },
     @{ Name = "clippy"; Args = $Prefix + @("clippy", "--workspace", "--all-targets", "--", "-D", "warnings") },
+    @{ Name = "fp-targeted"; Args = $Prefix + @("test", "-p", "conlang-language", "--test", "fp_v2") },
+    @{ Name = "runtime-targeted"; Args = $Prefix + @("test", "-p", "conlang-language", "--test", "runtime_sealing") },
     @{ Name = "identity-targeted"; Args = $Prefix + @("test", "-p", "conlang-language", "--test", "identity_sidecar") },
     @{ Name = "primitive-targeted"; Args = $Prefix + @("test", "-p", "conlang-changeset", "--test", "primitive_edits") },
     @{ Name = "workspace-full"; Args = $Prefix + @("test", "--workspace") },
@@ -170,4 +173,3 @@ foreach ($Gate in $Gates) {
 $Exit = if ($FailedGate) { 1 } else { 0 }
 Write-Summary $Exit $RootSha $Expected $Actual
 exit $Exit
-

@@ -1,4 +1,7 @@
-# Step 14 ChangeSet Interpreter（v1）
+# Step 14 ChangeSet Interpreter（preview，尚未封板）
+
+> 本文件描述下一階段契約。現有程式碼可作原型與回歸素材，但不構成 Step 14
+> completion、release gate 或舊檔 replay 相容性承諾；本次封板終點是 Step 13。
 
 Step 14 只改 caller `LanguageDocument`。target 永遠不是 effective library overlay、
 CompiledSystem、DerivedToken 或 surface。權威操作仍只有 Insert／Delete／Update／Move；
