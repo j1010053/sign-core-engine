@@ -37,6 +37,10 @@ fn local_dim_defs(sign: &SignDef, dim: Dim) -> Vec<(String, String)> {
             SignItem::Def(d) if path_dim(&d.path) == Some(dim) => {
                 Some((d.path.clone(), d.value.clone()))
             }
+            SignItem::FeatureValue(feature) if feature.dim == dim => Some((
+                format!("{}.{}", dim.keyword(), feature.name),
+                feature.value.clone(),
+            )),
             _ => None,
         })
         .collect()
@@ -63,17 +67,24 @@ impl SignDef {
     /// **分類閉包維度中立**(P38 v0.2 單一樹);`defs` 才依維度過濾。
     pub fn project(&self, dim: Dim, reg: &OntologyRegistry) -> DimProjection {
         let categories = reg.sign_categories(self); // 維度中立
-        // 繼承:閉包 self-first;範疇 Def 是「範疇預設」,越遠祖越先(越易被覆蓋)
-        // → 反轉閉包令根祖在前、本地最後 → last_wins 讓本地與近祖勝出(P6)。
+                                                    // 繼承 precedence 由 registry 統一計算:遠祖先、近祖後;
+                                                    // 同距離後寫 belongs 後套用;菱形節點只出現一次。
         let mut all: Vec<(String, String)> = Vec::new();
-        for cat in categories.iter().rev() {
-            if let Some(node) = reg.node(cat) {
+        for source in reg.inheritance_order(self) {
+            if let Some(node) = reg.node(&source.trait_name) {
                 all.extend(
                     node.defs
                         .iter()
                         .filter(|(p, _)| path_dim(p) == Some(dim)) // 只取本維 Def
                         .cloned(),
                 );
+                all.extend(node.items.iter().filter_map(|item| match item {
+                    SignItem::FeatureValue(feature) if feature.dim == dim => Some((
+                        format!("{}.{}", dim.keyword(), feature.name),
+                        feature.value.clone(),
+                    )),
+                    _ => None,
+                }));
             }
         }
         all.extend(local_dim_defs(self, dim)); // 本地在最後 → 覆蓋

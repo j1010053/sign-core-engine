@@ -1,0 +1,30 @@
+name	parent	dimension_default
+Semantic		
+SemanticFrame	Semantic	
+EventFrame	SemanticFrame	
+Predicate		
+Verb	Predicate	
+Intransitive	Verb	
+Transitive	Verb	
+Ditransitive	Transitive	
+Nominal		
+Noun	Nominal	
+Pronoun	Nominal	
+Adposition		
+Locative	Adposition	
+Entity	Semantic	
+Relation	Semantic	
+AgreementBearer		
+Physical	Entity	
+Animate	Physical	
+Human	Animate	
+Event	EventFrame	
+Motion	Event	
+TransferFrame	EventFrame	
+Transfer	TransferFrame	
+Pragmatic		
+Illocution	Pragmatic	
+SocialDeixis	Pragmatic	
+InfoStructure	Pragmatic	
+Stance	Pragmatic	
+Deixis	Pragmatic	

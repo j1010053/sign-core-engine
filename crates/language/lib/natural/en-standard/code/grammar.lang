@@ -1,0 +1,564 @@
+schema conlang.lang/v2
+
+/* Contemporary formal Standard English common to British and American usage.
+   Spaces in phon templates are structural word boundaries and are rendered
+   automatically by `surface_phrase`; capitalization and punctuation remain
+   outside this phon fixture. Semantic identity is trait membership plus provenance, never a free `sem.frame`,
+   `sem.gloss`, or `sem.concept` string.
+
+   `dog/dogs` is represented by one deep construction sign below.  The
+   surface branch is selected after the token's declared number feature has
+   been constrained; it is not a second `dogs` sign.  `seen` remains an
+   explicitly lexicalized irregular participle workaround. */
+
+Symbol a
+Symbol b
+Symbol d
+Symbol e
+Symbol g
+Symbol h
+Symbol i
+Symbol j
+Symbol k
+Symbol m
+Symbol n
+Symbol o
+Symbol r
+Symbol s
+Symbol t
+Symbol u
+Symbol y
+
+Class vowel {a, e, i, o, u, y}
+
+trait StandardEnglishProfile:
+    belongs GB020_Present
+    belongs GB021_Present
+    belongs GB028_Absent
+    belongs GB030_Present
+    belongs GB044_Present
+    belongs GB057_Absent
+    belongs GB059_Absent
+    belongs GB068_Absent
+    belongs GB070_Absent
+    belongs GB074_Present
+    belongs GB075_Absent
+    belongs GB082_Absent
+    belongs GB083_Present
+    belongs GB084_Absent
+    belongs GB086_Absent
+    belongs GB103_Absent
+    belongs GB107_Present
+    belongs GB117_Present
+    belongs GB118_Present
+    belongs GB132_Present
+    belongs GB147_Absent
+    belongs GB155_Absent
+    belongs GB262_Absent
+    belongs GB322_Absent
+    belongs GB522_Absent
+
+trait EnglishConstruction:
+    belongs StandardEnglishProfile
+    belongs FormMeaningConstruction
+
+/* Natural-language-specific semantic and feature schemas.  AgreementBearer
+   comes from std:core; its domains are deliberately inherited rather than
+   recreated as unconstrained syn paths. */
+trait EnglishCountMeaning:
+    sem:
+        feature:
+            number = enum(singular, plural)
+
+trait EnglishIdentifiability:
+    belongs Semantic
+    sem:
+        feature:
+            identifiability = enum(definite, indefinite)
+
+trait EnglishVoiceBearer:
+    syn:
+        feature:
+            voice = enum(active, passive)
+
+trait EnglishThirdSingular:
+    belongs AgreementBearer
+    syn:
+        feature:
+            number = singular
+            person = third
+
+/* Case is a property of a nominal occurrence, while government lives on the
+   predicate that licenses that occurrence.  A clause copies the predicate's
+   requirement into a per-slot occurrence context; the lexical sign remains
+   immutable and the nominal selects its own surface realization. */
+trait EnglishCaseBearer:
+    belongs Nominal
+    syn:
+        feature:
+            case = enum(nominative, accusative)
+
+trait EnglishSubjectCaseAssigner:
+    belongs Predicate
+    syn:
+        feature:
+            subject_case = enum(nominative, accusative)
+
+trait EnglishNominativeSubjectCaseAssigner:
+    belongs EnglishSubjectCaseAssigner
+    syn:
+        feature:
+            subject_case = nominative
+
+trait EnglishObjectCaseAssigner:
+    belongs Predicate
+    syn:
+        feature:
+            object_case = enum(nominative, accusative)
+
+trait EnglishFiniteTransitiveCaseAssigner:
+    belongs EnglishNominativeSubjectCaseAssigner
+    belongs EnglishObjectCaseAssigner
+    syn:
+        feature:
+            object_case = accusative
+
+trait EnglishFiniteIntransitivePredicate:
+    belongs Intransitive
+    belongs EnglishNominativeSubjectCaseAssigner
+
+trait EnglishFiniteTransitivePredicate:
+    belongs Transitive
+    belongs EnglishFiniteTransitiveCaseAssigner
+
+trait EnglishDeterminer:
+    belongs Semantic
+trait EnglishAdjective:
+    belongs Semantic
+trait EnglishAuxiliary:
+    belongs Predicate
+    belongs AgreementBearer
+trait EnglishCopula:
+    belongs EnglishAuxiliary
+    belongs Copula
+trait EnglishNegator:
+    belongs Semantic
+trait EnglishPluralMarker:
+    belongs Semantic
+
+/* Semantic frame identity is ontology membership.  These traits distinguish
+   frame/function classes without introducing a mutable `frame = string`. */
+trait EnglishReferenceFrame:
+    belongs SemanticFrame
+trait EnglishRelationFrame:
+    belongs SemanticFrame
+trait EnglishClauseFrame:
+    belongs EventFrame
+trait EnglishCopularFrame:
+    belongs EventFrame
+trait EnglishNegationFrame:
+    belongs EventFrame
+trait EnglishQuestionFrame:
+    belongs EventFrame
+trait EnglishPassiveFrame:
+    belongs EventFrame
+trait EnglishCountNounFrame:
+    belongs SemanticFrame
+trait EnglishRunFrame:
+    belongs EventFrame
+trait EnglishSeeFrame:
+    belongs EventFrame
+trait EnglishCopulaFrame:
+    belongs EventFrame
+trait EnglishDoSupportFrame:
+    belongs EventFrame
+trait EnglishDogConcept:
+    belongs Entity
+trait EnglishThirdFemininePerson:
+    belongs Human
+trait EnglishBookConcept:
+    belongs Entity
+trait EnglishHouseConcept:
+    belongs Entity
+trait EnglishBigProperty:
+    belongs Semantic
+trait EnglishInRelation:
+    belongs Relation
+
+sign john:
+    belongs Noun
+    belongs EnglishCaseBearer
+    belongs Human
+    belongs EnglishThirdSingular
+    phon:
+        /john/
+
+sign mary:
+    belongs Noun
+    belongs EnglishCaseBearer
+    belongs Human
+    belongs EnglishThirdSingular
+    phon:
+        /mary/
+
+/* One lexical sign realizes two surface case forms.  Case is supplied by its
+   clause occurrence, never stored back into this source sign. */
+sign she:
+    belongs Pronoun
+    belongs EnglishCaseBearer
+    belongs EnglishThirdSingular
+    belongs EnglishThirdFemininePerson
+    phon:
+        /she/
+        realization:
+            case:
+                $self.syn.case == nominative:
+                    /she/
+                $self.syn.case == accusative:
+                    /her/
+
+/* `dog` is a lexical stem.  Singular/plural surface realization belongs to
+   EnglishCountNounForm, whose SignId stays stable across contexts. */
+sign dog:
+    belongs Noun
+    belongs EnglishCaseBearer
+    belongs EnglishDogConcept
+    belongs EnglishThirdSingular
+    phon:
+        /dog/
+
+sign book:
+    belongs Noun
+    belongs EnglishCaseBearer
+    belongs EnglishBookConcept
+    belongs EnglishThirdSingular
+    phon:
+        /book/
+
+sign house:
+    belongs Noun
+    belongs EnglishCaseBearer
+    belongs EnglishHouseConcept
+    belongs EnglishThirdSingular
+    phon:
+        /house/
+
+sign the:
+    belongs EnglishDeterminer
+    belongs EnglishIdentifiability
+    sem:
+        feature:
+            identifiability = definite
+    phon:
+        /the/
+
+sign a:
+    belongs EnglishDeterminer
+    belongs EnglishIdentifiability
+    sem:
+        feature:
+            identifiability = indefinite
+    phon:
+        /a/
+
+sign big:
+    belongs EnglishAdjective
+    belongs EnglishBigProperty
+    phon:
+        /big/
+
+sign in:
+    belongs Adposition
+    belongs EnglishInRelation
+    phon:
+        /in/
+
+sign plural_s:
+    belongs EnglishPluralMarker
+    belongs EnglishCountMeaning
+    sem:
+        feature:
+            number = plural
+    phon:
+        /s/
+
+/* These are deep lexical bases.  Their finite spell-outs are selected by the
+   containing finite-clause constructions, rather than by sibling runs/sees
+   signs. */
+sign run:
+    belongs EnglishFiniteIntransitivePredicate
+    belongs EnglishRunFrame
+    phon:
+        /run/
+
+sign see:
+    belongs EnglishFiniteTransitivePredicate
+    belongs EnglishSeeFrame
+    phon:
+        /see/
+
+sign be:
+    belongs EnglishCopula
+    belongs EnglishCopulaFrame
+    phon:
+        /be/
+
+sign do:
+    belongs EnglishAuxiliary
+    belongs EnglishDoSupportFrame
+    phon:
+        /do/
+
+sign not:
+    belongs EnglishNegator
+    phon:
+        /not/
+
+/* An irregular lexicalized participle: deliberately retained as a
+   workaround, not evidence for productive regular morphology. */
+sign seen:
+    belongs Transitive
+    belongs EnglishSeeFrame
+    belongs EnglishVoiceBearer
+    lexicalized = true
+    syn:
+        feature:
+            voice = passive
+    phon:
+        /seen/
+
+sign EnglishDefiniteNP:
+    belongs EnglishConstruction
+    belongs DeterminationConstruction
+    belongs EnglishReferenceFrame
+    syn:
+        feature:
+            determination = enum(definite, indefinite)
+            determination = definite
+    prag:
+        identifiability = identifiable
+    phon:
+        /{determiner} {nominal}/
+
+sign EnglishIndefiniteNP:
+    belongs EnglishConstruction
+    belongs DeterminationConstruction
+    belongs EnglishReferenceFrame
+    syn:
+        feature:
+            determination = enum(definite, indefinite)
+            determination = indefinite
+    prag:
+        identifiability = non-identifiable
+    phon:
+        /{determiner} {nominal}/
+
+/* One deep noun-form construction.  A DerivationContext supplies its number
+   constraint; the sem feature reads finalized syn state through read-only
+   $self, then realization chooses a complete phon template. */
+sign EnglishCountNounForm:
+    belongs EnglishConstruction
+    belongs EnglishCountMeaning
+    belongs EnglishCountNounFrame
+    belongs AgreementBearer
+    syn:
+        slots:
+            stem [Noun]
+    sem:
+        feature:
+            number => $self.syn.number
+        roles:
+            referent [Entity]
+            referent = {stem}
+    phon:
+        /{stem}/
+        realization:
+            case:
+                $self.syn.number == plural:
+                    /{stem}s/
+                else:
+                    /{stem}/
+
+sign EnglishPluralNP:
+    belongs EnglishConstruction
+    belongs NumberMarkingConstruction
+    belongs EnglishCountMeaning
+    belongs EnglishReferenceFrame
+    belongs AgreementBearer
+    syn:
+        feature:
+            number = plural
+    sem:
+        feature:
+            number = plural
+    phon:
+        /{nominal}{marker}/
+
+sign EnglishPossessiveNP:
+    belongs EnglishConstruction
+    belongs PossessionConstruction
+    belongs EnglishReferenceFrame
+    phon:
+        /{possessor}s {possessed}/
+
+sign EnglishAttributiveNP:
+    belongs EnglishConstruction
+    belongs AttributionConstruction
+    belongs EnglishReferenceFrame
+    syn:
+        feature:
+            order = enum(attribute_nominal)
+            order = attribute_nominal
+    phon:
+        /{attribute} {nominal}/
+
+sign EnglishPrepositionalPhrase:
+    belongs EnglishConstruction
+    belongs PrepositionalPhrase
+    belongs EnglishRelationFrame
+
+sign EnglishIntransitiveClause:
+    belongs EnglishConstruction
+    belongs IntransitiveClauseConstruction
+    belongs EnglishClauseFrame
+    belongs AgreementBearer
+    syn:
+        slot_features:
+            subject.case = $slot.predicate.syn.subject_case
+        feature:
+            finite_form = enum(base, third_singular)
+            agreement_number = enum(singular, plural)
+            subject_case = enum(nominative, accusative)
+            number => $slot.subject.syn.number
+            person => $slot.subject.syn.person
+            agreement_number => $slot.subject.syn.number
+            subject_case => require($slot.subject.syn.case, $slot.predicate.syn.subject_case)
+            finite_form => third_singular / $slot.subject == [EnglishThirdSingular]
+            else finite_form => base
+    prag:
+        clause-type = declarative
+    phon:
+        /{subject} {predicate}/
+        realization:
+            /{subject} {predicate}s/ / $self.syn.finite_form == third_singular
+            else /{subject} {predicate}/
+
+sign EnglishSVOTransitiveClause:
+    belongs EnglishConstruction
+    belongs SVOTransitiveClause
+    belongs EnglishClauseFrame
+    belongs AgreementBearer
+    syn:
+        slot_features:
+            subject.case = $slot.predicate.syn.subject_case
+            object.case = $slot.predicate.syn.object_case
+        feature:
+            finite_form = enum(base, third_singular)
+            agreement_number = enum(singular, plural)
+            subject_case = enum(nominative, accusative)
+            object_case = enum(nominative, accusative)
+            number => $slot.subject.syn.number
+            person => $slot.subject.syn.person
+            agreement_number => $slot.subject.syn.number
+            subject_case => require($slot.subject.syn.case, $slot.predicate.syn.subject_case)
+            object_case => require($slot.object.syn.case, $slot.predicate.syn.object_case)
+            finite_form => third_singular / $slot.subject == [EnglishThirdSingular]
+            else finite_form => base
+    prag:
+        clause-type = declarative
+    phon:
+        /{subject} {predicate} {object}/
+        realization:
+            /{subject} {predicate}s {object}/ / $self.syn.finite_form == third_singular
+            else /{subject} {predicate} {object}/
+
+sign EnglishCopularPredication:
+    belongs EnglishConstruction
+    belongs CopularPredicationConstruction
+    belongs EnglishCopularFrame
+    belongs AgreementBearer
+    syn:
+        feature:
+            finite_form = enum(base, third_singular)
+            number => $slot.subject.syn.number
+            person => $slot.subject.syn.person
+            finite_form => third_singular / $slot.subject == [EnglishThirdSingular]
+            else finite_form => base
+    prag:
+        clause-type = declarative
+    phon:
+        /{subject} {copula} {predicate}/
+        realization:
+            case:
+                $self.syn.finite_form == third_singular:
+                    /{subject} is {predicate}/
+                else:
+                    /{subject} {copula} {predicate}/
+
+sign EnglishDoNegation:
+    belongs EnglishConstruction
+    belongs NegationConstruction
+    belongs EnglishNegationFrame
+    belongs AgreementBearer
+    syn:
+        slots:
+            subject [Nominal]
+            auxiliary [EnglishAuxiliary]
+            negator [EnglishNegator]
+        feature:
+            finite_form = enum(base, third_singular)
+            number => $slot.subject.syn.number
+            person => $slot.subject.syn.person
+            finite_form => third_singular / $slot.subject == [EnglishThirdSingular]
+            else finite_form => base
+    prag:
+        clause-type = declarative
+    phon:
+        /{subject} {auxiliary} {negator} {predicate}/
+        realization:
+            case:
+                $self.syn.finite_form == third_singular:
+                    /{subject} does {negator} {predicate}/
+                else:
+                    /{subject} {auxiliary} {negator} {predicate}/
+
+sign EnglishPolarQuestion:
+    belongs EnglishConstruction
+    belongs PolarQuestionConstruction
+    belongs EnglishQuestionFrame
+    belongs AgreementBearer
+    syn:
+        slots:
+            auxiliary [EnglishAuxiliary]
+            subject [Nominal]
+        feature:
+            finite_form = enum(base, third_singular)
+            number => $slot.subject.syn.number
+            person => $slot.subject.syn.person
+            finite_form => third_singular / $slot.subject == [EnglishThirdSingular]
+            else finite_form => base
+    phon:
+        /{auxiliary} {subject} {clause}/
+        realization:
+            /does {subject} {clause}/ / $self.syn.finite_form == third_singular
+            else /{auxiliary} {subject} {clause}/
+
+sign EnglishPeriphrasticPassive:
+    belongs EnglishConstruction
+    belongs PassiveConstruction
+    belongs EnglishPassiveFrame
+    belongs AgreementBearer
+    syn:
+        feature:
+            finite_form = enum(base, third_singular)
+            number => $slot.patient.syn.number
+            person => $slot.patient.syn.person
+            finite_form => third_singular / $slot.patient == [EnglishThirdSingular]
+            else finite_form => base
+    prag:
+        perspective = patient-prominent
+    phon:
+        /{patient} {auxiliary} {predicate} by {agent}/
+        realization:
+            /{patient} is {predicate} by {agent}/ / $self.syn.finite_form == third_singular
+            else /{patient} {auxiliary} {predicate} by {agent}/

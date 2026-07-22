@@ -47,7 +47,11 @@ sign go:
 #[test]
 fn roundtrip_identity_on_canonical_p21() {
     let canon = Language::parse(SRC).expect("parse").dump();
-    assert_eq!(Language::parse(&canon).unwrap().dump(), canon, "canonical 為不動點");
+    assert_eq!(
+        Language::parse(&canon).unwrap().dump(),
+        canon,
+        "canonical 為不動點"
+    );
     let a = Language::parse(&canon).unwrap();
     let b = Language::parse(&canon).unwrap();
     assert_eq!(a, b, "決定性 id");
@@ -76,7 +80,10 @@ global trait Alpha:
     let ib = dump.find("trait Beta").unwrap();
     let iz = dump.find("sign zz").unwrap();
     assert!(ia < ib && ib < iz, "區段序:global → trait → sign");
-    assert!(dump.contains("x => y @stage word"), "canonical 補 @stage word");
+    assert!(
+        dump.contains("x => y @stage word"),
+        "canonical 補 @stage word"
+    );
     assert_eq!(Language::parse(&dump).unwrap().dump(), dump, "不動點");
 }
 
@@ -95,11 +102,70 @@ fn source_to_ast_shape() {
     assert_eq!(r.stage, Stage::Word);
 
     let go = lang.sign_named("go").unwrap();
-    assert!(matches!(&go.items[0], SignItem::TraitUse { name, block: Some(0) } if name == "VerbCommon"));
-    assert!(matches!(&go.items[1], SignItem::TraitUse { name, block: Some(1) } if name == "VerbCommon"));
+    assert!(
+        matches!(&go.items[0], SignItem::TraitUse { name, block: Some(0) } if name == "VerbCommon")
+    );
+    assert!(
+        matches!(&go.items[1], SignItem::TraitUse { name, block: Some(1) } if name == "VerbCommon")
+    );
     assert!(go
         .items
         .iter()
         .any(|i| matches!(i, SignItem::Rule(r) if r.stage == Stage::Phrase)));
     insta::assert_snapshot!("ast_debug", format!("{lang:#?}"));
+}
+
+#[test]
+fn slot_features_are_canonical_and_roundtrip() {
+    let source = r#"sign Pair:
+    syn:
+        feature:
+            case = enum(nominative, accusative)
+            number = enum(singular, plural)
+        slots:
+            target [Nominal]
+            source [Nominal]
+        slot_features:
+            target.case = nominative
+            target.number = $slot.source.syn.number
+"#;
+
+    let language = Language::parse(source).expect("parse slot features");
+    let pair = language.sign_named("Pair").expect("Pair sign");
+    assert!(matches!(
+        pair.items.as_slice(),
+        [
+            SignItem::FeatureDecl(_),
+            SignItem::FeatureDecl(_),
+            SignItem::Slot(_),
+            SignItem::Slot(_),
+            SignItem::SlotFeatureBinding(first),
+            SignItem::SlotFeatureBinding(second),
+        ] if first.slot == "target"
+            && first.feature == "case"
+            && first.value == "nominative"
+            && first.source.line == 10
+            && second.slot == "target"
+            && second.feature == "number"
+            && second.value == "$slot.source.syn.number"
+            && second.source.line == 11
+    ));
+
+    let canonical = language.dump();
+    assert_eq!(
+        canonical,
+        r#"sign Pair:
+    syn:
+        slots:
+            target [Nominal]
+            source [Nominal]
+        slot_features:
+            target.case = nominative
+            target.number = $slot.source.syn.number
+        feature:
+            case = enum(nominative, accusative)
+            number = enum(singular, plural)
+"#
+    );
+    assert_eq!(Language::parse(&canonical).unwrap().dump(), canonical);
 }

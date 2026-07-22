@@ -1,0 +1,226 @@
+schema conlang.lang/v2
+
+/* Cross-linguistic construction schemas. Form is phon+syn and conventional
+   meaning/function is sem+prag; no duplicate pole wrapper is introduced.
+
+   These traits state abstract licensing and pairing requirements. They do not
+   choose a language-specific order, exponent, or allomorph. Concrete but still
+   cross-linguistic realization patterns live in realizations.lang. */
+
+trait FormMeaningConstruction:
+    syn:
+        feature:
+            pairing = enum(form_meaning)
+            pairing = form_meaning
+
+trait HeadProjection:
+    belongs FormMeaningConstruction
+    syn:
+        slots:
+            head [*]
+
+trait ControllerTargetAgreement:
+    belongs FormMeaningConstruction
+    syn:
+        slots:
+            controller [Nominal]
+            target [Predicate]
+        feature:
+            agreement_number = enum(singular, plural)
+            agreement_number => unify($slot.controller.syn.number, $slot.target.syn.number)
+
+trait DeterminationConstruction:
+    belongs FormMeaningConstruction
+    syn:
+        slots:
+            determiner [*]
+            nominal [Nominal]
+    sem:
+        roles:
+            specifier [Semantic]
+            referent [Entity]
+            specifier = {determiner}
+            referent = {nominal}
+
+trait NumberMarkingConstruction:
+    belongs FormMeaningConstruction
+    syn:
+        slots:
+            nominal [Nominal]
+            marker [*]?
+    sem:
+        roles:
+            referent [Entity]
+            marker [Semantic]?
+            referent = {nominal}
+            marker = {marker}
+
+trait AttributionConstruction:
+    belongs FormMeaningConstruction
+    syn:
+        slots:
+            attribute [*]
+            nominal [Nominal]
+    sem:
+        roles:
+            property [Semantic]
+            referent [Entity]
+            property = {attribute}
+            referent = {nominal}
+
+trait PossessionConstruction:
+    belongs FormMeaningConstruction
+    syn:
+        slots:
+            possessor [Nominal]
+            possessed [Nominal]
+    sem:
+        roles:
+            possessor [Entity]
+            possessed [Entity]
+            possessor = {possessor}
+            possessed = {possessed}
+
+trait AdpositionConstruction:
+    belongs FormMeaningConstruction
+    syn:
+        slots:
+            marker [Adposition]
+            complement [Nominal]
+    sem:
+        roles:
+            relation [Relation]
+            ground [Entity]
+            relation = {marker}
+            ground = {complement}
+
+trait IntransitiveClauseConstruction:
+    belongs FormMeaningConstruction
+    syn:
+        slots:
+            subject [Nominal]
+            predicate [Intransitive]
+    sem:
+        roles:
+            actor [Entity]
+            event [Event]
+            actor = {subject}
+            event = {predicate}
+
+trait TransitiveClauseConstruction:
+    belongs FormMeaningConstruction
+    syn:
+        slots:
+            subject [Nominal]
+            predicate [Transitive]
+            object [Nominal]
+    sem:
+        roles:
+            agent [Entity]
+            event [Event]
+            patient [Entity]
+            agent = {subject}
+            event = {predicate}
+            patient = {object}
+
+/* General copular predication, including property predicates. GB117 is
+   narrower: its behavioral evidence concerns predicate nominals. */
+trait CopularPredicationConstruction:
+    belongs FormMeaningConstruction
+    syn:
+        slots:
+            subject [Nominal]
+            copula [Copula]
+            predicate [*]
+    sem:
+        roles:
+            topic [Entity]
+            predication [Semantic]
+            topic = {subject}
+            predication = {predicate}
+
+/* GB117-compatible abstract behavior. Required, optional, and zero-copula
+   strategies are distinct construction schemas; the GB117 value alone does
+   not select one for every predicate-nominal construction in a language. */
+trait PredicateNominalConstruction:
+    belongs FormMeaningConstruction
+    syn:
+        slots:
+            subject [Nominal]
+            predicate [Nominal]
+    sem:
+        roles:
+            topic [Entity]
+            predication [Entity]
+            topic = {subject}
+            predication = {predicate}
+
+trait RequiredCopulaPredicateNominal:
+    belongs PredicateNominalConstruction
+    syn:
+        slots:
+            copula [Copula]
+
+trait OptionalCopulaPredicateNominal:
+    belongs PredicateNominalConstruction
+    syn:
+        slots:
+            copula [Copula]?
+
+trait ZeroCopulaPredicateNominal:
+    belongs PredicateNominalConstruction
+
+trait NegationConstruction:
+    belongs FormMeaningConstruction
+    syn:
+        slots:
+            predicate [Predicate]
+    sem:
+        feature:
+            polarity = enum(affirmative, negative)
+            polarity = negative
+        roles:
+            scope [Event]
+            scope = {predicate}
+
+trait PolarQuestionConstruction:
+    belongs FormMeaningConstruction
+    syn:
+        slots:
+            clause [Predicate]
+    sem:
+        roles:
+            proposition [Event]
+            proposition = {clause}
+    prag:
+        illocution = polar-question
+
+trait PassiveConstruction:
+    belongs FormMeaningConstruction
+    syn:
+        slots:
+            patient [Nominal]
+            auxiliary [Predicate]
+            predicate [Transitive]
+            agent [Nominal]?
+    sem:
+        roles:
+            patient [Entity]
+            event [Event]
+            agent [Entity]?
+            patient = {patient}
+            event = {predicate}
+            agent = {agent}
+
+trait SerialPredicateConstruction:
+    belongs FormMeaningConstruction
+    syn:
+        slots:
+            first [Predicate]
+            second [Predicate]
+    sem:
+        roles:
+            first_event [Event]
+            second_event [Event]
+            first_event = {first}
+            second_event = {second}

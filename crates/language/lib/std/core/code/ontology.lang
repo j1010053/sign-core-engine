@@ -1,0 +1,73 @@
+/* Core ontology package (stdlib).  This is the dimension-neutral category
+   tree used by `belongs`; category membership—not a mutable `syn.class`—is
+   be overridden locally.  Keep executable declarations in code/, lookup
+   metadata in data/, and package policy in config/ (architecture repair 6). */
+
+trait Semantic:
+trait SemanticFrame:
+    belongs Semantic
+trait EventFrame:
+    belongs SemanticFrame
+trait Entity:
+    belongs Semantic
+trait Relation:
+    belongs Semantic
+
+trait AgreementBearer:
+    syn:
+        feature:
+            number = enum(singular, plural)
+            person = enum(first, second, third)
+
+trait Predicate:
+trait Copula:
+    belongs Predicate
+trait Verb:
+    belongs Predicate
+trait Intransitive:
+    belongs Verb
+trait Transitive:
+    belongs Verb
+trait Ditransitive:
+    belongs Transitive
+trait Nominal:
+    belongs AgreementBearer
+trait Noun:
+    belongs Nominal
+trait Pronoun:
+    belongs Nominal
+trait Adposition:
+trait Locative:
+    belongs Adposition
+
+trait Physical:
+    belongs Entity
+trait Animate:
+    belongs Physical
+trait Human:
+    belongs Animate
+trait Event:
+    belongs EventFrame
+trait Motion:
+    belongs Event
+trait TransferFrame:
+    belongs EventFrame
+    sem:
+        roles:
+            agent [Animate]
+            theme [Entity]
+            recipient [Animate]?
+trait Transfer:
+    belongs TransferFrame
+
+trait Pragmatic:
+trait Illocution:
+    belongs Pragmatic
+trait SocialDeixis:
+    belongs Pragmatic
+trait InfoStructure:
+    belongs Pragmatic
+trait Stance:
+    belongs Pragmatic
+trait Deixis:
+    belongs Pragmatic

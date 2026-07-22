@@ -1,0 +1,72 @@
+Symbol d
+Symbol o
+Symbol g
+Symbol r
+Symbol u
+Symbol n
+Symbol s
+Class vowel {o, u}
+
+trait TutorialEntity:
+    belongs Semantic
+
+trait TutorialNominal:
+    belongs TutorialEntity
+    syn:
+        feature:
+            number = enum(singular, plural)
+            case = enum(nominative, accusative)
+
+trait TutorialPredicate:
+    belongs Semantic
+
+trait TutorialClauseFrame:
+    sem:
+        roles:
+            agent [TutorialEntity]
+            predicate [TutorialPredicate]
+
+sign dog:
+    belongs TutorialNominal
+    phon:
+        /dog/
+
+sign run:
+    belongs TutorialPredicate
+    phon:
+        /run/
+
+sign TutorialNP:
+    belongs TutorialNominal
+    syn:
+        slots:
+            stem [TutorialNominal]
+    sem:
+        feature:
+            interpreted_case = enum(nominative, accusative)
+            interpreted_case => $self.syn.case
+        roles:
+            referent [TutorialEntity]
+            referent = {stem}
+    prag:
+        discourse_case => $self.sem.interpreted_case
+    phon:
+        /{stem}/
+        realization:
+            /{stem}s/ / $self.syn.number == plural
+            else /{stem}/
+
+sign TutorialClause:
+    belongs TutorialClauseFrame
+    syn:
+        slots:
+            subject [TutorialNominal]
+            predicate [TutorialPredicate]
+        slot_features:
+            subject.case = nominative
+    sem:
+        roles:
+            agent = {subject}
+            predicate = {predicate}
+    phon:
+        /{subject} {predicate}/

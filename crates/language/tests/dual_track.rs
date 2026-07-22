@@ -72,7 +72,10 @@ const CASES: &[Case] = &[
 /// 路徑 B:Language 檔 → ①–⑤ → Program。
 fn program_b(lang_src: &str) -> Program {
     let l = Language::parse(lang_src).expect("path B: .lang parses");
-    compile_full(&l).expect("path B: compile ①–⑤").grammar.program
+    compile_full(&l)
+        .expect("path B: compile ①–⑤")
+        .grammar
+        .program
 }
 
 /// CLI 詞表′輸出邏輯的重現:Spell-out 過 → 表層(緊排);否則骨架緊排。

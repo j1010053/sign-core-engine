@@ -22,8 +22,8 @@
 use tshiatun_core::repr::word::Word;
 use tshiatun_dsl::{build_phrase, run_program, surface_phrase, Program, StepRecord};
 
-use crate::codegen::{self, Artifacts, CompiledSign, CodegenError};
-use crate::{Rule, RuleId, Stage};
+use crate::codegen::{self, Artifacts, CodegenError, CompiledSign};
+use crate::{Rule, Stage};
 
 /// 組合樹節點:葉 = sign 引用(P24 Ref 精神,以名字定址);環 = 詞幹層組合。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,7 +51,9 @@ pub enum WordError {
     #[error("sign {sign:?}: `phon` must be /…/ form, got {value:?}")]
     UrMalformed { sign: String, value: String },
     /// P3 cophonology 僅界定於 stem 層;其他 stage 的 sign 局部規則尚無語意。
-    #[error("sign {sign:?} local rule has stage {stage:?}: only stem-stage cophonology is defined (P3)")]
+    #[error(
+        "sign {sign:?} local rule has stage {stage:?}: only stem-stage cophonology is defined (P3)"
+    )]
     UnsupportedSignRuleStage { sign: String, stage: &'static str },
     #[error("sign {sign:?}: cophonology rule-set rejected: {msg}")]
     CophonologyCompile { sign: String, msg: String },
@@ -117,10 +119,15 @@ fn underlying_form(sign: &CompiledSign) -> Result<String, WordError> {
 /// 回傳演化後的 UR 文字。非 stem 局部規則、非音段效果 → 顯式拒絕(I18)。
 fn leaf_text(a: &Artifacts, sign: &CompiledSign) -> Result<String, WordError> {
     let ur = underlying_form(sign)?;
-    if sign.rules.is_empty() {
+    let phon_rules: Vec<_> = sign
+        .rules
+        .iter()
+        .filter(|rule| rule.dim == crate::Dim::Phon)
+        .collect();
+    if phon_rules.is_empty() {
         return Ok(ur);
     }
-    for r in &sign.rules {
+    for r in &phon_rules {
         if r.stage != Stage::Stem {
             return Err(WordError::UnsupportedSignRuleStage {
                 sign: sign.name.clone(),
@@ -136,14 +143,16 @@ fn leaf_text(a: &Artifacts, sign: &CompiledSign) -> Result<String, WordError> {
     }
     src.push('\n');
     let mut n = 1u32;
-    for r in &sign.rules {
+    for r in phon_rules {
         let rule = Rule {
-            id: RuleId(0), // 不入排放(I15-b);僅為型別完整
+            id: r.rule_id.clone(),
             body: r.body.clone(),
             stage: r.stage,
-            dim: crate::Dim::Phon, // cophonology = phon 音段效果(I18)
+            dim: r.dim,
             else_chain: r.else_chain.clone(),
-            then_chain: Vec::new(),
+            then_chain: r.then_chain.clone(),
+            source: r.source,
+            branch_sources: r.branch_sources.clone(),
         };
         codegen::emit_rule(&mut src, &mut n, &rule)?;
     }
@@ -222,7 +231,10 @@ pub fn derive(a: &Artifacts, spec: &PhraseSpec) -> Result<Derivation, WordError>
         .map_err(|e| WordError::Engine(e.to_string()))?;
     let mut steps = Vec::new();
     let mut steps_per_stage = [0usize; 3];
-    for (i, stage) in [Stage::Stem, Stage::Word, Stage::Phrase].into_iter().enumerate() {
+    for (i, stage) in [Stage::Stem, Stage::Word, Stage::Phrase]
+        .into_iter()
+        .enumerate()
+    {
         let slice = stage_slice(&a.grammar.program, stage);
         if slice.rules.is_empty() {
             continue;

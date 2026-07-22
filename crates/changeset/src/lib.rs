@@ -1,0 +1,2987 @@
+//! Step 13 primitive source edits.
+//!
+//! This crate depends on the synchronic language model, never the reverse.
+//! It edits only a caller-owned [`LanguageDocument`]; compiled/effective
+//! language state and runtime derived tokens are deliberately absent here.
+
+#![forbid(unsafe_code)]
+#![deny(missing_debug_implementations)]
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use conlang_language::{
+    check_document, compile_document, sha256_hex, AddressSegment, Block, CompileSystemError,
+    CompiledSystem, Def, Dim, FeatureDecl, FeatureValue, IdentityError, IdentityManifestV2,
+    Language, LanguageDocument, LibraryId, LibrarySpec, NodeAddress, NodeEntryV1, NodeId, NodeKind,
+    NodeRef, Realization, RealizationBranch, RoleBinding, RoleDecl, Rule, Severity, SignDef,
+    SignItem, Slot, SlotConstraint, SlotFeatureBinding, SlotMapOp, Stage, TraitDef,
+    ValidationReport,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Anchor {
+    Start,
+    End,
+    Before(NodeRef),
+    After(NodeRef),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
+pub enum DetachedNode {
+    DslDeclaration(String),
+    Prosody(Vec<String>),
+    Distribution { key: String, value: String },
+    Trait(TraitDef),
+    Sign(SignDef),
+    Block(Block),
+    Item(SignItem),
+    RuleElseBranch(String),
+    RuleThenBranch(String),
+    RealizationBranch(RealizationBranch),
+}
+
+impl DetachedNode {
+    pub fn kind(&self) -> NodeKind {
+        match self {
+            DetachedNode::DslDeclaration(_) => NodeKind::DslDeclaration,
+            DetachedNode::Prosody(_) => NodeKind::Prosody,
+            DetachedNode::Distribution { .. } => NodeKind::Distribution,
+            DetachedNode::Trait(_) => NodeKind::Trait,
+            DetachedNode::Sign(_) => NodeKind::Sign,
+            DetachedNode::Block(_) => NodeKind::Block,
+            DetachedNode::Item(item) => item_kind(item),
+            DetachedNode::RuleElseBranch(_) => NodeKind::RuleElseBranch,
+            DetachedNode::RuleThenBranch(_) => NodeKind::RuleThenBranch,
+            DetachedNode::RealizationBranch(_) => NodeKind::RealizationBranch,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
+pub enum NodeUpdate {
+    Rename(String),
+    TraitGlobal(bool),
+    DslDeclaration(String),
+    Prosody(Vec<String>),
+    Distribution { key: String, value: String },
+    DefinitionPath(String),
+    DefinitionValue(String),
+    RuleBody(String),
+    RuleStage(Stage),
+    RuleDimension(Dim),
+    RuleBranchBody(String),
+    SlotName(String),
+    SlotConstraint(SlotConstraint),
+    SlotOptional(bool),
+    TraitUse { name: String, block: Option<u32> },
+    Belongs(String),
+    FeatureDeclaration(FeatureDecl),
+    FeatureValue(FeatureValue),
+    SlotFeatureBinding(SlotFeatureBinding),
+    SlotMap(SlotMapOp),
+    RoleDeclaration(RoleDecl),
+    RoleBinding(RoleBinding),
+    RealizationTemplate(String),
+    RealizationGuard(Option<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
+pub enum PrimitiveEdit {
+    Insert {
+        parent: NodeRef,
+        anchor: Anchor,
+        subtree: DetachedNode,
+    },
+    Delete {
+        node: NodeRef,
+    },
+    Update {
+        node: NodeRef,
+        change: NodeUpdate,
+    },
+    Move {
+        node: NodeRef,
+        new_parent: NodeRef,
+        anchor: Anchor,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrimitiveKind {
+    Insert,
+    Delete,
+    Update,
+    Move,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeSnapshot {
+    pub id: NodeId,
+    pub kind: NodeKind,
+    pub parent: Option<NodeId>,
+    pub address: NodeAddress,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LanguageDiffEntry {
+    Inserted(NodeSnapshot),
+    Deleted(NodeSnapshot),
+    Updated {
+        before: NodeSnapshot,
+        after: NodeSnapshot,
+    },
+    Moved {
+        before: NodeSnapshot,
+        after: NodeSnapshot,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LanguageDiff {
+    pub entries: Vec<LanguageDiffEntry>,
+}
+
+impl LanguageDiff {
+    pub fn between(before: &LanguageDocument, after: &LanguageDocument) -> LanguageDiff {
+        let old = snapshots(before);
+        let new = snapshots(after);
+        let common: BTreeSet<_> = old
+            .keys()
+            .filter(|id| new.contains_key(*id))
+            .cloned()
+            .collect();
+        let old_ranks = sibling_ranks(&old, &common);
+        let new_ranks = sibling_ranks(&new, &common);
+        let mut entries = Vec::new();
+        let ids: BTreeSet<_> = old.keys().chain(new.keys()).cloned().collect();
+        for id in ids {
+            match (old.get(&id), new.get(&id)) {
+                (None, Some(after)) => entries.push(LanguageDiffEntry::Inserted(after.clone())),
+                (Some(before), None) => entries.push(LanguageDiffEntry::Deleted(before.clone())),
+                (Some(before), Some(after)) => {
+                    if before.parent != after.parent || old_ranks.get(&id) != new_ranks.get(&id) {
+                        entries.push(LanguageDiffEntry::Moved {
+                            before: before.clone(),
+                            after: after.clone(),
+                        });
+                    }
+                    if before.value != after.value || before.kind != after.kind {
+                        entries.push(LanguageDiffEntry::Updated {
+                            before: before.clone(),
+                            after: after.clone(),
+                        });
+                    }
+                }
+                (None, None) => unreachable!(),
+            }
+        }
+        LanguageDiff { entries }
+    }
+}
+
+fn sibling_ranks(
+    snapshots: &BTreeMap<NodeId, NodeSnapshot>,
+    common: &BTreeSet<NodeId>,
+) -> BTreeMap<NodeId, usize> {
+    let mut sequences: BTreeMap<(Option<NodeId>, u8), Vec<&NodeSnapshot>> = BTreeMap::new();
+    for (id, snapshot) in snapshots {
+        if common.contains(id) {
+            sequences
+                .entry((snapshot.parent.clone(), sequence_tag(&snapshot.address)))
+                .or_default()
+                .push(snapshot);
+        }
+    }
+    let mut ranks = BTreeMap::new();
+    for values in sequences.values_mut() {
+        values.sort_by(|left, right| left.address.cmp(&right.address));
+        for (rank, value) in values.iter().enumerate() {
+            ranks.insert(value.id.clone(), rank);
+        }
+    }
+    ranks
+}
+
+fn sequence_tag(address: &NodeAddress) -> u8 {
+    match address.0.last() {
+        None => 0,
+        Some(AddressSegment::DslDeclarations(_)) => 1,
+        Some(AddressSegment::Prosody) => 2,
+        Some(AddressSegment::Distribution(_)) => 3,
+        Some(AddressSegment::Traits(_)) => 4,
+        Some(AddressSegment::Signs(_)) => 5,
+        Some(AddressSegment::Blocks(_)) => 6,
+        Some(AddressSegment::Items(_)) => 7,
+        Some(AddressSegment::RuleElse(_)) => 8,
+        Some(AddressSegment::RuleThen(_)) => 9,
+        Some(AddressSegment::RealizationBranches(_)) => 10,
+        Some(AddressSegment::CaseExpression) => 11,
+        Some(AddressSegment::CaseBranches(_)) => 12,
+        Some(AddressSegment::CaseResult) => 13,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordDiagnostic {
+    pub severity: Severity,
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrimitiveRecord {
+    pub operation: PrimitiveKind,
+    pub target: Option<NodeRef>,
+    pub parent: Option<NodeRef>,
+    pub anchor: Option<Anchor>,
+    pub before: Option<NodeSnapshot>,
+    pub after: Option<NodeSnapshot>,
+    pub allocated_ids: Vec<NodeId>,
+    pub deleted_ids: Vec<NodeId>,
+    pub moved_ids: Vec<NodeId>,
+    pub diagnostics: Vec<RecordDiagnostic>,
+    pub diff: LanguageDiff,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditOutcome {
+    pub document: LanguageDocument,
+    pub record: PrimitiveRecord,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum EditError {
+    #[error("EDIT_TARGET_NOT_FOUND: {0:?}")]
+    TargetNotFound(NodeRef),
+    #[error("EDIT_EXTERNAL_TARGET: {0}")]
+    ExternalTarget(NodeId),
+    #[error("EDIT_ROOT_IMMUTABLE")]
+    RootImmutable,
+    #[error("EDIT_PARENT_KIND: cannot place {child:?} under {parent:?}")]
+    ParentKind { child: NodeKind, parent: NodeKind },
+    #[error("EDIT_ANCHOR_INVALID: {0}")]
+    AnchorInvalid(String),
+    #[error("EDIT_FIELD_MISMATCH: {0}")]
+    FieldMismatch(String),
+    #[error("EDIT_CYCLE: a node cannot be moved into its own subtree")]
+    Cycle,
+    #[error("EDIT_ID_EXHAUSTED")]
+    IdExhausted,
+    #[error("EDIT_IDENTITY: {0}")]
+    Identity(#[from] IdentityError),
+    #[error("EDIT_VALIDATION_FAILED")]
+    Validation(Box<ValidationReport>),
+}
+
+pub fn apply_edit(
+    source: &LanguageDocument,
+    edit: PrimitiveEdit,
+    libraries: &LibrarySpec,
+) -> Result<EditOutcome, EditError> {
+    let before = source.clone();
+    let operation = primitive_kind(&edit);
+    let target = edit_target(&edit);
+    let parent = edit_parent(&edit);
+    let anchor = edit_anchor(&edit);
+    let before_snapshot = target
+        .as_ref()
+        .and_then(|reference| snapshot_for(source, reference));
+
+    let candidate = apply_structural(source.clone(), &edit)?;
+    let validation = check_document(&candidate, libraries);
+    if validation.has_errors() {
+        return Err(EditError::Validation(Box::new(validation)));
+    }
+    let diff = LanguageDiff::between(&before, &candidate);
+    let mut allocated_ids = Vec::new();
+    let mut deleted_ids = Vec::new();
+    let mut moved_ids = Vec::new();
+    for entry in &diff.entries {
+        match entry {
+            LanguageDiffEntry::Inserted(node) => allocated_ids.push(node.id.clone()),
+            LanguageDiffEntry::Deleted(node) => deleted_ids.push(node.id.clone()),
+            LanguageDiffEntry::Moved { after, .. } => moved_ids.push(after.id.clone()),
+            LanguageDiffEntry::Updated { .. } => {}
+        }
+    }
+    let after_snapshot = match operation {
+        PrimitiveKind::Insert => allocated_ids
+            .first()
+            .and_then(|id| snapshot_by_id(&candidate, id)),
+        PrimitiveKind::Delete => None,
+        PrimitiveKind::Update | PrimitiveKind::Move => target
+            .as_ref()
+            .and_then(|reference| snapshot_for(&candidate, reference)),
+    };
+    let diagnostics = validation
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| RecordDiagnostic {
+            severity: diagnostic.severity,
+            code: diagnostic.code.to_owned(),
+            message: diagnostic.message.clone(),
+        })
+        .collect();
+    Ok(EditOutcome {
+        document: candidate,
+        record: PrimitiveRecord {
+            operation,
+            target,
+            parent,
+            anchor,
+            before: before_snapshot,
+            after: after_snapshot,
+            allocated_ids,
+            deleted_ids,
+            moved_ids,
+            diagnostics,
+            diff,
+        },
+    })
+}
+
+fn primitive_kind(edit: &PrimitiveEdit) -> PrimitiveKind {
+    match edit {
+        PrimitiveEdit::Insert { .. } => PrimitiveKind::Insert,
+        PrimitiveEdit::Delete { .. } => PrimitiveKind::Delete,
+        PrimitiveEdit::Update { .. } => PrimitiveKind::Update,
+        PrimitiveEdit::Move { .. } => PrimitiveKind::Move,
+    }
+}
+
+fn edit_target(edit: &PrimitiveEdit) -> Option<NodeRef> {
+    match edit {
+        PrimitiveEdit::Insert { .. } => None,
+        PrimitiveEdit::Delete { node }
+        | PrimitiveEdit::Update { node, .. }
+        | PrimitiveEdit::Move { node, .. } => Some(node.clone()),
+    }
+}
+
+fn edit_parent(edit: &PrimitiveEdit) -> Option<NodeRef> {
+    match edit {
+        PrimitiveEdit::Insert { parent, .. } => Some(parent.clone()),
+        PrimitiveEdit::Move { new_parent, .. } => Some(new_parent.clone()),
+        _ => None,
+    }
+}
+
+fn edit_anchor(edit: &PrimitiveEdit) -> Option<Anchor> {
+    match edit {
+        PrimitiveEdit::Insert { anchor, .. } | PrimitiveEdit::Move { anchor, .. } => {
+            Some(anchor.clone())
+        }
+        _ => None,
+    }
+}
+
+fn apply_structural(
+    source: LanguageDocument,
+    edit: &PrimitiveEdit,
+) -> Result<LanguageDocument, EditError> {
+    match edit {
+        PrimitiveEdit::Insert {
+            parent,
+            anchor,
+            subtree,
+        } => insert(source, parent, anchor, subtree.clone()),
+        PrimitiveEdit::Delete { node } => delete(source, node),
+        PrimitiveEdit::Update { node, change } => update(source, node, change.clone()),
+        PrimitiveEdit::Move {
+            node,
+            new_parent,
+            anchor,
+        } => move_node(source, node, new_parent, anchor),
+    }
+}
+
+fn ensure_target<'a>(
+    source: &'a LanguageDocument,
+    reference: &NodeRef,
+) -> Result<&'a NodeEntryV1, EditError> {
+    if !source.owns(&reference.id) {
+        return Err(EditError::ExternalTarget(reference.id.clone()));
+    }
+    let entry = source
+        .node(reference)
+        .ok_or_else(|| EditError::TargetNotFound(reference.clone()))?;
+    Ok(entry)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListKey {
+    Dsl,
+    Distribution,
+    Traits,
+    Signs,
+    Blocks,
+    Items,
+    RuleElse,
+    RuleThen,
+    Realization,
+}
+
+fn segment(key: ListKey, index: usize) -> AddressSegment {
+    match key {
+        ListKey::Dsl => AddressSegment::DslDeclarations(index),
+        ListKey::Distribution => AddressSegment::Distribution(index),
+        ListKey::Traits => AddressSegment::Traits(index),
+        ListKey::Signs => AddressSegment::Signs(index),
+        ListKey::Blocks => AddressSegment::Blocks(index),
+        ListKey::Items => AddressSegment::Items(index),
+        ListKey::RuleElse => AddressSegment::RuleElse(index),
+        ListKey::RuleThen => AddressSegment::RuleThen(index),
+        ListKey::Realization => AddressSegment::RealizationBranches(index),
+    }
+}
+
+fn segment_index(value: &AddressSegment, key: ListKey) -> Option<usize> {
+    match (key, value) {
+        (ListKey::Dsl, AddressSegment::DslDeclarations(index))
+        | (ListKey::Distribution, AddressSegment::Distribution(index))
+        | (ListKey::Traits, AddressSegment::Traits(index))
+        | (ListKey::Signs, AddressSegment::Signs(index))
+        | (ListKey::Blocks, AddressSegment::Blocks(index))
+        | (ListKey::Items, AddressSegment::Items(index))
+        | (ListKey::RuleElse, AddressSegment::RuleElse(index))
+        | (ListKey::RuleThen, AddressSegment::RuleThen(index))
+        | (ListKey::Realization, AddressSegment::RealizationBranches(index)) => Some(*index),
+        _ => None,
+    }
+}
+
+fn shift_list(
+    manifest: &mut IdentityManifestV2,
+    parent: &NodeAddress,
+    key: ListKey,
+    from: usize,
+    delta: isize,
+) {
+    for entry in &mut manifest.nodes {
+        if !entry.address.starts_with(parent) || entry.address.0.len() <= parent.0.len() {
+            continue;
+        }
+        let position = parent.0.len();
+        let Some(index) = segment_index(&entry.address.0[position], key) else {
+            continue;
+        };
+        if index >= from {
+            entry.address.0[position] = segment(key, index.saturating_add_signed(delta));
+        }
+    }
+}
+
+fn extract_identity_subtree(
+    manifest: &mut IdentityManifestV2,
+    prefix: &NodeAddress,
+) -> Vec<NodeEntryV1> {
+    let mut extracted = Vec::new();
+    manifest.nodes.retain(|entry| {
+        if entry.address.starts_with(prefix) {
+            extracted.push(entry.clone());
+            false
+        } else {
+            true
+        }
+    });
+    extracted
+}
+
+fn attach_identity_subtree(
+    manifest: &mut IdentityManifestV2,
+    mut subtree: Vec<NodeEntryV1>,
+    old_prefix: &NodeAddress,
+    new_prefix: &NodeAddress,
+    new_parent: &NodeId,
+) {
+    let root_id = subtree
+        .iter()
+        .find(|entry| &entry.address == old_prefix)
+        .map(|entry| entry.id.clone());
+    for entry in &mut subtree {
+        if entry.address.starts_with(old_prefix) {
+            let suffix = entry.address.0[old_prefix.0.len()..].to_vec();
+            entry.address.0 = new_prefix.0.clone();
+            entry.address.0.extend(suffix);
+        }
+        if root_id.as_ref() == Some(&entry.id) {
+            entry.parent = Some(new_parent.clone());
+        }
+    }
+    manifest.nodes.extend(subtree);
+}
+
+fn allocate_id(manifest: &mut IdentityManifestV2) -> Result<NodeId, EditError> {
+    let allocator = manifest
+        .allocators
+        .iter_mut()
+        .find(|allocator| allocator.namespace == manifest.active_namespace)
+        .ok_or_else(|| {
+            EditError::Identity(IdentityError::InvalidManifest(
+                "active namespace has no allocator".to_owned(),
+            ))
+        })?;
+    let ordinal = allocator.next_ordinal;
+    allocator.next_ordinal = allocator
+        .next_ordinal
+        .checked_add(1)
+        .ok_or(EditError::IdExhausted)?;
+    Ok(NodeId::new(
+        conlang_language::IdentityNamespace::Document(allocator.namespace.clone()),
+        ordinal,
+    ))
+}
+
+fn insert(
+    source: LanguageDocument,
+    parent_ref: &NodeRef,
+    anchor: &Anchor,
+    subtree: DetachedNode,
+) -> Result<LanguageDocument, EditError> {
+    let parent = ensure_target(&source, parent_ref)?.clone();
+    let (mut language, mut manifest) = source.into_edit_parts();
+    let (key, index, address) = insertion_site(&language, &manifest, &parent, anchor, &subtree)?;
+    if !matches!(address.0.last(), Some(AddressSegment::Prosody)) {
+        shift_list(&mut manifest, &parent.address, key, index, 1);
+    }
+    insert_payload(&mut language, &parent, index, subtree)?;
+    allocate_inserted_subtree(&language, &mut manifest, &address, Some(parent.id.clone()))?;
+    LanguageDocument::from_edit_parts(language, manifest).map_err(EditError::from)
+}
+
+fn insertion_site(
+    language: &Language,
+    manifest: &IdentityManifestV2,
+    parent: &NodeEntryV1,
+    anchor: &Anchor,
+    subtree: &DetachedNode,
+) -> Result<(ListKey, usize, NodeAddress), EditError> {
+    let child = subtree.kind();
+    let (key, length, group) = match (parent.kind, child) {
+        (NodeKind::Language, NodeKind::DslDeclaration) => {
+            (ListKey::Dsl, language.dsl_decls.len(), None)
+        }
+        (NodeKind::Language, NodeKind::Distribution) => {
+            (ListKey::Distribution, language.distribution.len(), None)
+        }
+        (NodeKind::Language, NodeKind::Trait) => (ListKey::Traits, language.traits.len(), None),
+        (NodeKind::Language, NodeKind::Sign) => (ListKey::Signs, language.signs.len(), None),
+        (NodeKind::Trait, NodeKind::Block) => {
+            let trait_def = trait_at(language, &parent.address)?;
+            (ListKey::Blocks, trait_def.blocks.len(), None)
+        }
+        (NodeKind::Sign | NodeKind::Block, kind) if is_item_kind(kind) => {
+            let items = items_at(language, parent)?;
+            (
+                ListKey::Items,
+                items.len(),
+                match subtree {
+                    DetachedNode::Item(item) => Some(item_group(item)),
+                    _ => None,
+                },
+            )
+        }
+        (NodeKind::Rule | NodeKind::FeatureRule, NodeKind::RuleElseBranch) => {
+            let rule = rule_at(language, &parent.address)?;
+            (ListKey::RuleElse, rule.else_chain.len(), None)
+        }
+        (NodeKind::Rule | NodeKind::FeatureRule, NodeKind::RuleThenBranch) => {
+            let rule = rule_at(language, &parent.address)?;
+            (ListKey::RuleThen, rule.then_chain.len(), None)
+        }
+        (NodeKind::Realization, NodeKind::RealizationBranch) => {
+            let realization = realization_at(language, &parent.address)?;
+            (ListKey::Realization, realization.branches.len(), None)
+        }
+        (NodeKind::Language, NodeKind::Prosody) if language.prosody.is_empty() => {
+            if !matches!(anchor, Anchor::End) {
+                return Err(EditError::AnchorInvalid(
+                    "the singleton prosody declaration only accepts End".to_owned(),
+                ));
+            }
+            return Ok((ListKey::Dsl, 0, NodeAddress(vec![AddressSegment::Prosody])));
+        }
+        _ => {
+            return Err(EditError::ParentKind {
+                child,
+                parent: parent.kind,
+            })
+        }
+    };
+    if matches!(
+        key,
+        ListKey::Traits | ListKey::Signs | ListKey::Distribution
+    ) {
+        if !matches!(anchor, Anchor::End) {
+            return Err(EditError::AnchorInvalid(
+                "canonical unordered collections accept only End".to_owned(),
+            ));
+        }
+        let index = canonical_unordered_index(language, key, subtree);
+        return Ok((key, index, parent.address.child(segment(key, index))));
+    }
+    let index = anchor_index(language, manifest, parent, key, length, group, anchor)?;
+    Ok((key, index, parent.address.child(segment(key, index))))
+}
+
+fn canonical_unordered_index(language: &Language, key: ListKey, subtree: &DetachedNode) -> usize {
+    match (key, subtree) {
+        (ListKey::Traits, DetachedNode::Trait(value)) => language
+            .traits
+            .iter()
+            .position(|item| (!item.global, &item.name) > (!value.global, &value.name))
+            .unwrap_or(language.traits.len()),
+        (ListKey::Signs, DetachedNode::Sign(value)) => language
+            .signs
+            .iter()
+            .position(|item| item.name > value.name)
+            .unwrap_or(language.signs.len()),
+        (ListKey::Distribution, DetachedNode::Distribution { key, value }) => language
+            .distribution
+            .iter()
+            .position(|item| item > &(key.clone(), value.clone()))
+            .unwrap_or(language.distribution.len()),
+        _ => 0,
+    }
+}
+
+fn anchor_index(
+    language: &Language,
+    manifest: &IdentityManifestV2,
+    parent: &NodeEntryV1,
+    key: ListKey,
+    length: usize,
+    group: Option<u16>,
+    anchor: &Anchor,
+) -> Result<usize, EditError> {
+    let group_bounds = || -> Result<(usize, usize), EditError> {
+        if key != ListKey::Items {
+            return Ok((0, length));
+        }
+        let items = items_at(language, parent)?;
+        let group =
+            group.ok_or_else(|| EditError::AnchorInvalid("missing item group".to_owned()))?;
+        let start = items
+            .iter()
+            .position(|item| item_group(item) >= group)
+            .unwrap_or(items.len());
+        let end = items
+            .iter()
+            .position(|item| item_group(item) > group)
+            .unwrap_or(items.len());
+        Ok((start, end))
+    };
+    match anchor {
+        Anchor::Start => Ok(group_bounds()?.0),
+        Anchor::End => Ok(group_bounds()?.1),
+        Anchor::Before(reference) | Anchor::After(reference) => {
+            let anchor_entry = manifest
+                .nodes
+                .iter()
+                .find(|entry| entry.id == reference.id && entry.kind == reference.expected)
+                .ok_or_else(|| EditError::TargetNotFound(reference.clone()))?;
+            if anchor_entry.parent.as_ref() != Some(&parent.id) {
+                return Err(EditError::AnchorInvalid(
+                    "Before/After anchor belongs to another parent".to_owned(),
+                ));
+            }
+            let position = parent.address.0.len();
+            let index = anchor_entry
+                .address
+                .0
+                .get(position)
+                .and_then(|segment| segment_index(segment, key))
+                .ok_or_else(|| {
+                    EditError::AnchorInvalid("anchor is in another logical sequence".to_owned())
+                })?;
+            if let Some(group) = group {
+                let anchor_item = items_at(language, parent)?
+                    .get(index)
+                    .ok_or_else(|| EditError::AnchorInvalid("anchor index is stale".to_owned()))?;
+                if item_group(anchor_item) != group {
+                    return Err(EditError::AnchorInvalid(
+                        "anchor is in another canonical item group".to_owned(),
+                    ));
+                }
+            }
+            Ok(index + usize::from(matches!(anchor, Anchor::After(_))))
+        }
+    }
+}
+
+fn insert_payload(
+    language: &mut Language,
+    parent: &NodeEntryV1,
+    index: usize,
+    subtree: DetachedNode,
+) -> Result<(), EditError> {
+    match subtree {
+        DetachedNode::DslDeclaration(value) if parent.kind == NodeKind::Language => {
+            language.dsl_decls.insert(index, value)
+        }
+        DetachedNode::Prosody(value) if parent.kind == NodeKind::Language => {
+            language.prosody = value
+        }
+        DetachedNode::Distribution { key, value } if parent.kind == NodeKind::Language => {
+            language.distribution.insert(index, (key, value))
+        }
+        DetachedNode::Trait(value) if parent.kind == NodeKind::Language => {
+            language.traits.insert(index, value)
+        }
+        DetachedNode::Sign(mut value) if parent.kind == NodeKind::Language => {
+            value.id = language.fresh_sign_id();
+            reassign_rule_ids(language, &mut value.items);
+            language.signs.insert(index, value)
+        }
+        DetachedNode::Block(value) if parent.kind == NodeKind::Trait => {
+            trait_at_mut(language, &parent.address)?
+                .blocks
+                .insert(index, value)
+        }
+        DetachedNode::Item(mut value)
+            if matches!(parent.kind, NodeKind::Sign | NodeKind::Block) =>
+        {
+            reassign_item_rule_id(language, &mut value);
+            items_at_mut(language, parent)?.insert(index, value)
+        }
+        DetachedNode::RuleElseBranch(value)
+            if matches!(parent.kind, NodeKind::Rule | NodeKind::FeatureRule) =>
+        {
+            rule_at_mut(language, &parent.address)?
+                .else_chain
+                .insert(index, value)
+        }
+        DetachedNode::RuleThenBranch(value)
+            if matches!(parent.kind, NodeKind::Rule | NodeKind::FeatureRule) =>
+        {
+            rule_at_mut(language, &parent.address)?
+                .then_chain
+                .insert(index, value)
+        }
+        DetachedNode::RealizationBranch(value) if parent.kind == NodeKind::Realization => {
+            realization_at_mut(language, &parent.address)?
+                .branches
+                .insert(index, value)
+        }
+        other => {
+            return Err(EditError::ParentKind {
+                child: other.kind(),
+                parent: parent.kind,
+            })
+        }
+    }
+    Ok(())
+}
+
+fn reassign_rule_ids(language: &mut Language, items: &mut [SignItem]) {
+    for item in items {
+        reassign_item_rule_id(language, item);
+    }
+}
+
+fn reassign_item_rule_id(language: &mut Language, item: &mut SignItem) {
+    if let SignItem::Rule(rule) | SignItem::FeatureRule(rule) = item {
+        rule.id = language.fresh_rule_id();
+    }
+}
+
+fn allocate_inserted_subtree(
+    language: &Language,
+    manifest: &mut IdentityManifestV2,
+    address: &NodeAddress,
+    parent: Option<NodeId>,
+) -> Result<NodeId, EditError> {
+    let kind = kind_at(language, address).ok_or_else(|| {
+        EditError::FieldMismatch(format!("inserted node at {address:?} is not addressable"))
+    })?;
+    let id = allocate_id(manifest)?;
+    manifest.nodes.push(NodeEntryV1 {
+        id: id.clone(),
+        kind,
+        parent,
+        address: address.clone(),
+    });
+    for child in child_addresses(language, address, kind)? {
+        allocate_inserted_subtree(language, manifest, &child, Some(id.clone()))?;
+    }
+    Ok(id)
+}
+
+fn child_addresses(
+    language: &Language,
+    address: &NodeAddress,
+    kind: NodeKind,
+) -> Result<Vec<NodeAddress>, EditError> {
+    let mut children = Vec::new();
+    match kind {
+        NodeKind::Trait => {
+            for index in 0..trait_at(language, address)?.blocks.len() {
+                children.push(address.child(AddressSegment::Blocks(index)));
+            }
+        }
+        NodeKind::Sign | NodeKind::Block => {
+            let entry = NodeEntryV1 {
+                id: NodeId::new(conlang_language::IdentityNamespace::Synthetic, 0),
+                kind,
+                parent: None,
+                address: address.clone(),
+            };
+            for index in 0..items_at(language, &entry)?.len() {
+                children.push(address.child(AddressSegment::Items(index)));
+            }
+        }
+        NodeKind::Rule | NodeKind::FeatureRule => {
+            let rule = rule_at(language, address)?;
+            for index in 0..rule.else_chain.len() {
+                children.push(address.child(AddressSegment::RuleElse(index)));
+            }
+            for index in 0..rule.then_chain.len() {
+                children.push(address.child(AddressSegment::RuleThen(index)));
+            }
+        }
+        NodeKind::Realization => {
+            for index in 0..realization_at(language, address)?.branches.len() {
+                children.push(address.child(AddressSegment::RealizationBranches(index)));
+            }
+        }
+        _ => {}
+    }
+    Ok(children)
+}
+
+fn delete(source: LanguageDocument, node_ref: &NodeRef) -> Result<LanguageDocument, EditError> {
+    let node = ensure_target(&source, node_ref)?.clone();
+    if node.kind == NodeKind::Language {
+        return Err(EditError::RootImmutable);
+    }
+    let parent_address = node.address.parent().ok_or(EditError::RootImmutable)?;
+    let list_position = if node.kind == NodeKind::Prosody {
+        None
+    } else {
+        Some(address_list_position(&node.address)?)
+    };
+    let (mut language, mut manifest) = source.into_edit_parts();
+    delete_payload(&mut language, &node)?;
+    let removed = extract_identity_subtree(&mut manifest, &node.address);
+    let removed_ids: BTreeSet<_> = removed.iter().map(|entry| entry.id.clone()).collect();
+    manifest
+        .refs
+        .retain(|binding| !removed_ids.contains(&binding.owner));
+    if let Some((key, index)) = list_position {
+        shift_list(&mut manifest, &parent_address, key, index + 1, -1);
+    }
+    LanguageDocument::from_edit_parts(language, manifest).map_err(EditError::from)
+}
+
+fn delete_payload(language: &mut Language, node: &NodeEntryV1) -> Result<(), EditError> {
+    match node.address.0.as_slice() {
+        [AddressSegment::DslDeclarations(index)] => {
+            language.dsl_decls.remove(*index);
+        }
+        [AddressSegment::Prosody] => language.prosody.clear(),
+        [AddressSegment::Distribution(index)] => {
+            language.distribution.remove(*index);
+        }
+        [AddressSegment::Traits(index)] => {
+            language.traits.remove(*index);
+        }
+        [AddressSegment::Signs(index)] => {
+            language.signs.remove(*index);
+        }
+        [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block)] => {
+            language.traits[*trait_index].blocks.remove(*block);
+        }
+        [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block), AddressSegment::Items(item)] =>
+        {
+            language.traits[*trait_index].blocks[*block]
+                .items
+                .remove(*item);
+        }
+        [AddressSegment::Signs(sign), AddressSegment::Items(item)] => {
+            language.signs[*sign].items.remove(*item);
+        }
+        path => delete_nested_payload(language, path)?,
+    }
+    Ok(())
+}
+
+fn delete_nested_payload(
+    language: &mut Language,
+    path: &[AddressSegment],
+) -> Result<(), EditError> {
+    let address = NodeAddress(path[..path.len() - 1].to_vec());
+    match path.last() {
+        Some(AddressSegment::RuleElse(index)) => {
+            rule_at_mut(language, &address)?.else_chain.remove(*index);
+        }
+        Some(AddressSegment::RuleThen(index)) => {
+            rule_at_mut(language, &address)?.then_chain.remove(*index);
+        }
+        Some(AddressSegment::RealizationBranches(index)) => {
+            realization_at_mut(language, &address)?
+                .branches
+                .remove(*index);
+        }
+        _ => {
+            return Err(EditError::FieldMismatch(
+                "unsupported delete address".to_owned(),
+            ))
+        }
+    }
+    Ok(())
+}
+
+fn update(
+    source: LanguageDocument,
+    node_ref: &NodeRef,
+    change: NodeUpdate,
+) -> Result<LanguageDocument, EditError> {
+    let node = ensure_target(&source, node_ref)?.clone();
+    let (mut language, mut manifest) = source.into_edit_parts();
+    let old_group = item_at_address(&language, &node.address).map(item_group);
+    let explicit_ref_field = update_payload(&mut language, &node, change)?;
+    if let Some(field) = explicit_ref_field {
+        manifest
+            .refs
+            .retain(|binding| !(binding.owner == node.id && binding.field == field));
+    }
+    if matches!(node.kind, NodeKind::Sign | NodeKind::Trait) {
+        reorder_named_container(&mut language, &mut manifest, &node)?;
+    } else if let Some(old_group) = old_group {
+        let new_group = item_at_address(&language, &node.address)
+            .map(item_group)
+            .unwrap_or(old_group);
+        if old_group != new_group {
+            reorder_item(&mut language, &mut manifest, &node, new_group)?;
+        }
+    }
+    LanguageDocument::from_edit_parts(language, manifest).map_err(EditError::from)
+}
+
+fn update_payload(
+    language: &mut Language,
+    node: &NodeEntryV1,
+    change: NodeUpdate,
+) -> Result<Option<String>, EditError> {
+    match (&node.kind, change) {
+        (NodeKind::Sign, NodeUpdate::Rename(name)) => {
+            let sign = sign_at_mut(language, &node.address)?;
+            let old = std::mem::replace(&mut sign.name, name.clone());
+            rewrite_sign_refs(language, &old, &name);
+            Ok(None)
+        }
+        (NodeKind::Trait, NodeUpdate::Rename(name)) => {
+            let trait_def = trait_at_mut(language, &node.address)?;
+            let old = std::mem::replace(&mut trait_def.name, name.clone());
+            rewrite_trait_refs(language, &old, &name);
+            Ok(None)
+        }
+        (NodeKind::Trait, NodeUpdate::TraitGlobal(value)) => {
+            trait_at_mut(language, &node.address)?.global = value;
+            Ok(None)
+        }
+        (NodeKind::DslDeclaration, NodeUpdate::DslDeclaration(value)) => {
+            let [AddressSegment::DslDeclarations(index)] = node.address.0.as_slice() else {
+                return Err(field_mismatch(node, "dsl declaration"));
+            };
+            language.dsl_decls[*index] = value;
+            Ok(None)
+        }
+        (NodeKind::Prosody, NodeUpdate::Prosody(value)) => {
+            language.prosody = value;
+            Ok(None)
+        }
+        (NodeKind::Distribution, NodeUpdate::Distribution { key, value }) => {
+            let [AddressSegment::Distribution(index)] = node.address.0.as_slice() else {
+                return Err(field_mismatch(node, "distribution"));
+            };
+            language.distribution[*index] = (key, value);
+            Ok(None)
+        }
+        (NodeKind::Definition, NodeUpdate::DefinitionPath(value)) => {
+            definition_at_mut(language, &node.address)?.path = value;
+            Ok(None)
+        }
+        (NodeKind::Definition, NodeUpdate::DefinitionValue(value)) => {
+            let def = definition_at_mut(language, &node.address)?;
+            let field = (def.path == "origin").then_some("origin".to_owned());
+            def.value = value;
+            Ok(field)
+        }
+        (NodeKind::Rule | NodeKind::FeatureRule, NodeUpdate::RuleBody(value)) => {
+            rule_at_mut(language, &node.address)?.body = value;
+            Ok(None)
+        }
+        (NodeKind::Rule | NodeKind::FeatureRule, NodeUpdate::RuleStage(value)) => {
+            rule_at_mut(language, &node.address)?.stage = value;
+            Ok(None)
+        }
+        (NodeKind::Rule | NodeKind::FeatureRule, NodeUpdate::RuleDimension(value)) => {
+            rule_at_mut(language, &node.address)?.dim = value;
+            Ok(None)
+        }
+        (
+            NodeKind::RuleElseBranch | NodeKind::RuleThenBranch,
+            NodeUpdate::RuleBranchBody(value),
+        ) => {
+            set_rule_branch(language, &node.address, value)?;
+            Ok(None)
+        }
+        (NodeKind::Slot, NodeUpdate::SlotName(value)) => {
+            slot_at_mut(language, &node.address)?.name = value;
+            Ok(None)
+        }
+        (NodeKind::Slot, NodeUpdate::SlotConstraint(value)) => {
+            slot_at_mut(language, &node.address)?.constraint = value;
+            Ok(Some("slot.constraint".to_owned()))
+        }
+        (NodeKind::Slot, NodeUpdate::SlotOptional(value)) => {
+            slot_at_mut(language, &node.address)?.optional = value;
+            Ok(None)
+        }
+        (NodeKind::TraitUse, NodeUpdate::TraitUse { name, block }) => {
+            *item_at_address_mut(language, &node.address)? = SignItem::TraitUse { name, block };
+            Ok(Some("trait_use.name".to_owned()))
+        }
+        (NodeKind::Belongs, NodeUpdate::Belongs(value)) => {
+            *item_at_address_mut(language, &node.address)? = SignItem::Belongs(value);
+            Ok(Some("belongs".to_owned()))
+        }
+        (NodeKind::FeatureDeclaration, NodeUpdate::FeatureDeclaration(value)) => {
+            *item_at_address_mut(language, &node.address)? = SignItem::FeatureDecl(value);
+            Ok(None)
+        }
+        (NodeKind::FeatureValue, NodeUpdate::FeatureValue(value)) => {
+            *item_at_address_mut(language, &node.address)? = SignItem::FeatureValue(value);
+            Ok(None)
+        }
+        (NodeKind::SlotFeatureBinding, NodeUpdate::SlotFeatureBinding(value)) => {
+            *item_at_address_mut(language, &node.address)? = SignItem::SlotFeatureBinding(value);
+            Ok(None)
+        }
+        (NodeKind::SlotMap, NodeUpdate::SlotMap(value)) => {
+            let field = matches!(value, SlotMapOp::AutoFill { .. })
+                .then_some("slot_map.autofill".to_owned());
+            *item_at_address_mut(language, &node.address)? = SignItem::SlotMap(value);
+            Ok(field)
+        }
+        (NodeKind::RoleDeclaration, NodeUpdate::RoleDeclaration(value)) => {
+            *item_at_address_mut(language, &node.address)? = SignItem::RoleDecl(value);
+            Ok(Some("role.constraint".to_owned()))
+        }
+        (NodeKind::RoleBinding, NodeUpdate::RoleBinding(value)) => {
+            *item_at_address_mut(language, &node.address)? = SignItem::RoleBinding(value);
+            Ok(None)
+        }
+        (NodeKind::RealizationBranch, NodeUpdate::RealizationTemplate(value)) => {
+            realization_branch_at_mut(language, &node.address)?.template = value;
+            Ok(None)
+        }
+        (NodeKind::RealizationBranch, NodeUpdate::RealizationGuard(value)) => {
+            realization_branch_at_mut(language, &node.address)?.guard = value;
+            Ok(None)
+        }
+        _ => Err(field_mismatch(node, "update variant")),
+    }
+}
+
+fn field_mismatch(node: &NodeEntryV1, field: &str) -> EditError {
+    EditError::FieldMismatch(format!(
+        "{field} is not editable on {:?} {}",
+        node.kind, node.id
+    ))
+}
+
+fn reorder_named_container(
+    language: &mut Language,
+    manifest: &mut IdentityManifestV2,
+    node: &NodeEntryV1,
+) -> Result<(), EditError> {
+    let (key, old_index, new_index) = match node.address.0.as_slice() {
+        [AddressSegment::Signs(index)] => {
+            let value = language.signs.remove(*index);
+            let new_index = language
+                .signs
+                .iter()
+                .position(|item| item.name > value.name)
+                .unwrap_or(language.signs.len());
+            language.signs.insert(new_index, value);
+            (ListKey::Signs, *index, new_index)
+        }
+        [AddressSegment::Traits(index)] => {
+            let value = language.traits.remove(*index);
+            let value_key = (!value.global, value.name.clone());
+            let new_index = language
+                .traits
+                .iter()
+                .position(|item| (!item.global, item.name.clone()) > value_key)
+                .unwrap_or(language.traits.len());
+            language.traits.insert(new_index, value);
+            (ListKey::Traits, *index, new_index)
+        }
+        _ => return Ok(()),
+    };
+    if old_index == new_index {
+        return Ok(());
+    }
+    move_manifest_prefix(manifest, &NodeAddress::root(), key, old_index, new_index);
+    Ok(())
+}
+
+fn move_manifest_prefix(
+    manifest: &mut IdentityManifestV2,
+    parent: &NodeAddress,
+    key: ListKey,
+    old_index: usize,
+    new_index: usize,
+) {
+    let old_prefix = parent.child(segment(key, old_index));
+    let mut subtree = extract_identity_subtree(manifest, &old_prefix);
+    shift_list(manifest, parent, key, old_index + 1, -1);
+    shift_list(manifest, parent, key, new_index, 1);
+    let new_prefix = parent.child(segment(key, new_index));
+    for entry in &mut subtree {
+        let suffix = entry.address.0[old_prefix.0.len()..].to_vec();
+        entry.address.0 = new_prefix.0.clone();
+        entry.address.0.extend(suffix);
+    }
+    manifest.nodes.extend(subtree);
+}
+
+fn reorder_item(
+    language: &mut Language,
+    manifest: &mut IdentityManifestV2,
+    node: &NodeEntryV1,
+    new_group: u16,
+) -> Result<(), EditError> {
+    let parent_address = node
+        .address
+        .parent()
+        .ok_or_else(|| field_mismatch(node, "parent"))?;
+    let parent = manifest
+        .nodes
+        .iter()
+        .find(|entry| entry.address == parent_address)
+        .cloned()
+        .ok_or_else(|| field_mismatch(node, "parent"))?;
+    let (_, old_index) = address_list_position(&node.address)?;
+    let value = items_at_mut(language, &parent)?.remove(old_index);
+    let old_prefix = node.address.clone();
+    let mut subtree = extract_identity_subtree(manifest, &old_prefix);
+    shift_list(manifest, &parent.address, ListKey::Items, old_index + 1, -1);
+    let items = items_at(language, &parent)?;
+    let new_index = items
+        .iter()
+        .position(|item| item_group(item) > new_group)
+        .unwrap_or(items.len());
+    shift_list(manifest, &parent.address, ListKey::Items, new_index, 1);
+    items_at_mut(language, &parent)?.insert(new_index, value);
+    let new_prefix = parent.address.child(AddressSegment::Items(new_index));
+    for entry in &mut subtree {
+        let suffix = entry.address.0[old_prefix.0.len()..].to_vec();
+        entry.address.0 = new_prefix.0.clone();
+        entry.address.0.extend(suffix);
+    }
+    manifest.nodes.extend(subtree);
+    Ok(())
+}
+
+fn move_node(
+    source: LanguageDocument,
+    node_ref: &NodeRef,
+    new_parent_ref: &NodeRef,
+    anchor: &Anchor,
+) -> Result<LanguageDocument, EditError> {
+    let node = ensure_target(&source, node_ref)?.clone();
+    let new_parent = ensure_target(&source, new_parent_ref)?.clone();
+    if node.kind == NodeKind::Language {
+        return Err(EditError::RootImmutable);
+    }
+    if new_parent.address.starts_with(&node.address) {
+        return Err(EditError::Cycle);
+    }
+    let detached = detached_at(source.language(), &node)?;
+    let old_parent_address = node.address.parent().ok_or(EditError::RootImmutable)?;
+    let (old_key, old_index) = address_list_position(&node.address)?;
+    let (mut language, mut manifest) = source.into_edit_parts();
+    let identity_subtree = extract_identity_subtree(&mut manifest, &node.address);
+    delete_payload(&mut language, &node)?;
+    shift_list(
+        &mut manifest,
+        &old_parent_address,
+        old_key,
+        old_index + 1,
+        -1,
+    );
+
+    let current_parent = manifest
+        .nodes
+        .iter()
+        .find(|entry| entry.id == new_parent.id)
+        .cloned()
+        .ok_or_else(|| EditError::TargetNotFound(new_parent_ref.clone()))?;
+    let (key, index, new_address) =
+        insertion_site(&language, &manifest, &current_parent, anchor, &detached)?;
+    shift_list(&mut manifest, &current_parent.address, key, index, 1);
+    insert_payload_preserving_runtime(&mut language, &current_parent, index, detached)?;
+    attach_identity_subtree(
+        &mut manifest,
+        identity_subtree,
+        &node.address,
+        &new_address,
+        &current_parent.id,
+    );
+    LanguageDocument::from_edit_parts(language, manifest).map_err(EditError::from)
+}
+
+fn detached_at(language: &Language, node: &NodeEntryV1) -> Result<DetachedNode, EditError> {
+    match node.address.0.as_slice() {
+        [AddressSegment::DslDeclarations(index)] => Ok(DetachedNode::DslDeclaration(
+            language.dsl_decls[*index].clone(),
+        )),
+        [AddressSegment::Traits(index)] => Ok(DetachedNode::Trait(language.traits[*index].clone())),
+        [AddressSegment::Signs(index)] => Ok(DetachedNode::Sign(language.signs[*index].clone())),
+        [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block)] => Ok(
+            DetachedNode::Block(language.traits[*trait_index].blocks[*block].clone()),
+        ),
+        [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block), AddressSegment::Items(item)] => {
+            Ok(DetachedNode::Item(
+                language.traits[*trait_index].blocks[*block].items[*item].clone(),
+            ))
+        }
+        [AddressSegment::Signs(sign), AddressSegment::Items(item)] => Ok(DetachedNode::Item(
+            language.signs[*sign].items[*item].clone(),
+        )),
+        path => {
+            let parent = NodeAddress(path[..path.len() - 1].to_vec());
+            match path.last() {
+                Some(AddressSegment::RuleElse(index)) => Ok(DetachedNode::RuleElseBranch(
+                    rule_at(language, &parent)?.else_chain[*index].clone(),
+                )),
+                Some(AddressSegment::RuleThen(index)) => Ok(DetachedNode::RuleThenBranch(
+                    rule_at(language, &parent)?.then_chain[*index].clone(),
+                )),
+                Some(AddressSegment::RealizationBranches(index)) => {
+                    Ok(DetachedNode::RealizationBranch(
+                        realization_at(language, &parent)?.branches[*index].clone(),
+                    ))
+                }
+                _ => Err(field_mismatch(node, "move")),
+            }
+        }
+    }
+}
+
+fn insert_payload_preserving_runtime(
+    language: &mut Language,
+    parent: &NodeEntryV1,
+    index: usize,
+    subtree: DetachedNode,
+) -> Result<(), EditError> {
+    match subtree {
+        DetachedNode::Sign(value) if parent.kind == NodeKind::Language => {
+            language.signs.insert(index, value);
+            Ok(())
+        }
+        DetachedNode::Item(value) if matches!(parent.kind, NodeKind::Sign | NodeKind::Block) => {
+            items_at_mut(language, parent)?.insert(index, value);
+            Ok(())
+        }
+        other => insert_payload(language, parent, index, other),
+    }
+}
+
+fn address_list_position(address: &NodeAddress) -> Result<(ListKey, usize), EditError> {
+    let segment = address.0.last().ok_or(EditError::RootImmutable)?;
+    let result = match segment {
+        AddressSegment::DslDeclarations(index) => (ListKey::Dsl, *index),
+        AddressSegment::Distribution(index) => (ListKey::Distribution, *index),
+        AddressSegment::Traits(index) => (ListKey::Traits, *index),
+        AddressSegment::Signs(index) => (ListKey::Signs, *index),
+        AddressSegment::Blocks(index) => (ListKey::Blocks, *index),
+        AddressSegment::Items(index) => (ListKey::Items, *index),
+        AddressSegment::RuleElse(index) => (ListKey::RuleElse, *index),
+        AddressSegment::RuleThen(index) => (ListKey::RuleThen, *index),
+        AddressSegment::RealizationBranches(index) => (ListKey::Realization, *index),
+        AddressSegment::Prosody
+        | AddressSegment::CaseExpression
+        | AddressSegment::CaseResult
+        | AddressSegment::CaseBranches(_) => {
+            return Err(EditError::FieldMismatch(
+                "node is not an editable legacy sequence element".to_owned(),
+            ))
+        }
+    };
+    Ok(result)
+}
+
+fn item_kind(item: &SignItem) -> NodeKind {
+    match item {
+        SignItem::TraitUse { .. } => NodeKind::TraitUse,
+        SignItem::Belongs(_) => NodeKind::Belongs,
+        SignItem::Slot(_) => NodeKind::Slot,
+        SignItem::SlotMap(_) => NodeKind::SlotMap,
+        SignItem::FeatureDecl(_) => NodeKind::FeatureDeclaration,
+        SignItem::FeatureValue(_) => NodeKind::FeatureValue,
+        SignItem::SlotFeatureBinding(_) => NodeKind::SlotFeatureBinding,
+        SignItem::RoleDecl(_) => NodeKind::RoleDeclaration,
+        SignItem::RoleBinding(_) => NodeKind::RoleBinding,
+        SignItem::Realization(_) => NodeKind::Realization,
+        SignItem::SignExpression(_) => NodeKind::Case,
+        SignItem::Constraint(_) => NodeKind::Constraint,
+        SignItem::FeatureRule(_) => NodeKind::FeatureRule,
+        SignItem::Def(_) => NodeKind::Definition,
+        SignItem::Rule(_) => NodeKind::Rule,
+    }
+}
+
+// -------------------------------------------------------------------------
+// Step 14: deterministic Primitive-only ChangeSet interpreter.
+
+pub const CHANGESET_SCHEMA_V1: &str = "conlang.changeset/v1";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibraryLock {
+    pub package: LibraryId,
+    pub version: String,
+    pub digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Selector {
+    Stable(NodeRef),
+    Language,
+    Sign(String),
+    Trait(String),
+    Path(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UnresolvedOperation {
+    Update {
+        selector: Selector,
+        field: String,
+        value: String,
+    },
+    Delete(Selector),
+    Move {
+        node: Selector,
+        parent: Selector,
+        anchor: UnresolvedAnchor,
+    },
+    InsertSign {
+        parent: Selector,
+        anchor: UnresolvedAnchor,
+        source: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UnresolvedAnchor {
+    Start,
+    End,
+    Before(Selector),
+    After(Selector),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnresolvedStatement {
+    pub ordinal: u64,
+    operations: Vec<UnresolvedOperation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnresolvedChangeSet {
+    pub schema: String,
+    pub namespace: String,
+    pub base_source: String,
+    pub base_identities: String,
+    pub libraries: Vec<LibraryLock>,
+    pub statements: Vec<UnresolvedStatement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedStatement {
+    pub ordinal: u64,
+    pub edits: Vec<PrimitiveEdit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedChangeSet {
+    pub schema: String,
+    pub namespace: String,
+    pub base_source: String,
+    pub base_identities: String,
+    pub libraries: Vec<LibraryLock>,
+    pub statements: Vec<ResolvedStatement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatementRecord {
+    pub ordinal: u64,
+    pub records: Vec<PrimitiveRecord>,
+    pub diff: LanguageDiff,
+    pub source_sha256: String,
+    pub identities_sha256: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReplayOutcome {
+    pub document: LanguageDocument,
+    pub records: Vec<StatementRecord>,
+    pub diff: LanguageDiff,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ReplayError {
+    #[error("CHANGESET_PARSE: {0}")]
+    Parse(String),
+    #[error("CHANGESET_SCHEMA: unsupported schema {0}")]
+    Schema(String),
+    #[error("CHANGESET_BASE_SOURCE_MISMATCH")]
+    BaseSourceMismatch,
+    #[error("CHANGESET_BASE_IDENTITIES_MISMATCH")]
+    BaseIdentitiesMismatch,
+    #[error("CHANGESET_LIBRARY_LOCK_MISMATCH: {0}")]
+    LibraryLockMismatch(String),
+    #[error("CHANGESET_NAMESPACE_MISMATCH: {0}")]
+    NamespaceMismatch(String),
+    #[error("CHANGESET_SELECTOR: {0}")]
+    Selector(String),
+    #[error("CHANGESET_STATEMENT_{ordinal}: {source}")]
+    Statement {
+        ordinal: u64,
+        #[source]
+        source: EditError,
+    },
+    #[error("CHANGESET_IDENTITY: {0}")]
+    Identity(#[from] IdentityError),
+    #[error("CHANGESET_LIBRARY: {0}")]
+    Library(String),
+    #[error("CHANGESET_COMPILE: {0}")]
+    Compile(#[from] CompileSystemError),
+}
+
+fn strip_digest(value: &str) -> String {
+    value
+        .trim()
+        .strip_prefix("sha256:")
+        .unwrap_or(value.trim())
+        .to_owned()
+}
+
+fn split_last_colon(value: &str) -> Result<(&str, u64), ReplayError> {
+    let (namespace, ordinal) = value
+        .rsplit_once(':')
+        .ok_or_else(|| ReplayError::Parse(format!("invalid NodeId {value:?}")))?;
+    let ordinal = ordinal
+        .parse()
+        .map_err(|_| ReplayError::Parse(format!("invalid NodeId ordinal {value:?}")))?;
+    Ok((namespace, ordinal))
+}
+
+fn parse_kind(value: &str) -> Result<NodeKind, ReplayError> {
+    match value.trim() {
+        "language" => Ok(NodeKind::Language),
+        "trait" => Ok(NodeKind::Trait),
+        "sign" => Ok(NodeKind::Sign),
+        "block" => Ok(NodeKind::Block),
+        "definition" | "def" => Ok(NodeKind::Definition),
+        "slot" => Ok(NodeKind::Slot),
+        "role" => Ok(NodeKind::RoleDeclaration),
+        "rule" => Ok(NodeKind::Rule),
+        "then" => Ok(NodeKind::RuleThenBranch),
+        "else" => Ok(NodeKind::RuleElseBranch),
+        "realization_branch" => Ok(NodeKind::RealizationBranch),
+        "application" => Ok(NodeKind::Application),
+        "case" => Ok(NodeKind::Case),
+        "case_branch" => Ok(NodeKind::CaseBranch),
+        "constraint" => Ok(NodeKind::Constraint),
+        other => Err(ReplayError::Parse(format!("unknown node kind {other:?}"))),
+    }
+}
+
+fn kind_keyword(kind: NodeKind) -> &'static str {
+    match kind {
+        NodeKind::Language => "language",
+        NodeKind::Trait => "trait",
+        NodeKind::Sign => "sign",
+        NodeKind::Block => "block",
+        NodeKind::Definition => "definition",
+        NodeKind::Slot => "slot",
+        NodeKind::RoleDeclaration => "role",
+        NodeKind::Rule | NodeKind::FeatureRule => "rule",
+        NodeKind::RuleThenBranch => "then",
+        NodeKind::RuleElseBranch => "else",
+        NodeKind::RealizationBranch => "realization_branch",
+        NodeKind::Application => "application",
+        NodeKind::Case => "case",
+        NodeKind::CaseBranch => "case_branch",
+        NodeKind::Constraint => "constraint",
+        _ => "node",
+    }
+}
+
+fn parse_selector(value: &str) -> Result<Selector, ReplayError> {
+    let value = value.trim();
+    if value.starts_with("language.")
+        || ((value.starts_with("sign(\"")
+            || value.starts_with("trait(\"")
+            || value.starts_with("node("))
+            && value.contains(")."))
+    {
+        return Ok(Selector::Path(value.to_owned()));
+    }
+    if value == "language" {
+        return Ok(Selector::Language);
+    }
+    for (prefix, make) in [
+        ("sign(\"", Selector::Sign as fn(String) -> Selector),
+        ("trait(\"", Selector::Trait as fn(String) -> Selector),
+    ] {
+        if let Some(rest) = value.strip_prefix(prefix) {
+            let name = rest
+                .strip_suffix("\")")
+                .ok_or_else(|| ReplayError::Parse(format!("invalid selector {value:?}")))?;
+            return Ok(make(name.to_owned()));
+        }
+    }
+    if let Some(inner) = value
+        .strip_prefix("node(")
+        .and_then(|rest| rest.strip_suffix(')'))
+    {
+        let (kind, id) = inner
+            .split_once(',')
+            .ok_or_else(|| ReplayError::Parse(format!("invalid node selector {value:?}")))?;
+        let id = id.trim().strip_prefix('@').ok_or_else(|| {
+            ReplayError::Parse(format!("stable node selector requires @NodeId: {value:?}"))
+        })?;
+        let (namespace, ordinal) = split_last_colon(id)?;
+        return Ok(Selector::Stable(NodeRef::new(
+            NodeId::new(
+                conlang_language::IdentityNamespace::Document(namespace.to_owned()),
+                ordinal,
+            ),
+            parse_kind(kind)?,
+        )));
+    }
+    Err(ReplayError::Parse(format!("unknown selector {value:?}")))
+}
+
+fn dump_selector(selector: &Selector) -> String {
+    match selector {
+        Selector::Stable(reference) => format!(
+            "node({}, @{})",
+            kind_keyword(reference.expected),
+            reference.id
+        ),
+        Selector::Language => "language".to_owned(),
+        Selector::Sign(name) => format!("sign(\"{name}\")"),
+        Selector::Trait(name) => format!("trait(\"{name}\")"),
+        Selector::Path(value) => value.clone(),
+    }
+}
+
+fn split_update_field(value: &str) -> Option<(&str, &str)> {
+    let mut square = 0usize;
+    let mut round = 0usize;
+    let mut split = None;
+    for (index, character) in value.char_indices() {
+        match character {
+            '[' => square += 1,
+            ']' => square = square.saturating_sub(1),
+            '(' => round += 1,
+            ')' => round = round.saturating_sub(1),
+            '.' if square == 0 && round == 0 => split = Some(index),
+            _ => {}
+        }
+    }
+    split.map(|index| (&value[..index], &value[index + 1..]))
+}
+
+fn parse_anchor(value: &str) -> Result<UnresolvedAnchor, ReplayError> {
+    let value = value.trim();
+    if value == "start" {
+        Ok(UnresolvedAnchor::Start)
+    } else if value == "end" {
+        Ok(UnresolvedAnchor::End)
+    } else if let Some(selector) = value.strip_prefix("before ") {
+        Ok(UnresolvedAnchor::Before(parse_selector(selector)?))
+    } else if let Some(selector) = value.strip_prefix("after ") {
+        Ok(UnresolvedAnchor::After(parse_selector(selector)?))
+    } else {
+        Err(ReplayError::Parse(format!("invalid anchor {value:?}")))
+    }
+}
+
+fn unquote_change_value(value: &str) -> String {
+    let value = value.trim();
+    if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
+        value[1..value.len() - 1].replace("\\\"", "\"")
+    } else {
+        value.to_owned()
+    }
+}
+
+fn parse_statement_body(ordinal: u64, body: &[String]) -> Result<UnresolvedStatement, ReplayError> {
+    let first = body
+        .first()
+        .ok_or_else(|| ReplayError::Parse(format!("statement {ordinal} is empty")))?
+        .trim();
+    let operation = if let Some(rest) = first.strip_prefix("update ") {
+        let (left, value) = rest
+            .split_once(" = ")
+            .ok_or_else(|| ReplayError::Parse(format!("invalid update in statement {ordinal}")))?;
+        let (selector, field) = split_update_field(left).ok_or_else(|| {
+            ReplayError::Parse(format!("update has no field in statement {ordinal}"))
+        })?;
+        UnresolvedOperation::Update {
+            selector: parse_selector(selector)?,
+            field: field.to_owned(),
+            value: unquote_change_value(value),
+        }
+    } else if let Some(rest) = first.strip_prefix("delete ") {
+        UnresolvedOperation::Delete(parse_selector(rest)?)
+    } else if let Some(rest) = first.strip_prefix("move ") {
+        let joined = body.join(" ");
+        let joined = joined.trim();
+        let rest = joined.strip_prefix("move ").unwrap_or(rest);
+        let (node, tail) = rest.split_once(" to ").ok_or_else(|| {
+            ReplayError::Parse(format!("move has no `to` in statement {ordinal}"))
+        })?;
+        let (parent, anchor) = tail.split_once(" at ").ok_or_else(|| {
+            ReplayError::Parse(format!("move has no `at` in statement {ordinal}"))
+        })?;
+        UnresolvedOperation::Move {
+            node: parse_selector(node)?,
+            parent: parse_selector(parent)?,
+            anchor: parse_anchor(anchor)?,
+        }
+    } else if let Some(rest) = first.strip_prefix("insert sign under ") {
+        let (parent, anchor) = rest
+            .strip_suffix(':')
+            .unwrap_or(rest)
+            .split_once(" at ")
+            .ok_or_else(|| {
+                ReplayError::Parse(format!("insert has no `at` in statement {ordinal}"))
+            })?;
+        let fragment = body.iter().skip(1).cloned().collect::<Vec<_>>().join("\n");
+        if fragment.trim().is_empty() {
+            return Err(ReplayError::Parse(format!(
+                "insert statement {ordinal} has no .lang fragment"
+            )));
+        }
+        UnresolvedOperation::InsertSign {
+            parent: parse_selector(parent)?,
+            anchor: parse_anchor(anchor)?,
+            source: fragment,
+        }
+    } else {
+        return Err(ReplayError::Parse(format!(
+            "unsupported primitive statement {ordinal}: {first}"
+        )));
+    };
+    Ok(UnresolvedStatement {
+        ordinal,
+        operations: vec![operation],
+    })
+}
+
+impl UnresolvedChangeSet {
+    pub fn parse(source: &str) -> Result<UnresolvedChangeSet, ReplayError> {
+        let lines = source.lines().collect::<Vec<_>>();
+        let header = lines
+            .iter()
+            .find(|line| !line.trim().is_empty() && !line.trim().starts_with('#'))
+            .ok_or_else(|| ReplayError::Parse("empty ChangeSet".to_owned()))?
+            .trim();
+        let namespace = header
+            .strip_prefix("changeset ")
+            .and_then(|rest| rest.strip_suffix(':'))
+            .ok_or_else(|| ReplayError::Parse("expected `changeset <namespace>:`".to_owned()))?
+            .to_owned();
+        let mut schema = None;
+        let mut base_source = None;
+        let mut base_identities = None;
+        let mut libraries = Vec::new();
+        let mut statements = Vec::new();
+        let mut index = 1;
+        while index < lines.len() {
+            let line = lines[index].trim();
+            if line.is_empty() || line.starts_with('#') {
+                index += 1;
+                continue;
+            }
+            if let Some(value) = line.strip_prefix("schema = ") {
+                schema = Some(value.trim().to_owned());
+            } else if let Some(value) = line.strip_prefix("base_source = ") {
+                base_source = Some(strip_digest(value));
+            } else if let Some(value) = line.strip_prefix("base_identities = ") {
+                base_identities = Some(strip_digest(value));
+            } else if let Some(value) = line.strip_prefix("library ") {
+                let (package_version, digest) = value
+                    .split_once(' ')
+                    .ok_or_else(|| ReplayError::Parse(format!("invalid library lock {line:?}")))?;
+                let (package, version) = package_version.rsplit_once('@').ok_or_else(|| {
+                    ReplayError::Parse(format!("library lock has no version {line:?}"))
+                })?;
+                libraries.push(LibraryLock {
+                    package: package
+                        .parse()
+                        .map_err(|error| ReplayError::Parse(format!("{error}")))?,
+                    version: version.to_owned(),
+                    digest: strip_digest(digest),
+                });
+            } else if let Some(value) = line
+                .strip_prefix("statement ")
+                .and_then(|value| value.strip_suffix(':'))
+            {
+                let ordinal = value.parse().map_err(|_| {
+                    ReplayError::Parse(format!("invalid statement ordinal {value:?}"))
+                })?;
+                let mut body = Vec::new();
+                index += 1;
+                while index < lines.len() {
+                    let candidate = lines[index];
+                    if candidate.trim().starts_with("statement ") {
+                        index -= 1;
+                        break;
+                    }
+                    if !candidate.trim().is_empty() {
+                        body.push(
+                            candidate
+                                .strip_prefix("        ")
+                                .unwrap_or(candidate)
+                                .to_owned(),
+                        );
+                    }
+                    index += 1;
+                }
+                statements.push(parse_statement_body(ordinal, &body)?);
+            } else {
+                return Err(ReplayError::Parse(format!(
+                    "unknown ChangeSet line {line:?}"
+                )));
+            }
+            index += 1;
+        }
+        let schema = schema.ok_or_else(|| ReplayError::Parse("missing schema".to_owned()))?;
+        if schema != CHANGESET_SCHEMA_V1 {
+            return Err(ReplayError::Schema(schema));
+        }
+        statements.sort_by_key(|statement| statement.ordinal);
+        if statements
+            .windows(2)
+            .any(|pair| pair[0].ordinal == pair[1].ordinal)
+        {
+            return Err(ReplayError::Parse(
+                "statement ordinals must be unique".to_owned(),
+            ));
+        }
+        libraries.sort_by(|left, right| left.package.cmp(&right.package));
+        Ok(UnresolvedChangeSet {
+            schema,
+            namespace,
+            base_source: base_source
+                .ok_or_else(|| ReplayError::Parse("missing base_source".to_owned()))?,
+            base_identities: base_identities
+                .ok_or_else(|| ReplayError::Parse("missing base_identities".to_owned()))?,
+            libraries,
+            statements,
+        })
+    }
+
+    pub fn resolve(
+        &self,
+        base: &LanguageDocument,
+        libraries: &LibrarySpec,
+    ) -> Result<ResolvedChangeSet, ReplayError> {
+        verify_base_and_locks(
+            base,
+            libraries,
+            &self.base_source,
+            &self.base_identities,
+            &self.libraries,
+        )?;
+        let mut working = base.fork(self.namespace.clone())?;
+        let mut resolved = Vec::new();
+        for statement in &self.statements {
+            let mut edits = Vec::new();
+            for operation in &statement.operations {
+                edits.push(resolve_operation(operation, &working)?);
+            }
+            let (candidate, _) =
+                apply_statement_structural(&working, statement.ordinal, &edits, libraries)?;
+            working = candidate;
+            resolved.push(ResolvedStatement {
+                ordinal: statement.ordinal,
+                edits,
+            });
+        }
+        Ok(ResolvedChangeSet {
+            schema: self.schema.clone(),
+            namespace: self.namespace.clone(),
+            base_source: self.base_source.clone(),
+            base_identities: self.base_identities.clone(),
+            libraries: self.libraries.clone(),
+            statements: resolved,
+        })
+    }
+}
+
+fn resolve_selector(
+    selector: &Selector,
+    document: &LanguageDocument,
+) -> Result<NodeRef, ReplayError> {
+    let reference = match selector {
+        Selector::Stable(reference) => reference.clone(),
+        Selector::Language => document.root_ref(),
+        Selector::Sign(name) => document
+            .ref_for_sign(name)
+            .ok_or_else(|| ReplayError::Selector(format!("unknown sign {name:?}")))?,
+        Selector::Trait(name) => document
+            .ref_for_trait(name)
+            .ok_or_else(|| ReplayError::Selector(format!("unknown trait {name:?}")))?,
+        Selector::Path(value) => return resolve_authoring_path(value, document),
+    };
+    document
+        .resolve_node(&reference)
+        .map_err(|error| ReplayError::Selector(error.to_string()))?;
+    Ok(reference)
+}
+
+fn resolve_authoring_path(
+    value: &str,
+    document: &LanguageDocument,
+) -> Result<NodeRef, ReplayError> {
+    let split = if let Some(suffix) = value.strip_prefix("language.") {
+        ("language", suffix)
+    } else {
+        let marker = ").";
+        let index = value
+            .find(marker)
+            .ok_or_else(|| ReplayError::Selector(format!("invalid authoring path {value:?}")))?;
+        (&value[..index + 1], &value[index + marker.len()..])
+    };
+    let mut current = resolve_selector(&parse_selector(split.0)?, document)?;
+    for segment in split_path_segments(split.1)? {
+        current = resolve_path_child(document, &current, &segment)?;
+    }
+    Ok(current)
+}
+
+fn split_path_segments(value: &str) -> Result<Vec<String>, ReplayError> {
+    let mut segments = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0usize;
+    for (index, character) in value.char_indices() {
+        match character {
+            '[' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            '.' if depth == 0 => {
+                segments.push(value[start..index].to_owned());
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    segments.push(value[start..].to_owned());
+    if depth != 0 || segments.iter().any(|segment| segment.is_empty()) {
+        return Err(ReplayError::Selector(format!(
+            "malformed authoring path {value:?}"
+        )));
+    }
+    Ok(segments)
+}
+
+fn selector_argument(segment: &str) -> Result<(&str, &str), ReplayError> {
+    segment
+        .split_once('[')
+        .and_then(|(kind, rest)| rest.strip_suffix(']').map(|argument| (kind, argument)))
+        .ok_or_else(|| ReplayError::Selector(format!("malformed path segment {segment:?}")))
+}
+
+fn resolve_path_child(
+    document: &LanguageDocument,
+    parent: &NodeRef,
+    segment: &str,
+) -> Result<NodeRef, ReplayError> {
+    let (kind, argument) = selector_argument(segment)?;
+    let mut children = document
+        .identities()
+        .nodes
+        .iter()
+        .filter(|entry| entry.parent.as_ref() == Some(&parent.id))
+        .collect::<Vec<_>>();
+    children.sort_by(|left, right| left.address.cmp(&right.address));
+    let numeric = || {
+        argument.parse::<usize>().map_err(|_| {
+            ReplayError::Selector(format!("selector index must be numeric: {segment:?}"))
+        })
+    };
+    let entry = match kind {
+        "block" => children
+            .iter()
+            .filter(|entry| entry.kind == NodeKind::Block)
+            .nth(numeric()?)
+            .copied(),
+        "rule" => children
+            .iter()
+            .filter(|entry| matches!(entry.kind, NodeKind::Rule | NodeKind::FeatureRule))
+            .nth(numeric()?)
+            .copied(),
+        "then" => children
+            .iter()
+            .filter(|entry| entry.kind == NodeKind::RuleThenBranch)
+            .nth(numeric()?)
+            .copied(),
+        "else" => children
+            .iter()
+            .filter(|entry| entry.kind == NodeKind::RuleElseBranch)
+            .nth(numeric()?)
+            .copied(),
+        "def" => children.iter().copied().find(|entry| {
+            entry.kind == NodeKind::Definition
+                && matches!(
+                    item_at_address(document.language(), &entry.address),
+                    Some(SignItem::Def(def)) if def.path == argument
+                )
+        }),
+        "slot" => children.iter().copied().find(|entry| {
+            entry.kind == NodeKind::Slot
+                && matches!(
+                    item_at_address(document.language(), &entry.address),
+                    Some(SignItem::Slot(slot)) if slot.name == argument
+                )
+        }),
+        "role" => children.iter().copied().find(|entry| {
+            entry.kind == NodeKind::RoleDeclaration
+                && matches!(
+                    item_at_address(document.language(), &entry.address),
+                    Some(SignItem::RoleDecl(role)) if role.name == argument
+                )
+        }),
+        "realization" => {
+            let index = numeric()?;
+            let realization = children
+                .iter()
+                .find(|entry| entry.kind == NodeKind::Realization)
+                .copied();
+            realization.and_then(|realization| {
+                document
+                    .identities()
+                    .nodes
+                    .iter()
+                    .filter(|entry| {
+                        entry.parent.as_ref() == Some(&realization.id)
+                            && entry.kind == NodeKind::RealizationBranch
+                    })
+                    .nth(index)
+            })
+        }
+        other => {
+            return Err(ReplayError::Selector(format!(
+                "unknown path selector {other:?}"
+            )))
+        }
+    };
+    entry
+        .map(|entry| NodeRef::new(entry.id.clone(), entry.kind))
+        .ok_or_else(|| {
+            ReplayError::Selector(format!("cannot resolve {segment:?} below {}", parent.id))
+        })
+}
+
+fn resolve_anchor(
+    anchor: &UnresolvedAnchor,
+    document: &LanguageDocument,
+) -> Result<Anchor, ReplayError> {
+    Ok(match anchor {
+        UnresolvedAnchor::Start => Anchor::Start,
+        UnresolvedAnchor::End => Anchor::End,
+        UnresolvedAnchor::Before(selector) => Anchor::Before(resolve_selector(selector, document)?),
+        UnresolvedAnchor::After(selector) => Anchor::After(resolve_selector(selector, document)?),
+    })
+}
+
+fn update_for(reference: &NodeRef, field: &str, value: &str) -> Result<NodeUpdate, ReplayError> {
+    match (reference.expected, field) {
+        (NodeKind::Sign | NodeKind::Trait, "name") => Ok(NodeUpdate::Rename(value.to_owned())),
+        (NodeKind::Definition, "path") => Ok(NodeUpdate::DefinitionPath(value.to_owned())),
+        (NodeKind::Definition, "value") => Ok(NodeUpdate::DefinitionValue(value.to_owned())),
+        (NodeKind::Rule | NodeKind::FeatureRule, "body") => {
+            Ok(NodeUpdate::RuleBody(value.to_owned()))
+        }
+        (NodeKind::RuleElseBranch | NodeKind::RuleThenBranch, "body") => {
+            Ok(NodeUpdate::RuleBranchBody(value.to_owned()))
+        }
+        (NodeKind::Slot, "name") => Ok(NodeUpdate::SlotName(value.to_owned())),
+        (NodeKind::RealizationBranch, "template") => {
+            Ok(NodeUpdate::RealizationTemplate(value.to_owned()))
+        }
+        _ => Err(ReplayError::Selector(format!(
+            "field {field:?} is not editable on {:?}",
+            reference.expected
+        ))),
+    }
+}
+
+fn resolve_operation(
+    operation: &UnresolvedOperation,
+    document: &LanguageDocument,
+) -> Result<PrimitiveEdit, ReplayError> {
+    match operation {
+        UnresolvedOperation::Update {
+            selector,
+            field,
+            value,
+        } => {
+            let node = resolve_selector(selector, document)?;
+            Ok(PrimitiveEdit::Update {
+                change: update_for(&node, field, value)?,
+                node,
+            })
+        }
+        UnresolvedOperation::Delete(selector) => Ok(PrimitiveEdit::Delete {
+            node: resolve_selector(selector, document)?,
+        }),
+        UnresolvedOperation::Move {
+            node,
+            parent,
+            anchor,
+        } => Ok(PrimitiveEdit::Move {
+            node: resolve_selector(node, document)?,
+            new_parent: resolve_selector(parent, document)?,
+            anchor: resolve_anchor(anchor, document)?,
+        }),
+        UnresolvedOperation::InsertSign {
+            parent,
+            anchor,
+            source,
+        } => {
+            let language = Language::parse(source)
+                .map_err(|error| ReplayError::Parse(format!("insert .lang: {error}")))?;
+            if !language.traits.is_empty() || language.signs.len() != 1 {
+                return Err(ReplayError::Parse(
+                    "insert sign fragment must contain exactly one sign".to_owned(),
+                ));
+            }
+            Ok(PrimitiveEdit::Insert {
+                parent: resolve_selector(parent, document)?,
+                anchor: resolve_anchor(anchor, document)?,
+                subtree: DetachedNode::Sign(language.signs[0].clone()),
+            })
+        }
+    }
+}
+
+fn dump_node(reference: &NodeRef) -> String {
+    dump_selector(&Selector::Stable(reference.clone()))
+}
+
+fn dump_anchor(anchor: &Anchor) -> String {
+    match anchor {
+        Anchor::Start => "start".to_owned(),
+        Anchor::End => "end".to_owned(),
+        Anchor::Before(reference) => format!("before {}", dump_node(reference)),
+        Anchor::After(reference) => format!("after {}", dump_node(reference)),
+    }
+}
+
+fn dump_value(value: &str) -> String {
+    if value.chars().all(|character| {
+        character.is_alphanumeric() || matches!(character, '_' | '-' | ':' | '/' | '.')
+    }) {
+        value.to_owned()
+    } else {
+        format!("\"{}\"", value.replace('"', "\\\""))
+    }
+}
+
+fn dump_update(change: &NodeUpdate) -> Option<(&'static str, String)> {
+    match change {
+        NodeUpdate::Rename(value) => Some(("name", value.clone())),
+        NodeUpdate::DefinitionPath(value) => Some(("path", value.clone())),
+        NodeUpdate::DefinitionValue(value) => Some(("value", value.clone())),
+        NodeUpdate::RuleBody(value) | NodeUpdate::RuleBranchBody(value) => {
+            Some(("body", value.clone()))
+        }
+        NodeUpdate::SlotName(value) => Some(("name", value.clone())),
+        NodeUpdate::RealizationTemplate(value) => Some(("template", value.clone())),
+        _ => None,
+    }
+}
+
+impl ResolvedChangeSet {
+    pub fn dump(&self) -> String {
+        let mut output = format!(
+            "changeset {}:\n    schema = {}\n    base_source = sha256:{}\n    base_identities = sha256:{}\n",
+            self.namespace, self.schema, self.base_source, self.base_identities
+        );
+        for lock in &self.libraries {
+            output.push_str(&format!(
+                "    library {}@{} sha256:{}\n",
+                lock.package, lock.version, lock.digest
+            ));
+        }
+        for statement in &self.statements {
+            output.push_str(&format!("\n    statement {}:\n", statement.ordinal));
+            for edit in &statement.edits {
+                match edit {
+                    PrimitiveEdit::Update { node, change } => {
+                        if let Some((field, value)) = dump_update(change) {
+                            output.push_str(&format!(
+                                "        update {}.{} = {}\n",
+                                dump_node(node),
+                                field,
+                                dump_value(&value)
+                            ));
+                        }
+                    }
+                    PrimitiveEdit::Delete { node } => {
+                        output.push_str(&format!("        delete {}\n", dump_node(node)));
+                    }
+                    PrimitiveEdit::Move {
+                        node,
+                        new_parent,
+                        anchor,
+                    } => output.push_str(&format!(
+                        "        move {} to {} at {}\n",
+                        dump_node(node),
+                        dump_node(new_parent),
+                        dump_anchor(anchor)
+                    )),
+                    PrimitiveEdit::Insert {
+                        parent,
+                        anchor,
+                        subtree: DetachedNode::Sign(sign),
+                    } => {
+                        output.push_str(&format!(
+                            "        insert sign under {} at {}:\n",
+                            dump_node(parent),
+                            dump_anchor(anchor)
+                        ));
+                        let mut fragment = Language::new();
+                        fragment.signs.push(sign.clone());
+                        for line in fragment.dump().lines() {
+                            output.push_str("            ");
+                            output.push_str(line);
+                            output.push('\n');
+                        }
+                    }
+                    PrimitiveEdit::Insert { .. } => {}
+                }
+            }
+        }
+        output
+    }
+}
+
+fn package_locks(spec: &LibrarySpec) -> Result<Vec<LibraryLock>, ReplayError> {
+    let catalog = conlang_language::library::embedded_catalog()
+        .map_err(|error| ReplayError::Library(error.to_string()))?;
+    let selection = catalog
+        .select(spec)
+        .map_err(|error| ReplayError::Library(error.to_string()))?;
+    let mut locks = Vec::new();
+    for id in selection.packages {
+        let package = catalog
+            .packages()
+            .iter()
+            .find(|package| package.id == id)
+            .expect("catalog selection returns catalog IDs");
+        let mut content = format!(
+            "{}\n{}\n{}\n{}\n{}\n{}\n",
+            package.id,
+            package.version,
+            package.rule_namespace,
+            package.priority,
+            package.code_path,
+            package.data_path
+        );
+        for dependency in &package.requires {
+            content.push_str(&format!("requires {dependency}\n"));
+        }
+        for export in &package.exports {
+            content.push_str(&format!(
+                "export {} {:?} {}\n",
+                export.stable_id, export.kind, export.alias
+            ));
+        }
+        content.push_str(package.code);
+        content.push('\n');
+        content.push_str(package.data);
+        locks.push(LibraryLock {
+            package: package.id.clone(),
+            version: package.version.clone(),
+            digest: sha256_hex(content.as_bytes()),
+        });
+    }
+    locks.sort_by(|left, right| left.package.cmp(&right.package));
+    Ok(locks)
+}
+
+pub fn identity_manifest_digest(document: &LanguageDocument) -> Result<String, ReplayError> {
+    Ok(sha256_hex(document.manifest_json()?.as_bytes()))
+}
+
+pub fn change_set_prelude(
+    document: &LanguageDocument,
+    spec: &LibrarySpec,
+    namespace: &str,
+) -> Result<String, ReplayError> {
+    let locks = package_locks(spec)?;
+    let mut source = format!(
+        "changeset {namespace}:\n    schema = {CHANGESET_SCHEMA_V1}\n    base_source = sha256:{}\n    base_identities = sha256:{}\n",
+        document.identities().source_sha256,
+        identity_manifest_digest(document)?
+    );
+    for lock in locks {
+        source.push_str(&format!(
+            "    library {}@{} sha256:{}\n",
+            lock.package, lock.version, lock.digest
+        ));
+    }
+    Ok(source)
+}
+
+fn verify_base_and_locks(
+    base: &LanguageDocument,
+    spec: &LibrarySpec,
+    source_digest: &str,
+    identity_digest: &str,
+    locks: &[LibraryLock],
+) -> Result<(), ReplayError> {
+    if base.identities().source_sha256 != source_digest {
+        return Err(ReplayError::BaseSourceMismatch);
+    }
+    if identity_manifest_digest(base)? != identity_digest {
+        return Err(ReplayError::BaseIdentitiesMismatch);
+    }
+    let actual = package_locks(spec)?;
+    if actual != locks {
+        return Err(ReplayError::LibraryLockMismatch(
+            "resolved package/version/content set differs".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn primitive_record(
+    before: &LanguageDocument,
+    after: &LanguageDocument,
+    edit: &PrimitiveEdit,
+    validation: &ValidationReport,
+) -> PrimitiveRecord {
+    let operation = primitive_kind(edit);
+    let target = edit_target(edit);
+    let parent = edit_parent(edit);
+    let anchor = edit_anchor(edit);
+    let before_snapshot = target
+        .as_ref()
+        .and_then(|reference| snapshot_for(before, reference));
+    let diff = LanguageDiff::between(before, after);
+    let allocated_ids = diff
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            LanguageDiffEntry::Inserted(node) => Some(node.id.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let deleted_ids = diff
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            LanguageDiffEntry::Deleted(node) => Some(node.id.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let moved_ids = diff
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            LanguageDiffEntry::Moved { after, .. } => Some(after.id.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let after_snapshot = target
+        .as_ref()
+        .and_then(|reference| snapshot_for(after, reference));
+    PrimitiveRecord {
+        operation,
+        target,
+        parent,
+        anchor,
+        before: before_snapshot,
+        after: after_snapshot,
+        allocated_ids,
+        deleted_ids,
+        moved_ids,
+        diagnostics: validation
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| RecordDiagnostic {
+                severity: diagnostic.severity,
+                code: diagnostic.code.to_owned(),
+                message: diagnostic.message.clone(),
+            })
+            .collect(),
+        diff,
+    }
+}
+
+fn apply_statement_structural(
+    source: &LanguageDocument,
+    ordinal: u64,
+    edits: &[PrimitiveEdit],
+    libraries: &LibrarySpec,
+) -> Result<(LanguageDocument, StatementRecord), ReplayError> {
+    let before = source.clone();
+    let mut candidate = source.clone();
+    let mut transitions = Vec::new();
+    for edit in edits {
+        let previous = candidate.clone();
+        candidate = apply_structural(candidate, edit)
+            .map_err(|source| ReplayError::Statement { ordinal, source })?;
+        transitions.push((previous, edit));
+    }
+    let validation = check_document(&candidate, libraries);
+    if validation.has_errors() {
+        return Err(ReplayError::Statement {
+            ordinal,
+            source: EditError::Validation(Box::new(validation)),
+        });
+    }
+    let records = transitions
+        .into_iter()
+        .map(|(previous, edit)| primitive_record(&previous, &candidate, edit, &validation))
+        .collect();
+    let identities_sha256 = identity_manifest_digest(&candidate)?;
+    Ok((
+        candidate.clone(),
+        StatementRecord {
+            ordinal,
+            records,
+            diff: LanguageDiff::between(&before, &candidate),
+            source_sha256: candidate.identities().source_sha256.clone(),
+            identities_sha256,
+        },
+    ))
+}
+
+#[derive(Debug, Clone)]
+pub struct ChangeInterpreter {
+    base: LanguageDocument,
+    libraries: LibrarySpec,
+    namespace: String,
+}
+
+impl ChangeInterpreter {
+    pub fn new(
+        base: LanguageDocument,
+        libraries: LibrarySpec,
+        namespace: impl Into<String>,
+    ) -> Result<ChangeInterpreter, ReplayError> {
+        let namespace = namespace.into();
+        let _ = base.fork(namespace.clone())?;
+        Ok(ChangeInterpreter {
+            base,
+            libraries,
+            namespace,
+        })
+    }
+
+    pub fn apply_statement(
+        &self,
+        document: &LanguageDocument,
+        statement: &ResolvedStatement,
+    ) -> Result<(LanguageDocument, StatementRecord), ReplayError> {
+        if document.identities().active_namespace != self.namespace {
+            return Err(ReplayError::NamespaceMismatch(
+                document.identities().active_namespace.clone(),
+            ));
+        }
+        apply_statement_structural(
+            document,
+            statement.ordinal,
+            &statement.edits,
+            &self.libraries,
+        )
+    }
+
+    pub fn run(&self, changeset: &ResolvedChangeSet) -> Result<ReplayOutcome, ReplayError> {
+        if changeset.namespace != self.namespace {
+            return Err(ReplayError::NamespaceMismatch(changeset.namespace.clone()));
+        }
+        verify_base_and_locks(
+            &self.base,
+            &self.libraries,
+            &changeset.base_source,
+            &changeset.base_identities,
+            &changeset.libraries,
+        )?;
+        let mut document = self.base.fork(self.namespace.clone())?;
+        let before = document.clone();
+        let mut records = Vec::new();
+        for statement in &changeset.statements {
+            let (next, record) = self.apply_statement(&document, statement)?;
+            document = next;
+            records.push(record);
+        }
+        Ok(ReplayOutcome {
+            diff: LanguageDiff::between(&before, &document),
+            document,
+            records,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct ChangeSession {
+    document: LanguageDocument,
+    libraries: LibrarySpec,
+    dirty: bool,
+    compiled: Option<CompiledSystem>,
+    compile_count: u64,
+}
+
+impl ChangeSession {
+    pub fn new(document: LanguageDocument, libraries: LibrarySpec) -> ChangeSession {
+        ChangeSession {
+            document,
+            libraries,
+            dirty: true,
+            compiled: None,
+            compile_count: 0,
+        }
+    }
+
+    pub fn document(&self) -> &LanguageDocument {
+        &self.document
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    pub fn compile_count(&self) -> u64 {
+        self.compile_count
+    }
+
+    pub fn commit(&mut self, document: LanguageDocument) {
+        self.document = document;
+        self.dirty = true;
+        self.compiled = None;
+    }
+
+    pub fn apply_statement(
+        &mut self,
+        interpreter: &ChangeInterpreter,
+        statement: &ResolvedStatement,
+    ) -> Result<StatementRecord, ReplayError> {
+        let (document, record) = interpreter.apply_statement(&self.document, statement)?;
+        self.commit(document);
+        Ok(record)
+    }
+
+    pub fn compiled_system(&mut self) -> Result<&CompiledSystem, ReplayError> {
+        if self.dirty || self.compiled.is_none() {
+            let compiled = compile_document(&self.document, &self.libraries)?;
+            self.compiled = Some(compiled);
+            self.compile_count += 1;
+            self.dirty = false;
+        }
+        Ok(self.compiled.as_ref().expect("compiled cache populated"))
+    }
+}
+
+fn is_item_kind(kind: NodeKind) -> bool {
+    matches!(
+        kind,
+        NodeKind::TraitUse
+            | NodeKind::Belongs
+            | NodeKind::Slot
+            | NodeKind::SlotMap
+            | NodeKind::FeatureDeclaration
+            | NodeKind::FeatureValue
+            | NodeKind::SlotFeatureBinding
+            | NodeKind::RoleDeclaration
+            | NodeKind::RoleBinding
+            | NodeKind::Realization
+            | NodeKind::Case
+            | NodeKind::Constraint
+            | NodeKind::FeatureRule
+            | NodeKind::Definition
+            | NodeKind::Rule
+    )
+}
+
+fn def_dimension(path: &str) -> Option<Dim> {
+    let head = path.split_once('.').map(|(head, _)| head).unwrap_or(path);
+    Dim::parse(head)
+}
+
+fn dim_base(dim: Dim) -> u16 {
+    match dim {
+        Dim::Syn => 10,
+        Dim::Phon => 20,
+        Dim::Sem => 30,
+        Dim::Prag => 40,
+    }
+}
+
+fn item_group(item: &SignItem) -> u16 {
+    match item {
+        SignItem::Belongs(_) => 0,
+        SignItem::TraitUse { .. } => 1,
+        SignItem::Def(def) if def_dimension(&def.path).is_none() => 2,
+        SignItem::Slot(_) => dim_base(Dim::Syn),
+        SignItem::SlotFeatureBinding(_) => dim_base(Dim::Syn) + 1,
+        SignItem::FeatureDecl(value) => dim_base(value.dim) + 2,
+        SignItem::FeatureValue(value) => dim_base(value.dim) + 2,
+        SignItem::FeatureRule(rule) => dim_base(rule.dim) + 2,
+        SignItem::RoleDecl(_) | SignItem::RoleBinding(_) => dim_base(Dim::Sem) + 3,
+        SignItem::Realization(_) => dim_base(Dim::Phon) + 3,
+        SignItem::Def(def) => dim_base(def_dimension(&def.path).unwrap_or(Dim::Syn)) + 4,
+        SignItem::Rule(rule) => dim_base(rule.dim) + 4,
+        SignItem::SlotMap(_) => dim_base(Dim::Syn) + 4,
+        SignItem::Constraint(_) => 50,
+        SignItem::SignExpression(_) => 51,
+    }
+}
+
+fn kind_at(language: &Language, address: &NodeAddress) -> Option<NodeKind> {
+    match address.0.as_slice() {
+        [] => Some(NodeKind::Language),
+        [AddressSegment::DslDeclarations(index)] if *index < language.dsl_decls.len() => {
+            Some(NodeKind::DslDeclaration)
+        }
+        [AddressSegment::Prosody] if !language.prosody.is_empty() => Some(NodeKind::Prosody),
+        [AddressSegment::Distribution(index)] if *index < language.distribution.len() => {
+            Some(NodeKind::Distribution)
+        }
+        [AddressSegment::Traits(index)] if *index < language.traits.len() => Some(NodeKind::Trait),
+        [AddressSegment::Signs(index)] if *index < language.signs.len() => Some(NodeKind::Sign),
+        [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block)]
+            if language
+                .traits
+                .get(*trait_index)?
+                .blocks
+                .get(*block)
+                .is_some() =>
+        {
+            Some(NodeKind::Block)
+        }
+        [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block), AddressSegment::Items(item)] => {
+            language
+                .traits
+                .get(*trait_index)?
+                .blocks
+                .get(*block)?
+                .items
+                .get(*item)
+                .map(item_kind)
+        }
+        [AddressSegment::Signs(sign), AddressSegment::Items(item)] => {
+            language.signs.get(*sign)?.items.get(*item).map(item_kind)
+        }
+        path => {
+            let parent = NodeAddress(path[..path.len().checked_sub(1)?].to_vec());
+            match path.last()? {
+                AddressSegment::RuleElse(index)
+                    if *index < rule_at(language, &parent).ok()?.else_chain.len() =>
+                {
+                    Some(NodeKind::RuleElseBranch)
+                }
+                AddressSegment::RuleThen(index)
+                    if *index < rule_at(language, &parent).ok()?.then_chain.len() =>
+                {
+                    Some(NodeKind::RuleThenBranch)
+                }
+                AddressSegment::RealizationBranches(index)
+                    if *index < realization_at(language, &parent).ok()?.branches.len() =>
+                {
+                    Some(NodeKind::RealizationBranch)
+                }
+                AddressSegment::CaseExpression => Some(NodeKind::Case),
+                AddressSegment::CaseBranches(index) => {
+                    let case_parent = NodeAddress(path[..path.len() - 1].to_vec());
+                    let case = case_at(language, &case_parent)?;
+                    (*index < case.branches.len()).then_some(NodeKind::CaseBranch)
+                }
+                AddressSegment::CaseResult => Some(NodeKind::Application),
+                _ => None,
+            }
+        }
+    }
+}
+
+fn case_at<'a>(
+    language: &'a Language,
+    address: &NodeAddress,
+) -> Option<&'a conlang_language::TypedCase> {
+    match address.0.as_slice() {
+        [AddressSegment::Signs(sign), AddressSegment::Items(item)] => {
+            match language.signs.get(*sign)?.items.get(*item)? {
+                SignItem::SignExpression(expression) => match &expression.expression {
+                    conlang_language::Expression::Case(case) => Some(case),
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
+        [AddressSegment::Signs(sign), AddressSegment::Items(item), AddressSegment::CaseExpression] => {
+            match language.signs.get(*sign)?.items.get(*item)? {
+                SignItem::Realization(realization) => realization.expression.as_ref(),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn trait_at<'a>(language: &'a Language, address: &NodeAddress) -> Result<&'a TraitDef, EditError> {
+    let [AddressSegment::Traits(index)] = address.0.as_slice() else {
+        return Err(EditError::FieldMismatch(
+            "expected trait address".to_owned(),
+        ));
+    };
+    language
+        .traits
+        .get(*index)
+        .ok_or_else(|| EditError::FieldMismatch("trait address is stale".to_owned()))
+}
+
+fn trait_at_mut<'a>(
+    language: &'a mut Language,
+    address: &NodeAddress,
+) -> Result<&'a mut TraitDef, EditError> {
+    let [AddressSegment::Traits(index)] = address.0.as_slice() else {
+        return Err(EditError::FieldMismatch(
+            "expected trait address".to_owned(),
+        ));
+    };
+    language
+        .traits
+        .get_mut(*index)
+        .ok_or_else(|| EditError::FieldMismatch("trait address is stale".to_owned()))
+}
+
+fn sign_at_mut<'a>(
+    language: &'a mut Language,
+    address: &NodeAddress,
+) -> Result<&'a mut SignDef, EditError> {
+    let [AddressSegment::Signs(index)] = address.0.as_slice() else {
+        return Err(EditError::FieldMismatch("expected sign address".to_owned()));
+    };
+    language
+        .signs
+        .get_mut(*index)
+        .ok_or_else(|| EditError::FieldMismatch("sign address is stale".to_owned()))
+}
+
+fn items_at<'a>(
+    language: &'a Language,
+    parent: &NodeEntryV1,
+) -> Result<&'a Vec<SignItem>, EditError> {
+    match parent.address.0.as_slice() {
+        [AddressSegment::Signs(index)] => Ok(&language.signs[*index].items),
+        [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block)] => {
+            Ok(&language.traits[*trait_index].blocks[*block].items)
+        }
+        _ => Err(EditError::FieldMismatch(
+            "parent has no item sequence".to_owned(),
+        )),
+    }
+}
+
+fn items_at_mut<'a>(
+    language: &'a mut Language,
+    parent: &NodeEntryV1,
+) -> Result<&'a mut Vec<SignItem>, EditError> {
+    match parent.address.0.as_slice() {
+        [AddressSegment::Signs(index)] => Ok(&mut language.signs[*index].items),
+        [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block)] => {
+            Ok(&mut language.traits[*trait_index].blocks[*block].items)
+        }
+        _ => Err(EditError::FieldMismatch(
+            "parent has no item sequence".to_owned(),
+        )),
+    }
+}
+
+fn item_at_address<'a>(language: &'a Language, address: &NodeAddress) -> Option<&'a SignItem> {
+    match address.0.as_slice() {
+        [AddressSegment::Signs(sign), AddressSegment::Items(item)] => {
+            language.signs.get(*sign)?.items.get(*item)
+        }
+        [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block), AddressSegment::Items(item)] => {
+            language
+                .traits
+                .get(*trait_index)?
+                .blocks
+                .get(*block)?
+                .items
+                .get(*item)
+        }
+        _ => None,
+    }
+}
+
+fn item_at_address_mut<'a>(
+    language: &'a mut Language,
+    address: &NodeAddress,
+) -> Result<&'a mut SignItem, EditError> {
+    match address.0.as_slice() {
+        [AddressSegment::Signs(sign), AddressSegment::Items(item)] => language
+            .signs
+            .get_mut(*sign)
+            .and_then(|sign| sign.items.get_mut(*item))
+            .ok_or_else(|| EditError::FieldMismatch("item address is stale".to_owned())),
+        [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block), AddressSegment::Items(item)] => {
+            language
+                .traits
+                .get_mut(*trait_index)
+                .and_then(|trait_def| trait_def.blocks.get_mut(*block))
+                .and_then(|block| block.items.get_mut(*item))
+                .ok_or_else(|| EditError::FieldMismatch("item address is stale".to_owned()))
+        }
+        _ => Err(EditError::FieldMismatch("expected item address".to_owned())),
+    }
+}
+
+fn rule_at<'a>(language: &'a Language, address: &NodeAddress) -> Result<&'a Rule, EditError> {
+    match item_at_address(language, address) {
+        Some(SignItem::Rule(rule) | SignItem::FeatureRule(rule)) => Ok(rule),
+        _ => Err(EditError::FieldMismatch("expected rule address".to_owned())),
+    }
+}
+
+fn rule_at_mut<'a>(
+    language: &'a mut Language,
+    address: &NodeAddress,
+) -> Result<&'a mut Rule, EditError> {
+    match item_at_address_mut(language, address)? {
+        SignItem::Rule(rule) | SignItem::FeatureRule(rule) => Ok(rule),
+        _ => Err(EditError::FieldMismatch("expected rule address".to_owned())),
+    }
+}
+
+fn realization_at<'a>(
+    language: &'a Language,
+    address: &NodeAddress,
+) -> Result<&'a Realization, EditError> {
+    match item_at_address(language, address) {
+        Some(SignItem::Realization(value)) => Ok(value),
+        _ => Err(EditError::FieldMismatch(
+            "expected realization address".to_owned(),
+        )),
+    }
+}
+
+fn realization_at_mut<'a>(
+    language: &'a mut Language,
+    address: &NodeAddress,
+) -> Result<&'a mut Realization, EditError> {
+    match item_at_address_mut(language, address)? {
+        SignItem::Realization(value) => Ok(value),
+        _ => Err(EditError::FieldMismatch(
+            "expected realization address".to_owned(),
+        )),
+    }
+}
+
+fn definition_at_mut<'a>(
+    language: &'a mut Language,
+    address: &NodeAddress,
+) -> Result<&'a mut Def, EditError> {
+    match item_at_address_mut(language, address)? {
+        SignItem::Def(value) => Ok(value),
+        _ => Err(EditError::FieldMismatch(
+            "expected definition address".to_owned(),
+        )),
+    }
+}
+
+fn slot_at_mut<'a>(
+    language: &'a mut Language,
+    address: &NodeAddress,
+) -> Result<&'a mut Slot, EditError> {
+    match item_at_address_mut(language, address)? {
+        SignItem::Slot(value) => Ok(value),
+        _ => Err(EditError::FieldMismatch("expected slot address".to_owned())),
+    }
+}
+
+fn set_rule_branch(
+    language: &mut Language,
+    address: &NodeAddress,
+    value: String,
+) -> Result<(), EditError> {
+    let parent = address.parent().ok_or(EditError::RootImmutable)?;
+    match address.0.last() {
+        Some(AddressSegment::RuleElse(index)) => {
+            rule_at_mut(language, &parent)?.else_chain[*index] = value
+        }
+        Some(AddressSegment::RuleThen(index)) => {
+            rule_at_mut(language, &parent)?.then_chain[*index] = value
+        }
+        _ => return Err(EditError::FieldMismatch("expected rule branch".to_owned())),
+    }
+    Ok(())
+}
+
+fn realization_branch_at_mut<'a>(
+    language: &'a mut Language,
+    address: &NodeAddress,
+) -> Result<&'a mut RealizationBranch, EditError> {
+    let parent = address.parent().ok_or(EditError::RootImmutable)?;
+    let Some(AddressSegment::RealizationBranches(index)) = address.0.last() else {
+        return Err(EditError::FieldMismatch(
+            "expected realization branch".to_owned(),
+        ));
+    };
+    realization_at_mut(language, &parent)?
+        .branches
+        .get_mut(*index)
+        .ok_or_else(|| EditError::FieldMismatch("branch address is stale".to_owned()))
+}
+
+fn rewrite_sign_refs(language: &mut Language, old: &str, new: &str) {
+    for sign in &mut language.signs {
+        rewrite_sign_refs_in_items(&mut sign.items, old, new);
+    }
+    for trait_def in &mut language.traits {
+        for block in &mut trait_def.blocks {
+            rewrite_sign_refs_in_items(&mut block.items, old, new);
+        }
+    }
+}
+
+fn rewrite_sign_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
+    for item in items {
+        match item {
+            SignItem::SlotMap(SlotMapOp::AutoFill { filler, .. }) if filler == old => {
+                *filler = new.to_owned()
+            }
+            SignItem::Def(def) if def.path == "origin" && def.value == format!("sign({old})") => {
+                def.value = format!("sign({new})")
+            }
+            _ => {}
+        }
+    }
+}
+
+fn rewrite_trait_refs(language: &mut Language, old: &str, new: &str) {
+    for sign in &mut language.signs {
+        rewrite_trait_refs_in_items(&mut sign.items, old, new);
+    }
+    for trait_def in &mut language.traits {
+        for block in &mut trait_def.blocks {
+            rewrite_trait_refs_in_items(&mut block.items, old, new);
+        }
+    }
+}
+
+fn rewrite_trait_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
+    for item in items {
+        match item {
+            SignItem::TraitUse { name, .. } | SignItem::Belongs(name) if name == old => {
+                *name = new.to_owned()
+            }
+            SignItem::Slot(slot) => {
+                if let SlotConstraint::Category(name) = &mut slot.constraint {
+                    if name == old {
+                        *name = new.to_owned();
+                    }
+                }
+            }
+            SignItem::RoleDecl(role) if role.constraint == old => role.constraint = new.to_owned(),
+            _ => {}
+        }
+    }
+}
+
+fn snapshots(document: &LanguageDocument) -> BTreeMap<NodeId, NodeSnapshot> {
+    document
+        .identities()
+        .nodes
+        .iter()
+        .map(|entry| {
+            (
+                entry.id.clone(),
+                NodeSnapshot {
+                    id: entry.id.clone(),
+                    kind: entry.kind,
+                    parent: entry.parent.clone(),
+                    address: entry.address.clone(),
+                    value: debug_value(document.language(), entry),
+                },
+            )
+        })
+        .collect()
+}
+
+fn snapshot_for(document: &LanguageDocument, reference: &NodeRef) -> Option<NodeSnapshot> {
+    snapshot_by_id(document, &reference.id).filter(|snapshot| snapshot.kind == reference.expected)
+}
+
+fn snapshot_by_id(document: &LanguageDocument, id: &NodeId) -> Option<NodeSnapshot> {
+    snapshots(document).remove(id)
+}
+
+fn debug_value(language: &Language, entry: &NodeEntryV1) -> String {
+    match entry.address.0.as_slice() {
+        [] => "Language".to_owned(),
+        [AddressSegment::DslDeclarations(index)] => format!("{:?}", language.dsl_decls[*index]),
+        [AddressSegment::Prosody] => format!("{:?}", language.prosody),
+        [AddressSegment::Distribution(index)] => format!("{:?}", language.distribution[*index]),
+        [AddressSegment::Traits(index)] => {
+            let value = &language.traits[*index];
+            format!("Trait(name={:?},global={})", value.name, value.global)
+        }
+        [AddressSegment::Signs(index)] => {
+            format!("Sign(name={:?})", language.signs[*index].name)
+        }
+        [AddressSegment::Traits(_), AddressSegment::Blocks(_)] => "Block".to_owned(),
+        address if item_at_address(language, &NodeAddress(address.to_vec())).is_some() => {
+            match item_at_address(language, &NodeAddress(address.to_vec())).unwrap() {
+                SignItem::Rule(rule) | SignItem::FeatureRule(rule) => format!(
+                    "Rule(body={:?},stage={:?},dim={:?})",
+                    rule.body, rule.stage, rule.dim
+                ),
+                SignItem::Realization(_) => "Realization".to_owned(),
+                item => format!("{item:?}"),
+            }
+        }
+        address => {
+            let parent = NodeAddress(address[..address.len() - 1].to_vec());
+            match address.last() {
+                Some(AddressSegment::RuleElse(index)) => format!(
+                    "{:?}",
+                    rule_at(language, &parent)
+                        .ok()
+                        .and_then(|rule| rule.else_chain.get(*index))
+                ),
+                Some(AddressSegment::RuleThen(index)) => format!(
+                    "{:?}",
+                    rule_at(language, &parent)
+                        .ok()
+                        .and_then(|rule| rule.then_chain.get(*index))
+                ),
+                Some(AddressSegment::RealizationBranches(index)) => format!(
+                    "{:?}",
+                    realization_at(language, &parent)
+                        .ok()
+                        .and_then(|value| value.branches.get(*index))
+                ),
+                _ => "<unavailable>".to_owned(),
+            }
+        }
+    }
+}

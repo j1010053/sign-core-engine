@@ -48,7 +48,10 @@ fn matched_main_branch_sets_value() {
     let (lang, reg) = setup();
     let teacher = lang.sign_named("teacher").unwrap();
     let (out, recs) = synchronic::run_sign_dim_rules(teacher, Dim::Prag, &reg);
-    assert_eq!(out.project(Dim::Prag, &reg).get("prag.register"), Some("formal"));
+    assert_eq!(
+        out.project(Dim::Prag, &reg).get("prag.register"),
+        Some("formal")
+    );
     assert_eq!(recs.len(), 1);
     assert_eq!(recs[0].status, RuleStatus::Matched);
     assert_eq!(recs[0].branch, Some(0), "命中主分支");
@@ -61,7 +64,10 @@ fn unmatched_main_falls_to_else() {
     let (lang, reg) = setup();
     let dog = lang.sign_named("dog").unwrap();
     let (out, recs) = synchronic::run_sign_dim_rules(dog, Dim::Prag, &reg);
-    assert_eq!(out.project(Dim::Prag, &reg).get("prag.register"), Some("neutral"));
+    assert_eq!(
+        out.project(Dim::Prag, &reg).get("prag.register"),
+        Some("neutral")
+    );
     assert_eq!(recs[0].status, RuleStatus::Matched);
     assert_eq!(recs[0].branch, Some(1), "命中 else 分支");
 }
@@ -80,7 +86,10 @@ fn identity_match_is_matched_and_blocks_else() {
     );
     assert_eq!(recs[0].status, RuleStatus::Matched);
     assert_eq!(recs[0].branch, Some(0));
-    assert!(!recs[0].changed, "值本已 formal → changed=false 但仍 Matched");
+    assert!(
+        !recs[0].changed,
+        "值本已 formal → changed=false 但仍 Matched"
+    );
 }
 
 /// Error:畸形規則(無 `=>`)→ Error 診斷,不進 else、不改 sign。
@@ -91,7 +100,11 @@ fn malformed_rule_is_error_not_else() {
     let (out, recs) = synchronic::run_sign_dim_rules(broken, Dim::Syn, &reg);
     assert_eq!(recs[0].status, RuleStatus::Error);
     assert!(recs[0].diag.is_some());
-    assert_eq!(out.project(Dim::Syn, &reg).defs, Vec::new(), "Error 不改 sign");
+    assert_eq!(
+        out.project(Dim::Syn, &reg).defs,
+        Vec::new(),
+        "Error 不改 sign"
+    );
 }
 
 /// 多轉換 + 順序求值:rule2 的守衛 `a == 1` 依賴 rule1 先前的 patch。
@@ -102,7 +115,11 @@ fn sequential_rules_see_prior_patch() {
     let (out, recs) = synchronic::run_sign_dim_rules(chain, Dim::Syn, &reg);
     let syn = out.project(Dim::Syn, &reg);
     assert_eq!(syn.get("syn.a"), Some("1"));
-    assert_eq!(syn.get("syn.b"), Some("2"), "rule2 見 rule1 的 a=1 → 守衛成立");
+    assert_eq!(
+        syn.get("syn.b"),
+        Some("2"),
+        "rule2 見 rule1 的 a=1 → 守衛成立"
+    );
     assert!(recs.iter().all(|r| r.status == RuleStatus::Matched));
 }
 
@@ -128,8 +145,14 @@ fn per_sign_evaluation_is_independent() {
     let (lang, reg) = setup();
     let t = synchronic::run_sign_dim_rules(lang.sign_named("teacher").unwrap(), Dim::Prag, &reg).0;
     let d = synchronic::run_sign_dim_rules(lang.sign_named("dog").unwrap(), Dim::Prag, &reg).0;
-    assert_eq!(t.project(Dim::Prag, &reg).get("prag.register"), Some("formal"));
-    assert_eq!(d.project(Dim::Prag, &reg).get("prag.register"), Some("neutral"));
+    assert_eq!(
+        t.project(Dim::Prag, &reg).get("prag.register"),
+        Some("formal")
+    );
+    assert_eq!(
+        d.project(Dim::Prag, &reg).get("prag.register"),
+        Some("neutral")
+    );
 }
 
 /// typed patch `Sign × Patch → Sign'` 保留原 sign(不就地改)+ 決定性。
@@ -147,7 +170,9 @@ fn patch_application_is_immutable_and_deterministic() {
 /// round-trip:含 syn/sem/prag 規則 + else 的 fixture 正規化為不動點(P21)。
 #[test]
 fn fixture_round_trips() {
-    let d1 = Language::parse(include_str!("fixtures/synchronic.lang")).unwrap().dump();
+    let d1 = Language::parse(include_str!("fixtures/synchronic.lang"))
+        .unwrap()
+        .dump();
     let d2 = Language::parse(&d1).unwrap().dump();
     assert_eq!(d1, d2);
     // prag 規則印在 prag: 區塊(維度標記正確)

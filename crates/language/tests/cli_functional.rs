@@ -15,7 +15,9 @@ fn tshiatun_dir() -> PathBuf {
 }
 
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli")
+        .join(name)
 }
 
 fn example(name: &str) -> PathBuf {
@@ -75,7 +77,11 @@ fn cli_words_prime_without_spellout_prints_skeleton() {
 /// `--trace`:逐規則推導表(規則名、輸入行、`⇒` 結果行)。
 #[test]
 fn cli_trace_prints_derivation_table() {
-    let o = run(&[&"--trace", &example("8_1_tonogenesis.qy"), &example("words.txt")]);
+    let o = run(&[
+        &"--trace",
+        &example("8_1_tonogenesis.qy"),
+        &example("words.txt"),
+    ]);
     assert!(o.status.success());
     let out = stdout(&o);
     assert!(out.contains("*pa"), "{out}");
@@ -147,13 +153,12 @@ fn cli_bad_rules_syntax_exit_1_with_line() {
 /// 詞含未宣告音段 = exit 1 + 明確訊息(不默默近似)。
 #[test]
 fn cli_unknown_segment_exit_1() {
-    let o = run(&[&example("8_1_tonogenesis.qy"), &fixture("words_unknown.txt")]);
+    let o = run(&[
+        &example("8_1_tonogenesis.qy"),
+        &fixture("words_unknown.txt"),
+    ]);
     assert_eq!(o.status.code(), Some(1));
-    assert!(
-        stderr(&o).contains("no declared symbol"),
-        "{}",
-        stderr(&o)
-    );
+    assert!(stderr(&o).contains("no declared symbol"), "{}", stderr(&o));
 }
 
 /// 零規則規則檔 = 詞表′恆等(原詞照出)。曾為已知缺陷(空詞取代輸入,

@@ -2,11 +2,16 @@
 //! **僅介面 + 資料**——無 entrenchment/固化動力學。
 
 use conlang_language::ontology;
-use conlang_language::patch::{Patch, PatchOp};
-use conlang_language::{Dim, Language};
+use conlang_language::patch::{diff, Patch, PatchOp};
+use conlang_language::{Dim, Language, Severity, ValidationReport};
 
 fn sign(src: &str) -> conlang_language::SignDef {
-    Language::parse(src).unwrap().signs.into_iter().next().unwrap()
+    Language::parse(src)
+        .unwrap()
+        .signs
+        .into_iter()
+        .next()
+        .unwrap()
 }
 
 /// `Sign × Patch → Sign'`:Set upsert、**保留原 Sign**(不就地破壞,P30)。
@@ -28,18 +33,20 @@ fn set_upserts_and_preserves_original() {
 #[test]
 fn unset_removes_local_and_inheritance_resurfaces() {
     // Verb 範疇預設 syn.class=verb(stdlib);sign 本地覆寫為 proper,unset 後回繼承值。
-    let lang = Language::parse(
-        "sign p:\n    belongs Verb\n    syn:\n        class = proper\n",
-    )
-    .unwrap();
+    let lang =
+        Language::parse("trait InheritedSynFeature:\n    syn:\n        inherited_value = base\nsign p:\n    belongs Verb\n    belongs InheritedSynFeature\n    syn:\n        inherited_value = local\n").unwrap();
     let (reg, _) = ontology::with_std(&lang);
     let p = lang.sign_named("p").unwrap();
-    assert_eq!(p.project(Dim::Syn, &reg).get("syn.class"), Some("proper"), "本地覆寫");
-
-    let s2 = Patch::syn().unset("class").apply(p);
     assert_eq!(
-        s2.project(Dim::Syn, &reg).get("syn.class"),
-        Some("verb"),
+        p.project(Dim::Syn, &reg).get("syn.inherited_value"),
+        Some("local"),
+        "本地覆寫"
+    );
+
+    let s2 = Patch::syn().unset("inherited_value").apply(p);
+    assert_eq!(
+        s2.project(Dim::Syn, &reg).get("syn.inherited_value"),
+        Some("base"),
         "unset 本地後,範疇繼承值 verb 重新浮現"
     );
 }
@@ -48,8 +55,8 @@ fn unset_removes_local_and_inheritance_resurfaces() {
 #[test]
 fn patch_is_dimension_isolated_by_construction() {
     let p = Patch::syn().set("class", "verb").unset("old");
-    assert_eq!(p.dim, Dim::Syn);
-    assert!(p.ops.iter().all(|op| match op {
+    assert_eq!(p.dim(), Dim::Syn);
+    assert!(p.ops().iter().all(|op| match op {
         PatchOp::Set { path, .. } | PatchOp::Unset { path } => path.starts_with("syn."),
     }));
 }
@@ -57,7 +64,10 @@ fn patch_is_dimension_isolated_by_construction() {
 /// 序列化 round-trip:`parse(render(p)) == p`。
 #[test]
 fn patch_serialization_round_trips() {
-    let p = Patch::sem().set("gloss", "GIVE").unset("stale").set("frame", "giving");
+    let p = Patch::sem()
+        .set("gloss", "GIVE")
+        .unset("stale")
+        .set("frame", "giving");
     let text = p.render();
     assert_eq!(text, "sem: set gloss=GIVE; unset stale; set frame=giving");
     assert_eq!(Patch::parse(&text).unwrap(), p, "round-trip");
@@ -72,6 +82,39 @@ fn patch_parse_rejects_malformed() {
     assert!(Patch::parse("xyz: set a=1").is_err(), "未知維度");
     assert!(Patch::parse("syn: set noequals").is_err());
     assert!(Patch::parse("syn: frobnicate a").is_err(), "未知 op");
+    let cross_dimension = Patch::parse("syn: set sem.value=x").unwrap_err();
+    assert_eq!(cross_dimension.code(), "PATCH_CROSS_DIMENSION");
+    let mut report = ValidationReport::new();
+    report.push(cross_dimension.diagnostic());
+    assert!(report.has_errors());
+    assert_eq!(report.diagnostics()[0].severity, Severity::Error);
+    assert!(Patch::syn().try_set("", "x").is_err(), "空 path");
+}
+
+#[test]
+fn diff_apply_matches_target_in_each_dimension() {
+    let before = sign(
+        "sign w:\n    phon:\n        /a/\n    syn:\n        x = 1\n    sem:\n        gloss = A\n",
+    );
+    let after = sign(
+        "sign w:\n    phon:\n        /b/\n    syn:\n        y = 2\n    sem:\n        gloss = B\n    prag:\n        register = formal\n",
+    );
+    let empty = Language::new();
+    let (reg, _) = ontology::with_std(&empty);
+    let mut current = before;
+    for dim in Dim::all() {
+        let patch = diff(&current, &after, dim);
+        assert_eq!(
+            Patch::parse(&patch.render()).unwrap(),
+            patch,
+            "{dim:?} diff round-trip"
+        );
+        current = patch.apply(&current);
+        assert_eq!(
+            current.project(dim, &reg).defs,
+            after.project(dim, &reg).defs
+        );
+    }
 }
 
 // ── entrenchment(資料欄位;無動力學) ──
@@ -95,7 +138,8 @@ fn entrenchment_is_data_field_only() {
 /// entrenchment 是**非維度** meta 欄位:不落任一維 projection(維度正交)。
 #[test]
 fn entrenchment_is_non_dimensional() {
-    let lang = Language::parse("sign w:\n    entrenchment = 0.5\n    syn:\n        class = verb\n").unwrap();
+    let lang = Language::parse("sign w:\n    entrenchment = 0.5\n    syn:\n        class = verb\n")
+        .unwrap();
     let (reg, _) = ontology::with_std(&lang);
     let w = lang.sign_named("w").unwrap();
     for dim in Dim::all() {
@@ -103,7 +147,24 @@ fn entrenchment_is_non_dimensional() {
             w.project(dim, &reg).get("entrenchment").is_none(),
             "{dim:?} projection 不含 entrenchment"
         );
-        assert!(w.project(dim, &reg).get(&format!("{}.entrenchment", dim.keyword())).is_none());
+        assert!(w
+            .project(dim, &reg)
+            .get(&format!("{}.entrenchment", dim.keyword()))
+            .is_none());
     }
     assert_eq!(w.entrenchment(), Some(0.5), "但 meta accessor 可讀");
+}
+
+#[test]
+fn lexicalized_is_data_only_and_non_dimensional() {
+    let s = sign("sign w:\n    lexicalized = false\n    phon:\n        /w/\n");
+    assert_eq!(s.lexicalized(), Some(false));
+    let changed = s.with_lexicalized(true);
+    assert_eq!(s.lexicalized(), Some(false));
+    assert_eq!(changed.lexicalized(), Some(true));
+    let empty = Language::new();
+    let (reg, _) = ontology::with_std(&empty);
+    for dim in Dim::all() {
+        assert!(changed.project(dim, &reg).get("lexicalized").is_none());
+    }
 }

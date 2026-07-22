@@ -130,41 +130,74 @@ global trait Alpha:
 
 // ── 顯式拒絕(I17-d):不默默近似 ──
 
-/// else 鏈(P22)尚無 dsl 對應 → ElseUnsupported。
-#[test]
-fn else_chain_is_rejected_explicitly() {
-    let src = "\
-Symbol a
-
-global trait G:
-    phon:
-        a => a / _#
-        else a => a
-";
-    let l = Language::parse(src).unwrap();
-    let e = codegen::compile_full(&l).unwrap_err();
-    assert!(
-        matches!(e, CodegenError::ElseUnsupported { ref body, .. } if body == "a => a / _#"),
-        "{e:?}"
-    );
+fn run_text(program: &tshiatun_dsl::Program, input: &str) -> String {
+    let word = tshiatun_dsl::build_word(program, input).unwrap();
+    let fallback = word.clone();
+    let steps = tshiatun_dsl::run_program(program, word).unwrap();
+    let last = steps.last().map(|step| &step.word).unwrap_or(&fallback);
+    last.skeleton
+        .iter()
+        .filter_map(|segment| program.env.syms.resolve(segment.sym))
+        .collect()
 }
 
-/// phon 規則的 then 鏈屬 dsl 域(dsl 自有 Then:)→ codegen 顯式拒絕(I26)。
+/// phon Else lowers to Tshiatūn `Else:` and is differential-equivalent to a
+/// directly authored `.qy` rule.
 #[test]
-fn then_chain_on_phon_rule_is_rejected() {
+fn else_chain_lowers_to_phon_dsl() {
     let src = "\
 Symbol a
+Symbol b
+Symbol c
+
+Class vowel {a, b, c}
 
 global trait G:
     phon:
-        a => a / _#
-        then a => a
+        a => b
+        else c => a
 ";
     let l = Language::parse(src).unwrap();
-    let e = codegen::compile_full(&l).unwrap_err();
-    assert!(
-        matches!(e, CodegenError::ThenUnsupported { ref body, .. } if body == "a => a / _#"),
-        "{e:?}"
+    let generated = codegen::compile_full(&l).unwrap();
+    assert!(generated.grammar.phon_source.contains("Else:"));
+    let direct = tshiatun_dsl::compile(
+        "Symbol a\nSymbol b\nSymbol c\nClass vowel {a, b, c}\nchoice:\n    a => b\n    Else: c => a\n",
+    )
+    .unwrap();
+    for input in ["a", "c"] {
+        assert_eq!(
+            run_text(&generated.grammar.program, input),
+            run_text(&direct, input)
+        );
+    }
+}
+
+/// phon Then lowers to Tshiatūn `Then:` and preserves feeding.
+#[test]
+fn then_chain_lowers_to_phon_dsl() {
+    let src = "\
+Symbol a
+Symbol b
+Symbol c
+
+Class vowel {a, b, c}
+
+global trait G:
+    phon:
+        a => b
+        then b => c
+";
+    let l = Language::parse(src).unwrap();
+    let generated = codegen::compile_full(&l).unwrap();
+    assert!(generated.grammar.phon_source.contains("Then:"));
+    let direct = tshiatun_dsl::compile(
+        "Symbol a\nSymbol b\nSymbol c\nClass vowel {a, b, c}\nchain:\n    a => b\n    Then: b => c\n",
+    )
+    .unwrap();
+    assert_eq!(run_text(&generated.grammar.program, "a"), "c");
+    assert_eq!(
+        run_text(&generated.grammar.program, "a"),
+        run_text(&direct, "a")
     );
 }
 

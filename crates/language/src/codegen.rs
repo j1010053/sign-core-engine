@@ -7,8 +7,8 @@
 //!
 //! 責任分離(P8):Compiled Grammar 僅含執行表示(規則集原文 + Program),
 //! **不保存 trait/priority/compile metadata**(trait 索引住 [`Pipeline`],
-//! 是 Compile Artifact)。Compiled Sign = 解析後欄位(③ 後者勝已套用)+
-//! sign 局部規則(消費者 = 步驟 12 的臨時 Word 建構/循環套用)。
+//! 是 Compile Artifact)。Compiled Sign = 解析後欄位(③ 後者勝已套用)+ sign 局部
+//! 規則；規則保留 id、維度、stage、Then/Else 與來源位置供 M1++ runtime/trace 使用。
 //!
 //! 編碼細節(I17):Language Rule 的 body 以 `;` 連接同塊多語句(dsl 詞法無
 //! `;`,分隔符不可能滲入語句);codegen 展開為「合成標籤 `rN:` + 每語句一行」,
@@ -16,24 +16,20 @@
 //! 塊頭(Scan 頭文法無冒號),其後語句同上展開。
 
 use crate::compile::{self, CompileError, Pipeline};
-use crate::{Language, Rule, SignItem, Stage};
+use crate::{Dim, Language, Rule, RuleId, SignItem, SourceLocation, Stage};
 use tshiatun_dsl::Program;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CodegenError {
     #[error(transparent)]
     Compile(#[from] CompileError),
-    /// phon 規則的 else/then 鏈求值屬 dsl 域(dsl 自有 Else:/Then:)——codegen 顯式拒絕,
-    /// 不默默丟棄(synchronic 的 else/then 求值於 syn/sem/prag 規則,I25/I26)。
-    #[error("rule {label} {body:?}: else-chain not lowerable to phon DSL (dsl 自有 Else:)")]
-    ElseUnsupported { label: String, body: String },
-    #[error("rule {label} {body:?}: then-chain not lowerable to phon DSL (dsl 自有 Then:)")]
-    ThenUnsupported { label: String, body: String },
     /// dsl 的 Scan 塊不承載 stage 語句(lower 固定 default)——顯式拒絕。
     #[error("Scan rule {body:?} has non-word stage {stage}: dsl Scan blocks carry no stage")]
     ScanStageUnsupported { body: String, stage: &'static str },
     /// 產出的規則集被 dsl 拒收(語句原文有誤);附完整產物供定位。
-    #[error("generated phon rule-set rejected by dsl: {msg}\n--- generated source ---\n{generated}")]
+    #[error(
+        "generated phon rule-set rejected by dsl: {msg}\n--- generated source ---\n{generated}"
+    )]
     Dsl { msg: String, generated: String },
 }
 
@@ -44,14 +40,30 @@ pub struct CompiledGrammar {
     pub phon_source: String,
     /// `tshiatun_dsl::compile(phon_source)` 產物(規則已解析、帶 stage 標記)。
     pub program: Program,
+    /// Generated `.qy` line to physical `.lang` rule/branch line.
+    pub source_map: Vec<PhonSourceMap>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PhonSourceMap {
+    pub generated_line: usize,
+    pub rule_id: RuleId,
+    /// `0` is the main branch, `1..` are Then/Else branches.
+    pub branch: usize,
+    pub source: SourceLocation,
 }
 
 /// Compiled Sign 內的一條 sign 局部規則(phon 或 syn/sem;消費者 = 步驟 12)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompiledSignRule {
+    pub rule_id: RuleId,
     pub body: String,
     pub stage: Stage,
+    pub dim: Dim,
     pub else_chain: Vec<String>,
+    pub then_chain: Vec<String>,
+    pub source: SourceLocation,
+    pub branch_sources: Vec<SourceLocation>,
 }
 
 /// Compiled Sign:③ 解析後的欄位(同 path 已後者勝)+ 局部規則,無 trait 痕跡。
@@ -60,6 +72,12 @@ pub struct CompiledSign {
     pub name: String,
     /// `(path, value)`,保 ④ 槽位序(Def 原地不動)。
     pub defs: Vec<(String, String)>,
+    pub feature_declarations: Vec<crate::FeatureDecl>,
+    pub feature_values: Vec<crate::FeatureValue>,
+    pub slot_feature_bindings: Vec<crate::SlotFeatureBinding>,
+    pub role_declarations: Vec<crate::RoleDecl>,
+    pub role_bindings: Vec<crate::RoleBinding>,
+    pub realization: Option<crate::Realization>,
     pub rules: Vec<CompiledSignRule>,
 }
 
@@ -82,18 +100,39 @@ fn stage_str(s: Stage) -> &'static str {
 /// 一條 ④ 規則 → dsl 規則塊文字。`n` 為合成標籤計數器(決定性,P26 精神)。
 /// (`pub(crate)`:word 模組的 cophonology 小規則組沿用同一排放,I18。)
 pub(crate) fn emit_rule(out: &mut String, n: &mut u32, r: &Rule) -> Result<(), CodegenError> {
-    if !r.else_chain.is_empty() {
-        return Err(CodegenError::ElseUnsupported {
-            label: format!("r{n}"),
-            body: r.body.clone(),
-        });
-    }
-    if !r.then_chain.is_empty() {
-        return Err(CodegenError::ThenUnsupported {
-            label: format!("r{n}"),
-            body: r.body.clone(),
-        });
-    }
+    emit_rule_mapped(out, n, r, &mut Vec::new())
+}
+
+fn generated_line(out: &str) -> usize {
+    out.bytes().filter(|byte| *byte == b'\n').count() + 1
+}
+
+fn push_mapped_statement(
+    out: &mut String,
+    indent: &str,
+    statement: &str,
+    rule: &Rule,
+    branch: usize,
+    source: SourceLocation,
+    source_map: &mut Vec<PhonSourceMap>,
+) {
+    source_map.push(PhonSourceMap {
+        generated_line: generated_line(out),
+        rule_id: rule.id.clone(),
+        branch,
+        source,
+    });
+    out.push_str(indent);
+    out.push_str(statement);
+    out.push('\n');
+}
+
+fn emit_rule_mapped(
+    out: &mut String,
+    n: &mut u32,
+    r: &Rule,
+    source_map: &mut Vec<PhonSourceMap>,
+) -> Result<(), CodegenError> {
     let stmts = |s: &str| {
         s.split(';')
             .map(str::trim)
@@ -114,9 +153,7 @@ pub(crate) fn emit_rule(out: &mut String, n: &mut u32, r: &Rule) -> Result<(), C
                 out.push_str(head.trim_end());
                 out.push_str(":\n");
                 for s in stmts(tail) {
-                    out.push_str("    ");
-                    out.push_str(&s);
-                    out.push('\n');
+                    push_mapped_statement(out, "    ", &s, r, 0, r.source, source_map);
                 }
             }
             None => {
@@ -131,9 +168,29 @@ pub(crate) fn emit_rule(out: &mut String, n: &mut u32, r: &Rule) -> Result<(), C
             out.push_str(&format!("    stage: {}\n", stage_str(r.stage)));
         }
         for s in stmts(&r.body) {
-            out.push_str("    ");
-            out.push_str(&s);
-            out.push('\n');
+            push_mapped_statement(out, "    ", &s, r, 0, r.source, source_map);
+        }
+    }
+    let (keyword, branches) = if !r.else_chain.is_empty() {
+        ("Else", &r.else_chain)
+    } else {
+        ("Then", &r.then_chain)
+    };
+    for (index, branch) in branches.iter().enumerate() {
+        out.push_str("    ");
+        out.push_str(keyword);
+        out.push_str(":\n");
+        let source = r.branch_sources.get(index).copied().unwrap_or(r.source);
+        for statement in stmts(branch) {
+            push_mapped_statement(
+                out,
+                "        ",
+                &statement,
+                r,
+                index + 1,
+                source,
+                source_map,
+            );
         }
     }
     Ok(())
@@ -157,13 +214,14 @@ pub fn codegen(ordered: &Language) -> Result<(CompiledGrammar, Vec<CompiledSign>
     let mut globals: Vec<_> = ordered.traits.iter().filter(|t| t.global).collect();
     globals.sort_by(|a, b| a.name.cmp(&b.name)); // canonical 序(printer 同序,決定性)
     let mut n = 1u32;
+    let mut source_map = Vec::new();
     for t in globals {
         for b in &t.blocks {
             for item in &b.items {
                 // phon 側只收 phon 規則(P44 維度隔離;syn/sem/prag 規則求值於 Sign,12d)
                 if let SignItem::Rule(r) = item {
                     if r.dim == crate::Dim::Phon {
-                        emit_rule(&mut src, &mut n, r)?;
+                        emit_rule_mapped(&mut src, &mut n, r, &mut source_map)?;
                     }
                 }
             }
@@ -187,14 +245,63 @@ pub fn codegen(ordered: &Language) -> Result<(CompiledGrammar, Vec<CompiledSign>
                     _ => None,
                 })
                 .collect(),
+            feature_declarations: s
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    SignItem::FeatureDecl(feature) => Some(feature.clone()),
+                    _ => None,
+                })
+                .collect(),
+            feature_values: s
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    SignItem::FeatureValue(feature) => Some(feature.clone()),
+                    _ => None,
+                })
+                .collect(),
+            slot_feature_bindings: s
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    SignItem::SlotFeatureBinding(binding) => Some(binding.clone()),
+                    _ => None,
+                })
+                .collect(),
+            role_declarations: s
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    SignItem::RoleDecl(role) => Some(role.clone()),
+                    _ => None,
+                })
+                .collect(),
+            role_bindings: s
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    SignItem::RoleBinding(role) => Some(role.clone()),
+                    _ => None,
+                })
+                .collect(),
+            realization: s.items.iter().find_map(|item| match item {
+                SignItem::Realization(realization) => Some(realization.clone()),
+                _ => None,
+            }),
             rules: s
                 .items
                 .iter()
                 .filter_map(|i| match i {
-                    SignItem::Rule(r) => Some(CompiledSignRule {
+                    SignItem::Rule(r) | SignItem::FeatureRule(r) => Some(CompiledSignRule {
+                        rule_id: r.id.clone(),
                         body: r.body.clone(),
                         stage: r.stage,
+                        dim: r.dim,
                         else_chain: r.else_chain.clone(),
+                        then_chain: r.then_chain.clone(),
+                        source: r.source,
+                        branch_sources: r.branch_sources.clone(),
                     }),
                     _ => None,
                 })
@@ -206,6 +313,7 @@ pub fn codegen(ordered: &Language) -> Result<(CompiledGrammar, Vec<CompiledSign>
         CompiledGrammar {
             phon_source: src,
             program,
+            source_map,
         },
         signs,
     ))

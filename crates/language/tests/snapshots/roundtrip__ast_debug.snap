@@ -37,7 +37,10 @@ Language {
                         Rule(
                             Rule {
                                 id: RuleId(
-                                    0,
+                                    NodeId {
+                                        namespace: Ephemeral,
+                                        ordinal: 0,
+                                    },
                                 ),
                                 body: "a => ə / _#",
                                 stage: Word,
@@ -47,6 +50,20 @@ Language {
                                     "e",
                                 ],
                                 then_chain: [],
+                                source: SourceLocation {
+                                    line: 13,
+                                    column: 0,
+                                },
+                                branch_sources: [
+                                    SourceLocation {
+                                        line: 14,
+                                        column: 0,
+                                    },
+                                    SourceLocation {
+                                        line: 15,
+                                        column: 0,
+                                    },
+                                ],
                             },
                         ),
                     ],
@@ -56,13 +73,21 @@ Language {
                         Rule(
                             Rule {
                                 id: RuleId(
-                                    1,
+                                    NodeId {
+                                        namespace: Ephemeral,
+                                        ordinal: 1,
+                                    },
                                 ),
                                 body: "n => m / _[+labial]",
                                 stage: Stem,
                                 dim: Phon,
                                 else_chain: [],
                                 then_chain: [],
+                                source: SourceLocation {
+                                    line: 18,
+                                    column: 0,
+                                },
+                                branch_sources: [],
                             },
                         ),
                     ],
@@ -105,7 +130,10 @@ Language {
     signs: [
         SignDef {
             id: SignId(
-                0,
+                NodeId {
+                    namespace: Ephemeral,
+                    ordinal: 0,
+                },
             ),
             name: "go",
             items: [
@@ -142,18 +170,27 @@ Language {
                 Rule(
                     Rule {
                         id: RuleId(
-                            2,
+                            NodeId {
+                                namespace: Ephemeral,
+                                ordinal: 2,
+                            },
                         ),
                         body: "o => ə / _#",
                         stage: Phrase,
                         dim: Phon,
                         else_chain: [],
                         then_chain: [],
+                        source: SourceLocation {
+                            line: 36,
+                            column: 0,
+                        },
+                        branch_sources: [],
                     },
                 ),
             ],
         },
     ],
+    rule_namespace: Local,
     next_rule: 3,
     next_sign: 1,
 }

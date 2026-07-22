@@ -43,8 +43,10 @@
 | `架構修補彙整_01-04_v1.0.md` | **P1–P19 權威總表** + 裁決(P14–P19)+ 廢止/更名對照(全庫檢索用) |
 | `架構2.0總鳥瞰_v1.0.md` | **2.0 單一入口**:Language/ChangeSet 雙軌全圖、四條資訊流、Debug 模塊化、**新實作順序(步驟 8–22,M1–M4)** |
 | `架構修補05_Primitive與檔案格式_v0.1.md` | **P20–P28 權威**:DSL 獨立性、IR dump/canonical printer、條件語法(else/Path/tier-adjacency)、四原語、Ref 模型、.lang/.chg 檔案格式 |
-| `架構修補06_插件服務與DSL_API_v0.1.md` | **P29–P37 權威**:插件系統(資料層/程式碼層分離)、外部服務生命週期(ServiceRef→resolve→執行→驗證→History)、音變 DSL 最小對外 API(承 P5/P22 鐵律)。**設計層,實作未排程** |
+| `架構修補06_插件服務與DSL_API_v0.1.md` | **P29–P37 權威**:插件系統(資料層/程式碼層分離)、外部服務生命週期(ServiceRef→resolve→執行→驗證→History)、音變 DSL 最小對外 API(承 P5/P22 鐵律)。完整插件仍是設計層；embedded std 已先實作 package code/data/config 子集。 |
 | `架構修補07_共時四維系統_v0.1.md` | **P38–P44 權威**:phon/syn/sem/prag 四維獨立(OntologyRegistry)、Defs+typed projection/patch、`belongs`(取代 provides)、valence=slots、construction-as-Sign+slot mapping、Lexurgy 式 Else 三分、四維同步規則;路線圖插入步驟 12a–12e(M1++,M2 前) |
+| `14_共時lang語法與資料貼合度_v0.1.md` | **共時 surface 實作對照**:巢狀 Path、`.lang` SlotMap、typed sign metadata，以及 Language 與 Evidence/Attestation 的 type/token 邊界。 |
+| `15_std_Grambank預設traits_v0.1.md` | **stdlib 資料對照**:修補06 package 分層、Grambank v1.0 的 25 項 trait 子集、0/1/? 知識狀態、行為映射、限制與測試證據。 |
 | `archive/` | 已取代的歷史文件,勿引用(各檔頭有橫幅說明) |
 
 ## 2. 不可違反的設計不變式(內化這些,寫每一行程式碼時對照)
@@ -246,18 +248,13 @@ patch **僅介面/欄位**(entrenchment/lexicalization 行為留 M2 後)。關�
 取代 provides(P40)、valence=slots(P41)、construction=Sign(P42)、Else 三分
 Matched/Unmatched/Error(P43)、每維規則只改自己那維(P44)。
 
-**已完成(鳥瞰步驟 12a,I19/I20)**:四維 ontology + `belongs` + typed projection。
-`crates/language/ontology.rs`:`OntologyRegistry`(phon/syn/sem/prag 四棵**獨立**樹,
-名稱空間依 dim 分開)自一組 Language 建成;**最小本體 = 額外引用的 stdlib
-`.lang`**(`std/ontology.lang`,I20 資料層非硬編碼;`std_ontology()`/`with_std()`)。
-`belongs`(P40,`Item::Belongs`/`SignItem::Belongs`,dim-marked `<dim> trait`)閉包
-= nearest-first(pre-order DFS、首見去重、循環安全);與 `Name[n]` macro 並存分工
-(I19:belongs 保留標記、展開由 projection lazy 解析不複製 Def,P39)。
-`projection.rs`:`sign.project(dim,&reg)` = 對 `Defs` 型別化解讀 + 範疇繼承(近祖/
-本地勝,P6);維度正交。建構期四類診斷(未知目標含 sign 級、跨維、循環、重名;
-分級不 panic)。出口過:`tests/ontology.rs` 11 案(stdlib round-trip、閉包語意、
-四維獨立同名、四類診斷、projection 繼承/覆蓋/正交、決定性)。ontology trait 於
-compile 存續(`retain(global || dim.is_some())`)。
+**已完成(鳥瞰步驟 12a,I19/I20)**:單一維度中立 ontology + `belongs` + typed
+projection。`crates/language/ontology.rs` 的 `OntologyRegistry` 自一組 Language 建成
+一棵分類樹；phon/syn/sem/prag 是正交內容投影，不各建同名分類樹。**最小本體 =
+額外引用的 stdlib `.lang`**；`std_ontology()`/`with_std()` 保持相容。`belongs` 閉包
+菱形去重、循環安全，有效內容依遠祖→近祖、同距離後寫 `belongs`、本地最後決議；
+與 `Name[n]` macro 並存分工。建構期診斷涵蓋未知目標、循環、重名、Def winner
+provenance 與 slot conflict。出口見 `tests/ontology.rs` 與 M1++ 封板矩陣。
 
 **已完成(鳥瞰步驟 12b,I21)**:Construction 與 slots。`construction.rs`:
 construction-as-Sign(P42,帶 ≥1 slot 的 sign)、具名 slots(`slot NAME [Filler]`,
@@ -310,10 +307,32 @@ patch);`RuleRecord` 保 status/changed/branch/diag/RuleId。出口過:
 `SignDef::entrenchment()`/`with_entrenchment()`(跨維 meta 欄位,無固化動力學,
 留 M2/B)。**共時語法功能總檢查**:`tests/synchronic_system.rs` 整合一份 mini-grammar
 串 12a–12e 全層(分類樹→投影→construction form-meaning→同步規則→patch→Flow A)。
-workbench 115 測試綠、0 警告;引擎零觸動、wasm 綠。
+workbench M1++ 封板回歸綠；引擎零觸動。
 
-**下一個任務(鳥瞰步驟 13,M2 歷時開跑)**:Primitive Edit 四原語(P23:
-insert/delete/update/move,樹上封閉;Ref 為屬性值 P24;Path 定址複用 path 模組)
-+ 決定性 ID(P26)。crate 佈局(新 `changeset` crate vs language 內模組)動工時裁決。
-🔑 其後步驟 14 = ChangeSet Interpreter(改寫 Language→重 compile→表層變 = 歷時貫通)。
+**共時 `.lang` surface 補齊(2026-07-21)**:維度 Def lhs 接完整 Path
+(`.`/`[key]`/`~tier`)；`syn:` 內平坦 `map SLOT OP [ARG]` 與 Rust 共用
+`SlotMapOp`，source mapping 經 compile 驗證後進 construction runtime；sign 頂層
+`origin/provenance/lifecycle` typed 化。歷史 attestation 年代/文本/可信度仍不進
+Language，對照見 docs/14 與 `tests/lang_surface.rs`。
+
+**統一 library + std/cxg + English(2026-07-21)**:依修補06建立
+`crates/language/lib/{std,plugin,natural}`，由 `LibraryCatalog` 驗證 kind、dependency、
+priority、stable exports 與 rule namespace；`stdlib` 與舊 ontology API 為相容 facade。
+std 含 core/grambank/cxg；釘選 Grambank v1.0.3 `stan1293` 的 25
+項二元參數，每項有未知根、`_Absent`(0)、`_Present`(1)與保守的 syn/sem/prag
+行為 Def。cxg 提供 typed Slot(`[*]`)與 slot-aware Rule；`natural:en-standard` 由
+`compile_with_libraries` 顯式選取並提供 12 類核心構式。出口
+`tests/library_cxg_english.rs` 與 `tests/stdlib_grambank.rs`，詳見 docs/15–16。
+外部 plugin discovery、英語完整文法與缺口新關鍵字仍延後。
+
+**步驟 13 已完成**：`LanguageDocument` 以 versioned sidecar 保存 caller source 的
+stable NodeId/Ref binding，`conlang-changeset` 實作 immutable checked
+insert/delete/update/move、stable Anchor、LanguageDiff 與 PrimitiveRecord；
+`check_language` 已從 codegen 前抽出供 compile/edit 共用。詳見 docs/20。
+
+**步驟 14 已完成（2026-07-22）**：identity v2 mixed namespaces、Primitive-only
+`.chg` parse/resolve/canonical stable-NodeRef dump、statement transaction、base／manifest／
+library lock、deterministic replay、ChangeSession lazy compile。共時封板介面補齊 derived-token
+downward slot feature forwarding、DeepTokenState baseline 重跑與 OccurrenceRecord；教學與可執行
+fixture 在 docs/21，契約證據在 docs/22。
 

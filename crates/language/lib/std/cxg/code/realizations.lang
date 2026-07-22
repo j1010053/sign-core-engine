@@ -1,0 +1,98 @@
+/* Optional concrete realization patterns for the abstract schemas in
+   schema.lang. These are ordinary traits, not `recipe`/`goal` declarations:
+   recipe and goal are diachronic function-layer names, not synchronic .lang
+   keywords. A natural-language package may inherit one of these patterns or
+   provide a different realization. */
+
+trait PrepositionalPhrase:
+    belongs AdpositionConstruction
+    phon:
+        /{marker} {complement}/
+    syn:
+        feature:
+            order = enum(marker_complement)
+            order = marker_complement
+    constraints:
+        before(marker, complement)
+        adjacent(marker, complement)
+
+trait PostpositionalPhrase:
+    belongs AdpositionConstruction
+    phon:
+        /{complement} {marker}/
+    syn:
+        feature:
+            order = enum(complement_marker)
+            order = complement_marker
+    constraints:
+        before(complement, marker)
+        adjacent(complement, marker)
+
+trait SVOTransitiveClause:
+    belongs TransitiveClauseConstruction
+    phon:
+        /{subject} {predicate} {object}/
+    syn:
+        feature:
+            order = enum(subject_predicate_object)
+            order = subject_predicate_object
+    constraints:
+        before(subject, predicate)
+        before(predicate, object)
+        adjacent(subject, predicate)
+        adjacent(predicate, object)
+
+trait OVSTransitiveClause:
+    belongs TransitiveClauseConstruction
+    phon:
+        /{object} {predicate} {subject}/
+    syn:
+        feature:
+            order = enum(object_predicate_subject)
+            order = object_predicate_subject
+    constraints:
+        before(object, predicate)
+        before(predicate, subject)
+        adjacent(object, predicate)
+        adjacent(predicate, subject)
+
+trait PrefixNegation:
+    belongs NegationConstruction
+    syn:
+        slots:
+            negator [*]
+    phon:
+        /{negator}{predicate}/
+    constraints:
+        before(negator, predicate)
+        adjacent(negator, predicate)
+
+trait SuffixNegation:
+    belongs NegationConstruction
+    syn:
+        slots:
+            negator [*]
+    phon:
+        /{predicate}{negator}/
+    constraints:
+        before(predicate, negator)
+        adjacent(predicate, negator)
+
+trait InitialPolarQuestion:
+    belongs PolarQuestionConstruction
+    syn:
+        slots:
+            particle [*]
+    phon:
+        /{particle} {clause}/
+    constraints:
+        before(particle, clause)
+        adjacent(particle, clause)
+
+trait SerialPredicate:
+    belongs SerialPredicateConstruction
+    phon:
+        /{first} {second}/
+    constraints:
+        before(first, second)
+        adjacent(first, second)

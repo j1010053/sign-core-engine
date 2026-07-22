@@ -17,7 +17,11 @@ fn parse(src: &str) -> Language {
 fn std_ontology_parses_and_round_trips() {
     let l = ontology::std_ontology();
     let dump = l.dump();
-    assert_eq!(parse(&dump).dump(), dump, "stdlib ontology.lang 必須 round-trip 恆等");
+    assert_eq!(
+        parse(&dump).dump(),
+        dump,
+        "stdlib ontology.lang 必須 round-trip 恆等"
+    );
     let (reg, diags) = OntologyRegistry::build(&[&l]);
     assert!(diags.is_empty(), "stdlib 本體不得有建構診斷:{diags:?}");
     assert!(!reg.names().is_empty(), "分類樹不得為空");
@@ -33,7 +37,11 @@ fn belongs_closure_is_nearest_first() {
         vec!["Ditransitive", "Transitive", "Verb", "Predicate"]
     );
     assert_eq!(reg.closure("Predicate"), vec!["Predicate"]);
-    assert_eq!(reg.closure("Human"), vec!["Human", "Animate", "Physical", "Entity"]);
+    assert_eq!(
+        reg.closure("Human"),
+        vec!["Human", "Animate", "Physical", "Entity", "Semantic"],
+        "Entity is now explicitly a semantic type, while nearest-first order remains stable"
+    );
 }
 
 /// 使用者可擴充自定範疇,掛回本體某節點(docs/07 §9)。
@@ -44,7 +52,13 @@ fn user_can_extend_ontology() {
     assert!(diags.is_empty(), "{diags:?}");
     assert_eq!(
         reg.closure("Ditransitive2"),
-        vec!["Ditransitive2", "Ditransitive", "Transitive", "Verb", "Predicate"]
+        vec![
+            "Ditransitive2",
+            "Ditransitive",
+            "Transitive",
+            "Verb",
+            "Predicate"
+        ]
     );
 }
 
@@ -78,12 +92,12 @@ fn sign_belongs_to_unknown_category_is_diagnosed() {
 
 #[test]
 fn belongs_cycle_is_diagnosed_and_closure_stays_safe() {
-    let user = parse(
-        "trait A:\n    belongs B\ntrait B:\n    belongs C\ntrait C:\n    belongs A\n",
-    );
+    let user = parse("trait A:\n    belongs B\ntrait B:\n    belongs C\ntrait C:\n    belongs A\n");
     let (reg, diags) = OntologyRegistry::build(&[&user]);
     assert!(
-        diags.iter().any(|d| matches!(d, OntologyDiag::Cycle { .. })),
+        diags
+            .iter()
+            .any(|d| matches!(d, OntologyDiag::Cycle { .. })),
         "應偵測環:{diags:?}"
     );
     let c = reg.closure("A");
@@ -109,7 +123,7 @@ fn duplicate_trait_is_diagnosed() {
 #[test]
 fn projection_inherits_category_defaults_and_local_overrides() {
     let user = parse(
-        "sign give:\n    belongs Transitive\n    belongs Transfer\n    phon:\n        /give/\n    sem:\n        gloss = GIVE\nsign proper:\n    belongs Noun\n    syn:\n        class = proper-noun\n",
+        "trait LocalNominalStatus:\n    syn:\n        feature:\n            nominal_status = enum(common, proper)\nsign give:\n    belongs Transitive\n    belongs Transfer\n    phon:\n        /give/\n    sem:\n        gloss = GIVE\nsign proper:\n    belongs Noun\n    belongs LocalNominalStatus\n    syn:\n        feature:\n            nominal_status = proper\n",
     );
     let (reg, diags) = ontology::with_std(&user);
     assert!(diags.is_empty(), "with_std 建構不得有診斷:{diags:?}");
@@ -119,11 +133,36 @@ fn projection_inherits_category_defaults_and_local_overrides() {
     // 分類閉包**維度中立**:Transitive→Verb→Predicate 併 Transfer→Event
     assert_eq!(
         syn.categories,
-        vec!["Transitive", "Verb", "Predicate", "Transfer", "Event"]
+        vec![
+            "Transitive",
+            "Verb",
+            "Predicate",
+            "Transfer",
+            "TransferFrame",
+            "EventFrame",
+            "SemanticFrame",
+            "Semantic",
+        ]
     );
-    assert!(syn.is_a("Verb") && syn.is_a("Transfer"));
-    // syn.class 由 Verb 範疇繼承(本地未覆蓋)
-    assert_eq!(syn.get("syn.class"), Some("verb"));
+    assert!(
+        syn.is_a("Verb")
+            && syn.is_a("Transfer")
+            && syn.is_a("TransferFrame")
+            && syn.is_a("EventFrame")
+            && syn.is_a("SemanticFrame")
+            && syn.is_a("Semantic")
+    );
+    assert!(
+        !syn.is_a("Event"),
+        "Transfer is a frame contract here; it does not silently assert the Event category"
+    );
+    // Ontology membership is carried by `belongs`; it no longer writes a
+    // mutable `syn.class` default.
+    assert_eq!(
+        syn.get("syn.class"),
+        None,
+        "category identity is in belongs closure, not a mutable syn.class default"
+    );
 
     // sem 維:本地 sem.gloss;分類同上(中立)
     let sem = give.project(Dim::Sem, &reg);
@@ -133,11 +172,35 @@ fn projection_inherits_category_defaults_and_local_overrides() {
     // phon 維:本地 UR
     assert_eq!(give.project(Dim::Phon, &reg).get("phon"), Some("/give/"));
 
-    // 本地覆蓋:proper 覆蓋 Nominal 繼承的 syn.class
+    // A locally declared enum feature remains available on the Syn projection.
     let proper = user.sign_named("proper").unwrap();
     let psyn = proper.project(Dim::Syn, &reg);
-    assert_eq!(psyn.get("syn.class"), Some("proper-noun"), "本地勝(P6)");
+    assert_eq!(psyn.get("syn.nominal_status"), Some("proper"));
     assert!(psyn.is_a("Nominal"));
+}
+
+#[test]
+fn generic_and_typed_feature_values_share_one_precedence_stream() {
+    let language = parse(
+        r#"trait BaseState:
+    syn:
+        feature:
+            state = enum(base, local)
+            state = base
+sign item:
+    belongs BaseState
+    syn:
+        state = local
+"#,
+    );
+    let (registry, diagnostics) = ontology::with_std(&language);
+    assert!(diagnostics.is_empty());
+    let effective = registry.effective_sign(language.sign_named("item").unwrap());
+    assert_eq!(
+        effective.project(Dim::Syn, &registry).get("syn.state"),
+        Some("local"),
+        "a local generic Def must beat an inherited typed FeatureValue"
+    );
 }
 
 /// 維度正交:syn projection 的 defs 不含 sem/phon 的 Def(P44)。
@@ -150,7 +213,10 @@ fn projection_defs_are_dimension_orthogonal() {
     let w = user.sign_named("w").unwrap();
     assert_eq!(w.project(Dim::Syn, &reg).get("phon"), None);
     assert_eq!(w.project(Dim::Syn, &reg).get("sem.gloss"), None);
-    assert_eq!(w.project(Dim::Prag, &reg).get("prag.register"), Some("formal"));
+    assert_eq!(
+        w.project(Dim::Prag, &reg).get("prag.register"),
+        Some("formal")
+    );
 }
 
 #[test]

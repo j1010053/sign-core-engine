@@ -11,13 +11,20 @@ Symbol g
 Class vowel {u, o}
 
 trait Honorific:
+trait VerbStatus:
+    syn:
+        feature:
+            valence = enum(base, intransitive)
+            valence = base
 
 sign run:
     belongs Verb
     belongs Motion
+    belongs VerbStatus
     entrenchment = 0.9
     syn:
-        class => intransitive / [Verb]
+        feature:
+            valence => intransitive / [Verb]
     sem:
         gloss = RUN
     phon:

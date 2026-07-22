@@ -28,10 +28,18 @@ fn run(lang: &Language, reg: &OntologyRegistry, sign: &str) -> conlang_language:
 fn else_runs_one_branch_then_runs_all() {
     let (lang, reg) = setup();
     let e = run(&lang, &reg, "else_same");
-    assert_eq!(e.project(Dim::Syn, &reg).get("syn.x"), Some("a"), "Else:只第一分支");
+    assert_eq!(
+        e.project(Dim::Syn, &reg).get("syn.x"),
+        Some("a"),
+        "Else:只第一分支"
+    );
 
     let t = run(&lang, &reg, "then_same");
-    assert_eq!(t.project(Dim::Syn, &reg).get("syn.x"), Some("b"), "Then:兩分支依序,後者勝");
+    assert_eq!(
+        t.project(Dim::Syn, &reg).get("syn.x"),
+        Some("b"),
+        "Then:兩分支依序,後者勝"
+    );
 }
 
 /// feeding:Then 第二分支見第一分支的 commit(守衛 `x == 1` 成立 → y=2);
@@ -47,7 +55,11 @@ fn then_feeds_next_branch_else_does_not() {
     let t = run(&lang, &reg, "then_feed");
     let ts = t.project(Dim::Syn, &reg);
     assert_eq!(ts.get("syn.x"), Some("1"));
-    assert_eq!(ts.get("syn.y"), Some("2"), "Then:第二分支見 x=1 → y=2(feeding)");
+    assert_eq!(
+        ts.get("syn.y"),
+        Some("2"),
+        "Then:第二分支見 x=1 → y=2(feeding)"
+    );
 }
 
 /// Then 首分支未匹配([Nope]),後分支**仍跑**(順序組合,非條件 fallback)。

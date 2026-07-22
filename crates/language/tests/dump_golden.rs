@@ -20,10 +20,7 @@ fn lang_dump_golden_matches_patch05_sample() {
         .map(String::from)
         .to_vec();
     // ⑤ 分佈覆寫(故意亂序;canonical 應排序)
-    l.distribution = vec![
-        ("/t/".into(), "0.20".into()),
-        ("/k/".into(), "0.15".into()),
-    ];
+    l.distribution = vec![("/t/".into(), "0.20".into()), ("/k/".into(), "0.15".into())];
 
     // global trait CorePhonology(兩 block,P27)
     let r1 = l.rule("a => ə / _#", Stage::Word);

@@ -50,5 +50,5 @@ sign then_feed:
 
 sign then_noop_first:
     syn:
-        x => 1 / [Nope]
+        x => 1 / [Noun]
             then y => 2

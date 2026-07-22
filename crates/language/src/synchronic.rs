@@ -1,22 +1,12 @@
-//! 四維同步規則求值(步驟 12d;修補07 P43/P44,I25)。
-//!
-//! syn/sem/prag 規則求值於 **Sign 的維度 projection**(phon 規則求值於 Word,dsl,
-//! 不在此)。**維度隔離(P44)**:一條 dim 規則只讀寫自己那維(產出該維 [`Patch`]),
-//! 不碰他維——結構保證(規則在其維度區塊內,寫入 path 自帶維度前綴)。
-//!
-//! **Lexurgy 式 `Else` 三分(P43)**:一條規則 = 主分支 + else 鏈,**第一匹配勝出**:
-//! - **Matched**:某分支守衛成立(含 identity:值未變仍算 Matched)→ 套用、跳過其餘;
-//! - **Unmatched**:無分支匹配(`matched == 0`)→(整條規則 noop);
-//! - **Error**:分支語法/守衛畸形 → 診斷,**不得偷偷進後續分支**。
-//!
-//! **逐求值單元**:每個 Sign 各自判定;規則序內**順序求值**(後規則見前 patch,P9)。
-//! 保留 `matched`(status)/`changed`(值實變)/`diag`/source-location(RuleId)/
-//! 決定性書寫序。
+//! Deterministic syn/sem/prag rule evaluation for stored signs and derived
+//! construction tokens. Token rules may read immutable filler snapshots with
+//! `$slot.<name>.<dim>.<path>` and `unify(...)`.
 
+use crate::construction::{slots_of, FillerSnapshot};
 use crate::ontology::OntologyRegistry;
-use crate::{Dim, RuleId, SignDef, SignItem};
+use crate::path::parse_path;
+use crate::{Def, Dim, RuleId, RuleNamespace, SignDef, SignItem, Slot, SourceLocation};
 
-/// 求值三分(P43)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleStatus {
     Matched,
@@ -26,47 +16,212 @@ pub enum RuleStatus {
 
 pub use crate::patch::Patch;
 
-/// 一條規則對一個 sign 的求值紀錄(trace)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotRead {
+    pub slot: String,
+    pub dim: Dim,
+    pub path: String,
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelfRead {
+    pub dim: Dim,
+    pub path: String,
+    pub value: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleRecord {
     pub rule_id: RuleId,
     pub dim: Dim,
     pub status: RuleStatus,
-    /// 值是否實變(identity 命中時 false,但 status 仍 Matched)。
     pub changed: bool,
-    /// 命中分支索引(0 = 主,1.. = else_chain);Unmatched/Error 為 None。
     pub branch: Option<usize>,
-    /// Error 診斷 / 資訊。
     pub diag: Option<String>,
+    pub source: SourceLocation,
+    pub source_package: Option<String>,
+    pub slot_reads: Vec<SlotRead>,
+    pub self_reads: Vec<SelfRead>,
 }
 
-// ── 結構化 dim 規則(自 raw body 解析) ──
+#[derive(Debug, Clone)]
+struct SlotAccess {
+    slot: String,
+    dim: Dim,
+    path: String,
+}
 
+#[derive(Debug, Clone)]
+struct SelfAccess {
+    dim: Dim,
+    path: String,
+}
+
+#[derive(Debug, Clone)]
+enum Access {
+    Slot(SlotAccess),
+    Self_(SelfAccess),
+}
+
+#[derive(Debug, Clone)]
+enum ValueExpr {
+    Literal(String),
+    Access(Access),
+    Unify(Vec<Access>),
+    /// Like `unify`, but an absent operand is a runtime Error rather than an
+    /// Unmatched result.  This is used for obligatory selection contracts
+    /// such as case government while preserving optional-feature semantics
+    /// for ordinary `unify`.
+    Require(Vec<Access>),
+}
+
+#[derive(Debug, Clone)]
 struct DimRule {
     field: String,
-    value: String,
+    value: ValueExpr,
     guard: Option<Guard>,
 }
+
+#[derive(Debug, Clone)]
 enum Guard {
-    /// `[Category]`:sign 的 belongs 閉包含 Category(維度中立,P38 v0.2)。
     IsA(String),
-    /// `field == value`:本維 projection 該欄等於 value。
     FieldEq(String, String),
+    SlotFieldEq(SlotAccess, String),
+    SlotIsA(String, String),
+    SelfIsA(String),
+    SelfFieldEq(SelfAccess, String),
+}
+
+fn parse_self_access(value: &str) -> Result<SelfAccess, String> {
+    let mut parts = value.trim().splitn(3, '.');
+    if parts.next() != Some("$self") {
+        return Err(format!(
+            "self reference must begin with `$self.`, got {value:?}"
+        ));
+    }
+    let dim = parts.next().and_then(Dim::parse);
+    let path = parts.next().unwrap_or_default();
+    if path.is_empty() || dim.is_none() {
+        return Err(format!(
+            "self reference must be `$self.phon|syn|sem|prag.PATH`, got {value:?}"
+        ));
+    }
+    let dim = dim.expect("checked above");
+    parse_path(&format!("{}.{}", dim.keyword(), path)).map_err(|error| error.to_string())?;
+    Ok(SelfAccess {
+        dim,
+        path: path.to_owned(),
+    })
+}
+
+fn parse_access(value: &str) -> Result<Access, String> {
+    if value.trim().starts_with("$slot.") {
+        parse_slot_access(value).map(Access::Slot)
+    } else if value.trim().starts_with("$self.") {
+        parse_self_access(value).map(Access::Self_)
+    } else {
+        Err(format!(
+            "expected `$self` or `$slot` reference, got {value:?}"
+        ))
+    }
+}
+
+fn parse_slot_access(value: &str) -> Result<SlotAccess, String> {
+    let mut parts = value.trim().splitn(4, '.');
+    if parts.next() != Some("$slot") {
+        return Err(format!(
+            "slot reference must begin with `$slot.`, got {value:?}"
+        ));
+    }
+    let slot = parts.next().unwrap_or_default();
+    let dim = parts.next().and_then(Dim::parse);
+    let path = parts.next().unwrap_or_default();
+    if slot.is_empty() || path.is_empty() || dim.is_none() {
+        return Err(format!(
+            "slot reference must be `$slot.NAME.phon|syn|sem|prag.PATH`, got {value:?}"
+        ));
+    }
+    let dim = dim.expect("checked above");
+    parse_path(&format!("{}.{}", dim.keyword(), path)).map_err(|error| error.to_string())?;
+    Ok(SlotAccess {
+        slot: slot.to_owned(),
+        dim,
+        path: path.to_owned(),
+    })
+}
+
+fn parse_value(value: &str) -> Result<ValueExpr, String> {
+    let value = value.trim();
+    if let Some(inner) = value
+        .strip_prefix("require(")
+        .and_then(|inner| inner.strip_suffix(')'))
+    {
+        let accesses = inner
+            .split(',')
+            .map(parse_access)
+            .collect::<Result<Vec<_>, _>>()?;
+        if accesses.is_empty() {
+            return Err("require needs at least one typed reference".to_owned());
+        }
+        let dimensions = accesses
+            .iter()
+            .map(|access| match access {
+                Access::Slot(access) => access.dim,
+                Access::Self_(access) => access.dim,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        if dimensions.len() != 1 {
+            return Err("require operands must belong to one dimension".to_owned());
+        }
+        return Ok(ValueExpr::Require(accesses));
+    }
+    if let Some(inner) = value
+        .strip_prefix("unify(")
+        .and_then(|inner| inner.strip_suffix(')'))
+    {
+        let accesses = inner
+            .split(',')
+            .map(parse_access)
+            .collect::<Result<Vec<_>, _>>()?;
+        if accesses.len() < 2 {
+            return Err("unify requires at least two typed references".to_owned());
+        }
+        let dimensions = accesses
+            .iter()
+            .map(|access| match access {
+                Access::Slot(access) => access.dim,
+                Access::Self_(access) => access.dim,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        if dimensions.len() != 1 {
+            return Err("unify operands must belong to one dimension".to_owned());
+        }
+        return Ok(ValueExpr::Unify(accesses));
+    }
+    if value.starts_with("$slot.") || value.starts_with("$self.") {
+        return parse_access(value).map(ValueExpr::Access);
+    }
+    if value.is_empty() {
+        return Err("rule RHS value is empty".to_owned());
+    }
+    Ok(ValueExpr::Literal(value.to_owned()))
 }
 
 fn parse_dim_rule(body: &str) -> Result<DimRule, String> {
     let (lhs, rhs) = body.split_once("=>").ok_or("rule must contain `=>`")?;
     let field = lhs.trim().to_owned();
-    if field.is_empty() || field.contains(char::is_whitespace) {
+    if field.is_empty()
+        || field.contains(char::is_whitespace)
+        || parse_path(&field).is_err()
+        || Dim::parse(field.split(['.', '[', '~']).next().unwrap_or_default()).is_some()
+    {
         return Err(format!("rule LHS must be a single field, got {field:?}"));
     }
     let (value, guard) = match rhs.split_once(" / ") {
-        Some((v, g)) => (v.trim().to_owned(), Some(parse_guard(g.trim())?)),
-        None => (rhs.trim().to_owned(), None),
+        Some((value, guard)) => (parse_value(value)?, Some(parse_guard(guard.trim())?)),
+        None => (parse_value(rhs)?, None),
     };
-    if value.is_empty() {
-        return Err("rule RHS value is empty".to_owned());
-    }
     Ok(DimRule {
         field,
         value,
@@ -74,163 +229,929 @@ fn parse_dim_rule(body: &str) -> Result<DimRule, String> {
     })
 }
 
-fn parse_guard(g: &str) -> Result<Guard, String> {
-    if let Some(inner) = g.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-        let cat = inner.trim();
-        if cat.is_empty() {
+fn parse_guard(value: &str) -> Result<Guard, String> {
+    if let Some(inner) = value
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+    {
+        let category = inner.trim();
+        if category.is_empty() {
             return Err("empty category guard `[]`".to_owned());
         }
-        return Ok(Guard::IsA(cat.to_owned()));
+        return Ok(Guard::IsA(category.to_owned()));
     }
-    if let Some((f, v)) = g.split_once("==") {
-        return Ok(Guard::FieldEq(f.trim().to_owned(), v.trim().to_owned()));
+    let Some((field, expected)) = value.split_once("==") else {
+        return Err(format!("malformed guard {value:?}"));
+    };
+    let field = field.trim();
+    let expected = expected.trim();
+    if expected.is_empty() {
+        return Err(format!("malformed guard {value:?}"));
     }
-    Err(format!("malformed guard {g:?}"))
+    if field == "$self" {
+        let Some(category) = expected.strip_prefix('[').and_then(|v| v.strip_suffix(']')) else {
+            return Err("`$self ==` requires a `[Trait]` value".to_owned());
+        };
+        return Ok(Guard::SelfIsA(category.trim().to_owned()));
+    }
+    if let Some(slot) = field
+        .strip_prefix("$slot.")
+        .filter(|name| !name.contains('.'))
+    {
+        let Some(category) = expected.strip_prefix('[').and_then(|v| v.strip_suffix(']')) else {
+            return Err("`$slot.NAME ==` requires a `[Trait]` value".to_owned());
+        };
+        return Ok(Guard::SlotIsA(slot.to_owned(), category.trim().to_owned()));
+    }
+    if field.starts_with("$slot.") {
+        return Ok(Guard::SlotFieldEq(
+            parse_slot_access(field)?,
+            expected.to_owned(),
+        ));
+    }
+    if field.starts_with("$self.") {
+        return Ok(Guard::SelfFieldEq(
+            parse_self_access(field)?,
+            expected.to_owned(),
+        ));
+    }
+    if field.is_empty()
+        || parse_path(field).is_err()
+        || Dim::parse(field.split(['.', '[', '~']).next().unwrap_or_default()).is_some()
+    {
+        return Err(format!("malformed field guard {value:?}"));
+    }
+    Ok(Guard::FieldEq(field.to_owned(), expected.to_owned()))
 }
 
-fn guard_matches(guard: &Guard, sign: &SignDef, dim: Dim, reg: &OntologyRegistry) -> bool {
-    match guard {
-        Guard::IsA(cat) => reg.sign_categories(sign).iter().any(|c| c == cat),
-        Guard::FieldEq(f, v) => {
-            let path = format!("{}.{}", dim.keyword(), f);
-            sign.project(dim, reg).get(&path) == Some(v.as_str())
+fn accesses(rule: &DimRule) -> Vec<&SlotAccess> {
+    let mut result = Vec::new();
+    match &rule.value {
+        ValueExpr::Literal(_) => {}
+        ValueExpr::Access(Access::Slot(access)) => result.push(access),
+        ValueExpr::Access(Access::Self_(_)) => {}
+        ValueExpr::Unify(values) | ValueExpr::Require(values) => {
+            result.extend(values.iter().filter_map(|access| match access {
+                Access::Slot(access) => Some(access),
+                Access::Self_(_) => None,
+            }))
+        }
+    }
+    if let Some(Guard::SlotFieldEq(access, _)) = &rule.guard {
+        result.push(access);
+    }
+    result
+}
+
+pub(crate) fn rule_slot_references(rule: &crate::Rule) -> Vec<String> {
+    std::iter::once(rule.body.as_str())
+        .chain(rule.else_chain.iter().map(String::as_str))
+        .chain(rule.then_chain.iter().map(String::as_str))
+        .filter_map(|branch| parse_dim_rule(branch).ok())
+        .flat_map(|parsed| {
+            accesses(&parsed)
+                .into_iter()
+                .map(|access| access.slot.clone())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+pub(crate) fn validate_rule(
+    rule: &crate::Rule,
+    registry: &OntologyRegistry,
+    slots: &[Slot],
+) -> Vec<String> {
+    std::iter::once(rule.body.as_str())
+        .chain(rule.else_chain.iter().map(String::as_str))
+        .chain(rule.then_chain.iter().map(String::as_str))
+        .enumerate()
+        .flat_map(|(index, branch)| match parse_dim_rule(branch) {
+            Err(error) => vec![format!("branch {index}: {error}")],
+            Ok(parsed) => {
+                let mut errors = Vec::new();
+                if let Some(Guard::IsA(category)) = &parsed.guard {
+                    if !registry.has(category) {
+                        errors.push(format!(
+                            "branch {index}: unknown category guard [{category}]"
+                        ));
+                    }
+                }
+                if let Some(Guard::SelfIsA(category) | Guard::SlotIsA(_, category)) = &parsed.guard
+                {
+                    if !registry.has(category) {
+                        errors.push(format!(
+                            "branch {index}: unknown category guard [{category}]"
+                        ));
+                    }
+                }
+                if let Some(Guard::SlotIsA(slot, _)) = &parsed.guard {
+                    if !slots.iter().any(|decl| decl.name == *slot) {
+                        errors.push(format!("branch {index}: unknown slot reference {slot:?}"));
+                    }
+                }
+                for access in accesses(&parsed) {
+                    if !slots.iter().any(|slot| slot.name == access.slot) {
+                        errors.push(format!(
+                            "branch {index}: unknown slot reference {:?}",
+                            access.slot
+                        ));
+                    }
+                }
+                errors
+            }
+        })
+        .collect()
+}
+
+struct EvalContext<'a> {
+    fillers: &'a [FillerSnapshot],
+    slots: &'a [Slot],
+}
+
+enum ReadResult {
+    Value(String),
+    Unmatched,
+    Error(String),
+}
+
+fn read_slot(
+    access: &SlotAccess,
+    context: &EvalContext<'_>,
+    reads: &mut Vec<SlotRead>,
+) -> ReadResult {
+    let Some(slot) = context.slots.iter().find(|slot| slot.name == access.slot) else {
+        return ReadResult::Error(format!("unknown slot reference {:?}", access.slot));
+    };
+    let filler = context
+        .fillers
+        .iter()
+        .find(|filler| filler.slot == access.slot);
+    let value = filler
+        .and_then(|snapshot| snapshot.scalar(access.dim, &access.path))
+        .map(str::to_owned);
+    reads.push(SlotRead {
+        slot: access.slot.clone(),
+        dim: access.dim,
+        path: access.path.clone(),
+        value: value.clone(),
+    });
+    match (filler, value) {
+        (_, Some(value)) => ReadResult::Value(value),
+        (Some(_), None) => ReadResult::Unmatched,
+        (None, None) if slot.optional => ReadResult::Unmatched,
+        (None, None) => ReadResult::Error(format!(
+            "required slot {:?} has no value for {}.{}",
+            access.slot,
+            access.dim.keyword(),
+            access.path
+        )),
+    }
+}
+
+fn resolve_value(
+    expression: &ValueExpr,
+    sign: &SignDef,
+    registry: &OntologyRegistry,
+    context: &EvalContext<'_>,
+    reads: &mut Vec<SlotRead>,
+    self_reads: &mut Vec<SelfRead>,
+) -> ReadResult {
+    match expression {
+        ValueExpr::Literal(value) => ReadResult::Value(value.clone()),
+        ValueExpr::Access(Access::Slot(access)) => read_slot(access, context, reads),
+        ValueExpr::Access(Access::Self_(access)) => read_self(access, sign, registry, self_reads),
+        ValueExpr::Unify(accesses) => {
+            let mut value: Option<String> = None;
+            for access in accesses {
+                let read = match access {
+                    Access::Slot(access) => read_slot(access, context, reads),
+                    Access::Self_(access) => read_self(access, sign, registry, self_reads),
+                };
+                match read {
+                    ReadResult::Value(candidate) => {
+                        if let Some(expected) = &value {
+                            if expected != &candidate {
+                                return ReadResult::Error(format!(
+                                    "unify conflict: {expected:?} != {candidate:?}"
+                                ));
+                            }
+                        } else {
+                            value = Some(candidate);
+                        }
+                    }
+                    ReadResult::Unmatched => return ReadResult::Unmatched,
+                    ReadResult::Error(error) => return ReadResult::Error(error),
+                }
+            }
+            ReadResult::Value(value.expect("unify arity validated"))
+        }
+        ValueExpr::Require(accesses) => {
+            let mut value: Option<String> = None;
+            for access in accesses {
+                let read = match access {
+                    Access::Slot(access) => read_slot(access, context, reads),
+                    Access::Self_(access) => read_self(access, sign, registry, self_reads),
+                };
+                match read {
+                    ReadResult::Value(candidate) => {
+                        if let Some(expected) = &value {
+                            if expected != &candidate {
+                                return ReadResult::Error(format!(
+                                    "required value conflict: {expected:?} != {candidate:?}"
+                                ));
+                            }
+                        } else {
+                            value = Some(candidate);
+                        }
+                    }
+                    ReadResult::Unmatched => {
+                        return ReadResult::Error(
+                            "required typed reference has no value".to_owned(),
+                        );
+                    }
+                    ReadResult::Error(error) => return ReadResult::Error(error),
+                }
+            }
+            ReadResult::Value(value.expect("require arity validated"))
         }
     }
 }
 
-/// 求值**單一分支**(parse + guard + 可選 patch),記其 branch 索引。
-fn eval_one_branch(
-    id: RuleId,
-    bi: usize,
-    branch: &str,
+fn read_self(
+    access: &SelfAccess,
     sign: &SignDef,
+    registry: &OntologyRegistry,
+    reads: &mut Vec<SelfRead>,
+) -> ReadResult {
+    let path = format!("{}.{}", access.dim.keyword(), access.path);
+    let value = sign
+        .project(access.dim, registry)
+        .get(&path)
+        .map(str::to_owned);
+    reads.push(SelfRead {
+        dim: access.dim,
+        path: access.path.clone(),
+        value: value.clone(),
+    });
+    value
+        .map(ReadResult::Value)
+        .unwrap_or(ReadResult::Unmatched)
+}
+
+fn source_package(id: &RuleId) -> Option<String> {
+    match id.namespace() {
+        RuleNamespace::Local | RuleNamespace::Document(_) => None,
+        RuleNamespace::Package(package) => Some(package.clone()),
+    }
+}
+
+fn record(
+    id: &RuleId,
     dim: Dim,
-    reg: &OntologyRegistry,
-) -> (RuleRecord, Option<Patch>) {
-    let mk = |status, changed, branch, diag| RuleRecord {
-        rule_id: id,
+    status: RuleStatus,
+    changed: bool,
+    branch: Option<usize>,
+    diag: Option<String>,
+    source: SourceLocation,
+    slot_reads: Vec<SlotRead>,
+    self_reads: Vec<SelfRead>,
+) -> RuleRecord {
+    RuleRecord {
+        rule_id: id.clone(),
         dim,
         status,
         changed,
         branch,
         diag,
-    };
-    let dr = match parse_dim_rule(branch) {
-        Ok(d) => d,
-        Err(e) => {
+        source,
+        source_package: source_package(id),
+        slot_reads,
+        self_reads,
+    }
+}
+
+enum GuardResult {
+    Matched,
+    Unmatched,
+    Error(String),
+}
+
+pub(crate) fn validate_realization_guard(
+    source: &str,
+    registry: &OntologyRegistry,
+    slots: &[Slot],
+) -> Result<(), String> {
+    match parse_guard(source)? {
+        Guard::IsA(category) | Guard::SelfIsA(category) => registry
+            .has(&category)
+            .then_some(())
+            .ok_or_else(|| format!("unknown category guard [{category}]")),
+        Guard::SlotIsA(slot, category) => {
+            if !slots.iter().any(|item| item.name == slot) {
+                return Err(format!("unknown slot reference {slot:?}"));
+            }
+            registry
+                .has(&category)
+                .then_some(())
+                .ok_or_else(|| format!("unknown category guard [{category}]"))
+        }
+        Guard::SlotFieldEq(access, _) => slots
+            .iter()
+            .any(|item| item.name == access.slot)
+            .then_some(())
+            .ok_or_else(|| format!("unknown slot reference {:?}", access.slot)),
+        Guard::SelfFieldEq(_, _) => Ok(()),
+        Guard::FieldEq(_, _) => {
+            Err("realization guards require explicit `$self` or `$slot` reads".to_owned())
+        }
+    }
+}
+
+/// Slot reads in a phon realization guard also make a construction slot part
+/// of its form pole, even when the selected template itself has no `{slot}`.
+/// Invalid guards are reported by `validate_realization_guard`; this helper is
+/// deliberately best-effort for unused-slot diagnostics.
+pub(crate) fn realization_guard_slot_references(source: &str) -> Vec<String> {
+    match parse_guard(source) {
+        Ok(Guard::SlotFieldEq(access, _)) => vec![access.slot],
+        Ok(Guard::SlotIsA(slot, _)) => vec![slot],
+        _ => Vec::new(),
+    }
+}
+
+fn guard_matches(
+    guard: &Guard,
+    sign: &SignDef,
+    dim: Dim,
+    registry: &OntologyRegistry,
+    context: &EvalContext<'_>,
+    reads: &mut Vec<SlotRead>,
+    self_reads: &mut Vec<SelfRead>,
+) -> GuardResult {
+    match guard {
+        Guard::IsA(category) => {
+            if !registry.has(category) {
+                return GuardResult::Error(format!("unknown category guard [{category}]"));
+            }
+            if registry
+                .sign_categories(sign)
+                .iter()
+                .any(|candidate| candidate == category)
+            {
+                GuardResult::Matched
+            } else {
+                GuardResult::Unmatched
+            }
+        }
+        Guard::FieldEq(field, expected) => {
+            let path = format!("{}.{}", dim.keyword(), field);
+            if sign.project(dim, registry).get(&path) == Some(expected.as_str()) {
+                GuardResult::Matched
+            } else {
+                GuardResult::Unmatched
+            }
+        }
+        Guard::SlotFieldEq(access, expected) => match read_slot(access, context, reads) {
+            ReadResult::Value(value) if value == *expected => GuardResult::Matched,
+            ReadResult::Value(_) | ReadResult::Unmatched => GuardResult::Unmatched,
+            ReadResult::Error(error) => GuardResult::Error(error),
+        },
+        Guard::SelfFieldEq(access, expected) => {
+            match read_self(access, sign, registry, self_reads) {
+                ReadResult::Value(value) if value == *expected => GuardResult::Matched,
+                ReadResult::Value(_) | ReadResult::Unmatched => GuardResult::Unmatched,
+                ReadResult::Error(error) => GuardResult::Error(error),
+            }
+        }
+        Guard::SelfIsA(category) => {
+            if !registry.has(category) {
+                GuardResult::Error(format!("unknown category guard [{category}]"))
+            } else if registry
+                .sign_categories(sign)
+                .iter()
+                .any(|item| item == category)
+            {
+                GuardResult::Matched
+            } else {
+                GuardResult::Unmatched
+            }
+        }
+        Guard::SlotIsA(slot, category) => {
+            if !registry.has(category) {
+                return GuardResult::Error(format!("unknown category guard [{category}]"));
+            }
+            let Some(declaration) = context.slots.iter().find(|item| item.name == *slot) else {
+                return GuardResult::Error(format!("unknown slot reference {slot:?}"));
+            };
+            let filler = context.fillers.iter().find(|item| item.slot == *slot);
+            match filler {
+                Some(filler) if filler.categories.iter().any(|item| item == category) => {
+                    GuardResult::Matched
+                }
+                Some(_) => GuardResult::Unmatched,
+                None if declaration.optional || context.fillers.is_empty() => {
+                    GuardResult::Unmatched
+                }
+                None => GuardResult::Error(format!("required slot {slot:?} is unfilled")),
+            }
+        }
+    }
+}
+
+fn eval_one_branch(
+    id: &RuleId,
+    branch_index: usize,
+    branch: &str,
+    sign: &SignDef,
+    dim: Dim,
+    registry: &OntologyRegistry,
+    source: SourceLocation,
+    context: &EvalContext<'_>,
+) -> (RuleRecord, Option<Patch>) {
+    let parsed = match parse_dim_rule(branch) {
+        Ok(parsed) => parsed,
+        Err(error) => {
             return (
-                mk(RuleStatus::Error, false, None, Some(format!("branch {bi}: {e}"))),
+                record(
+                    id,
+                    dim,
+                    RuleStatus::Error,
+                    false,
+                    None,
+                    Some(format!("branch {branch_index}: {error}")),
+                    source,
+                    Vec::new(),
+                    Vec::new(),
+                ),
                 None,
-            )
+            );
         }
     };
-    let matched = dr
-        .guard
-        .as_ref()
-        .map_or(true, |g| guard_matches(g, sign, dim, reg));
-    if !matched {
-        return (mk(RuleStatus::Unmatched, false, Some(bi), None), None);
+    let mut reads = Vec::new();
+    let mut self_reads = Vec::new();
+    if let Some(guard) = &parsed.guard {
+        match guard_matches(
+            guard,
+            sign,
+            dim,
+            registry,
+            context,
+            &mut reads,
+            &mut self_reads,
+        ) {
+            GuardResult::Matched => {}
+            GuardResult::Unmatched => {
+                return (
+                    record(
+                        id,
+                        dim,
+                        RuleStatus::Unmatched,
+                        false,
+                        Some(branch_index),
+                        None,
+                        source,
+                        reads,
+                        self_reads,
+                    ),
+                    None,
+                );
+            }
+            GuardResult::Error(error) => {
+                return (
+                    record(
+                        id,
+                        dim,
+                        RuleStatus::Error,
+                        false,
+                        None,
+                        Some(format!("branch {branch_index}: {error}")),
+                        source,
+                        reads,
+                        self_reads,
+                    ),
+                    None,
+                );
+            }
+        }
     }
-    let path = format!("{}.{}", dim.keyword(), dr.field);
-    let old = sign.project(dim, reg).get(&path).map(str::to_owned);
-    let changed = old.as_deref() != Some(dr.value.as_str());
+    let value = match resolve_value(
+        &parsed.value,
+        sign,
+        registry,
+        context,
+        &mut reads,
+        &mut self_reads,
+    ) {
+        ReadResult::Value(value) => value,
+        ReadResult::Unmatched => {
+            return (
+                record(
+                    id,
+                    dim,
+                    RuleStatus::Unmatched,
+                    false,
+                    Some(branch_index),
+                    None,
+                    source,
+                    reads,
+                    self_reads,
+                ),
+                None,
+            );
+        }
+        ReadResult::Error(error) => {
+            return (
+                record(
+                    id,
+                    dim,
+                    RuleStatus::Error,
+                    false,
+                    None,
+                    Some(format!("branch {branch_index}: {error}")),
+                    source,
+                    reads,
+                    self_reads,
+                ),
+                None,
+            );
+        }
+    };
+    if let Some(declaration) = sign.items.iter().find_map(|item| match item {
+        SignItem::FeatureDecl(feature) if feature.dim == dim && feature.name == parsed.field => {
+            Some(feature)
+        }
+        _ => None,
+    }) {
+        if !declaration.values.contains(&value) {
+            return (
+                record(
+                    id,
+                    dim,
+                    RuleStatus::Error,
+                    false,
+                    None,
+                    Some(format!(
+                        "branch {branch_index}: value {value:?} is outside enum({}) for {}.{}",
+                        declaration.values.join(", "),
+                        dim.keyword(),
+                        parsed.field
+                    )),
+                    source,
+                    reads,
+                    self_reads,
+                ),
+                None,
+            );
+        }
+    }
+    let path = format!("{}.{}", dim.keyword(), parsed.field);
+    let changed = sign.project(dim, registry).get(&path) != Some(value.as_str());
     (
-        mk(RuleStatus::Matched, changed, Some(bi), None),
-        Some(Patch::for_dim(dim).set(&dr.field, &dr.value)), // 維度隔離:builder 加前綴
+        record(
+            id,
+            dim,
+            RuleStatus::Matched,
+            changed,
+            Some(branch_index),
+            None,
+            source,
+            reads,
+            self_reads,
+        ),
+        Some(Patch::for_dim(dim).set(&parsed.field, &value)),
     )
 }
 
-/// **Lexurgy `Else`**(P43):主 + else 鏈,**第一匹配 fallback**——第一個 Matched
-/// 勝出(其餘不跑);identity(值未變)算 Matched;Error 立即中止,**不進後續分支**;
-/// 全 Unmatched → 整條 Unmatched。回傳單一紀錄 + 可選 patch(至多套一次)。
 fn eval_else(
-    id: RuleId,
-    body: &str,
-    else_chain: &[String],
+    rule: &crate::Rule,
     sign: &SignDef,
-    dim: Dim,
-    reg: &OntologyRegistry,
+    registry: &OntologyRegistry,
+    sources: &[SourceLocation],
+    context: &EvalContext<'_>,
 ) -> (RuleRecord, Option<Patch>) {
-    for (bi, branch) in std::iter::once(body)
-        .chain(else_chain.iter().map(String::as_str))
+    for (index, branch) in std::iter::once(rule.body.as_str())
+        .chain(rule.else_chain.iter().map(String::as_str))
         .enumerate()
     {
-        let (rec, patch) = eval_one_branch(id, bi, branch, sign, dim, reg);
-        match rec.status {
-            RuleStatus::Matched | RuleStatus::Error => return (rec, patch),
-            RuleStatus::Unmatched => continue, // 試下一分支
+        let (record, patch) = eval_one_branch(
+            &rule.id,
+            index,
+            branch,
+            sign,
+            rule.dim,
+            registry,
+            sources.get(index).copied().unwrap_or_default(),
+            context,
+        );
+        match record.status {
+            RuleStatus::Matched | RuleStatus::Error => return (record, patch),
+            RuleStatus::Unmatched => {}
         }
     }
     (
-        RuleRecord {
-            rule_id: id,
-            dim,
-            status: RuleStatus::Unmatched,
-            changed: false,
-            branch: None,
-            diag: None,
-        },
+        record(
+            &rule.id,
+            rule.dim,
+            RuleStatus::Unmatched,
+            false,
+            None,
+            None,
+            sources.first().copied().unwrap_or_default(),
+            Vec::new(),
+            Vec::new(),
+        ),
         None,
     )
 }
 
-/// **Lexurgy `Then`**(I26):主 + then 鏈,**順序組合**——每分支依序在**更新後**狀態
-/// 上跑其 match/apply(前分支 commit 後,下一分支讀新狀態);**全分支皆跑**(非條件
-/// 分支)。回傳演化後 sign + 每分支一筆紀錄(含未匹配分支)。
 fn eval_then(
-    id: RuleId,
-    body: &str,
-    then_chain: &[String],
+    rule: &crate::Rule,
     sign: &SignDef,
-    dim: Dim,
-    reg: &OntologyRegistry,
+    registry: &OntologyRegistry,
+    sources: &[SourceLocation],
+    context: &EvalContext<'_>,
 ) -> (SignDef, Vec<RuleRecord>) {
-    let mut cur = sign.clone();
+    let mut current = sign.clone();
     let mut records = Vec::new();
-    for (bi, branch) in std::iter::once(body)
-        .chain(then_chain.iter().map(String::as_str))
+    for (index, branch) in std::iter::once(rule.body.as_str())
+        .chain(rule.then_chain.iter().map(String::as_str))
         .enumerate()
     {
-        let (rec, patch) = eval_one_branch(id, bi, branch, &cur, dim, reg);
-        if let Some(p) = patch {
-            cur = p.apply(&cur);
+        let (record, patch) = eval_one_branch(
+            &rule.id,
+            index,
+            branch,
+            &current,
+            rule.dim,
+            registry,
+            sources.get(index).copied().unwrap_or_default(),
+            context,
+        );
+        if let Some(patch) = patch {
+            current = patch.apply(&current);
         }
-        records.push(rec);
+        let stop = record.status == RuleStatus::Error;
+        records.push(record);
+        if stop {
+            break;
+        }
     }
-    (cur, records)
+    (current, records)
 }
 
-/// 對一個 sign 跑其**某維**的全部同步規則(書寫序、順序求值,後見前 patch)。
-/// 回傳(演化後 sign,逐規則紀錄)。**不就地改**輸入 sign。
+fn run_dim_rules(
+    sign: &SignDef,
+    dim: Dim,
+    registry: &OntologyRegistry,
+    fillers: &[FillerSnapshot],
+    slots: &[Slot],
+) -> (SignDef, Vec<RuleRecord>) {
+    let rules = sign
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SignItem::Rule(rule) | SignItem::FeatureRule(rule) if rule.dim == dim => {
+                Some(rule.clone())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let context = EvalContext { fillers, slots };
+    let mut current = sign.clone();
+    let mut records = Vec::new();
+    for rule in rules {
+        let sources = std::iter::once(rule.source)
+            .chain(rule.branch_sources.iter().copied())
+            .collect::<Vec<_>>();
+        if rule.then_chain.is_empty() {
+            let (record, patch) = eval_else(&rule, &current, registry, &sources, &context);
+            if let Some(patch) = patch {
+                current = patch.apply(&current);
+            }
+            records.push(record);
+        } else {
+            let (next, branch_records) = eval_then(&rule, &current, registry, &sources, &context);
+            current = next;
+            records.extend(branch_records);
+        }
+    }
+    (current, records)
+}
+
 pub fn run_sign_dim_rules(
     sign: &SignDef,
     dim: Dim,
-    reg: &OntologyRegistry,
+    registry: &OntologyRegistry,
 ) -> (SignDef, Vec<RuleRecord>) {
-    let rules: Vec<crate::Rule> = sign
+    let slots = slots_of(sign);
+    run_dim_rules(sign, dim, registry, &[], &slots)
+}
+
+fn token_sign(token: &crate::construction::DerivedToken) -> SignDef {
+    let mut items = token
+        .rule_sign
         .items
         .iter()
-        .filter_map(|i| match i {
-            SignItem::Rule(r) if r.dim == dim => Some(r.clone()),
-            _ => None,
+        .filter(|item| {
+            matches!(
+                item,
+                SignItem::Belongs(_)
+                    | SignItem::Slot(_)
+                    | SignItem::FeatureDecl(_)
+                    | SignItem::RoleDecl(_)
+                    | SignItem::RoleBinding(_)
+                    | SignItem::Realization(_)
+                    | SignItem::Rule(_)
+                    | SignItem::FeatureRule(_)
+            )
         })
-        .collect();
-    let mut cur = sign.clone();
-    let mut records = Vec::new();
-    for r in rules {
-        if !r.then_chain.is_empty() {
-            // Lexurgy Then:順序組合,全分支皆跑
-            let (next, recs) = eval_then(r.id, &r.body, &r.then_chain, &cur, dim, reg);
-            cur = next;
-            records.extend(recs);
-        } else {
-            // Lexurgy Else(或無鏈單分支):第一匹配
-            let (rec, patch) = eval_else(r.id, &r.body, &r.else_chain, &cur, dim, reg);
-            if let Some(p) = patch {
-                cur = p.apply(&cur);
-            }
-            records.push(rec);
-        }
+        .cloned()
+        .collect::<Vec<_>>();
+    for (path, value) in token.phon.iter().chain(&token.syn).chain(&token.prag) {
+        items.push(SignItem::Def(Def {
+            path: path.clone(),
+            value: value.clone(),
+        }));
     }
-    (cur, records)
+    for (field, value) in &token.sem.fields {
+        items.push(SignItem::Def(Def {
+            path: format!("sem.{field}"),
+            value: value.clone(),
+        }));
+    }
+    for (field, value) in &token.sem.features {
+        items.push(SignItem::Def(Def {
+            path: format!("sem.{field}"),
+            value: value.clone(),
+        }));
+    }
+    SignDef {
+        id: token.rule_sign.id.clone(),
+        name: format!("{}#token", token.construction),
+        items,
+    }
+}
+
+pub(crate) fn evaluate_token_guard(
+    token: &crate::construction::DerivedToken,
+    source: &str,
+    registry: &OntologyRegistry,
+) -> (RuleStatus, Vec<SlotRead>, Vec<SelfRead>, Option<String>) {
+    let guard = match parse_guard(source) {
+        Ok(guard) => guard,
+        Err(error) => return (RuleStatus::Error, Vec::new(), Vec::new(), Some(error)),
+    };
+    let sign = token_sign(token);
+    let slots = slots_of(&token.rule_sign);
+    let context = EvalContext {
+        fillers: &token.fillers,
+        slots: &slots,
+    };
+    let mut slot_reads = Vec::new();
+    let mut self_reads = Vec::new();
+    let result = guard_matches(
+        &guard,
+        &sign,
+        Dim::Phon,
+        registry,
+        &context,
+        &mut slot_reads,
+        &mut self_reads,
+    );
+    match result {
+        GuardResult::Matched => (RuleStatus::Matched, slot_reads, self_reads, None),
+        GuardResult::Unmatched => (RuleStatus::Unmatched, slot_reads, self_reads, None),
+        GuardResult::Error(error) => (RuleStatus::Error, slot_reads, self_reads, Some(error)),
+    }
+}
+
+/// Evaluate a realization guard for a stored sign after occurrence-local
+/// constraints have been applied.  This is intentionally read-only: it lets
+/// a nominal choose an allomorph such as `she`/`her` without mutating the
+/// lexicon or exposing the rest of the construction token.
+pub(crate) fn evaluate_sign_guard(
+    sign: &SignDef,
+    source: &str,
+    registry: &OntologyRegistry,
+) -> (RuleStatus, Vec<SlotRead>, Vec<SelfRead>, Option<String>) {
+    let guard = match parse_guard(source) {
+        Ok(guard) => guard,
+        Err(error) => return (RuleStatus::Error, Vec::new(), Vec::new(), Some(error)),
+    };
+    let slots = slots_of(sign);
+    let context = EvalContext {
+        fillers: &[],
+        slots: &slots,
+    };
+    let mut slot_reads = Vec::new();
+    let mut self_reads = Vec::new();
+    let result = guard_matches(
+        &guard,
+        sign,
+        Dim::Phon,
+        registry,
+        &context,
+        &mut slot_reads,
+        &mut self_reads,
+    );
+    match result {
+        GuardResult::Matched => (RuleStatus::Matched, slot_reads, self_reads, None),
+        GuardResult::Unmatched => (RuleStatus::Unmatched, slot_reads, self_reads, None),
+        GuardResult::Error(error) => (RuleStatus::Error, slot_reads, self_reads, Some(error)),
+    }
+}
+
+pub fn run_token_dim_rules(
+    token: &crate::construction::DerivedToken,
+    dim: Dim,
+    registry: &OntologyRegistry,
+) -> (crate::construction::DerivedToken, Vec<RuleRecord>) {
+    assert!(dim != Dim::Phon, "phon token rules execute in Tshiatūn");
+    let mut items = token
+        .rule_sign
+        .items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item,
+                SignItem::Belongs(_)
+                    | SignItem::Slot(_)
+                    | SignItem::FeatureDecl(_)
+                    | SignItem::RoleDecl(_)
+                    | SignItem::RoleBinding(_)
+                    | SignItem::Realization(_)
+                    | SignItem::Rule(_)
+                    | SignItem::FeatureRule(_)
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    items.extend(token.phon.iter().map(|(path, value)| {
+        SignItem::Def(Def {
+            path: path.clone(),
+            value: value.clone(),
+        })
+    }));
+    items.extend(token.syn.iter().map(|(path, value)| {
+        SignItem::Def(Def {
+            path: path.clone(),
+            value: value.clone(),
+        })
+    }));
+    items.extend(token.sem.fields.iter().map(|(field, value)| {
+        SignItem::Def(Def {
+            path: format!("sem.{field}"),
+            value: value.clone(),
+        })
+    }));
+    items.extend(token.sem.features.iter().map(|(field, value)| {
+        SignItem::Def(Def {
+            path: format!("sem.{field}"),
+            value: value.clone(),
+        })
+    }));
+    items.extend(token.prag.iter().map(|(path, value)| {
+        SignItem::Def(Def {
+            path: path.clone(),
+            value: value.clone(),
+        })
+    }));
+    let sign = SignDef {
+        id: token.rule_sign.id.clone(),
+        name: format!("{}#token", token.construction),
+        items,
+    };
+    let slots = slots_of(&token.rule_sign);
+    let (sign, records) = run_dim_rules(&sign, dim, registry, &token.fillers, &slots);
+    let mut output = token.clone();
+    match dim {
+        Dim::Syn => output.syn = sign.project(Dim::Syn, registry).defs,
+        Dim::Sem => {
+            let declarations = token
+                .rule_sign
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    SignItem::FeatureDecl(feature) if feature.dim == Dim::Sem => {
+                        Some(feature.name.as_str())
+                    }
+                    _ => None,
+                })
+                .collect::<std::collections::BTreeSet<_>>();
+            output.sem.fields.clear();
+            output.sem.features.clear();
+            for (path, value) in sign.project(Dim::Sem, registry).defs {
+                let name = path.strip_prefix("sem.").unwrap_or(&path).to_owned();
+                if declarations.contains(name.as_str()) {
+                    output.sem.features.insert(name, value);
+                } else {
+                    output.sem.fields.push((name, value));
+                }
+            }
+        }
+        Dim::Prag => output.prag = sign.project(Dim::Prag, registry).defs,
+        Dim::Phon => unreachable!(),
+    }
+    (output, records)
 }

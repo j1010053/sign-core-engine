@@ -1,0 +1,10 @@
+[package]
+name = "conlang-changeset"
+version = "0.1.0"
+edition = "2021"
+description = "Step 13 persistent primitive edits over caller Language source"
+
+[dependencies]
+conlang-language = { path = "../language" }
+thiserror = "2"
+

@@ -43,9 +43,7 @@ pub fn parse_path(src: &str) -> Result<Path, PathError> {
     let mut rest = src;
     let mut pos = 0usize;
     // Anchor(首節):裸名
-    let head_end = rest
-        .find(['.', '[', '~'])
-        .unwrap_or(rest.len());
+    let head_end = rest.find(['.', '[', '~']).unwrap_or(rest.len());
     let head = &rest[..head_end];
     if !ident_ok(head) {
         return Err(err(0, "anchor must be a bare name"));

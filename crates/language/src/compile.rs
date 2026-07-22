@@ -89,14 +89,12 @@ pub fn expand_traits(src: &Language) -> Result<Language, CompileError> {
             }
         }
         for (name, (whole, idx)) in &used {
-            let t = src
-                .traits
-                .iter()
-                .find(|t| &t.name == name)
-                .ok_or_else(|| CompileError::UnknownTrait {
+            let t = src.traits.iter().find(|t| &t.name == name).ok_or_else(|| {
+                CompileError::UnknownTrait {
                     sign: sign.name.clone(),
                     name: (*name).to_owned(),
-                })?;
+                }
+            })?;
             // 界限:0 起算,合法 n ∈ [0, len)
             for n in idx {
                 if *n as usize >= t.blocks.len() {
@@ -126,7 +124,11 @@ pub fn expand_traits(src: &Language) -> Result<Language, CompileError> {
         for it in &sign.items {
             match it {
                 SignItem::TraitUse { name, block } => {
-                    let t = src.traits.iter().find(|t| &t.name == name).expect("checked");
+                    let t = src
+                        .traits
+                        .iter()
+                        .find(|t| &t.name == name)
+                        .expect("checked");
                     match block {
                         None => {
                             // 整個 trait:全 block 依序 inline
@@ -191,39 +193,44 @@ pub fn order_stages(resolved: &Language) -> Language {
         rules.sort_by_key(|r| stage_rank(r.stage)); // stable:同 stage 保序
         rules.into_iter()
     }
+    fn reorder_rule_items(items: &mut [SignItem]) {
+        // `feature:` rules are ordinary dimension rules at runtime.  Sort one
+        // combined stream, preserving source order for equal stages, then
+        // restore the AST variant from its stable RuleId.
+        let feature_ids = items
+            .iter()
+            .filter_map(|item| match item {
+                SignItem::FeatureRule(rule) => Some(rule.id.clone()),
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let rules = items
+            .iter()
+            .filter_map(|item| match item {
+                SignItem::Rule(rule) | SignItem::FeatureRule(rule) => Some(rule.clone()),
+                _ => None,
+            })
+            .collect();
+        let mut next = sorted_rules(rules);
+        for slot in items {
+            if matches!(slot, SignItem::Rule(_) | SignItem::FeatureRule(_)) {
+                let rule = next.next().expect("rule slot count");
+                *slot = if feature_ids.contains(&rule.id) {
+                    SignItem::FeatureRule(rule)
+                } else {
+                    SignItem::Rule(rule)
+                };
+            }
+        }
+    }
     let mut out = resolved.clone();
     for t in out.traits.iter_mut() {
         let mut items: Vec<SignItem> = t.blocks.drain(..).flat_map(|b| b.items).collect();
-        let rules = items
-            .iter()
-            .filter_map(|i| match i {
-                SignItem::Rule(r) => Some(r.clone()),
-                _ => None,
-            })
-            .collect();
-        let mut next = sorted_rules(rules);
-        for slot in items.iter_mut() {
-            if matches!(slot, SignItem::Rule(_)) {
-                *slot = SignItem::Rule(next.next().expect("rule slot count"));
-            }
-        }
+        reorder_rule_items(&mut items);
         t.blocks = vec![Block { items }];
     }
     for s in out.signs.iter_mut() {
-        let rules = s
-            .items
-            .iter()
-            .filter_map(|i| match i {
-                SignItem::Rule(r) => Some(r.clone()),
-                _ => None,
-            })
-            .collect();
-        let mut next = sorted_rules(rules);
-        for slot in s.items.iter_mut() {
-            if matches!(slot, SignItem::Rule(_)) {
-                *slot = SignItem::Rule(next.next().expect("rule slot count"));
-            }
-        }
+        reorder_rule_items(&mut s.items);
     }
     out
 }

@@ -35,7 +35,11 @@ fn derived_sem_composes_filler_meaning_nodes() {
     // role giver = john 的**語意節點**(非字串;帶 john 全部 sem 欄位)
     let giver = tok.sem.role("giver").expect("giver role");
     assert_eq!(giver.field("gloss"), Some("JOHN"));
-    assert_eq!(giver.field("ref"), Some("individual"), "整個節點,非僅 gloss");
+    assert_eq!(
+        giver.field("ref"),
+        Some("individual"),
+        "整個節點,非僅 gloss"
+    );
     // role gift = book 的語意節點
     let gift = tok.sem.role("gift").expect("gift role");
     assert_eq!(gift.field("gloss"), Some("BOOK"));
@@ -55,7 +59,10 @@ fn form_and_meaning_derived_together() {
     )
     .unwrap();
     // form 極:表層 + syn 範疇
-    assert_eq!(construction::surface(&art.grammar.program, &tok).unwrap(), "gijobo");
+    assert_eq!(
+        construction::surface(&art.grammar.program, &tok).unwrap(),
+        "gijobo"
+    );
     assert!(tok.syn_categories.contains(&"Verb".to_string()));
     // meaning 極:frame 綁 filler 語意
     assert_eq!(tok.sem.field("frame"), Some("giving"));

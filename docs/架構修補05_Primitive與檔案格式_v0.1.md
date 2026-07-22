@@ -120,16 +120,16 @@ MLIR 的核心性質——文字形式同時作為輸入與輸出;**由於沒有
 
 ### 3.1 `/` 已存在,不發明新語法
 
-DSL 的環境語法 `/ _#`、`/ [+voice] _` 即條件;修補03 的 `valence => 2 / _[+move]` 已將其擴至 syn 側。Goal/Recipe 的守衛**直接復用 `/`**:
+DSL 的環境語法 `/ _#`、`/ [+voice] _` 即條件;修補03 的 `valence => 2 / _[+move]` 已將其擴至 syn 側。歷時 function 的 Goal/Recipe **分層 IR**可直接復用 `/` 的條件語意。以下只是 IR 示意，`goal`／`recipe` **不是 `.chg` 關鍵字**：
 
 ```
-recipe GO_Future(verb: SignRef) / verb.syn.category == VERB { ... }
+Function GO_Future [layer=Recipe](verb: SignRef)
+    / verb.syn.category == VERB
 
-goal Future(target: SignRef) {
-    GO_Future(target)        / target.sem.concept == GO
-    WANT_Future(target)      / target.sem.concept == WANT
+Function Future [layer=Goal](target: SignRef)
+    candidate GO_Future(target)        / target.sem.concept == GO
+    candidate WANT_Future(target)      / target.sem.concept == WANT
     else Auxiliary_Future(target)
-}
 ```
 
 `a => ə / _#` 的 `/` = 「在這個環境下」;`GO_Future(target) / target.sem.concept == GO` = 「在這個條件下它是候選」。**同一記法、同一意思**,只是匹配對象從 Word 換成 Language。零新語法。
@@ -171,8 +171,8 @@ _~<tone>[1]              # 聯結到聲調 tier 的第一個元素
 ### 3.4 Path 表達式(Language 域)
 
 ```
-recipe X(cxn) / cxn.slot[agent].syn.animate
-goal   Y(t)   / t.sem.concept == GO & !t.syn.has(AUX)
+Function X [layer=Recipe](cxn) / cxn.slot[agent].syn.animate
+Function Y [layer=Goal](t) / t.sem.concept == GO & !t.syn.has(AUX)
 ```
 
 `.` 欄位存取、`[key]` slot/序數存取——`[...]` 與 trait 的 `TR[1]`、選擇器的 `<syl>[2]` 同一記法。
@@ -196,7 +196,7 @@ Path := Anchor ( '.' Name              # 欄位
 | 域 | Anchor | 求值 | 結果 | crate |
 |---|---|---|---|---|
 | **Word**(規則環境) | `_` 焦點、`#` 界、tier 引用 | 帶焦點位置 | `Position → Bool`(所有為真處套用) | dsl |
-| **Language**(Goal/Recipe 守衛) | 參數名(`target`/`cxn`) | 無焦點 | `Bool`(適用與否) | language |
+| **Language**(歷時 function 守衛) | 參數名(`target`/`cxn`) | 無焦點 | `Bool`(適用與否) | language |
 
 環境與守衛**不是兩種東西**:條件都是「對某 context 的布林測試」,環境的 context 多一個焦點位置。**dsl 定義核心文法(LinearTemplate + 組合子 + else),language 擴充 Path anchor**——依賴方向合規(P20)。
 
@@ -384,13 +384,13 @@ Primitive Edit 操作 **Language 資料結構**,不是 Compiled Grammar 的 AST�
 
 ```
 Language 檔案                ChangeSet 檔案
-  定義區:trait / global  ↔    定義區:goal / recipe
+  定義區:trait / global  ↔    定義區:具名歷時 function + layer metadata
   使用區:sign           ↔    執行區:呼叫序列
 ```
 
-兩側都是「可參數化的具名定義 + 使用」——共時側的 trait 是宣告的 macro、歷時側的 recipe 是操作的 macro。**檔案框架、命名解析、參數綁定、展開機制可共用實作**,只有「展開成什麼」不同。
+兩側都是「可參數化的具名定義 + 使用」——共時側的 trait 是宣告的 macro、歷時側的 Recipe-layer function 是操作的 macro。Goal/Recipe 是 AST/執行器的 function 分層名稱，**不是 source keyword**。**檔案框架、命名解析、參數綁定、展開機制可共用實作**,只有「展開成什麼」不同。
 
-**差異**:trait 有 `==` block + 插入位置語意(宣告的位置有意義);Recipe 是線性序列,不需 block 槽位(操作本就是一串)。
+**差異**:trait 有 `==` block + 插入位置語意(宣告的位置有意義);Recipe-layer function 是線性序列,不需 block 槽位(操作本就是一串)。
 
 ---
 
@@ -437,24 +437,27 @@ sign go {
 
 ### 10.2 ChangeSet(`.chg`)
 
+下列為 **IR 草案記法，不是 lexer 關鍵字表**；`Function`、`Invoke` 只用來顯示
+function 身分與 Goal/Recipe 分層。真正 `.chg` 表面語法須另案決定。
+
 ```
 # ── 定義區 ──
-recipe GO_Future(verb: SignRef) / verb.syn.category == VERB {
+Function GO_Future [layer=Recipe](verb: SignRef) / verb.syn.category == VERB {
     drift(verb.sem, direction: bleaching)
     reanalyze(verb, target: Category, to: AUX)
     entrench(verb, delta: +0.3)
     sound_change(rule: <reduction>)
 }
 
-goal Future(target: SignRef) {
+Function Future [layer=Goal](target: SignRef) {
     GO_Future(target)        / target.sem.concept == GO
     WANT_Future(target)      / target.sem.concept == WANT
     else Auxiliary_Future(target)
 }
 
 # ── 執行區(四層任一,層級介入 P17 的檔案體現)──
-goal    Future(target: sign(go))                    # ④
-recipe  GO_Future(verb: sign(go))                   # ③
+Invoke Future [layer=Goal](target: sign(go))         # ④
+Invoke GO_Future [layer=Recipe](verb: sign(go))      # ③
 rewrite reanalyze(sign(go), target: Category, to: AUX)   # ②
 edit    update(sign(go).syn.category, AUX)          # ①
 ```

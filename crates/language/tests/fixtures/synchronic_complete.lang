@@ -1,0 +1,53 @@
+/* 共時 `.lang` 完整表面 fixture。
+   construction type 與共時狀態在此；歷史 attestation/evidence 不在 Language。 */
+
+Symbol a
+Symbol d
+
+trait CommonNoun:
+    belongs Noun
+trait Determiner:
+
+sign article:
+    belongs Determiner
+    phon:
+        /a/
+    sem:
+        senses[core].concept = DEFINITE
+
+sign dog:
+    belongs CommonNoun
+    phon:
+        /d/
+    sem:
+        senses[core].concept = DOG
+        senses[core].gloss = dog
+
+sign proto_np:
+    belongs CommonNoun
+    phon:
+        /d/
+
+sign NP:
+    belongs CommonNoun
+    origin = sign(proto_np)
+    provenance = grammaticalized
+    lifecycle = active
+    entrenchment = 0.75
+    lexicalized = true
+    syn:
+        slots:
+            det [Determiner]?
+            head [CommonNoun]
+            tail [CommonNoun]?
+        map det autofill article
+        map det internalize
+        map head rename nucleus
+        map head optional false
+        map tail preserve
+        licensing.register = general
+    phon:
+        /{det}{head}{tail}/
+    sem:
+        senses[core].concept = DEFINITE_NP
+        profile = {head}

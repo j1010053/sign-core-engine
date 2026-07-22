@@ -5,7 +5,7 @@
 
 use conlang_language::codegen::compile_full;
 use conlang_language::word::{self, Component, PhraseSpec, WordError};
-use conlang_language::Language;
+use conlang_language::{Dim, Language, SignItem, Stage};
 use tshiatun_core::repr::word::MorphUnit;
 use tshiatun_dsl::run_program;
 
@@ -23,7 +23,10 @@ fn ring(names: &[&str]) -> Component {
 #[test]
 fn root_affix_composition_through_cycles_to_surface() {
     let a = artifacts();
-    let spec = PhraseSpec(vec![ring(&["root_pa", "suffix_ap"]), Component::sign("root_pa")]);
+    let spec = PhraseSpec(vec![
+        ring(&["root_pa", "suffix_ap"]),
+        Component::sign("root_pa"),
+    ]);
     let d = word::derive(&a, &spec).expect("derive");
 
     assert_eq!(d.input_text, "pa+ap pa");
@@ -82,13 +85,35 @@ fn cophonology_applies_to_its_own_sign_only() {
     assert_ne!(d.surface, c.surface);
 }
 
+/// Non-phon local rules belong to the Sign evaluator and must never be
+/// lowered into the legacy word-level cophonology program.
+#[test]
+fn word_cophonology_ignores_non_phon_local_rules() {
+    let mut language = Language::parse(include_str!("fixtures/compose.lang")).unwrap();
+    let rule = language.rule_dim("flag => evaluated", Stage::Stem, Dim::Syn);
+    language
+        .signs
+        .iter_mut()
+        .find(|sign| sign.name == "root_ap")
+        .unwrap()
+        .items
+        .push(SignItem::Rule(rule));
+    let artifacts = compile_full(&language).unwrap();
+    let derived = word::derive(&artifacts, &PhraseSpec(vec![Component::sign("root_ap")]))
+        .expect("syn rule is dimension-isolated from phon cophonology");
+    assert_eq!(derived.input_text, "ap");
+}
+
 /// 驅動等價性(metamorphic):對展平組合,三 stage 切片串跑 ≡ 單趟
 /// `run_program`(④ 已排序)。表層與末狀態逐位元一致。
 #[test]
 fn staged_driver_equals_single_pass_on_flat_composition() {
     let a = artifacts();
     for spec in [
-        PhraseSpec(vec![ring(&["root_pa", "suffix_ap"]), Component::sign("root_pa")]),
+        PhraseSpec(vec![
+            ring(&["root_pa", "suffix_ap"]),
+            Component::sign("root_pa"),
+        ]),
         PhraseSpec(vec![ring(&["root_ap", "clitic_x"])]),
         PhraseSpec(vec![Component::sign("root_ap")]),
     ] {

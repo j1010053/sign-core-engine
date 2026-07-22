@@ -12,11 +12,23 @@
 //! 註記),行為留 B(語法化/語意漂移引擎)。
 
 use crate::ontology::OntologyRegistry;
-use crate::{Dim, SignDef};
+use crate::{Dim, SignDef, SignItem};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SemanticSource {
+    pub package: Option<String>,
+    pub sign: String,
+}
 
 /// 一個組合語意節點(meaning 極)。**唯讀視圖**;修改走 patch(12e)。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SemNode {
+    /// Ontological semantic/frame types. Frame identity is never a free scalar.
+    pub types: Vec<String>,
+    /// Values of declared `sem: feature:` enums.
+    pub features: BTreeMap<String, String>,
+    pub source: SemanticSource,
     /// 純量語意欄位(`sem.*` Def:concept/gloss/ref/frame…)。保插入序,同名後者勝
     /// (projection 已解析)。**多義(polysemy)= 多個 sense 欄位**合法、不去重。
     pub fields: Vec<(String, String)>,
@@ -32,7 +44,13 @@ pub struct SemNode {
 impl SemNode {
     /// 純量欄位查值(便利)。
     pub fn field(&self, name: &str) -> Option<&str> {
-        self.fields.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+        if let Some(value) = self.features.get(name) {
+            return Some(value);
+        }
+        self.fields
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
     }
     /// role 子節點(便利)。
     pub fn role(&self, name: &str) -> Option<&SemNode> {
@@ -47,13 +65,73 @@ impl SemNode {
     /// 去維度前綴;role 空——詞彙 filler 為原子)。construction 的 role 組合於
     /// [`crate::construction`] 解析。
     pub fn of_sign(sign: &SignDef, reg: &OntologyRegistry) -> SemNode {
-        let proj = sign.project(Dim::Sem, reg);
+        let effective = reg.effective_sign(sign);
+        let proj = effective.project(Dim::Sem, reg);
+        let feature_names = effective
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                SignItem::FeatureDecl(feature) if feature.dim == Dim::Sem => {
+                    Some(feature.name.clone())
+                }
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let features = proj
+            .defs
+            .iter()
+            .filter_map(|(path, value)| {
+                let name = path.strip_prefix("sem.").unwrap_or(path);
+                feature_names
+                    .contains(name)
+                    .then(|| (name.to_owned(), value.clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
         let fields = proj
             .defs
             .iter()
+            .filter(|(path, _)| {
+                let name = path.strip_prefix("sem.").unwrap_or(path);
+                !features.contains_key(name)
+            })
             .map(|(p, v)| (p.strip_prefix("sem.").unwrap_or(p).to_owned(), v.clone()))
             .collect();
+        let categories = reg.sign_categories(&effective);
+        let mut types = categories
+            .iter()
+            .filter(|category| reg.has("Semantic") && reg.category_is_a(category, "Semantic"))
+            .cloned()
+            .collect::<Vec<_>>();
+        // The core ontology deliberately keeps syntactic categories out of
+        // the semantic inheritance tree.  These conventional bridges give
+        // ordinary Nominal/Predicate/Adposition fillers semantic node types
+        // without making `belongs Verb` mutate the public syn category
+        // closure.
+        let bridge = |syn_category: &str, semantic_type: &str, types: &mut Vec<String>| {
+            if reg.has(semantic_type) && categories.iter().any(|item| item == syn_category) {
+                types.push(semantic_type.to_owned());
+            }
+        };
+        bridge("Nominal", "Entity", &mut types);
+        bridge("Predicate", "Event", &mut types);
+        bridge("Adposition", "Relation", &mut types);
+        // Every executable sign contributes a semantic node.  The base
+        // `Semantic` type makes an intentionally unconstrained `[*]` filler
+        // usable for schema roles that only demand a meaning-bearing node;
+        // stricter Entity/Event/Animate requirements still validate against
+        // ontology membership below it.
+        if reg.has("Semantic") {
+            types.push("Semantic".to_owned());
+        }
+        types.sort();
+        types.dedup();
         SemNode {
+            types,
+            features,
+            source: SemanticSource {
+                package: sign.source_package().map(str::to_owned),
+                sign: sign.name.clone(),
+            },
             fields,
             roles: Vec::new(),
         }

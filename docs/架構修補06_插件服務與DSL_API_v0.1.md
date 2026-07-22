@@ -10,7 +10,7 @@
 
 回答三個問題:
 
-1. **官方標準庫與未來第三方插件**如何提供共用的 trait / recipe / goal / 服務?
+1. **官方標準庫與未來第三方插件**如何提供共用的 trait / sign、歷時 function 與服務?
 2. **外部服務**(SemanticBackend / DistributionProvider / Strategy)如何被引用、執行、驗證、重播?
 3. **音變 DSL 作為獨立軟體**(P20),最小要開出什麼 API?
 
@@ -65,19 +65,19 @@ executor 對「第幾環、為何跑 stem 三次」一無所知——每環由 l
 ```
 /std/<套件名>/            ← 官方標準庫(隨軟體發布)
 /plugin/<套件名>/         ← 第三方插件(使用者安裝)
-    code/     *.lang + *.chg     ← trait / sign / recipe / goal 的宣告式定義
+    code/     *.lang + *.chg     ← trait / sign 與具 layer metadata 的歷時 function
     data/     語言知識、機率權重   ← E1 先驗庫快照、Weight DB、分佈表
     config/   啟用開關、export 表  ← 中介資訊(見 §1.2)
 ```
 
-**code/ 與 data/ 的分界判準**:**會被 compile(進 AST)的東西在 `code/`;只被查表讀值的東西在 `data/`。** trait/recipe/goal 定義在 code;先驗數值、權重表在 data。
+**code/ 與 data/ 的分界判準**:**會被 compile(進 AST)的東西在 `code/`;只被查表讀值的東西在 `data/`。** trait/sign 與歷時 function 定義在 code;先驗數值、權重表在 data。Goal/Recipe 是 function 的分層 code 名稱，不是 `.lang` 或 `.chg` 關鍵字。
 
 ### 1.2 config/ 與 export 機制
 
 `config/` 包含:
 
 - **啟用開關**:本套件是否參與 compile。
-- **export 表**:**只有被標 `export` 的符號對外可見**;compile 時自動掃描所有啟用套件的 export 表,**無需顯式 import**(無 `use` 語句)。
+- **export 表**:**只有列在 `exports.tsv` 的符號對外可見**;compile 時自動掃描所有啟用套件的 export 表,**無需顯式 import**(無 `use` 語句)。`.lang` 不使用 `export trait`／`export sign` 前綴；visibility 與 stable ID 只由 config 表負責。
 - **priority 權重**(選填):本套件在跨套件衝突時的優先序。
 - **Registry 實作清單**(若本套件附帶程式碼層服務,列出提供的服務名,§3)。
 
@@ -95,7 +95,7 @@ executor 對「第幾環、為何跑 stem 三次」一無所知——每環由 l
 ```
 
 - **同名衝突且同 priority**:compile **warn + 強制消歧**(不靜默選一)——此時才需要寫全名 `套件名::符號`(`::` 與 Path 的 `.` 視覺區分,防與欄位存取混淆);平常靠 auto-discovery,不寫前綴。
-- **語法化路徑標準庫的落點**:Heine & Kuteva 路徑庫 = `std::grammaticalization` 套件的 `code/*.chg`(一堆具名 recipe),docs/08 懸置的「路徑資料庫」就此落地——**官方加新路徑 = 加 .chg 檔,不改引擎**。
+- **語法化路徑標準庫的落點**:Heine & Kuteva 路徑庫 = `std::grammaticalization` 套件的 `code/*.chg`(一組 Recipe-layer 具名 function),docs/08 懸置的「路徑資料庫」就此落地——**官方加新路徑 = 加 .chg 檔,不改引擎**。
 
 ---
 
@@ -150,7 +150,7 @@ ServiceRef = { kind:      SemanticBackend | DistributionProvider | Strategy,
 ```
 
 - **kind** → resolve 時型別檢查(Strategy 名字填錯進 backend 欄位 = 編譯期錯,非執行期爆)。
-- **namespace** → 服務也是套件的 export 之一(與 trait/recipe 同一張 export 表)。
+- **namespace** → 服務也是套件的 export 之一(與 trait/歷時 function 同一張 export 表)。
 - **version** → replay 可追溯「當年用哪版」;實際角色見 §3.4(c)。
 
 ### 3.2 resolve 與 execution 分離【P32】
@@ -286,7 +286,7 @@ pub fn brackets(word: &Word) -> &[Bracket];
 
 | 編號 | 決策 |
 |---|---|
-| **P29** | **插件 = code/data/config 三層目錄 + export 表**:std 與 plugin 同構;code=會 compile 的宣告、data=查表數值、config=啟用+export+priority+Registry 清單;**export 為唯一穩定契約**(帶穩定 ID,名字僅別名;隔離內部檔案結構,ChangeSet 永不引用內部路徑);auto-discovery 無顯式 import;Priority 四層(未啟用<std<plugin<本地);同名同級衝突 warn+強制消歧(此時才用 `套件::符號`);H&K 路徑庫 = `std::grammaticalization` 的 .chg |
+| **P29** | **插件 = code/data/config 三層目錄 + export 表**:std 與 plugin 同構;code=會 compile 的宣告、data=查表數值、config=啟用+export+priority+Registry 清單;Goal/Recipe 只是歷時 function layer code,非關鍵字;**export 為唯一穩定契約**(帶穩定 ID,名字僅別名;隔離內部檔案結構,ChangeSet 永不引用內部路徑);auto-discovery 無顯式 import;Priority 四層(未啟用<std<plugin<本地);同名同級衝突 warn+強制消歧(此時才用 `套件::符號`);H&K 路徑庫 = `std::grammaticalization` 的 .chg |
 | **P30** | **程式碼層服務入統一 PluginRegistry**:SemanticBackend(必後端)/ DistributionProvider(執行必後端,產物快照可入 data)/ Strategy(簡單條件式可入 code 宣告,複雜算法式後端);`.lang`/`.chg` 只存名字引用,啟動查表——資料層永不含邏輯 |
 | **P31** | **MVP 插件為編譯期靜態註冊**:受 WASM-safe 約束;執行時動態載入為 N 級,走 host 端橋接(邏輯跑 host、經介面呼叫核心),非 dlopen |
 | **P32** | **ServiceRef{kind, namespace, name, version} + resolve/execution 分離**:kind 供編譯期型別檢查;服務與 trait 同走 export 表;啟動全量 resolve(缺服務立即報錯);resolve 表 = fixture 注入點 + 可 dump 綁定表 |

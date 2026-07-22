@@ -71,8 +71,12 @@ fn expansion_inlines_traituse_and_keeps_all_traits() {
     assert!(e.trait_named("VerbCommon").is_some());
     // inline 於引用位置:go 前兩項為 VerbCommon 兩 block 的內容
     let go = e.sign_named("go").unwrap();
-    assert!(matches!(&go.items[0], SignItem::Def(d) if d.path == "syn.provides" && d.value == "VERB"));
-    assert!(matches!(&go.items[1], SignItem::Def(d) if d.path == "entrenchment" && d.value == "0.5"));
+    assert!(
+        matches!(&go.items[0], SignItem::Def(d) if d.path == "syn.provides" && d.value == "VERB")
+    );
+    assert!(
+        matches!(&go.items[1], SignItem::Def(d) if d.path == "entrenchment" && d.value == "0.5")
+    );
 }
 
 /// ③:同 path Def 文件序後者勝。
@@ -118,6 +122,34 @@ fn stage_sort_orders_rules() {
         })
         .collect();
     assert_eq!(ts, [Stem, Word], "global blocks 展平 + 排序");
+}
+
+#[test]
+fn stage_sort_keeps_feature_rules_in_the_same_dispatch_stream() {
+    use conlang_language::Stage::*;
+
+    let source = Language::parse(
+        "sign staged:\n    syn:\n        feature:\n            mark = enum(on, off)\n            mark => on @stage phrase\n        plain => ready @stage stem\n",
+    )
+    .unwrap();
+    let ordered = compile::compile(&source).unwrap().ordered;
+    let staged = ordered.sign_named("staged").unwrap();
+    let sequence = staged
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SignItem::Rule(rule) => Some(("rule", rule.stage, rule.body.as_str())),
+            SignItem::FeatureRule(rule) => Some(("feature", rule.stage, rule.body.as_str())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sequence,
+        [
+            ("rule", Stem, "plain => ready"),
+            ("feature", Phrase, "mark => on")
+        ]
+    );
 }
 
 #[test]
@@ -200,11 +232,19 @@ fn bare_and_empty_brackets_inline_whole_trait() {
         })
         .collect();
     assert_eq!(paths, ["syn.a", "syn.b"], "裸 T 展開全部 block");
-    assert!(!x.items.iter().any(|i| matches!(i, SignItem::TraitUse { .. })));
+    assert!(!x
+        .items
+        .iter()
+        .any(|i| matches!(i, SignItem::TraitUse { .. })));
 
     // 未分塊 trait(1 block)寫 `T[]` → 整個 trait(等同裸 T),canonical 印為裸 `T`
-    let unsplit = Language::parse("trait T:\n    syn:\n        a = 1\n\nsign y:\n    T[]\n").unwrap();
-    assert!(unsplit.dump().contains("    T\n"), "T[] 正規化為裸 T:\n{}", unsplit.dump());
+    let unsplit =
+        Language::parse("trait T:\n    syn:\n        a = 1\n\nsign y:\n    T[]\n").unwrap();
+    assert!(
+        unsplit.dump().contains("    T\n"),
+        "T[] 正規化為裸 T:\n{}",
+        unsplit.dump()
+    );
     let y = compile::expand_traits(&unsplit).unwrap();
     let yp: Vec<&str> = y
         .sign_named("y")

@@ -34,12 +34,12 @@ fn conjugate(lang: &Language, art: &Artifacts, reg: &OntologyRegistry, suffix: &
 fn german_present_paradigm() {
     let (lang, art, reg) = setup();
     let paradigm = [
-        ("suffix_1sg", "sage"),   // ich sage
-        ("suffix_2sg", "sagst"),  // du sagst
-        ("suffix_3sg", "sagt"),   // er/sie/es sagt
-        ("suffix_1pl", "sagen"),  // wir sagen
-        ("suffix_2pl", "sagt"),   // ihr sagt
-        ("suffix_3pl", "sagen"),  // sie sagen
+        ("suffix_1sg", "sage"),  // ich sage
+        ("suffix_2sg", "sagst"), // du sagst
+        ("suffix_3sg", "sagt"),  // er/sie/es sagt
+        ("suffix_1pl", "sagen"), // wir sagen
+        ("suffix_2pl", "sagt"),  // ihr sagt
+        ("suffix_3pl", "sagen"), // sie sagen
     ];
     for (suffix, expected) in paradigm {
         assert_eq!(
@@ -61,7 +61,10 @@ fn optional_prefix_slot_marked_with_question_mark() {
         &[("prefix", "auf"), ("stem", "sag"), ("suffix", "suffix_3pl")],
     )
     .unwrap();
-    assert_eq!(construction::surface(&art.grammar.program, &with_prefix).unwrap(), "aufsagen");
+    assert_eq!(
+        construction::surface(&art.grammar.program, &with_prefix).unwrap(),
+        "aufsagen"
+    );
 
     let without = construction::apply(
         &lang,
@@ -70,7 +73,10 @@ fn optional_prefix_slot_marked_with_question_mark() {
         &[("stem", "sag"), ("suffix", "suffix_3pl")],
     )
     .unwrap();
-    assert_eq!(construction::surface(&art.grammar.program, &without).unwrap(), "sagen");
+    assert_eq!(
+        construction::surface(&art.grammar.program, &without).unwrap(),
+        "sagen"
+    );
 }
 
 /// 環綴:模板字面素材(`ge{stem}t`)直通 → 過去分詞 gesagt。
@@ -78,7 +84,10 @@ fn optional_prefix_slot_marked_with_question_mark() {
 fn participle_circumfix_via_template_literals() {
     let (lang, art, reg) = setup();
     let tok = construction::apply(&lang, &reg, "Participle", &[("stem", "sag")]).unwrap();
-    assert_eq!(construction::surface(&art.grammar.program, &tok).unwrap(), "gesagt");
+    assert_eq!(
+        construction::surface(&art.grammar.program, &tok).unwrap(),
+        "gesagt"
+    );
 }
 
 /// derived token 是 Verb(承 construction 的 belongs 閉包);內部狀態可見。
@@ -105,7 +114,11 @@ fn partial_application_leaves_residual_valence() {
     let tok = construction::apply(&lang, &reg, "PresentVerb", &[("stem", "sag")]).unwrap();
     assert!(!tok.is_saturated(), "缺必填 suffix → 未飽和");
     assert_eq!(tok.missing_required(), vec!["suffix".to_string()]);
-    let residual: Vec<&str> = tok.residual_slots().iter().map(|s| s.name.as_str()).collect();
+    let residual: Vec<&str> = tok
+        .residual_slots()
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect();
     assert_eq!(residual, vec!["prefix", "suffix"]);
     // 未飽和 → 求表層報錯(不默默產出半形)
     assert!(matches!(
@@ -121,7 +134,10 @@ fn application_does_not_mutate_source_signs() {
     let before = construction::slots_of(lang.sign_named("PresentVerb").unwrap());
     let _ = conjugate(&lang, &art, &reg, "suffix_2sg");
     let after = construction::slots_of(lang.sign_named("PresentVerb").unwrap());
-    assert_eq!(before, after, "來源 construction 的 slots 不得被套用改動(P42)");
+    assert_eq!(
+        before, after,
+        "來源 construction 的 slots 不得被套用改動(P42)"
+    );
     assert_eq!(before.len(), 3);
 }
 
@@ -187,7 +203,13 @@ fn fixture_round_trips() {
     let d2 = Language::parse(&d1).unwrap().dump();
     assert_eq!(d1, d2);
     // slot `?` 保留於 canonical(維度區塊 syn: → slots: 內縮排)
-    assert!(d1.contains("prefix [Prefix]?"), "optional `?` 應保留:\n{d1}");
+    assert!(
+        d1.contains("prefix [Prefix]?"),
+        "optional `?` 應保留:\n{d1}"
+    );
     assert!(d1.contains("stem [VerbStem]\n"), "required 無 `?`");
-    assert!(d1.contains("    syn:\n        slots:\n"), "slots 在 syn: 區塊下:\n{d1}");
+    assert!(
+        d1.contains("    syn:\n        slots:\n"),
+        "slots 在 syn: 區塊下:\n{d1}"
+    );
 }

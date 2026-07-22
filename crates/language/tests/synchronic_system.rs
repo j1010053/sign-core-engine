@@ -28,7 +28,11 @@ fn ontology_and_projection_layers() {
         assert!(cats.contains(&c.to_string()), "缺範疇 {c}:{cats:?}");
     }
     // 投影按維:syn 繼承 Verb 的 class=verb(sign 未本地覆寫該 Def,只有規則)
-    assert_eq!(run.project(Dim::Syn, &reg).get("syn.class"), Some("verb"));
+    assert_eq!(
+        run.project(Dim::Syn, &reg).get("syn.valence"),
+        Some("base"),
+        "the declared feature inherits its base value before the rule runs"
+    );
     assert_eq!(run.project(Dim::Sem, &reg).get("sem.gloss"), Some("RUN"));
     assert_eq!(run.project(Dim::Phon, &reg).get("phon"), Some("/run/"));
 }
@@ -47,7 +51,10 @@ fn construction_form_and_meaning_layer() {
     )
     .expect("apply");
     // form 極:表層 + syn 範疇
-    assert_eq!(construction::surface(&art.grammar.program, &tok).unwrap(), "dogrun");
+    assert_eq!(
+        construction::surface(&art.grammar.program, &tok).unwrap(),
+        "dogrun"
+    );
     assert!(tok.syn_categories.contains(&"Verb".to_string()));
     // meaning 極:frame + role 綁 filler 語意節點(非字串)
     assert_eq!(tok.sem.field("frame"), Some("event"));
@@ -63,12 +70,18 @@ fn synchronic_rules_layer() {
     let run = lang.sign_named("run").unwrap();
     let (run2, recs) = synchronic::run_sign_dim_rules(run, Dim::Syn, &reg);
     assert_eq!(recs[0].status, RuleStatus::Matched);
-    assert_eq!(run2.project(Dim::Syn, &reg).get("syn.class"), Some("intransitive"));
+    assert_eq!(
+        run2.project(Dim::Syn, &reg).get("syn.valence"),
+        Some("intransitive")
+    );
 
     // prag:lord 屬 Honorific → Else 主分支 → formal
     let lord = lang.sign_named("lord").unwrap();
     let (lord2, _) = synchronic::run_sign_dim_rules(lord, Dim::Prag, &reg);
-    assert_eq!(lord2.project(Dim::Prag, &reg).get("prag.register"), Some("formal"));
+    assert_eq!(
+        lord2.project(Dim::Prag, &reg).get("prag.register"),
+        Some("formal")
+    );
 }
 
 /// 層 6 續:維度隔離——syn 規則跑完不生 sem/prag/phon Def。
@@ -90,8 +103,15 @@ fn patch_and_entrenchment_layer() {
     let run = lang.sign_named("run").unwrap();
     assert_eq!(run.entrenchment(), Some(0.9));
     let run2 = Patch::sem().set("gloss", "SPRINT").apply(run);
-    assert_eq!(run.project(Dim::Sem, &reg).get("sem.gloss"), Some("RUN"), "原不變");
-    assert_eq!(run2.project(Dim::Sem, &reg).get("sem.gloss"), Some("SPRINT"));
+    assert_eq!(
+        run.project(Dim::Sem, &reg).get("sem.gloss"),
+        Some("RUN"),
+        "原不變"
+    );
+    assert_eq!(
+        run2.project(Dim::Sem, &reg).get("sem.gloss"),
+        Some("SPRINT")
+    );
     assert_eq!(run2.entrenchment(), Some(0.9), "patch 未動 entrenchment");
 }
 
@@ -101,7 +121,10 @@ fn flow_a_and_whole_chain_deterministic() {
     let (lang, reg) = load();
     let art1 = compile_full(&lang).unwrap();
     let art2 = compile_full(&lang).unwrap();
-    assert_eq!(art1.grammar.phon_source, art2.grammar.phon_source, "codegen 決定性");
+    assert_eq!(
+        art1.grammar.phon_source, art2.grammar.phon_source,
+        "codegen 決定性"
+    );
 
     let mk = || {
         let tok = construction::apply(
@@ -119,7 +142,9 @@ fn flow_a_and_whole_chain_deterministic() {
 /// 整份 fixture round-trip 不動點(全語法特徵:belongs/slots/維度規則/Else/entrenchment)。
 #[test]
 fn whole_fixture_round_trips() {
-    let d1 = Language::parse(include_str!("fixtures/synchronic_system.lang")).unwrap().dump();
+    let d1 = Language::parse(include_str!("fixtures/synchronic_system.lang"))
+        .unwrap()
+        .dump();
     let d2 = Language::parse(&d1).unwrap().dump();
     assert_eq!(d1, d2);
 }

@@ -1,0 +1,26 @@
+id	question	domain	values	root_trait	present_trait	absent_trait	source
+GB020	Are there definite or specific articles?	nominal-determination	0|1|?	GB020_DefiniteOrSpecificArticles	GB020_Present	GB020_Absent	https://grambank.clld.org/parameters/GB020
+GB021	Do indefinite nominals commonly have indefinite articles?	nominal-determination	0|1|?	GB021_IndefiniteArticles	GB021_Present	GB021_Absent	https://grambank.clld.org/parameters/GB021
+GB028	Is there a distinction between inclusive and exclusive?	pronouns	0|1|?	GB028_InclusiveExclusiveDistinction	GB028_Present	GB028_Absent	https://grambank.clld.org/parameters/GB028
+GB030	Is there a gender distinction in independent 3rd person pronouns?	pronouns	0|1|?	GB030_ThirdPersonPronounGender	GB030_Present	GB030_Absent	https://grambank.clld.org/parameters/GB030
+GB044	Is there productive morphological plural marking on nouns?	nominal-number	0|1|?	GB044_NounPluralMorphology	GB044_Present	GB044_Absent	https://grambank.clld.org/parameters/GB044
+GB057	Are there numeral classifiers?	nominal-classification	0|1|?	GB057_NumeralClassifiers	GB057_Present	GB057_Absent	https://grambank.clld.org/parameters/GB057
+GB059	Is the adnominal possessive construction different for alienable and inalienable nouns?	possession	0|1|?	GB059_PossessiveAlienabilitySplit	GB059_Present	GB059_Absent	https://grambank.clld.org/parameters/GB059
+GB068	Do core adjectives (defined semantically as property concepts such as value, shape, age, dimension) act like verbs in predicative position?	predication	0|1|?	GB068_VerbLikePredicativeAdjectives	GB068_Present	GB068_Absent	https://grambank.clld.org/parameters/GB068
+GB070	Are there morphological cases for non-pronominal core arguments (i.e. S/A/P)?	alignment-and-case	0|1|?	GB070_CoreArgumentCase	GB070_Present	GB070_Absent	https://grambank.clld.org/parameters/GB070
+GB074	Are there prepositions?	adpositions	0|1|?	GB074_Prepositions	GB074_Present	GB074_Absent	https://grambank.clld.org/parameters/GB074
+GB075	Are there postpositions?	adpositions	0|1|?	GB075_Postpositions	GB075_Present	GB075_Absent	https://grambank.clld.org/parameters/GB075
+GB082	Is there overt morphological marking of present tense on verbs?	tense-and-aspect	0|1|?	GB082_PresentTenseMorphology	GB082_Present	GB082_Absent	https://grambank.clld.org/parameters/GB082
+GB083	Is there overt morphological marking on the verb dedicated to past tense?	tense-and-aspect	0|1|?	GB083_PastTenseMorphology	GB083_Present	GB083_Absent	https://grambank.clld.org/parameters/GB083
+GB084	Is there overt morphological marking on the verb dedicated to future tense?	tense-and-aspect	0|1|?	GB084_FutureTenseMorphology	GB084_Present	GB084_Absent	https://grambank.clld.org/parameters/GB084
+GB086	Is a morphological distinction between perfective and imperfective aspect available on verbs?	tense-and-aspect	0|1|?	GB086_PerfectiveImperfectiveMorphology	GB086_Present	GB086_Absent	https://grambank.clld.org/parameters/GB086
+GB103	Is there a benefactive applicative marker on the verb (including indexing)?	valency	0|1|?	GB103_BenefactiveApplicative	GB103_Present	GB103_Absent	https://grambank.clld.org/parameters/GB103
+GB107	Can standard negation be marked by an affix, clitic or modification of the verb?	negation	0|1|?	GB107_BoundVerbalNegation	GB107_Present	GB107_Absent	https://grambank.clld.org/parameters/GB107
+GB117	Is there a copula in use in an equative sentence when the predicate is a nominal?	predication	0|1|?	GB117_PredicateNominalCopula	GB117_Present	GB117_Absent	https://grambank.clld.org/parameters/GB117
+GB118	Are there serial verb constructions?	complex-predicates	0|1|?	GB118_SerialVerbConstructions	GB118_Present	GB118_Absent	https://grambank.clld.org/parameters/GB118
+GB132	Is a pragmatically unmarked constituent order verb-medial for transitive clauses?	constituent-order	0|1|?	GB132_VerbMedialTransitiveOrder	GB132_Present	GB132_Absent	https://grambank.clld.org/parameters/GB132
+GB147	Is there a morphological passive marked on the lexical verb?	voice	0|1|?	GB147_MorphologicalPassive	GB147_Present	GB147_Absent	https://grambank.clld.org/parameters/GB147
+GB155	Are causatives formed by affixes or clitics on verbs?	valency	0|1|?	GB155_MorphologicalCausative	GB155_Present	GB155_Absent	https://grambank.clld.org/parameters/GB155
+GB262	Is there a clause-initial polar interrogative particle?	interrogatives	0|1|?	GB262_InitialPolarQuestionParticle	GB262_Present	GB262_Absent	https://grambank.clld.org/parameters/GB262
+GB322	Is there grammatical marking of direct evidence (perceived with the senses)?	evidentiality	0|1|?	GB322_DirectEvidential	GB322_Present	GB322_Absent	https://grambank.clld.org/parameters/GB322
+GB522	Can the S or A argument be omitted from a pragmatically unmarked clause when the referent is inferrable from context ("pro-drop" or "null anaphora")?	argument-expression	0|1|?	GB522_ProDrop	GB522_Present	GB522_Absent	https://grambank.clld.org/parameters/GB522

@@ -8,7 +8,10 @@
 //! 這份輸出**就是** IR dump 格式(P21);對 canonical 輸入 round-trip 恆等,
 //! 非 canonical 正規化為不動點(維度分組是冪等重排)。
 
-use crate::{Block, Language, SignItem, Stage, TraitDef};
+use crate::{
+    Block, CaseCondition, Expression, Language, LanguageSchema, SignArgumentValue, SignItem,
+    SignProjection, SlotMapOp, Stage, TraitDef, TypedCase,
+};
 
 const DIMS: [&str; 4] = ["syn", "phon", "sem", "prag"];
 
@@ -27,12 +30,96 @@ fn def_dim(path: &str) -> Option<&str> {
 }
 
 fn push_rule(out: &mut String, indent: &str, r: &crate::Rule) {
-    out.push_str(&format!("{indent}{} @stage {}\n", r.body, stage_str(r.stage)));
+    out.push_str(&format!(
+        "{indent}{} @stage {}\n",
+        r.body,
+        stage_str(r.stage)
+    ));
     for e in &r.else_chain {
         out.push_str(&format!("{indent}    else {e}\n")); // Lexurgy Else(P43)
     }
     for t in &r.then_chain {
         out.push_str(&format!("{indent}    then {t}\n")); // Lexurgy Then(I26);與 else 互斥
+    }
+}
+
+fn push_slot_map(out: &mut String, operation: &SlotMapOp) {
+    let source = match operation {
+        SlotMapOp::Preserve { slot } => format!("map {slot} preserve"),
+        SlotMapOp::Rename { slot, to } => format!("map {slot} rename {to}"),
+        SlotMapOp::AutoFill { slot, filler } => format!("map {slot} autofill {filler}"),
+        SlotMapOp::Internalize { slot } => format!("map {slot} internalize"),
+        SlotMapOp::Optional { slot, optional } => format!("map {slot} optional {optional}"),
+    };
+    out.push_str(&format!("        {source}\n"));
+}
+
+fn expression_source(expression: &Expression) -> String {
+    match expression {
+        Expression::SignApplication(application) => {
+            let arguments = application
+                .arguments
+                .iter()
+                .map(|argument| {
+                    let value = match &argument.value {
+                        SignArgumentValue::SelfSign => "{$self}".to_owned(),
+                        SignArgumentValue::Slot(slot) => format!("{{{slot}}}"),
+                        SignArgumentValue::Application(application) => {
+                            expression_source(&Expression::SignApplication((**application).clone()))
+                        }
+                    };
+                    argument
+                        .name
+                        .as_ref()
+                        .map(|name| format!("{name} = {value}"))
+                        .unwrap_or(value)
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{}({arguments})", application.callee)
+        }
+        Expression::PhonInterpolation(application) => format!(
+            "/{{{}.phon.ret}}/",
+            expression_source(&Expression::SignApplication(application.clone()))
+        ),
+        Expression::Projection { value, dimension } => {
+            let suffix = match dimension {
+                SignProjection::Phon => "phon",
+                SignProjection::Syn => "syn",
+                SignProjection::Sem => "sem",
+                SignProjection::Prag => "prag",
+            };
+            format!("{}.{suffix}.ret", expression_source(value))
+        }
+        Expression::PhonTemplate(template) => template.clone(),
+        Expression::EnumValue(value) => value.clone(),
+        Expression::SelfSign => "$self".to_owned(),
+        Expression::Slot(slot) => slot.clone(),
+        Expression::Case(_) => "<nested-case>".to_owned(),
+    }
+}
+
+fn push_case(out: &mut String, indent: &str, case: &TypedCase) {
+    match &case.scrutinee {
+        Some(scrutinee) => out.push_str(&format!("{indent}case {scrutinee}:\n")),
+        None => out.push_str(&format!("{indent}case:\n")),
+    }
+    let branch_indent = format!("{indent}    ");
+    let result_indent = format!("{branch_indent}    ");
+    for branch in &case.branches {
+        let condition = match &branch.condition {
+            CaseCondition::Equals(value) => format!("== {value}"),
+            CaseCondition::Guard(guard) => guard.clone(),
+            CaseCondition::Else => "else".to_owned(),
+        };
+        out.push_str(&format!("{branch_indent}{condition}:\n"));
+        out.push_str(&format!(
+            "{result_indent}{}\n",
+            expression_source(&branch.result)
+        ));
+        for category in &branch.belongs {
+            out.push_str(&format!("{result_indent}belongs {category}\n"));
+        }
     }
 }
 
@@ -69,13 +156,45 @@ fn push_body(out: &mut String, blocks: &[Block]) {
         // 4) 維度區塊(固定序 syn/phon/sem/prag)
         for dim in DIMS {
             let has_slot = dim == "syn" && items.iter().any(|it| matches!(it, SignItem::Slot(_)));
-            let has_def = items.iter().any(
-                |it| matches!(it, SignItem::Def(d) if def_dim(&d.path) == Some(dim)),
-            );
+            let has_slot_map =
+                dim == "syn" && items.iter().any(|it| matches!(it, SignItem::SlotMap(_)));
+            let has_slot_features = dim == "syn"
+                && items
+                    .iter()
+                    .any(|it| matches!(it, SignItem::SlotFeatureBinding(_)));
+            let has_def = items
+                .iter()
+                .any(|it| matches!(it, SignItem::Def(d) if def_dim(&d.path) == Some(dim)));
             let has_rule = items
                 .iter()
                 .any(|it| matches!(it, SignItem::Rule(r) if rule_dim(r) == dim));
-            if !(has_slot || has_def || has_rule) {
+            let parsed_dim = crate::Dim::parse(dim).expect("known dimension");
+            let has_feature = items.iter().any(|item| {
+                matches!(item,
+                    SignItem::FeatureDecl(feature) if feature.dim == parsed_dim
+                ) || matches!(item,
+                    SignItem::FeatureValue(feature) if feature.dim == parsed_dim
+                ) || matches!(item,
+                    SignItem::FeatureRule(rule) if rule.dim == parsed_dim
+                )
+            });
+            let has_roles = dim == "sem"
+                && items
+                    .iter()
+                    .any(|item| matches!(item, SignItem::RoleDecl(_) | SignItem::RoleBinding(_)));
+            let has_realization = dim == "phon"
+                && items
+                    .iter()
+                    .any(|item| matches!(item, SignItem::Realization(_)));
+            if !(has_slot
+                || has_slot_map
+                || has_slot_features
+                || has_def
+                || has_rule
+                || has_feature
+                || has_roles
+                || has_realization)
+            {
                 continue;
             }
             out.push_str(&format!("    {dim}:\n"));
@@ -86,9 +205,81 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                         out.push_str(&format!(
                             "            {} [{}]{}\n",
                             s.name,
-                            s.filler,
+                            s.constraint.display_name(),
                             if s.optional { "?" } else { "" }
                         ));
+                    }
+                }
+            }
+            if has_slot_features {
+                out.push_str("        slot_features:\n");
+                for it in items {
+                    if let SignItem::SlotFeatureBinding(binding) = it {
+                        out.push_str(&format!(
+                            "            {}.{} = {}\n",
+                            binding.slot, binding.feature, binding.value
+                        ));
+                    }
+                }
+            }
+            if has_feature {
+                out.push_str("        feature:\n");
+                for item in items {
+                    match item {
+                        SignItem::FeatureDecl(feature) if feature.dim == parsed_dim => {
+                            out.push_str(&format!(
+                                "            {} = enum({})\n",
+                                feature.name,
+                                feature.values.join(", ")
+                            ));
+                        }
+                        SignItem::FeatureValue(feature) if feature.dim == parsed_dim => {
+                            out.push_str(&format!(
+                                "            {} = {}\n",
+                                feature.name, feature.value
+                            ));
+                        }
+                        SignItem::FeatureRule(rule) if rule.dim == parsed_dim => {
+                            push_rule(out, "            ", rule);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if has_roles {
+                out.push_str("        roles:\n");
+                for item in items {
+                    match item {
+                        SignItem::RoleDecl(role) => out.push_str(&format!(
+                            "            {} [{}]{}\n",
+                            role.name,
+                            role.constraint,
+                            if role.optional { "?" } else { "" }
+                        )),
+                        SignItem::RoleBinding(role) => out
+                            .push_str(&format!("            {} = {{{}}}\n", role.name, role.slot)),
+                        _ => {}
+                    }
+                }
+            }
+            if has_realization {
+                out.push_str("        realization:\n");
+                for item in items {
+                    if let SignItem::Realization(realization) = item {
+                        if let Some(case) = &realization.expression {
+                            push_case(out, "            ", case);
+                        }
+                        for branch in &realization.branches {
+                            match &branch.guard {
+                                Some(guard) => out.push_str(&format!(
+                                    "            {} / {}\n",
+                                    branch.template, guard
+                                )),
+                                None => {
+                                    out.push_str(&format!("            else {}\n", branch.template))
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -104,7 +295,33 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                         }
                     }
                     SignItem::Rule(r) if rule_dim(r) == dim => push_rule(out, "        ", r),
+                    SignItem::SlotMap(operation) if dim == "syn" => push_slot_map(out, operation),
                     _ => {}
+                }
+            }
+        }
+        let constraints = items
+            .iter()
+            .filter_map(|item| match item {
+                SignItem::Constraint(constraint) => Some(constraint),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if !constraints.is_empty() {
+            out.push_str("    constraints:\n");
+            for constraint in constraints {
+                out.push_str(&format!(
+                    "        {}({}, {})\n",
+                    constraint.predicate.keyword(),
+                    constraint.left,
+                    constraint.right
+                ));
+            }
+        }
+        for item in items {
+            if let SignItem::SignExpression(expression) = item {
+                if let Expression::Case(case) = &expression.expression {
+                    push_case(out, "    ", case);
                 }
             }
         }
@@ -130,6 +347,10 @@ fn push_trait(out: &mut String, t: &TraitDef) {
 /// canonical 印出;空 Language → 空字串。
 pub fn print(l: &Language) -> String {
     let mut sections: Vec<String> = Vec::new();
+
+    if l.schema() == LanguageSchema::V2 {
+        sections.push(format!("{}\n", LanguageSchema::V2_HEADER));
+    }
 
     if !l.dsl_decls.is_empty() {
         let body: String = l
@@ -168,9 +389,12 @@ pub fn print(l: &Language) -> String {
     signs.sort_by(|a, b| a.name.cmp(&b.name));
     for sg in signs {
         let mut s = format!("sign {}:\n", sg.name);
-        push_body(&mut s, std::slice::from_ref(&Block {
-            items: sg.items.clone(),
-        }));
+        push_body(
+            &mut s,
+            std::slice::from_ref(&Block {
+                items: sg.items.clone(),
+            }),
+        );
         sections.push(s);
     }
 
@@ -208,5 +432,37 @@ mod tests {
             l.dump()
         };
         assert_eq!(mk(false), mk(true));
+    }
+
+    #[test]
+    fn prints_syn_slot_feature_bindings_in_their_own_section() {
+        let mut language = Language::new();
+        language.add_sign(
+            "Clause",
+            vec![
+                SignItem::Slot(Slot {
+                    name: "target".into(),
+                    constraint: SlotConstraint::Category("Nominal".into()),
+                    optional: false,
+                }),
+                SignItem::SlotFeatureBinding(SlotFeatureBinding {
+                    slot: "target".into(),
+                    feature: "number".into(),
+                    value: "$slot.source.syn.number".into(),
+                    source: SourceLocation::line(9),
+                }),
+            ],
+        );
+
+        assert_eq!(
+            language.dump(),
+            r#"sign Clause:
+    syn:
+        slots:
+            target [Nominal]
+        slot_features:
+            target.number = $slot.source.syn.number
+"#
+        );
     }
 }
