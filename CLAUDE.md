@@ -340,7 +340,14 @@ Primitive Edit。功能回歸為根 workspace 251/251、Tshiatūn 157/157；完�
 **步驟 14 已封板（2026-07-24）**：Primitive-only `.chg` 的 parse／resolve／replay／
 lazy compile 與 statement 交易定稿為 Step 14 completion。相容性測試補齊——replay 跨執行
 決定性、`.chg` dump round-trip、**三道 digest**(base source／identity-manifest／library
-lock)replay 前拒絕、交易回滾/部分保留、lazy compile cache、v1→v2 升級**內容無損**
-(`step14_interpreter.rs` + `identity_sidecar.rs`)。契約見 docs/22;`cargo test --workspace`
-全綠為證(本機無 pwsh,`.ps1` 閘門未實跑)。**舊 v1 檔不承諾 replay**;v1 路徑於下一步硬移除。
+lock)replay 前拒絕、交易回滾/部分保留、lazy compile cache(`step14_interpreter.rs`)。
+契約見 docs/22;`cargo test --workspace` 全綠為證(本機無 pwsh,`.ps1` 閘門未實跑)。
+
+**v1 路徑已硬移除(2026-07-24)**:v2 為唯一模型。移除 `LanguageSchema` V1/V2 分野
+(FP `case`/`when`/`constraints` 永遠可用,無需標頭;舊 `schema conlang.lang/v2` 行被
+接受並忽略,printer 不再輸出)、identity manifest v1(`IdentityManifestV1`/
+`IDENTITY_SCHEMA_V1`/`migrate_v1`/read 分支——`LanguageDocument::open` 只吃 v2 sidecar,
+v1/未知 → `UnknownSchema`)。**舊 v1 檔不可載入**。移除前已證 v1→v2 升級無損(Stage A,
+git history)。12 base fixtures 於 v2 逐字不變(goldens 零 churn);263/263 綠、0 警告、
+引擎零觸動。共用型別 `NodeEntryV1`/`RefTargetV1`/`RefBindingV1`(v2 沿用)保留。
 

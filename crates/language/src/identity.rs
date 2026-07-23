@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{metadata, Language, Realization, RuleId, SignId, SignItem, SlotConstraint};
 
-pub const IDENTITY_SCHEMA_V1: &str = "conlang.language-identities/v1";
 pub const IDENTITY_SCHEMA_V2: &str = "conlang.language-identities/v2";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -226,17 +225,6 @@ pub struct RefBindingV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct IdentityManifestV1 {
-    pub schema: String,
-    pub namespace: String,
-    pub next_ordinal: u64,
-    pub source_sha256: String,
-    pub nodes: Vec<NodeEntryV1>,
-    pub refs: Vec<RefBindingV1>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct IdentityAllocatorV2 {
     pub namespace: String,
     pub next_ordinal: u64,
@@ -325,12 +313,8 @@ impl LanguageDocument {
             .get("schema")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| IdentityError::InvalidManifest("missing schema".to_owned()))?;
-        let identities = match schema {
-            IDENTITY_SCHEMA_V1 => {
-                let legacy: IdentityManifestV1 = serde_json::from_value(envelope)
-                    .map_err(|error| IdentityError::InvalidManifest(error.to_string()))?;
-                migrate_v1(legacy)?
-            }
+        // v1 identity 已淘汰(硬移除 2026-07-24):只接受 v2 sidecar;v1/未知 → UnknownSchema。
+        let identities: IdentityManifestV2 = match schema {
             IDENTITY_SCHEMA_V2 => serde_json::from_value(envelope)
                 .map_err(|error| IdentityError::InvalidManifest(error.to_string()))?,
             other => return Err(IdentityError::UnknownSchema(other.to_owned())),
@@ -399,19 +383,6 @@ impl LanguageDocument {
             .allocators
             .sort_by(|left, right| left.namespace.cmp(&right.namespace));
         Ok(fork)
-    }
-
-    /// Explicit, identity-preserving V1 -> V2 source migration.  The schema
-    /// header is not an editable AST node, so every existing NodeId remains
-    /// bound to the same address.  Future expression nodes are allocated by
-    /// the active namespace through the ordinary edit transaction.
-    pub fn migrate_to_v2(&self) -> Result<LanguageDocument, IdentityError> {
-        if self.language.is_v2() {
-            return Ok(self.clone());
-        }
-        let mut language = self.language.clone();
-        language.migrate_to_v2();
-        LanguageDocument::from_edit_parts(language, self.identities.clone())
     }
 
     pub fn source(&self) -> String {
@@ -724,22 +695,6 @@ fn validate_namespace(namespace: &str) -> Result<(), IdentityError> {
         return Err(IdentityError::InvalidNamespace);
     }
     Ok(())
-}
-
-fn migrate_v1(legacy: IdentityManifestV1) -> Result<IdentityManifestV2, IdentityError> {
-    validate_namespace(&legacy.namespace)?;
-    Ok(IdentityManifestV2 {
-        schema: IDENTITY_SCHEMA_V2.to_owned(),
-        root_namespace: legacy.namespace.clone(),
-        active_namespace: legacy.namespace.clone(),
-        allocators: vec![IdentityAllocatorV2 {
-            namespace: legacy.namespace,
-            next_ordinal: legacy.next_ordinal,
-        }],
-        source_sha256: legacy.source_sha256,
-        nodes: legacy.nodes,
-        refs: legacy.refs,
-    })
 }
 
 fn validate_manifest_namespaces(manifest: &IdentityManifestV2) -> Result<(), IdentityError> {

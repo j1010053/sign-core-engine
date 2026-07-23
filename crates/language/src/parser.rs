@@ -26,7 +26,7 @@ use crate::path::parse_path;
 use crate::{
     BinaryConstraint, Block, CaseBranch, CaseCondition, CaseSelection, ConstraintPredicate, Def,
     Dim, Expression, ExpressionType, FeatureDecl, FeatureExpression, FeatureValue, Language,
-    LanguageSchema, Realization, RealizationBranch, RoleBinding, RoleDecl, RoleExpression, Rule,
+    Realization, RealizationBranch, RoleBinding, RoleDecl, RoleExpression, Rule,
     SignApplication, SignArgument, SignArgumentValue, SignExpression, SignItem, SignProjection,
     Slot, SlotConstraint, SlotFeatureBinding, SlotMapOp, SourceLocation, Stage, TraitDef,
     TypedCase,
@@ -74,7 +74,7 @@ fn container_head(text: &str) -> Option<(&'static str, &str)> {
 }
 
 fn is_language_head(text: &str) -> bool {
-    text == LanguageSchema::V2_HEADER
+    text == crate::LEGACY_V2_HEADER
         || text.starts_with("prosody =")
         || text == "distribution:"
         || container_head(text).is_some()
@@ -771,18 +771,9 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             if text == "==" {
                 blocks.push(Block::default());
             } else if text == "constraints:" {
-                if !lang.is_v2() {
-                    return Err(err(no, "`constraints:` requires `schema conlang.lang/v2`"));
-                }
                 in_constraints = true;
                 constraints_indent = ind;
             } else if is_context_head(text) {
-                if !lang.is_v2() {
-                    return Err(err(
-                        no,
-                        "typed `case`/`when` requires `schema conlang.lang/v2`",
-                    ));
-                }
                 let (case, next) =
                     parse_typed_case(lang, body, index - 1, ExpressionType::SignContext)?;
                 blocks
@@ -842,12 +833,6 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             && !in_realization
             && is_context_head(text)
         {
-            if !lang.is_v2() {
-                return Err(err(
-                    no,
-                    "typed `case`/`when` requires `schema conlang.lang/v2`",
-                ));
-            }
             if dim.to_dim() == Dim::Phon {
                 return Err(err(
                     no,
@@ -912,9 +897,6 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                 continue;
             }
             if let Some(name) = text.strip_suffix("=>").map(str::trim) {
-                if !lang.is_v2() {
-                    return Err(err(no, "typed feature expression requires V2"));
-                }
                 if !ident_ok(name) {
                     return Err(err(no, "feature expression target must be an identifier"));
                 }
@@ -1019,9 +1001,6 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                 let name = name.trim();
                 let value = value.trim();
                 if value.is_empty() {
-                    if !lang.is_v2() {
-                        return Err(err(no, "typed role expression requires V2"));
-                    }
                     if !ident_ok(name) {
                         return Err(err(no, "role expression target must be an identifier"));
                     }
@@ -1100,9 +1079,6 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
         }
         if in_realization {
             if text == "case:" || (text.starts_with("case ") && text.ends_with(':')) {
-                if !lang.is_v2() {
-                    return Err(err(no, "typed `case` requires `schema conlang.lang/v2`"));
-                }
                 let (case, next) =
                     parse_typed_case(lang, body, index - 1, ExpressionType::PhonContext)?;
                 let item = blocks.last_mut().unwrap().items.last_mut();
@@ -1330,19 +1306,8 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
             i += 1;
             continue;
         }
-        if ln.text == LanguageSchema::V2_HEADER {
-            if lang.is_v2()
-                || seen_language
-                || !lang.dsl_decls.is_empty()
-                || !lang.traits.is_empty()
-                || !lang.signs.is_empty()
-            {
-                return Err(err(
-                    ln.no,
-                    "V2 schema header must occur once before language content",
-                ));
-            }
-            lang.set_schema(LanguageSchema::V2);
+        // 舊 v2 schema 標頭:v1 已淘汰、v2 唯一 → 接受並忽略(back-compat;printer 不再輸出)。
+        if ln.text == crate::LEGACY_V2_HEADER {
             i += 1;
             continue;
         }

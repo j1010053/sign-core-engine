@@ -9,7 +9,7 @@
 //! 非 canonical 正規化為不動點(維度分組是冪等重排)。
 
 use crate::{
-    Block, CaseCondition, CaseSelection, Expression, ExpressionType, Language, LanguageSchema,
+    Block, CaseCondition, CaseSelection, Expression, ExpressionType, Language,
     SignArgumentValue, SignItem, SignProjection, SlotMapOp, Stage, TraitDef, TypedCase,
 };
 
@@ -441,10 +441,6 @@ fn push_trait(out: &mut String, t: &TraitDef) {
 /// canonical 印出;空 Language → 空字串。
 pub fn print(l: &Language) -> String {
     let mut sections: Vec<String> = Vec::new();
-
-    if l.schema() == LanguageSchema::V2 {
-        sections.push(format!("{}\n", LanguageSchema::V2_HEADER));
-    }
 
     if !l.dsl_decls.is_empty() {
         let body: String = l

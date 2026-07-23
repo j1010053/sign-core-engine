@@ -25,8 +25,10 @@ constraints、重跑狀態與 realization。公開入口包含 `evaluate_sign_wi
 
 canonical sidecar schema 是 `conlang.language-identities/v2`：
 `root_namespace`、`active_namespace`、sorted `allocators[]`、source digest、nodes、refs。
-`LanguageDocument::fork` 保留祖先 ID，只讓 Insert 從 active ChangeSet allocator 配號。v1 可讀，
-驗證成功後升級；重複／未知 allocator、落後 counter、library editable node 都拒絕。
+`LanguageDocument::fork` 保留祖先 ID，只讓 Insert 從 active ChangeSet allocator 配號。
+**identity v1 已硬移除(2026-07-24)**:`LanguageDocument::open` **只接受 v2 sidecar**,
+v1/未知 schema → `UnknownSchema` 拒絕(不再讀取或升級);重複／未知 allocator、落後
+counter、library editable node 都拒絕。（移除前的 v1→v2 升級無損證據見 git history。）
 
 ## `.chg` 與交易
 

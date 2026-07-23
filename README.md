@@ -71,8 +71,13 @@ caller source。slot／trait rename 會重寫 typed consumers，巢狀 case 亦�
 **Step 14 已封板（2026-07-24）**：Primitive-only `.chg` 的 parse／resolve／replay／
 lazy compile 與 statement 交易定稿。相容性測試涵蓋 replay 跨執行決定性、`.chg` dump
 round-trip、三道 digest(base source／identity-manifest／library lock)replay 前拒絕、
-交易回滾/部分保留、lazy compile cache、v1→v2 升級內容無損。`cargo test --workspace`
-全綠為證(本機無 PowerShell,`.ps1` 閘門未實跑)。舊 v1 檔不承諾 replay。契約見 docs/22。
+交易回滾/部分保留、lazy compile cache。`cargo test --workspace` 全綠為證(本機無
+PowerShell,`.ps1` 閘門未實跑)。契約見 docs/22。
+
+**v1 路徑已硬移除（2026-07-24）**：v2 為唯一模型。移除 `LanguageSchema` V1/V2 分野
+(FP `case`/`when`/`constraints` 為預設,無需標頭;舊 `schema conlang.lang/v2` 行被接受
+並忽略、不再輸出)與 identity manifest v1(`open` 只吃 v2 sidecar,v1→`UnknownSchema`)。
+**舊 v1 檔不可載入**;移除前已證 v1→v2 升級無損。base fixtures 於 v2 逐字不變。
 
 ## `.lang` 語法一瞥(colon+縮排,I22)
 

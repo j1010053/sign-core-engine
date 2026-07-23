@@ -47,9 +47,8 @@ pub use construction::{OccurrenceCaseRecord, OccurrenceCaseStatus, OccurrenceRec
 pub use diagnostic::{Diagnostic, DiagnosticSource, Severity, SourceLocation, ValidationReport};
 pub use identity::{
     sha256_hex, AddressSegment, AstNode, EditableField, IdentityAllocatorV2, IdentityError,
-    IdentityManifestV1, IdentityManifestV2, IdentityNamespace, LanguageDocument, NodeAddress,
-    NodeEntryV1, NodeId, NodeKind, NodeRef, RefBindingV1, RefTargetV1, ResolvedTarget,
-    IDENTITY_SCHEMA_V1, IDENTITY_SCHEMA_V2,
+    IdentityManifestV2, IdentityNamespace, LanguageDocument, NodeAddress, NodeEntryV1, NodeId,
+    NodeKind, NodeRef, RefBindingV1, RefTargetV1, ResolvedTarget, IDENTITY_SCHEMA_V2,
 };
 pub use library::{
     LibraryCatalog, LibraryExport, LibraryExportKind, LibraryId, LibraryKind, LibraryLoadError,
@@ -327,19 +326,10 @@ pub struct Realization {
     pub expression: Option<TypedCase>,
 }
 
-/// Surface-language version.  V1 remains the default deliberately: parsing a
-/// historical document must never silently opt it in to V2 syntax or change
-/// its canonical identity digest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum LanguageSchema {
-    #[default]
-    V1,
-    V2,
-}
-
-impl LanguageSchema {
-    pub const V2_HEADER: &'static str = "schema conlang.lang/v2";
-}
+/// 舊 v2 schema 標頭。**v1 已淘汰、v2 為唯一模型**(2026-07-24 硬移除):FP 層永遠
+/// 可用,不再需要標頭選版。為 back-compat,parser 仍**接受並忽略**此行(printer 不再
+/// 輸出);它不影響解析、canonical dump 或 identity digest。
+pub const LEGACY_V2_HEADER: &str = "schema conlang.lang/v2";
 
 /// The type expected at an expression site.  `Feature` carries its declared
 /// enum domain separately during type checking; it is not an untyped string.
@@ -667,7 +657,6 @@ pub struct SignDef {
 /// `Language::new()` = canonical empty Language,四原語(步驟 13)有處掛靠。
 #[derive(Clone, PartialEq, Eq, Default)]
 pub struct Language {
-    schema: LanguageSchema,
     /// dsl 域宣告區(Lexurgy 形,不透明 verbatim 行;I15-a)。
     pub dsl_decls: Vec<String>,
     /// ① `prosody = μ σ Ft ω φ ι U`(七層鏈;空 = 未宣告)。
@@ -686,9 +675,6 @@ pub struct Language {
 impl std::fmt::Debug for Language {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut debug = formatter.debug_struct("Language");
-        if self.schema == LanguageSchema::V2 {
-            debug.field("schema", &self.schema);
-        }
         debug
             .field("dsl_decls", &self.dsl_decls)
             .field("prosody", &self.prosody)
@@ -706,24 +692,6 @@ impl Language {
     /// canonical empty Language(P28)。
     pub fn new() -> Language {
         Language::default()
-    }
-
-    pub fn schema(&self) -> LanguageSchema {
-        self.schema
-    }
-
-    pub fn is_v2(&self) -> bool {
-        self.schema == LanguageSchema::V2
-    }
-
-    /// Explicit migration switch.  Identity-aware migration lives on
-    /// `LanguageDocument`; this low-level method only changes source syntax.
-    pub fn migrate_to_v2(&mut self) {
-        self.schema = LanguageSchema::V2;
-    }
-
-    pub(crate) fn set_schema(&mut self, schema: LanguageSchema) {
-        self.schema = schema;
     }
 
     /// 決定性 RuleId 配發(P26:namespace 內純序列)。
@@ -787,9 +755,6 @@ impl Language {
     /// RuleIds retain their bound namespaces while SignIds are made unique in
     /// the combined runtime view.
     pub(crate) fn append_library(&mut self, mut other: Language) {
-        if other.is_v2() {
-            self.schema = LanguageSchema::V2;
-        }
         self.dsl_decls.append(&mut other.dsl_decls);
         self.prosody.append(&mut other.prosody);
         self.distribution.append(&mut other.distribution);
