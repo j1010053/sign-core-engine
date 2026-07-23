@@ -68,11 +68,11 @@ caller source。slot／trait rename 會重寫 typed consumers，巢狀 case 亦�
 移動。2026-07-22 根 workspace 251/251、Tshiatūn 157/157 通過；完整工具閘門仍因
 本機工具鏈與既存 dirty submodule 回傳 exit 2，未宣稱 release gate exit 0；詳見 docs/20。
 
-**Step 14 尚未封板**：repo 內已有 Primitive-only `.chg`、statement transaction、
-replay 與 lazy compile 的 preview；preview 測試會隨 workspace regression 執行，但不構成
-Step 14 相容性或 release 聲明。
-舊檔不保證可直接 replay；下一階段須以 Step 13 的 stable source identity 重新完成
-ChangeSet 契約與擴大回歸。preview 規格見 docs/22。
+**Step 14 已封板（2026-07-24）**：Primitive-only `.chg` 的 parse／resolve／replay／
+lazy compile 與 statement 交易定稿。相容性測試涵蓋 replay 跨執行決定性、`.chg` dump
+round-trip、三道 digest(base source／identity-manifest／library lock)replay 前拒絕、
+交易回滾/部分保留、lazy compile cache、v1→v2 升級內容無損。`cargo test --workspace`
+全綠為證(本機無 PowerShell,`.ps1` 閘門未實跑)。舊 v1 檔不承諾 replay。契約見 docs/22。
 
 ## `.lang` 語法一瞥(colon+縮排,I22)
 

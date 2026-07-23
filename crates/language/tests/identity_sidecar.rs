@@ -104,6 +104,11 @@ fn v1_is_read_and_canonically_upgraded_to_v2() {
     assert_eq!(reopened.identities().root_namespace, "evo:legacy");
     assert_eq!(reopened.identities().active_namespace, "evo:legacy");
     assert_eq!(reopened.identities().allocators.len(), 1);
+    // v1→v2 升級**內容無損**(移除 v1 前的相容性閘門):除 schema 字串外,
+    // nodes/refs/source digest 與原生 v2 逐一相同 —— 硬移除 v1 不丟任何身分資訊。
+    assert_eq!(reopened.identities().nodes, current.nodes);
+    assert_eq!(reopened.identities().refs, current.refs);
+    assert_eq!(reopened.identities().source_sha256, current.source_sha256);
 }
 
 #[test]

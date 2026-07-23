@@ -337,8 +337,10 @@ slot／trait rename 會重寫 typed consumers，巢狀 typed case 可 round-trip
 Primitive Edit。功能回歸為根 workspace 251/251、Tshiatūn 157/157；完整本機工具閘門
 仍為基礎設施 exit 2，未宣稱 release gate exit 0；證據見 docs/20、docs/23。
 
-**步驟 14 尚未封板**：identity mixed namespace、Primitive-only `.chg`、statement
-transaction、replay 與 lazy compile 的程式碼只視為 preview，不是目前 release／相容性
-聲明。舊檔不要求直接 replay；V1 `.lang` reader 只為明示遷移暫時 frozen。preview 契約見
-docs/22，完成 Step 14 與相容性測試後才能重新標為完成。
+**步驟 14 已封板（2026-07-24）**：Primitive-only `.chg` 的 parse／resolve／replay／
+lazy compile 與 statement 交易定稿為 Step 14 completion。相容性測試補齊——replay 跨執行
+決定性、`.chg` dump round-trip、**三道 digest**(base source／identity-manifest／library
+lock)replay 前拒絕、交易回滾/部分保留、lazy compile cache、v1→v2 升級**內容無損**
+(`step14_interpreter.rs` + `identity_sidecar.rs`)。契約見 docs/22;`cargo test --workspace`
+全綠為證(本機無 pwsh,`.ps1` 閘門未實跑)。**舊 v1 檔不承諾 replay**;v1 路徑於下一步硬移除。
 
