@@ -1266,6 +1266,7 @@ fn token_case_condition_matches(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn evaluate_token_feature_case(
     token: &DerivedToken,
     case: &TypedCase,
@@ -1397,6 +1398,7 @@ fn apply_token_feature_expressions(
     Ok(token)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn evaluate_token_role_case(
     token: &DerivedToken,
     case: &TypedCase,

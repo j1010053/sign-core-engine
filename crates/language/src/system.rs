@@ -13,8 +13,9 @@ use crate::path::parse_path;
 use crate::semantic_dto::{SemanticDocumentError, SemanticDocumentV1, SemanticNodeV1};
 use crate::synchronic::{self, RuleRecord, RuleStatus, SelfRead, SlotRead};
 use crate::{
-    CaseCondition, Dim, Expression, Language, LanguageDocument, SignApplication, SignArgumentValue,
-    SignDef, SignId, SignItem, SignLifecycle, SignProvenance, SlotConstraint, TypedCase,
+    CaseCondition, CaseSelection, Dim, Expression, Language, LanguageDocument, SignApplication,
+    SignArgumentValue, SignDef, SignId, SignItem, SignLifecycle, SignProvenance, SlotConstraint,
+    TypedCase,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
@@ -184,6 +185,7 @@ pub struct SignEvaluation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum SignValue {
     Stored(SignEvaluation),
     Applied(DerivedToken),
@@ -236,6 +238,7 @@ pub enum CaseBranchStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CaseRecord {
+    pub selection: CaseSelection,
     pub branch: usize,
     pub status: CaseBranchStatus,
     pub source: SourceLocation,
@@ -441,6 +444,60 @@ fn validate_typed_schemas(
         }
     }
 
+    fn collect_sign_fragments(
+        expression: &Expression,
+        inherited: &[SignItem],
+        output: &mut Vec<Vec<SignItem>>,
+    ) {
+        match expression {
+            Expression::SignFragment(items) | Expression::DimFragment { items, .. } => {
+                let mut context = inherited.to_vec();
+                context.extend(items.iter().cloned());
+                output.push(context.clone());
+                for item in items {
+                    collect_item_fragments(item, &context, output);
+                }
+            }
+            Expression::Case(case) => {
+                for branch in &case.branches {
+                    collect_sign_fragments(&branch.result, inherited, output);
+                }
+            }
+            Expression::Projection { value, .. } => {
+                collect_sign_fragments(value, inherited, output)
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_item_fragments(
+        item: &SignItem,
+        inherited: &[SignItem],
+        output: &mut Vec<Vec<SignItem>>,
+    ) {
+        match item {
+            SignItem::SignExpression(expression) => {
+                collect_sign_fragments(&expression.expression, inherited, output)
+            }
+            SignItem::FeatureExpression(expression) => {
+                collect_sign_fragments(&expression.expression, inherited, output)
+            }
+            SignItem::RoleExpression(expression) => {
+                collect_sign_fragments(&expression.expression, inherited, output)
+            }
+            SignItem::Realization(realization) => {
+                for branch in realization
+                    .expression
+                    .iter()
+                    .flat_map(|case| &case.branches)
+                {
+                    collect_sign_fragments(&branch.result, inherited, output);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn slot_feature_read(value: &str) -> Option<(&str, &str)> {
         let mut parts = value.split('.');
         match (
@@ -598,6 +655,31 @@ fn validate_typed_schemas(
         };
         (trait_def.name.clone(), registry.effective_sign(&synthetic))
     }));
+    let roots = candidates.clone();
+    for (owner, effective) in roots {
+        let mut fragments = Vec::new();
+        for item in &effective.items {
+            collect_item_fragments(item, &[], &mut fragments);
+        }
+        for (index, fragment) in fragments.into_iter().enumerate() {
+            // Before the compile expansion pass a fragment may still contain
+            // a trait macro.  Its complete contract is validated by the
+            // ordered-language pass after the macro has been expanded.
+            if fragment
+                .iter()
+                .any(|item| matches!(item, SignItem::TraitUse { .. }))
+            {
+                continue;
+            }
+            let mut virtual_sign = effective.clone();
+            virtual_sign.name = format!("{owner}#SignContext[{index}]");
+            virtual_sign.items.extend(fragment);
+            candidates.push((
+                virtual_sign.name.clone(),
+                registry.effective_sign(&virtual_sign),
+            ));
+        }
+    }
 
     for (owner, effective) in candidates {
         for item in &effective.items {
@@ -1348,6 +1430,31 @@ fn validate_fp_expressions(
             | Expression::PhonInterpolation(application) => {
                 application_and_nested(application, output);
             }
+            Expression::SignFragment(items) | Expression::DimFragment { items, .. } => {
+                for item in items {
+                    match item {
+                        SignItem::SignExpression(expression) => {
+                            applications(&expression.expression, output)
+                        }
+                        SignItem::FeatureExpression(expression) => {
+                            applications(&expression.expression, output)
+                        }
+                        SignItem::RoleExpression(expression) => {
+                            applications(&expression.expression, output)
+                        }
+                        SignItem::Realization(realization) => {
+                            for branch in realization
+                                .expression
+                                .iter()
+                                .flat_map(|case| &case.branches)
+                            {
+                                applications(&branch.result, output);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
             Expression::Projection { value, .. } => applications(value, output),
             // Nested cases are visited by the enclosing validation queue, so
             // only inspect direct branch expressions here.
@@ -1358,18 +1465,25 @@ fn validate_fp_expressions(
 
     fn expression_matches_type(expression: &Expression, expected: &crate::ExpressionType) -> bool {
         match (expression, expected) {
-            (Expression::SignApplication(_), crate::ExpressionType::Sign)
-            | (Expression::SelfSign, crate::ExpressionType::Sign)
-            | (Expression::PhonInterpolation(_), crate::ExpressionType::Phon)
-            | (Expression::PhonTemplate(_), crate::ExpressionType::Phon)
+            (Expression::SignApplication(_), crate::ExpressionType::SignContext)
+            | (Expression::SignFragment(_), crate::ExpressionType::SignContext)
+            | (Expression::SelfSign, crate::ExpressionType::SignContext)
+            | (Expression::PhonInterpolation(_), crate::ExpressionType::PhonContext)
+            | (Expression::PhonTemplate(_), crate::ExpressionType::PhonContext)
             | (Expression::EnumValue(_), crate::ExpressionType::Feature { .. })
             | (Expression::Slot(_), crate::ExpressionType::Role { .. }) => true,
+            (Expression::DimFragment { dim: Dim::Syn, .. }, crate::ExpressionType::SynContext)
+            | (Expression::DimFragment { dim: Dim::Sem, .. }, crate::ExpressionType::SemContext)
+            | (
+                Expression::DimFragment { dim: Dim::Prag, .. },
+                crate::ExpressionType::PragContext,
+            ) => true,
             (
                 Expression::Projection {
                     value,
                     dimension: crate::SignProjection::Phon,
                 },
-                crate::ExpressionType::Phon,
+                crate::ExpressionType::PhonContext,
             ) => matches!(value.as_ref(), Expression::SignApplication(_)),
             (Expression::Case(nested), expected) => {
                 &nested.expected == expected
@@ -1382,24 +1496,41 @@ fn validate_fp_expressions(
         }
     }
 
-    let mut calls = BTreeMap::<String, Vec<String>>::new();
-    for trait_def in &language.traits {
-        if trait_def
-            .blocks
-            .iter()
-            .flat_map(|block| &block.items)
-            .any(|item| matches!(item, SignItem::SignExpression(_)))
-        {
-            report.push(Diagnostic::new(
-                Severity::Error,
-                "CASE_SIGN_CONTEXT_REQUIRED",
-                format!(
-                    "trait {:?} cannot contain a Sign-returning case",
-                    trait_def.name
-                ),
-            ));
+    fn context_dim(expected: &crate::ExpressionType) -> Option<Dim> {
+        match expected {
+            crate::ExpressionType::SynContext => Some(Dim::Syn),
+            crate::ExpressionType::SemContext => Some(Dim::Sem),
+            crate::ExpressionType::PragContext => Some(Dim::Prag),
+            _ => None,
         }
     }
+
+    fn item_allowed_in_context(item: &SignItem, dim: Dim) -> bool {
+        match item {
+            SignItem::FeatureDecl(value) => value.dim == dim,
+            SignItem::FeatureValue(value) => value.dim == dim,
+            SignItem::FeatureExpression(value) => value.dim == dim,
+            SignItem::FeatureRule(rule) | SignItem::Rule(rule) => rule.dim == dim,
+            SignItem::Def(definition) => definition
+                .path
+                .strip_prefix(dim.keyword())
+                .is_some_and(|suffix| suffix.starts_with('.')),
+            SignItem::SignExpression(expression) => match &expression.expression {
+                Expression::Case(case) => context_dim(&case.expected) == Some(dim),
+                _ => false,
+            },
+            SignItem::Slot(_)
+            | SignItem::SlotMap(_)
+            | SignItem::SlotFeatureBinding(_)
+            | SignItem::Constraint(_) => dim == Dim::Syn,
+            SignItem::RoleDecl(_) | SignItem::RoleBinding(_) | SignItem::RoleExpression(_) => {
+                dim == Dim::Sem
+            }
+            SignItem::TraitUse { .. } | SignItem::Belongs(_) | SignItem::Realization(_) => false,
+        }
+    }
+
+    let mut calls = BTreeMap::<String, Vec<String>>::new();
     for local in &language.signs {
         let effective = registry.effective_sign(local);
         let local_parameters = construction::parameters_of(&effective);
@@ -1409,15 +1540,23 @@ fn validate_fp_expressions(
             .iter()
             .filter_map(|item| match item {
                 SignItem::SignExpression(expression) => match &expression.expression {
-                    Expression::Case(case) => {
-                        Some((case.as_ref(), crate::ExpressionType::Sign, "sign"))
-                    }
+                    Expression::Case(case) => Some((
+                        case.as_ref(),
+                        case.expected.clone(),
+                        match &case.expected {
+                            crate::ExpressionType::SignContext => "sign",
+                            crate::ExpressionType::SynContext => "syn",
+                            crate::ExpressionType::SemContext => "sem",
+                            crate::ExpressionType::PragContext => "prag",
+                            _ => "sign.expression",
+                        },
+                    )),
                     _ => None,
                 },
                 SignItem::Realization(realization) => realization
                     .expression
                     .as_ref()
-                    .map(|case| (case, crate::ExpressionType::Phon, "phon.realization")),
+                    .map(|case| (case, crate::ExpressionType::PhonContext, "phon.realization")),
                 SignItem::FeatureExpression(expression) => match &expression.expression {
                     Expression::Case(case) => Some((
                         case.as_ref(),
@@ -1525,7 +1664,7 @@ fn validate_fp_expressions(
                     }
                     CaseCondition::Equals(_) | CaseCondition::Else => {}
                 }
-                if !matches!(case.expected, crate::ExpressionType::Sign)
+                if !matches!(case.expected, crate::ExpressionType::SignContext)
                     && !branch.belongs.is_empty()
                 {
                     report.push(Diagnostic::new(
@@ -1551,6 +1690,45 @@ fn validate_fp_expressions(
                         }]),
                     );
                 }
+                if case.selection == CaseSelection::Accumulate {
+                    if !matches!(
+                        case.expected,
+                        crate::ExpressionType::SignContext
+                            | crate::ExpressionType::SynContext
+                            | crate::ExpressionType::SemContext
+                            | crate::ExpressionType::PragContext
+                    ) {
+                        report.push(Diagnostic::new(
+                            Severity::Error,
+                            "WHEN_CONTEXT_TYPE_MISMATCH",
+                            format!(
+                                "sign {:?} uses `when` in a non-fragment {:?} context",
+                                local.name, case.expected
+                            ),
+                        ));
+                    }
+                    if !matches!(
+                        &branch.result,
+                        Expression::SignFragment(_) | Expression::DimFragment { .. }
+                    ) || !branch.belongs.is_empty()
+                    {
+                        report.push(
+                            Diagnostic::new(
+                                Severity::Error,
+                                "WHEN_NON_FRAGMENT_RESULT",
+                                format!(
+                                    "sign {:?} `when` branch must return an anonymous context fragment",
+                                    local.name
+                                ),
+                            )
+                            .with_sources(vec![DiagnosticSource {
+                                owner: local.name.clone(),
+                                path: Some(site.to_owned()),
+                                location: branch.source,
+                            }]),
+                        );
+                    }
+                }
                 for category in &branch.belongs {
                     if !registry.has(category) {
                         report.push(Diagnostic::new(
@@ -1558,6 +1736,100 @@ fn validate_fp_expressions(
                             "CASE_UNKNOWN_MEMBERSHIP",
                             format!("sign {:?} case adds unknown trait {category:?}", local.name),
                         ));
+                    }
+                }
+                if let Expression::SignFragment(items) | Expression::DimFragment { items, .. } =
+                    &branch.result
+                {
+                    if let Some(dim) = context_dim(&case.expected) {
+                        for item in items {
+                            if !item_allowed_in_context(item, dim) {
+                                report.push(
+                                    Diagnostic::new(
+                                        Severity::Error,
+                                        "CASE_FRAGMENT_CONTEXT_VIOLATION",
+                                        format!(
+                                            "sign {:?} places {item:?} outside <{}Context>",
+                                            local.name,
+                                            dim.keyword()
+                                        ),
+                                    )
+                                    .with_sources(vec![
+                                        DiagnosticSource {
+                                            owner: local.name.clone(),
+                                            path: Some(format!("{}.fragment", dim.keyword())),
+                                            location: branch.source,
+                                        },
+                                    ]),
+                                );
+                            }
+                        }
+                    }
+                    for item in items {
+                        match item {
+                            SignItem::Belongs(category)
+                            | SignItem::TraitUse { name: category, .. }
+                                if !registry.has(category) =>
+                            {
+                                report.push(
+                                    Diagnostic::new(
+                                        Severity::Error,
+                                        "CASE_FRAGMENT_UNKNOWN_TRAIT",
+                                        format!(
+                                            "sign {:?} SignContext fragment references unknown trait {category:?}",
+                                            local.name
+                                        ),
+                                    )
+                                    .with_sources(vec![DiagnosticSource {
+                                        owner: local.name.clone(),
+                                        path: Some("sign.fragment".to_owned()),
+                                        location: branch.source,
+                                    }]),
+                                );
+                            }
+                            SignItem::SignExpression(expression) => {
+                                if let Expression::Case(nested) = &expression.expression {
+                                    cases.push((
+                                        nested.as_ref(),
+                                        nested.expected.clone(),
+                                        "context.fragment",
+                                    ));
+                                }
+                            }
+                            SignItem::FeatureExpression(expression) => {
+                                if let Expression::Case(nested) = &expression.expression {
+                                    cases.push((
+                                        nested.as_ref(),
+                                        crate::ExpressionType::Feature {
+                                            dim: expression.dim,
+                                            name: expression.name.clone(),
+                                        },
+                                        "sign.fragment.feature",
+                                    ));
+                                }
+                            }
+                            SignItem::RoleExpression(expression) => {
+                                if let Expression::Case(nested) = &expression.expression {
+                                    cases.push((
+                                        nested.as_ref(),
+                                        crate::ExpressionType::Role {
+                                            name: expression.name.clone(),
+                                        },
+                                        "sign.fragment.roles",
+                                    ));
+                                }
+                            }
+                            SignItem::Realization(realization) => {
+                                if let Some(nested) = &realization.expression {
+                                    cases.push((
+                                        nested,
+                                        crate::ExpressionType::PhonContext,
+                                        "sign.fragment.phon.realization",
+                                    ));
+                                }
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 let mut branch_calls = Vec::new();
@@ -2530,6 +2802,7 @@ impl CompiledSystem {
         Ok(sign)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn evaluate_feature_case(
         &self,
         current: &SignValue,
@@ -2543,6 +2816,7 @@ impl CompiledSystem {
         for (index, branch) in case.branches.iter().enumerate() {
             if !self.case_condition_matches(current, case, &branch.condition)? {
                 records.push(CaseRecord {
+                    selection: case.selection,
                     branch: index,
                     status: CaseBranchStatus::Unmatched,
                     source: branch.source,
@@ -2579,6 +2853,7 @@ impl CompiledSystem {
                 }
             }
             records.push(CaseRecord {
+                selection: case.selection,
                 branch: index,
                 status: CaseBranchStatus::Matched,
                 source: branch.source,
@@ -2896,7 +3171,7 @@ impl CompiledSystem {
         &self,
         source: &DerivedToken,
         source_sign: SignDef,
-        stack: &[String],
+        _stack: &[String],
         rules: &mut Vec<UnitRuleRecord>,
         cases: &mut Vec<CaseRecord>,
     ) -> Result<SignValue, SystemError> {
@@ -2923,11 +3198,70 @@ impl CompiledSystem {
             context = context.feature(*dim, name.clone(), value.clone());
         }
         token = self.apply_context(token, &context)?;
-        let value = self.evaluate_applied_sign(token, stack, rules, cases)?;
+        // Rebuild from the deep/base token and run its dimension rules, but do
+        // not replay Sign-level cases already traversed by the caller.  A
+        // fragment may add nested cases; `apply_sign_fragment` evaluates only
+        // those newly introduced expressions after this rebuild.
+        let (token, token_rules, token_cases) = self.run_token_rules(token)?;
+        rules.extend(token_rules);
+        cases.extend(token_cases);
+        let value = SignValue::Applied(token);
         if let SignValue::Applied(token) = &value {
             Self::check_context(token, &context)?;
         }
         Ok(value)
+    }
+
+    fn apply_sign_fragment(
+        &self,
+        current: SignValue,
+        items: &[SignItem],
+        records: &mut Vec<CaseRecord>,
+        stack: &[String],
+        rules: &mut Vec<UnitRuleRecord>,
+    ) -> Result<SignValue, SystemError> {
+        if items
+            .iter()
+            .any(|item| matches!(item, SignItem::TraitUse { .. }))
+        {
+            return Err(SystemError::InvalidSignExpression(
+                "unexpanded trait use reached a SignContext fragment".to_owned(),
+            ));
+        }
+
+        let nested = items
+            .iter()
+            .filter_map(|item| match item {
+                SignItem::SignExpression(expression) => Some(expression.expression.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        let mut rebuilt = match current {
+            SignValue::Stored(evaluation) => {
+                let mut source = evaluation.source_sign.clone();
+                source.items.extend(items.iter().cloned());
+                let (evaluation, fragment_cases) =
+                    self.evaluate_source_sign_with_context(&source, &evaluation.context)?;
+                records.extend(fragment_cases);
+                SignValue::Stored(evaluation)
+            }
+            SignValue::Applied(token) => {
+                let mut source = token.source_sign().clone();
+                source.items.extend(items.iter().cloned());
+                self.rebuild_applied_with_source(&token, source, stack, rules, records)?
+            }
+        };
+
+        for expression in nested {
+            let Expression::Case(case) = expression else {
+                return Err(SystemError::InvalidSignExpression(
+                    "SignContext fragment contains a non-case Sign expression".to_owned(),
+                ));
+            };
+            rebuilt = self.evaluate_sign_case(rebuilt, &case, records, stack, rules)?;
+        }
+        Ok(rebuilt)
     }
 
     fn apply_case_memberships(
@@ -2989,10 +3323,94 @@ impl CompiledSystem {
         stack: &[String],
         rules: &mut Vec<UnitRuleRecord>,
     ) -> Result<SignValue, SystemError> {
+        if case.selection == CaseSelection::Accumulate {
+            // `when` guards form one matching phase.  Every guard observes
+            // this same pre-merge value; fragments are not allowed to feed
+            // later guards in the same `when`.
+            let probe = current.clone();
+            let mut statuses = Vec::with_capacity(case.branches.len());
+            let mut any_matched = false;
+            let mut merged_items = Vec::new();
+
+            for branch in &case.branches {
+                let matches = match &branch.condition {
+                    CaseCondition::Else => !any_matched,
+                    condition => self.case_condition_matches(&probe, case, condition)?,
+                };
+                statuses.push(matches);
+                if !matches {
+                    continue;
+                }
+                any_matched = true;
+                if !branch.belongs.is_empty() {
+                    return Err(SystemError::InvalidSignExpression(
+                        "`when` memberships must be part of its anonymous SignContext fragment"
+                            .to_owned(),
+                    ));
+                }
+                match &branch.result {
+                    Expression::SignFragment(items) | Expression::DimFragment { items, .. } => {
+                        merged_items.extend(items.iter().cloned());
+                    }
+                    other => {
+                        return Err(SystemError::InvalidSignExpression(format!(
+                            "`when` returned a non-fragment expression {other:?}"
+                        )));
+                    }
+                }
+            }
+
+            if !any_matched {
+                records.extend(case.branches.iter().enumerate().map(|(index, branch)| {
+                    CaseRecord {
+                        selection: case.selection,
+                        branch: index,
+                        status: CaseBranchStatus::Unmatched,
+                        source: branch.source,
+                        diagnostic_code: None,
+                    }
+                }));
+                return Ok(current);
+            }
+
+            // Keep trace/rule side effects transactional as well: a failed
+            // fragment merge exposes neither a partially rebuilt Sign nor a
+            // partially committed trace.
+            let mut staged_records = Vec::new();
+            let mut staged_rules = Vec::new();
+            let result = self.apply_sign_fragment(
+                current,
+                &merged_items,
+                &mut staged_records,
+                stack,
+                &mut staged_rules,
+            )?;
+            records.extend(
+                case.branches
+                    .iter()
+                    .enumerate()
+                    .map(|(index, branch)| CaseRecord {
+                        selection: case.selection,
+                        branch: index,
+                        status: if statuses[index] {
+                            CaseBranchStatus::Matched
+                        } else {
+                            CaseBranchStatus::Unmatched
+                        },
+                        source: branch.source,
+                        diagnostic_code: None,
+                    }),
+            );
+            records.extend(staged_records);
+            rules.extend(staged_rules);
+            return Ok(result);
+        }
+
         for (index, branch) in case.branches.iter().enumerate() {
             let matches = self.case_condition_matches(&current, case, &branch.condition)?;
             if !matches {
                 records.push(CaseRecord {
+                    selection: case.selection,
                     branch: index,
                     status: CaseBranchStatus::Unmatched,
                     source: branch.source,
@@ -3003,6 +3421,9 @@ impl CompiledSystem {
             let result = match &branch.result {
                 Expression::SignApplication(application) => {
                     self.apply_sign_application(&current, application, stack, rules, records)
+                }
+                Expression::SignFragment(items) | Expression::DimFragment { items, .. } => {
+                    self.apply_sign_fragment(current.clone(), items, records, stack, rules)
                 }
                 Expression::SelfSign => Ok(current.clone()),
                 Expression::Case(nested) => {
@@ -3016,6 +3437,7 @@ impl CompiledSystem {
                 Ok(value) => value,
                 Err(error) if is_case_blocking_constraint(&error) => {
                     records.push(CaseRecord {
+                        selection: case.selection,
                         branch: index,
                         status: CaseBranchStatus::MoreSpecificBlocked,
                         source: branch.source,
@@ -3028,6 +3450,7 @@ impl CompiledSystem {
             let result =
                 self.apply_case_memberships(result, &branch.belongs, records, stack, rules)?;
             records.push(CaseRecord {
+                selection: case.selection,
                 branch: index,
                 status: CaseBranchStatus::Matched,
                 source: branch.source,
@@ -3309,6 +3732,7 @@ impl CompiledSystem {
         let cases = occurrence_cases
             .into_iter()
             .map(|record| CaseRecord {
+                selection: CaseSelection::FirstMatch,
                 branch: record.branch,
                 status: match record.status {
                     construction::OccurrenceCaseStatus::Matched => CaseBranchStatus::Matched,
@@ -3459,6 +3883,7 @@ impl CompiledSystem {
         for (index, branch) in case.branches.iter().enumerate() {
             if !self.case_condition_matches(&current, case, &branch.condition)? {
                 cases.push(CaseRecord {
+                    selection: case.selection,
                     branch: index,
                     status: CaseBranchStatus::Unmatched,
                     source: branch.source,
@@ -3507,6 +3932,7 @@ impl CompiledSystem {
                 }
             };
             cases.push(CaseRecord {
+                selection: case.selection,
                 branch: index,
                 status: CaseBranchStatus::Matched,
                 source: branch.source,
@@ -3866,6 +4292,7 @@ impl CompiledSystem {
             .iter()
             .flat_map(|occurrence| occurrence.cases.iter())
             .map(|record| CaseRecord {
+                selection: CaseSelection::FirstMatch,
                 branch: record.branch,
                 status: match record.status {
                     construction::OccurrenceCaseStatus::Matched => CaseBranchStatus::Matched,
@@ -3902,6 +4329,7 @@ impl CompiledSystem {
                 .iter()
                 .flat_map(|occurrence| occurrence.cases.iter())
                 .map(|record| CaseRecord {
+                    selection: CaseSelection::FirstMatch,
                     branch: record.branch,
                     status: match record.status {
                         construction::OccurrenceCaseStatus::Matched => CaseBranchStatus::Matched,

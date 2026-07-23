@@ -3,6 +3,8 @@ use conlang_language::library::{embedded_catalog, LibraryId, LibraryKind, Librar
 use conlang_language::synchronic::RuleStatus;
 use conlang_language::{compile_system, compile_with_libraries, DerivationContext, Dim, Language};
 
+type DerivationCase<'a> = (&'a str, &'a [(&'a str, &'a str)], &'a str);
+
 fn english_spec() -> LibrarySpec {
     LibrarySpec::natural(LibraryId::new(LibraryKind::Natural, "en-standard"))
 }
@@ -412,7 +414,7 @@ fn english_verbs_assign_case_and_nominal_occurrences_realize_it() {
 #[test]
 fn twelve_english_constructions_execute_through_the_public_runtime() {
     let system = compile_with_libraries(Language::new(), english_spec()).unwrap();
-    let cases: &[(&str, &[(&str, &str)], &str)] = &[
+    let cases: &[DerivationCase<'_>] = &[
         (
             "EnglishDefiniteNP",
             &[("determiner", "the"), ("nominal", "dog")],
@@ -893,7 +895,7 @@ sign TestSerial:
     belongs SerialPredicate
 "#;
     let system = compile_system(Language::parse(source).unwrap()).unwrap();
-    let cases: &[(&str, &[(&str, &str)], &str)] = &[
+    let cases: &[DerivationCase<'_>] = &[
         (
             "TestPre",
             &[("marker", "marker"), ("complement", "nominal")],

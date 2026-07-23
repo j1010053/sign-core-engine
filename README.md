@@ -53,6 +53,14 @@ base、derived token 從 deep baseline 重跑 Syn→Sem→Prag，再重選 reali
 來源 sign/token。stable source identity／typed resolver 與 V2 expression node 身分由
 Step 13 提供；ChangeSet replay 仍是 Step 14。完整稽核與邊界見 docs/19–20、docs/23。
 
+V2 typed `case` 以封閉 context type 檢查 branch。Sign body 可回傳完整 Sign application，
+也可回傳匿名 `SignContext` fragment：fragment 可沿用 trait expansion 並合併回目前 Sign，
+不建立新 SignId；`PhonContext` 只接受純 phon template／projection，trait 不可展開到 phon。
+`SynContext`、`SemContext`、`PragContext` 則限制匿名 fragment 只能包含各自維度的內容。
+`when:` 累加所有命中 fragment，但所有 guard 一律讀同一份合併前 frozen snapshot；
+確定 match 結果後才按來源序 merge，前一命中不能影響後一 guard。完整契約與反例見
+[docs/24_case_when與context_fragment_v2.md](docs/24_case_when與context_fragment_v2.md)。
+
 **Step 13 source interface 與 Primitive Edit 的語義／API 契約已封板**：caller `.lang` 搭配版本化
 identity sidecar，為 V1 節點及 V2 Application／Case／CaseBranch／Constraint 提供 stable
 `NodeId`／typed resolver；四原語、`check_language`、Language diff 與 trace 均只修改

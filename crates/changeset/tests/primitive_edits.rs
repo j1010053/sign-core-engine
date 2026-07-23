@@ -3,10 +3,10 @@ use conlang_changeset::{
     PrimitiveEdit, PrimitiveKind,
 };
 use conlang_language::{
-    codegen, word, AddressSegment, CaseBranch, CaseCondition, ConstraintPredicate, Expression,
-    IdentityNamespace, Language, LanguageDocument, LibrarySpec, NodeAddress, NodeId, NodeKind,
-    NodeRef, RefTargetV1, SignApplication, SignExpression, SignItem, SignProjection,
-    SourceLocation,
+    codegen, word, AddressSegment, CaseBranch, CaseCondition, CaseSelection, ConstraintPredicate,
+    Def, Expression, IdentityNamespace, Language, LanguageDocument, LibrarySpec, NodeAddress,
+    NodeId, NodeKind, NodeRef, RefTargetV1, SignApplication, SignExpression, SignItem,
+    SignProjection, SourceLocation,
 };
 
 const SOURCE: &str = r#"
@@ -142,6 +142,103 @@ fn direct_application(branch: &CaseBranch) -> SignApplication {
         Expression::SignApplication(application) => application.clone(),
         other => panic!("expected direct application, got {other:?}"),
     }
+}
+
+#[test]
+fn sign_context_fragment_items_support_all_four_primitive_edits() {
+    let source = r#"schema conlang.lang/v2
+
+trait PrimitiveFragmentMark:
+
+sign root:
+    phon:
+        /r/
+    case:
+        else:
+            belongs PrimitiveFragmentMark
+            sem:
+                first = one
+                second = two
+"#;
+    let before = LanguageDocument::import_new_root(source, "evo:fragment-edits").unwrap();
+    let case = sign_case(&before, "root");
+    let branch = child(&before, &case, NodeKind::CaseBranch, 0);
+    let first = child(&before, &branch, NodeKind::Definition, 0);
+
+    let updated = apply_edit(
+        &before,
+        PrimitiveEdit::Update {
+            node: first.clone(),
+            change: NodeUpdate::DefinitionValue("updated".to_owned()),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap()
+    .document;
+    assert!(updated.source().contains("first = updated"));
+    assert_eq!(
+        child(&updated, &branch, NodeKind::Definition, 0).id,
+        first.id
+    );
+
+    let inserted = apply_edit(
+        &updated,
+        PrimitiveEdit::Insert {
+            parent: branch.clone(),
+            anchor: Anchor::End,
+            subtree: DetachedNode::Item(SignItem::Def(Def {
+                path: "sem.third".to_owned(),
+                value: "three".to_owned(),
+            })),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap()
+    .document;
+    let third = child(&inserted, &branch, NodeKind::Definition, 2);
+
+    let moved = apply_edit(
+        &inserted,
+        PrimitiveEdit::Move {
+            node: third.clone(),
+            new_parent: branch.clone(),
+            anchor: Anchor::Before(first),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap()
+    .document;
+    let moved_third = moved
+        .identities()
+        .nodes
+        .iter()
+        .find(|node| node.id == third.id)
+        .unwrap();
+    assert!(
+        matches!(moved_third.address.0.last(), Some(AddressSegment::Items(1))),
+        "Move preserves identity and updates the logical fragment position"
+    );
+
+    let deleted = apply_edit(
+        &moved,
+        PrimitiveEdit::Delete {
+            node: third.clone(),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap()
+    .document;
+    assert!(!deleted
+        .identities()
+        .nodes
+        .iter()
+        .any(|node| node.id == third.id));
+    assert!(!deleted.source().contains("third = three"));
+    let (canonical, manifest) = deleted.dump_pair().unwrap();
+    assert_eq!(
+        LanguageDocument::open(&canonical, &manifest).unwrap(),
+        deleted
+    );
 }
 
 #[test]
@@ -583,6 +680,50 @@ fn v2_typed_updates_preserve_case_application_and_constraint_identity() {
         .document
         .source()
         .contains("adjacent(left, right)"));
+}
+
+#[test]
+fn case_selection_is_a_typed_identity_preserving_update() {
+    let before = LanguageDocument::import_new_root(
+        r#"schema conlang.lang/v2
+
+sign root:
+    syn:
+        feature:
+            trigger = enum(on, off)
+            trigger = on
+            result = enum(base, selected)
+            result = base
+    phon:
+        /x/
+    case:
+        $self.syn.trigger == on:
+            syn:
+                feature:
+                    result = selected
+"#,
+        "evo:case-selection",
+    )
+    .unwrap();
+    let sign = before.ref_for_sign("root").unwrap();
+    let case = child(&before, &sign, NodeKind::Case, 0);
+    let updated = apply_edit(
+        &before,
+        PrimitiveEdit::Update {
+            node: case.clone(),
+            change: NodeUpdate::CaseSelection(CaseSelection::Accumulate),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        updated.document.resolve_node(&case).unwrap().node.id,
+        case.id
+    );
+    assert!(updated.document.source().contains("    when:"));
+    assert!(updated.record.diff.entries.iter().any(
+        |entry| matches!(entry, LanguageDiffEntry::Updated { after, .. } if after.id == case.id)
+    ));
 }
 
 #[test]

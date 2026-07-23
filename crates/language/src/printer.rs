@@ -9,8 +9,8 @@
 //! 非 canonical 正規化為不動點(維度分組是冪等重排)。
 
 use crate::{
-    Block, CaseCondition, Expression, Language, LanguageSchema, SignArgumentValue, SignItem,
-    SignProjection, SlotMapOp, Stage, TraitDef, TypedCase,
+    Block, CaseCondition, CaseSelection, Expression, ExpressionType, Language, LanguageSchema,
+    SignArgumentValue, SignItem, SignProjection, SlotMapOp, Stage, TraitDef, TypedCase,
 };
 
 const DIMS: [&str; 4] = ["syn", "phon", "sem", "prag"];
@@ -78,6 +78,8 @@ fn expression_source(expression: &Expression) -> String {
                 .join(", ");
             format!("{}({arguments})", application.callee)
         }
+        Expression::SignFragment(_) => "<SignContext>".to_owned(),
+        Expression::DimFragment { dim, .. } => format!("<{}Context>", dim.keyword()),
         Expression::PhonInterpolation(application) => format!(
             "/{{{}.phon.ret}}/",
             expression_source(&Expression::SignApplication(application.clone()))
@@ -104,9 +106,13 @@ fn expression_source(expression: &Expression) -> String {
 }
 
 fn push_case(out: &mut String, indent: &str, case: &TypedCase) {
+    let keyword = match case.selection {
+        CaseSelection::FirstMatch => "case",
+        CaseSelection::Accumulate => "when",
+    };
     match &case.scrutinee {
-        Some(scrutinee) => out.push_str(&format!("{indent}case {scrutinee}:\n")),
-        None => out.push_str(&format!("{indent}case:\n")),
+        Some(scrutinee) => out.push_str(&format!("{indent}{keyword} {scrutinee}:\n")),
+        None => out.push_str(&format!("{indent}{keyword}:\n")),
     }
     let branch_indent = format!("{indent}    ");
     let result_indent = format!("{branch_indent}    ");
@@ -117,13 +123,38 @@ fn push_case(out: &mut String, indent: &str, case: &TypedCase) {
             CaseCondition::Else => "else".to_owned(),
         };
         out.push_str(&format!("{branch_indent}{condition}:\n"));
-        if let Expression::Case(nested) = &branch.result {
-            push_case(out, &result_indent, nested);
-        } else {
-            out.push_str(&format!(
-                "{result_indent}{}\n",
-                expression_source(&branch.result)
-            ));
+        match &branch.result {
+            Expression::Case(nested) => push_case(out, &result_indent, nested),
+            Expression::SignFragment(items) => {
+                let mut fragment = String::new();
+                push_body(
+                    &mut fragment,
+                    std::slice::from_ref(&Block {
+                        items: items.clone(),
+                    }),
+                );
+                for line in fragment.lines() {
+                    out.push_str(&result_indent);
+                    out.push_str(line.strip_prefix("    ").unwrap_or(line));
+                    out.push('\n');
+                }
+            }
+            Expression::DimFragment { dim, items } => {
+                let mut fragment = String::new();
+                push_body(
+                    &mut fragment,
+                    std::slice::from_ref(&Block {
+                        items: items.clone(),
+                    }),
+                );
+                let header = format!("    {}:", dim.keyword());
+                for line in fragment.lines().filter(|line| *line != header) {
+                    out.push_str(&result_indent);
+                    out.push_str(line.strip_prefix("        ").unwrap_or(line));
+                    out.push('\n');
+                }
+            }
+            result => out.push_str(&format!("{result_indent}{}\n", expression_source(result))),
         }
         for category in &branch.belongs {
             out.push_str(&format!("{result_indent}belongs {category}\n"));
@@ -201,6 +232,22 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                 && items
                     .iter()
                     .any(|item| matches!(item, SignItem::Realization(_)));
+            let has_context_expression = items.iter().any(|item| {
+                matches!(
+                    item,
+                    SignItem::SignExpression(expression)
+                        if matches!(
+                            &expression.expression,
+                            Expression::Case(case)
+                                if matches!(
+                                    (&case.expected, parsed_dim),
+                                    (ExpressionType::SynContext, crate::Dim::Syn)
+                                        | (ExpressionType::SemContext, crate::Dim::Sem)
+                                        | (ExpressionType::PragContext, crate::Dim::Prag)
+                                )
+                        )
+                )
+            });
             if !(has_slot
                 || has_slot_map
                 || has_slot_features
@@ -208,7 +255,8 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                 || has_rule
                 || has_feature
                 || has_roles
-                || has_realization)
+                || has_realization
+                || has_context_expression)
             {
                 continue;
             }
@@ -326,6 +374,23 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                     _ => {}
                 }
             }
+            if has_context_expression {
+                for item in items {
+                    if let SignItem::SignExpression(expression) = item {
+                        if let Expression::Case(case) = &expression.expression {
+                            let expected = match parsed_dim {
+                                crate::Dim::Syn => ExpressionType::SynContext,
+                                crate::Dim::Sem => ExpressionType::SemContext,
+                                crate::Dim::Prag => ExpressionType::PragContext,
+                                crate::Dim::Phon => ExpressionType::PhonContext,
+                            };
+                            if case.expected == expected {
+                                push_case(out, "        ", case);
+                            }
+                        }
+                    }
+                }
+            }
         }
         let constraints = items
             .iter()
@@ -348,7 +413,9 @@ fn push_body(out: &mut String, blocks: &[Block]) {
         for item in items {
             if let SignItem::SignExpression(expression) = item {
                 if let Expression::Case(case) = &expression.expression {
-                    push_case(out, "    ", case);
+                    if case.expected == ExpressionType::SignContext {
+                        push_case(out, "    ", case);
+                    }
                 }
             }
         }

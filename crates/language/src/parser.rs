@@ -1,3 +1,4 @@
+#![allow(clippy::doc_lazy_continuation)]
 //! Language parser(步驟 9 + I22 語法重設計):`.lang` 原文 → [`Language`]。
 //!
 //! **colon + 縮排**風格(貼合 tshiatun/Lexurgy;取代 `{ }`)。統一 body 語法
@@ -23,11 +24,12 @@
 
 use crate::path::parse_path;
 use crate::{
-    BinaryConstraint, Block, CaseBranch, CaseCondition, ConstraintPredicate, Def, Dim, Expression,
-    ExpressionType, FeatureDecl, FeatureExpression, FeatureValue, Language, LanguageSchema,
-    Realization, RealizationBranch, RoleBinding, RoleDecl, RoleExpression, Rule, SignApplication,
-    SignArgument, SignArgumentValue, SignExpression, SignItem, SignProjection, Slot,
-    SlotConstraint, SlotFeatureBinding, SlotMapOp, SourceLocation, Stage, TraitDef, TypedCase,
+    BinaryConstraint, Block, CaseBranch, CaseCondition, CaseSelection, ConstraintPredicate, Def,
+    Dim, Expression, ExpressionType, FeatureDecl, FeatureExpression, FeatureValue, Language,
+    LanguageSchema, Realization, RealizationBranch, RoleBinding, RoleDecl, RoleExpression, Rule,
+    SignApplication, SignArgument, SignArgumentValue, SignExpression, SignItem, SignProjection,
+    Slot, SlotConstraint, SlotFeatureBinding, SlotMapOp, SourceLocation, Stage, TraitDef,
+    TypedCase,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -45,6 +47,7 @@ fn err(line: usize, msg: impl Into<String>) -> ParseError {
 }
 
 /// 一行:行號、縮排空格數、去空白內容。
+#[derive(Clone)]
 struct Line {
     no: usize,
     indent: usize,
@@ -170,10 +173,12 @@ fn parse_expression(
     line: usize,
 ) -> Result<Expression, ParseError> {
     let source = source.trim();
-    if source == "$self" && matches!(expected, ExpressionType::Sign) {
+    if source == "$self" && matches!(expected, ExpressionType::SignContext) {
         return Ok(Expression::SelfSign);
     }
-    if matches!(expected, ExpressionType::Phon) && source.starts_with('/') && source.ends_with('/')
+    if matches!(expected, ExpressionType::PhonContext)
+        && source.starts_with('/')
+        && source.ends_with('/')
     {
         if let Some(inner) = source
             .strip_prefix("/{")
@@ -225,18 +230,84 @@ fn parse_expression(
     ))
 }
 
+fn is_context_head(source: &str) -> bool {
+    source == "case:"
+        || source == "when:"
+        || ((source.starts_with("case ") || source.starts_with("when ")) && source.ends_with(':'))
+}
+
+fn is_fragment_context(expected: &ExpressionType) -> bool {
+    matches!(
+        expected,
+        ExpressionType::SignContext
+            | ExpressionType::SynContext
+            | ExpressionType::SemContext
+            | ExpressionType::PragContext
+    )
+}
+
+fn dim_context(dim: Dim) -> ExpressionType {
+    match dim {
+        Dim::Syn => ExpressionType::SynContext,
+        Dim::Sem => ExpressionType::SemContext,
+        Dim::Prag => ExpressionType::PragContext,
+        Dim::Phon => ExpressionType::PhonContext,
+    }
+}
+
+fn context_dim(expected: &ExpressionType) -> Option<Dim> {
+    match expected {
+        ExpressionType::SynContext => Some(Dim::Syn),
+        ExpressionType::SemContext => Some(Dim::Sem),
+        ExpressionType::PragContext => Some(Dim::Prag),
+        _ => None,
+    }
+}
+
+fn parse_dim_fragment(
+    lang: &mut Language,
+    body: &[Line],
+    dim: Dim,
+) -> Result<Vec<SignItem>, ParseError> {
+    let first = body
+        .first()
+        .ok_or_else(|| err(0, "dimension context fragment is empty"))?;
+    let mut wrapped = Vec::with_capacity(body.len() + 1);
+    wrapped.push(Line {
+        no: first.no,
+        indent: first.indent.saturating_sub(1),
+        text: format!("{}:", dim.keyword()),
+    });
+    wrapped.extend(body.iter().cloned());
+    Ok(parse_body(lang, &wrapped)?
+        .into_iter()
+        .flat_map(|block| block.items)
+        .collect())
+}
+
 fn parse_typed_case(
+    lang: &mut Language,
     body: &[Line],
     start: usize,
     expected: ExpressionType,
 ) -> Result<(TypedCase, usize), ParseError> {
     let head = &body[start];
-    let Some(case_head) = head.text.strip_prefix("case") else {
+    let (selection, case_head) = if let Some(rest) = head.text.strip_prefix("case") {
+        (CaseSelection::FirstMatch, rest)
+    } else if let Some(rest) = head.text.strip_prefix("when") {
+        (CaseSelection::Accumulate, rest)
+    } else {
         return Err(err(
             head.no,
-            "internal case parser called on a non-case line",
+            "internal context parser called on a non-case/when line",
         ));
     };
+    if selection == CaseSelection::Accumulate && !is_fragment_context(&expected) {
+        return Err(err(
+            head.no,
+            "`when:` is only valid in SignContext, SynContext, SemContext, or PragContext",
+        ));
+    }
     let Some(scrutinee) = case_head.strip_suffix(':') else {
         return Err(err(head.no, "case header must end with `:`"));
     };
@@ -293,14 +364,52 @@ fn parse_typed_case(
             return Err(err(branch.no, "case branch requires a result expression"));
         }
         let result_line = &body[index];
-        let result = if result_line.text.starts_with("case") {
-            let (nested, next) = parse_typed_case(body, index, expected.clone())?;
+        let branch_body_start = index;
+        let mut branch_body_end = index;
+        while branch_body_end < body.len() && body[branch_body_end].indent > branch_indent {
+            branch_body_end += 1;
+        }
+        let scalar_result = if selection == CaseSelection::FirstMatch {
+            parse_expression(&result_line.text, &expected, result_line.no).ok()
+        } else {
+            None
+        };
+        let result = if is_context_head(&result_line.text) {
+            let (nested, next) = parse_typed_case(lang, body, index, expected.clone())?;
             index = next;
             Expression::Case(Box::new(nested))
-        } else {
-            let result = parse_expression(&result_line.text, &expected, result_line.no)?;
+        } else if let Some(result) = scalar_result {
             index += 1;
             result
+        } else if matches!(expected, ExpressionType::SignContext) {
+            let blocks = parse_body(lang, &body[branch_body_start..branch_body_end])?;
+            let items = blocks
+                .into_iter()
+                .flat_map(|block| block.items)
+                .collect::<Vec<_>>();
+            if items.is_empty() {
+                return Err(err(
+                    result_line.no,
+                    "SignContext fragment must contain at least one Sign item",
+                ));
+            }
+            index = branch_body_end;
+            Expression::SignFragment(items)
+        } else if let Some(dim) = context_dim(&expected) {
+            let items = parse_dim_fragment(lang, &body[branch_body_start..branch_body_end], dim)?;
+            if items.is_empty() {
+                return Err(err(
+                    result_line.no,
+                    format!("{expected:?} fragment must contain at least one item"),
+                ));
+            }
+            index = branch_body_end;
+            Expression::DimFragment { dim, items }
+        } else {
+            return Err(err(
+                result_line.no,
+                format!("case branch does not contain an expression accepted by <{expected:?}>"),
+            ));
         };
         let mut belongs = Vec::new();
         while index < body.len() && body[index].indent > branch_indent {
@@ -315,7 +424,7 @@ fn parse_typed_case(
                     "only `belongs` may follow a Sign branch result",
                 ));
             };
-            if !matches!(expected, ExpressionType::Sign) {
+            if !matches!(expected, ExpressionType::SignContext) {
                 return Err(err(
                     line.no,
                     "`belongs` is only valid in a case branch whose result type is Sign",
@@ -333,6 +442,7 @@ fn parse_typed_case(
     }
     Ok((
         TypedCase {
+            selection,
             expected,
             scrutinee,
             branches,
@@ -666,11 +776,15 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                 }
                 in_constraints = true;
                 constraints_indent = ind;
-            } else if text == "case:" || (text.starts_with("case ") && text.ends_with(':')) {
+            } else if is_context_head(text) {
                 if !lang.is_v2() {
-                    return Err(err(no, "typed `case` requires `schema conlang.lang/v2`"));
+                    return Err(err(
+                        no,
+                        "typed `case`/`when` requires `schema conlang.lang/v2`",
+                    ));
                 }
-                let (case, next) = parse_typed_case(body, index - 1, ExpressionType::Sign)?;
+                let (case, next) =
+                    parse_typed_case(lang, body, index - 1, ExpressionType::SignContext)?;
                 blocks
                     .last_mut()
                     .unwrap()
@@ -721,6 +835,37 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                 format!("indented line {text:?} outside a dimension block"),
             ));
         };
+        if !in_slots
+            && !in_slot_features
+            && !in_feature
+            && !in_roles
+            && !in_realization
+            && is_context_head(text)
+        {
+            if !lang.is_v2() {
+                return Err(err(
+                    no,
+                    "typed `case`/`when` requires `schema conlang.lang/v2`",
+                ));
+            }
+            if dim.to_dim() == Dim::Phon {
+                return Err(err(
+                    no,
+                    "phon dimension branching belongs under `realization:`",
+                ));
+            }
+            let (case, next) = parse_typed_case(lang, body, index - 1, dim_context(dim.to_dim()))?;
+            blocks
+                .last_mut()
+                .unwrap()
+                .items
+                .push(SignItem::SignExpression(SignExpression {
+                    source: case.source,
+                    expression: Expression::Case(Box::new(case)),
+                }));
+            index = next;
+            continue;
+        }
         if in_slots {
             let slot = parse_slot(text, no)?;
             blocks.last_mut().unwrap().items.push(SignItem::Slot(slot));
@@ -789,7 +934,7 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                     dim: dim.to_dim(),
                     name: name.to_owned(),
                 };
-                let (case, next) = parse_typed_case(body, index, expected)?;
+                let (case, next) = parse_typed_case(lang, body, index, expected)?;
                 blocks
                     .last_mut()
                     .unwrap()
@@ -891,6 +1036,7 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                         return Err(err(no, "role expression requires an indented typed case"));
                     }
                     let (case, next) = parse_typed_case(
+                        lang,
                         body,
                         index,
                         ExpressionType::Role {
@@ -957,7 +1103,8 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                 if !lang.is_v2() {
                     return Err(err(no, "typed `case` requires `schema conlang.lang/v2`"));
                 }
-                let (case, next) = parse_typed_case(body, index - 1, ExpressionType::Phon)?;
+                let (case, next) =
+                    parse_typed_case(lang, body, index - 1, ExpressionType::PhonContext)?;
                 let item = blocks.last_mut().unwrap().items.last_mut();
                 let Some(SignItem::Realization(realization)) = item else {
                     return Err(err(no, "internal realization block state is invalid"));

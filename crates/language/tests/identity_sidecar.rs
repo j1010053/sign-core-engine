@@ -243,6 +243,109 @@ fn v2_expression_nodes_have_recursive_unique_stable_addresses() {
 }
 
 #[test]
+fn anonymous_sign_context_fragment_items_keep_stable_identity_and_refs() {
+    let source = r#"schema conlang.lang/v2
+
+trait FragmentMark:
+
+sign root:
+    phon:
+        /r/
+    case:
+        else:
+            belongs FragmentMark
+            sem:
+                selected = yes
+"#;
+    let document = LanguageDocument::import_new_root(source, "evo:fragment").unwrap();
+    let branch = document
+        .identities()
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::CaseBranch)
+        .unwrap();
+    let fragment_items = document
+        .identities()
+        .nodes
+        .iter()
+        .filter(|node| {
+            node.parent.as_ref() == Some(&branch.id)
+                && matches!(node.kind, NodeKind::Belongs | NodeKind::Definition)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(fragment_items.len(), 2);
+    assert!(fragment_items.iter().all(|node| {
+        node.address.0.windows(2).any(|pair| {
+            matches!(
+                pair,
+                [AddressSegment::CaseBranches(_), AddressSegment::Items(_)]
+            )
+        })
+    }));
+    assert!(document.identities().refs.iter().any(|binding| {
+        binding.owner == fragment_items[0].id
+            && binding.field == "belongs"
+            && matches!(
+                &binding.target,
+                RefTargetV1::Local { target } if target.expected == NodeKind::Trait
+            )
+    }));
+
+    let (canonical, manifest) = document.dump_pair().unwrap();
+    let reopened = LanguageDocument::open(&canonical, &manifest).unwrap();
+    assert_eq!(reopened, document);
+}
+
+#[test]
+fn dimension_when_fragment_items_round_trip_with_stable_identity() {
+    let source = r#"schema conlang.lang/v2
+
+sign root:
+    syn:
+        feature:
+            trigger = enum(on, off)
+            trigger = on
+            selected = enum(no, yes)
+            selected = no
+        when:
+            $self.syn.trigger == on:
+                feature:
+                    selected = yes
+    phon:
+        /r/
+"#;
+    let document = LanguageDocument::import_new_root(source, "evo:dim-fragment").unwrap();
+    let branch = document
+        .identities()
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::CaseBranch)
+        .unwrap();
+    let value = document
+        .identities()
+        .nodes
+        .iter()
+        .find(|node| {
+            node.parent.as_ref() == Some(&branch.id) && node.kind == NodeKind::FeatureValue
+        })
+        .unwrap();
+    assert!(value.address.0.windows(2).any(|pair| {
+        matches!(
+            pair,
+            [AddressSegment::CaseBranches(_), AddressSegment::Items(_)]
+        )
+    }));
+    let value_id = value.id.clone();
+    let (canonical, manifest) = document.dump_pair().unwrap();
+    let reopened = LanguageDocument::open(&canonical, &manifest).unwrap();
+    assert!(reopened
+        .identities()
+        .nodes
+        .iter()
+        .any(|node| node.id == value_id && node.kind == NodeKind::FeatureValue));
+}
+
+#[test]
 fn expression_refs_keep_target_ids_across_display_rename_and_reopen() {
     let document =
         LanguageDocument::import_new_root(V2_EXPRESSION_SOURCE, "evo:rename-expressions").unwrap();

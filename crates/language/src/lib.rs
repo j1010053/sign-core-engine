@@ -142,17 +142,12 @@ ref_ty!(
 ///
 /// `.lang` by itself is intentionally local: a package loader is the authority
 /// that binds package code to the stable namespace declared in its config.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum RuleNamespace {
+    #[default]
     Local,
     Document(String),
     Package(String),
-}
-
-impl Default for RuleNamespace {
-    fn default() -> Self {
-        Self::Local
-    }
 }
 
 impl std::fmt::Display for RuleNamespace {
@@ -350,10 +345,26 @@ impl LanguageSchema {
 /// enum domain separately during type checking; it is not an untyped string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExpressionType {
-    Sign,
-    Phon,
-    Feature { dim: Dim, name: String },
-    Role { name: String },
+    /// A case in Sign position may yield a complete Sign expression or a
+    /// fragment which is merged into the Sign currently being built.
+    SignContext,
+    /// A phon case yields a pure phon fragment (currently a complete template
+    /// or a full-Sign phon projection).  Trait expansion is deliberately not
+    /// available in this context.
+    PhonContext,
+    /// A fragment confined to the syntactic/form dimension.
+    SynContext,
+    /// A fragment confined to the semantic/meaning dimension.
+    SemContext,
+    /// A fragment confined to the pragmatic/function dimension.
+    PragContext,
+    Feature {
+        dim: Dim,
+        name: String,
+    },
+    Role {
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -388,6 +399,16 @@ pub enum SignProjection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expression {
     SignApplication(SignApplication),
+    /// An anonymous, typed Sign context.  Its items use the same closed
+    /// vocabulary and compile-time trait expansion path as a normal Sign
+    /// body, but the fragment has no independent Sign identity.
+    SignFragment(Vec<SignItem>),
+    /// An anonymous fragment confined to one non-phon dimension.  Phon uses
+    /// its existing pure-template representation instead of Sign items.
+    DimFragment {
+        dim: Dim,
+        items: Vec<SignItem>,
+    },
     /// A complete Sign application projected into a pure phon template:
     /// `/{callee(...).phon.ret}/`.
     PhonInterpolation(SignApplication),
@@ -412,17 +433,26 @@ pub enum CaseCondition {
     Else,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaseSelection {
+    /// `case:` selects the first Matched branch.
+    FirstMatch,
+    /// `when:` merges every Matched anonymous fragment in source order.
+    Accumulate,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CaseBranch {
     pub condition: CaseCondition,
     pub result: Expression,
-    /// Only meaningful for `case<Sign>`; type checking rejects it elsewhere.
+    /// Only meaningful for `case<SignContext>`; type checking rejects it elsewhere.
     pub belongs: Vec<String>,
     pub source: SourceLocation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedCase {
+    pub selection: CaseSelection,
     pub expected: ExpressionType,
     pub scrutinee: Option<String>,
     pub branches: Vec<CaseBranch>,

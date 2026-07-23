@@ -122,6 +122,7 @@ pub enum EditableField {
     RoleSlot,
     RealizationTemplate,
     RealizationGuard,
+    CaseSelection,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -709,6 +710,7 @@ fn editable_field(kind: NodeKind, name: &str) -> Option<EditableField> {
         (NodeKind::RoleBinding, "slot") => Some(EditableField::RoleSlot),
         (NodeKind::RealizationBranch, "template") => Some(EditableField::RealizationTemplate),
         (NodeKind::RealizationBranch, "guard") => Some(EditableField::RealizationGuard),
+        (NodeKind::Case, "selection") => Some(EditableField::CaseSelection),
         _ => None,
     }
 }
@@ -888,6 +890,32 @@ fn enumerate_item_children(
                     next,
                     entries,
                 );
+            }
+            crate::Expression::SignFragment(items)
+            | crate::Expression::DimFragment { items, .. } => {
+                // A SignContext fragment is anonymous.  Its editable Sign
+                // items are therefore direct children of the owning case
+                // branch rather than children of a synthetic fragment node.
+                let branch_address = address.parent().unwrap_or_else(|| address.clone());
+                for (index, item) in items.iter().enumerate() {
+                    let item_address = branch_address.child(AddressSegment::Items(index));
+                    let item_id = push_entry(
+                        entries,
+                        namespace,
+                        next,
+                        item_kind(item),
+                        Some(parent.clone()),
+                        item_address.clone(),
+                    );
+                    enumerate_item_children(
+                        item,
+                        &item_address,
+                        &item_id,
+                        namespace,
+                        next,
+                        entries,
+                    );
+                }
             }
             crate::Expression::Projection { value, .. } => {
                 // A projection is a typed view of its input rather than an
@@ -1271,31 +1299,11 @@ fn bind_runtime_ids(language: &mut Language, nodes: &[NodeEntryV1]) -> Result<()
                 })?;
                 sign.id = SignId::document(namespace, entry.id.ordinal);
             }
-            [AddressSegment::Signs(sign), AddressSegment::Items(item)]
-                if matches!(entry.kind, NodeKind::Rule | NodeKind::FeatureRule) =>
-            {
-                bind_rule(
-                    language
-                        .signs
-                        .get_mut(*sign)
-                        .and_then(|sign| sign.items.get_mut(*item)),
-                    namespace,
-                    entry.id.ordinal,
-                )?;
-            }
-            [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block), AddressSegment::Items(item)]
-                if matches!(entry.kind, NodeKind::Rule | NodeKind::FeatureRule) =>
-            {
-                bind_rule(
-                    language
-                        .traits
-                        .get_mut(*trait_index)
-                        .and_then(|trait_def| trait_def.blocks.get_mut(*block))
-                        .and_then(|block| block.items.get_mut(*item)),
-                    namespace,
-                    entry.id.ordinal,
-                )?;
-            }
+            _ if matches!(entry.kind, NodeKind::Rule | NodeKind::FeatureRule) => bind_rule(
+                item_at_mut(language, &entry.address),
+                namespace,
+                entry.id.ordinal,
+            )?,
             _ => {}
         }
     }
@@ -1359,21 +1367,196 @@ fn reference_target(
 }
 
 fn item_at<'a>(language: &'a Language, address: &NodeAddress) -> Option<&'a SignItem> {
-    match address.0.as_slice() {
-        [AddressSegment::Signs(sign), AddressSegment::Items(item)] => {
-            language.signs.get(*sign)?.items.get(*item)
+    fn expression_item_at<'a>(
+        expression: &'a crate::Expression,
+        path: &[AddressSegment],
+    ) -> Option<&'a SignItem> {
+        fn case_item_at<'a>(
+            case: &'a crate::TypedCase,
+            path: &[AddressSegment],
+        ) -> Option<&'a SignItem> {
+            let [AddressSegment::CaseBranches(branch), rest @ ..] = path else {
+                return None;
+            };
+            let result = &case.branches.get(*branch)?.result;
+            match rest {
+                [AddressSegment::Items(item), tail @ ..] => {
+                    let items = match result {
+                        crate::Expression::SignFragment(items)
+                        | crate::Expression::DimFragment { items, .. } => items,
+                        _ => return None,
+                    };
+                    nested_item_at(items.get(*item)?, tail)
+                }
+                [AddressSegment::CaseResult, tail @ ..] => expression_item_at(result, tail),
+                _ => None,
+            }
         }
-        [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block), AddressSegment::Items(item)] => {
-            language
-                .traits
-                .get(*trait_index)?
-                .blocks
-                .get(*block)?
-                .items
-                .get(*item)
+
+        match expression {
+            crate::Expression::Projection { value, .. } => expression_item_at(value, path),
+            crate::Expression::Case(case) => case_item_at(case, path),
+            crate::Expression::SignFragment(items)
+            | crate::Expression::DimFragment { items, .. } => {
+                let [AddressSegment::Items(item), tail @ ..] = path else {
+                    return None;
+                };
+                nested_item_at(items.get(*item)?, tail)
+            }
+            _ => None,
         }
-        _ => None,
     }
+
+    fn nested_item_at<'a>(item: &'a SignItem, path: &[AddressSegment]) -> Option<&'a SignItem> {
+        if path.is_empty() {
+            return Some(item);
+        }
+        match item {
+            SignItem::SignExpression(expression) => {
+                expression_item_at(&expression.expression, path)
+            }
+            SignItem::FeatureExpression(expression) => {
+                expression_item_at(&expression.expression, path)
+            }
+            SignItem::RoleExpression(expression) => {
+                expression_item_at(&expression.expression, path)
+            }
+            SignItem::Realization(realization) => {
+                let [AddressSegment::CaseExpression, tail @ ..] = path else {
+                    return None;
+                };
+                let case = realization.expression.as_ref()?;
+                let [AddressSegment::CaseBranches(branch), rest @ ..] = tail else {
+                    return None;
+                };
+                let result = &case.branches.get(*branch)?.result;
+                match rest {
+                    [AddressSegment::Items(index), nested @ ..] => {
+                        let items = match result {
+                            crate::Expression::SignFragment(items)
+                            | crate::Expression::DimFragment { items, .. } => items,
+                            _ => return None,
+                        };
+                        nested_item_at(items.get(*index)?, nested)
+                    }
+                    [AddressSegment::CaseResult, nested @ ..] => expression_item_at(result, nested),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    let (root, tail) = match address.0.as_slice() {
+        [AddressSegment::Signs(sign), AddressSegment::Items(item), tail @ ..] => {
+            (language.signs.get(*sign)?.items.get(*item)?, tail)
+        }
+        [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block), AddressSegment::Items(item), tail @ ..] => {
+            (
+                language
+                    .traits
+                    .get(*trait_index)?
+                    .blocks
+                    .get(*block)?
+                    .items
+                    .get(*item)?,
+                tail,
+            )
+        }
+        _ => return None,
+    };
+    nested_item_at(root, tail)
+}
+
+fn item_at_mut<'a>(language: &'a mut Language, address: &NodeAddress) -> Option<&'a mut SignItem> {
+    fn expression_item_at_mut<'a>(
+        expression: &'a mut crate::Expression,
+        path: &[AddressSegment],
+    ) -> Option<&'a mut SignItem> {
+        match expression {
+            crate::Expression::Projection { value, .. } => {
+                expression_item_at_mut(value.as_mut(), path)
+            }
+            crate::Expression::Case(case) => case_item_at_mut(case, path),
+            crate::Expression::SignFragment(items)
+            | crate::Expression::DimFragment { items, .. } => {
+                let [AddressSegment::Items(item), tail @ ..] = path else {
+                    return None;
+                };
+                nested_item_at_mut(items.get_mut(*item)?, tail)
+            }
+            _ => None,
+        }
+    }
+
+    fn case_item_at_mut<'a>(
+        case: &'a mut crate::TypedCase,
+        path: &[AddressSegment],
+    ) -> Option<&'a mut SignItem> {
+        let [AddressSegment::CaseBranches(branch), rest @ ..] = path else {
+            return None;
+        };
+        let result = &mut case.branches.get_mut(*branch)?.result;
+        match rest {
+            [AddressSegment::Items(item), tail @ ..] => {
+                let items = match result {
+                    crate::Expression::SignFragment(items)
+                    | crate::Expression::DimFragment { items, .. } => items,
+                    _ => return None,
+                };
+                nested_item_at_mut(items.get_mut(*item)?, tail)
+            }
+            [AddressSegment::CaseResult, tail @ ..] => expression_item_at_mut(result, tail),
+            _ => None,
+        }
+    }
+
+    fn nested_item_at_mut<'a>(
+        item: &'a mut SignItem,
+        path: &[AddressSegment],
+    ) -> Option<&'a mut SignItem> {
+        if path.is_empty() {
+            return Some(item);
+        }
+        match item {
+            SignItem::SignExpression(expression) => {
+                expression_item_at_mut(&mut expression.expression, path)
+            }
+            SignItem::FeatureExpression(expression) => {
+                expression_item_at_mut(&mut expression.expression, path)
+            }
+            SignItem::RoleExpression(expression) => {
+                expression_item_at_mut(&mut expression.expression, path)
+            }
+            SignItem::Realization(realization) => {
+                let [AddressSegment::CaseExpression, tail @ ..] = path else {
+                    return None;
+                };
+                case_item_at_mut(realization.expression.as_mut()?, tail)
+            }
+            _ => None,
+        }
+    }
+
+    let (root, tail) = match address.0.as_slice() {
+        [AddressSegment::Signs(sign), AddressSegment::Items(item), tail @ ..] => {
+            (language.signs.get_mut(*sign)?.items.get_mut(*item)?, tail)
+        }
+        [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block), AddressSegment::Items(item), tail @ ..] => {
+            (
+                language
+                    .traits
+                    .get_mut(*trait_index)?
+                    .blocks
+                    .get_mut(*block)?
+                    .items
+                    .get_mut(*item)?,
+                tail,
+            )
+        }
+        _ => return None,
+    };
+    nested_item_at_mut(root, tail)
 }
 
 fn entry_at<'a>(
@@ -1765,7 +1948,8 @@ sign root:
             source: crate::SourceLocation::line(7),
         };
         let nested = crate::TypedCase {
-            expected: crate::ExpressionType::Sign,
+            selection: crate::CaseSelection::FirstMatch,
+            expected: crate::ExpressionType::SignContext,
             scrutinee: None,
             branches: vec![crate::CaseBranch {
                 condition: crate::CaseCondition::Else,

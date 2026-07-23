@@ -37,6 +37,8 @@ pub enum CompileError {
     DuplicateTrait(String),
     #[error("duplicate sign name {0:?}")]
     DuplicateSign(String),
+    #[error("trait expansion cycle in {sign:?}: {path}")]
+    TraitExpansionCycle { sign: String, path: String },
 }
 
 /// 全管線產物:各 stage 的 Language(皆可 dump)+ Trait 索引(Compile Artifact)。
@@ -65,86 +67,164 @@ fn check_names(l: &Language) -> Result<(), CompileError> {
     Ok(())
 }
 
+fn expand_expression_contexts(
+    src: &Language,
+    sign: &str,
+    expression: &mut crate::Expression,
+    active: &mut Vec<String>,
+) -> Result<(), CompileError> {
+    match expression {
+        crate::Expression::SignFragment(items) => {
+            *items = expand_item_sequence(src, sign, items, active)?;
+        }
+        crate::Expression::DimFragment { items, .. } => {
+            for item in items {
+                expand_item_expressions(src, sign, item, active)?;
+            }
+        }
+        crate::Expression::Case(case) => {
+            for branch in &mut case.branches {
+                expand_expression_contexts(src, sign, &mut branch.result, active)?;
+            }
+        }
+        crate::Expression::Projection { value, .. } => {
+            expand_expression_contexts(src, sign, value, active)?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn expand_item_expressions(
+    src: &Language,
+    sign: &str,
+    item: &mut SignItem,
+    active: &mut Vec<String>,
+) -> Result<(), CompileError> {
+    match item {
+        SignItem::SignExpression(expression) => {
+            expand_expression_contexts(src, sign, &mut expression.expression, active)
+        }
+        SignItem::FeatureExpression(expression) => {
+            expand_expression_contexts(src, sign, &mut expression.expression, active)
+        }
+        SignItem::RoleExpression(expression) => {
+            expand_expression_contexts(src, sign, &mut expression.expression, active)
+        }
+        SignItem::Realization(realization) => {
+            if let Some(case) = &mut realization.expression {
+                for branch in &mut case.branches {
+                    expand_expression_contexts(src, sign, &mut branch.result, active)?;
+                }
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn expand_item_sequence(
+    src: &Language,
+    sign: &str,
+    source: &[SignItem],
+    active: &mut Vec<String>,
+) -> Result<Vec<SignItem>, CompileError> {
+    let mut used: BTreeMap<&str, (bool, Vec<u32>)> = BTreeMap::new();
+    for item in source {
+        if let SignItem::TraitUse { name, block } = item {
+            let entry = used.entry(name).or_default();
+            match block {
+                None => entry.0 = true,
+                Some(index) => entry.1.push(*index),
+            }
+        }
+    }
+    for (name, (whole, indices)) in &used {
+        let trait_def = src
+            .traits
+            .iter()
+            .find(|trait_def| &trait_def.name == name)
+            .ok_or_else(|| CompileError::UnknownTrait {
+                sign: sign.to_owned(),
+                name: (*name).to_owned(),
+            })?;
+        for index in indices {
+            if *index as usize >= trait_def.blocks.len() {
+                return Err(CompileError::BlockOutOfRange {
+                    sign: sign.to_owned(),
+                    name: (*name).to_owned(),
+                    block: *index,
+                    blocks: trait_def.blocks.len(),
+                });
+            }
+        }
+        if !whole {
+            for wanted in 0..trait_def.blocks.len() as u32 {
+                if !indices.contains(&wanted) {
+                    return Err(CompileError::IncompleteTraitUse {
+                        sign: sign.to_owned(),
+                        name: (*name).to_owned(),
+                        missing: wanted,
+                    });
+                }
+            }
+        }
+    }
+
+    let mut output = Vec::new();
+    for item in source {
+        match item {
+            SignItem::TraitUse { name, block } => {
+                if let Some(start) = active.iter().position(|candidate| candidate == name) {
+                    let mut path = active[start..].to_vec();
+                    path.push(name.clone());
+                    return Err(CompileError::TraitExpansionCycle {
+                        sign: sign.to_owned(),
+                        path: path.join(" -> "),
+                    });
+                }
+                let trait_def = src
+                    .traits
+                    .iter()
+                    .find(|trait_def| trait_def.name == *name)
+                    .ok_or_else(|| CompileError::UnknownTrait {
+                        sign: sign.to_owned(),
+                        name: name.clone(),
+                    })?;
+                let selected = match block {
+                    None => trait_def
+                        .blocks
+                        .iter()
+                        .flat_map(|block| block.items.iter().cloned())
+                        .collect::<Vec<_>>(),
+                    Some(index) => trait_def.blocks[*index as usize].items.clone(),
+                };
+                active.push(name.clone());
+                output.extend(expand_item_sequence(src, sign, &selected, active)?);
+                active.pop();
+            }
+            other => {
+                let mut expanded = other.clone();
+                expand_item_expressions(src, sign, &mut expanded, active)?;
+                output.push(expanded);
+            }
+        }
+    }
+    Ok(output)
+}
+
 /// Pass ①→②:Trait Expansion(I16-a/b)。
-/// 消去非 global trait 與全部 `TraitUse`(inline 至引用位置,保序);
-/// global trait 存續(展開對其恆等);P5 完整性:引用者須寫出該 trait 全部 block。
+/// Trait uses in a typed SignContext fragment follow the exact same expansion
+/// path as top-level Sign items.  The fragment remains anonymous: expansion
+/// contributes Sign items but never creates another Sign node.
 pub fn expand_traits(src: &Language) -> Result<Language, CompileError> {
     check_names(src)?;
     let mut out = src.clone();
     out.signs.clear();
-    // **所有 trait 存續**(修補07 P38 v0.2:trait 是維度中立的分類節點,單一分類樹)——
-    // registry/projection 編譯後仍須查閱其 belongs 邊與繼承 Def;`Name[n]` macro 仍
-    // inline 至 sign(下方),但 trait 本身不消去(與舊 P5「非 global 消去」不同)。
-
     for sign in &src.signs {
-        // 每個被引用 trait 收集:是否有「整個 trait」引用(None)+ indexed(Some(n),0 起算)
-        let mut used: BTreeMap<&str, (bool, Vec<u32>)> = BTreeMap::new();
-        for it in &sign.items {
-            if let SignItem::TraitUse { name, block } = it {
-                let e = used.entry(name).or_default();
-                match block {
-                    None => e.0 = true,
-                    Some(n) => e.1.push(*n),
-                }
-            }
-        }
-        for (name, (whole, idx)) in &used {
-            let t = src.traits.iter().find(|t| &t.name == name).ok_or_else(|| {
-                CompileError::UnknownTrait {
-                    sign: sign.name.clone(),
-                    name: (*name).to_owned(),
-                }
-            })?;
-            // 界限:0 起算,合法 n ∈ [0, len)
-            for n in idx {
-                if *n as usize >= t.blocks.len() {
-                    return Err(CompileError::BlockOutOfRange {
-                        sign: sign.name.clone(),
-                        name: (*name).to_owned(),
-                        block: *n,
-                        blocks: t.blocks.len(),
-                    });
-                }
-            }
-            // P5 完整性:僅對 indexed 引用強制(整個 trait 引用天然覆蓋全部)
-            if !whole {
-                for want in 0..t.blocks.len() as u32 {
-                    if !idx.contains(&want) {
-                        return Err(CompileError::IncompleteTraitUse {
-                            sign: sign.name.clone(),
-                            name: (*name).to_owned(),
-                            missing: want,
-                        });
-                    }
-                }
-            }
-        }
-        // inline:引用位置展開(位置即語意,P5)。統一 body(I22):block items 即 SignItem
-        let mut items = Vec::new();
-        for it in &sign.items {
-            match it {
-                SignItem::TraitUse { name, block } => {
-                    let t = src
-                        .traits
-                        .iter()
-                        .find(|t| &t.name == name)
-                        .expect("checked");
-                    match block {
-                        None => {
-                            // 整個 trait:全 block 依序 inline
-                            for b in &t.blocks {
-                                items.extend(b.items.iter().cloned());
-                            }
-                        }
-                        Some(n) => items.extend(t.blocks[*n as usize].items.iter().cloned()),
-                    }
-                }
-                other => items.push(other.clone()),
-            }
-        }
-        let mut s2 = sign.clone();
-        s2.items = items;
-        out.signs.push(s2);
+        let mut expanded = sign.clone();
+        expanded.items = expand_item_sequence(src, &sign.name, &sign.items, &mut Vec::new())?;
+        out.signs.push(expanded);
     }
     Ok(out)
 }

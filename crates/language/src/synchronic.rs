@@ -509,6 +509,7 @@ fn source_package(id: &RuleId) -> Option<String> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record(
     id: &RuleId,
     dim: Dim,
@@ -662,6 +663,7 @@ fn guard_matches(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn eval_one_branch(
     id: &RuleId,
     branch_index: usize,

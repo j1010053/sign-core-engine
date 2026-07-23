@@ -109,6 +109,13 @@ sign TutorialRule:
 
 identity 轉換仍算 Matched，因此會阻擋 Else。未知 trait、畸形 path、`unify` 衝突等是 Error，不可偷走 fallback；Unmatched 才會試下一個 Else。`RuleRecord` 保存 RuleId、stage、dimension、branch、source line、`$self`／`$slot` reads 與 package provenance。
 
+V2 expression 另有 `case:` 與 `when:`。`case:` 只取第一個 Matched fragment；`when:`
+則累加所有 Matched fragment。要注意 `when` 不是 sequential feeding：它先凍結合併前的
+Sign，所有 guard 都只讀這份 snapshot，之後才把命中的匿名 fragment 按來源序合併。
+因此前一支新增的 feature 不會使後一支 guard 改為 Matched。`when` 可位於 Sign、
+`syn:`、`sem:`、`prag:` context；phon／feature scalar／role scalar 的選擇仍使用 `case:`。
+完整範例見 `docs/24_case_when與context_fragment_v2.md`。
+
 ## 6. 一個 deep sign，多個 surface realization
 
 `phon:` 的 `/.../` 是 deep/default template；`realization:` 依 finalized token 第一匹配選完整模板。選定後展開 `{slot}`，確認只剩純 phon 字串，才交給 Tshiatūn 音變。詞界由 phon phrase 保存，`surface_phrase` 最後映射成空格；surface 永不寫回 sign。

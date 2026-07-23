@@ -93,6 +93,7 @@ pub enum NodeUpdate {
     RoleBinding(RoleBinding),
     RealizationTemplate(String),
     RealizationGuard(Option<String>),
+    CaseSelection(conlang_language::CaseSelection),
     CaseBranch(CaseBranch),
     SignApplication(SignApplication),
     Constraint(BinaryConstraint),
@@ -610,7 +611,7 @@ fn insertion_site(
             let trait_def = trait_at(language, &parent.address)?;
             (ListKey::Blocks, trait_def.blocks.len(), None)
         }
-        (NodeKind::Sign | NodeKind::Block, kind) if is_item_kind(kind) => {
+        (NodeKind::Sign | NodeKind::Block | NodeKind::CaseBranch, kind) if is_item_kind(kind) => {
             let items = items_at(language, parent)?;
             (
                 ListKey::Items,
@@ -785,7 +786,10 @@ fn insert_payload(
                 .insert(index, value)
         }
         DetachedNode::Item(mut value)
-            if matches!(parent.kind, NodeKind::Sign | NodeKind::Block) =>
+            if matches!(
+                parent.kind,
+                NodeKind::Sign | NodeKind::Block | NodeKind::CaseBranch
+            ) =>
         {
             reassign_item_rule_id(language, &mut value);
             items_at_mut(language, parent)?.insert(index, value)
@@ -907,8 +911,16 @@ fn child_addresses(
         }
         NodeKind::CaseBranch => {
             let branch = case_branch_at(language, address)?;
-            if expression_node_kind(&branch.result).is_some() {
-                children.push(address.child(AddressSegment::CaseResult));
+            match &branch.result {
+                Expression::SignFragment(items) | Expression::DimFragment { items, .. } => {
+                    for index in 0..items.len() {
+                        children.push(address.child(AddressSegment::Items(index)));
+                    }
+                }
+                result if expression_node_kind(result).is_some() => {
+                    children.push(address.child(AddressSegment::CaseResult));
+                }
+                _ => {}
             }
         }
         NodeKind::Application => {
@@ -999,6 +1011,15 @@ fn delete_nested_payload(
         }
         Some(AddressSegment::CaseBranches(index)) => {
             case_at_mut(language, &address)?.branches.remove(*index);
+        }
+        Some(AddressSegment::Items(index)) => {
+            let parent = NodeEntryV1 {
+                id: NodeId::new(conlang_language::IdentityNamespace::Synthetic, 0),
+                kind: NodeKind::CaseBranch,
+                parent: None,
+                address,
+            };
+            items_at_mut(language, &parent)?.remove(*index);
         }
         _ => {
             return Err(EditError::FieldMismatch(
@@ -1241,6 +1262,10 @@ fn update_payload(
             realization_branch_at_mut(language, &node.address)?.guard = value;
             Ok(None)
         }
+        (NodeKind::Case, NodeUpdate::CaseSelection(value)) => {
+            case_at_mut(language, &node.address)?.selection = value;
+            Ok(None)
+        }
         (NodeKind::CaseBranch, NodeUpdate::CaseBranch(value)) => {
             *case_branch_at_mut(language, &node.address)? = value;
             Ok(Some("case.references".to_owned()))
@@ -1456,6 +1481,20 @@ fn detached_at(language: &Language, node: &NodeEntryV1) -> Result<DetachedNode, 
                         .cloned()
                         .ok_or_else(|| field_mismatch(node, "move"))?,
                 )),
+                Some(AddressSegment::Items(index)) => {
+                    let parent_entry = NodeEntryV1 {
+                        id: NodeId::new(conlang_language::IdentityNamespace::Synthetic, 0),
+                        kind: NodeKind::CaseBranch,
+                        parent: None,
+                        address: parent,
+                    };
+                    Ok(DetachedNode::Item(
+                        items_at(language, &parent_entry)?
+                            .get(*index)
+                            .cloned()
+                            .ok_or_else(|| field_mismatch(node, "move"))?,
+                    ))
+                }
                 _ => Err(field_mismatch(node, "move")),
             }
         }
@@ -1473,7 +1512,12 @@ fn insert_payload_preserving_runtime(
             language.signs.insert(index, value);
             Ok(())
         }
-        DetachedNode::Item(value) if matches!(parent.kind, NodeKind::Sign | NodeKind::Block) => {
+        DetachedNode::Item(value)
+            if matches!(
+                parent.kind,
+                NodeKind::Sign | NodeKind::Block | NodeKind::CaseBranch
+            ) =>
+        {
             items_at_mut(language, parent)?.insert(index, value);
             Ok(())
         }
@@ -2218,6 +2262,17 @@ fn update_for(reference: &NodeRef, field: &str, value: &str) -> Result<NodeUpdat
         (NodeKind::RealizationBranch, "template") => {
             Ok(NodeUpdate::RealizationTemplate(value.to_owned()))
         }
+        (NodeKind::Case, "selection") => match value {
+            "case" | "first_match" => Ok(NodeUpdate::CaseSelection(
+                conlang_language::CaseSelection::FirstMatch,
+            )),
+            "when" | "accumulate" => Ok(NodeUpdate::CaseSelection(
+                conlang_language::CaseSelection::Accumulate,
+            )),
+            _ => Err(ReplayError::Selector(format!(
+                "case selection must be `case` or `when`, got {value:?}"
+            ))),
+        },
         _ => Err(ReplayError::Selector(format!(
             "field {field:?} is not editable on {:?}",
             reference.expected
@@ -2307,6 +2362,14 @@ fn dump_update(change: &NodeUpdate) -> Option<(&'static str, String)> {
         }
         NodeUpdate::SlotName(value) => Some(("name", value.clone())),
         NodeUpdate::RealizationTemplate(value) => Some(("template", value.clone())),
+        NodeUpdate::CaseSelection(value) => Some((
+            "selection",
+            match value {
+                conlang_language::CaseSelection::FirstMatch => "case",
+                conlang_language::CaseSelection::Accumulate => "when",
+            }
+            .to_owned(),
+        )),
         _ => None,
     }
 }
@@ -2754,6 +2817,9 @@ fn item_group(item: &SignItem) -> u16 {
 }
 
 fn kind_at(language: &Language, address: &NodeAddress) -> Option<NodeKind> {
+    if let Some(item) = item_at_address(language, address) {
+        return Some(item_kind(item));
+    }
     match address.0.as_slice() {
         [] => Some(NodeKind::Language),
         [AddressSegment::DslDeclarations(index)] if *index < language.dsl_decls.len() => {
@@ -2774,19 +2840,6 @@ fn kind_at(language: &Language, address: &NodeAddress) -> Option<NodeKind> {
                 .is_some() =>
         {
             Some(NodeKind::Block)
-        }
-        [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block), AddressSegment::Items(item)] => {
-            language
-                .traits
-                .get(*trait_index)?
-                .blocks
-                .get(*block)?
-                .items
-                .get(*item)
-                .map(item_kind)
-        }
-        [AddressSegment::Signs(sign), AddressSegment::Items(item)] => {
-            language.signs.get(*sign)?.items.get(*item).map(item_kind)
         }
         path => {
             let parent = NodeAddress(path[..path.len().checked_sub(1)?].to_vec());
@@ -3222,6 +3275,18 @@ fn items_at<'a>(
         [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block)] => {
             Ok(&language.traits[*trait_index].blocks[*block].items)
         }
+        _ if parent.kind == NodeKind::CaseBranch => {
+            let branch = case_branch_at(language, &parent.address)?;
+            let items = match &branch.result {
+                Expression::SignFragment(items) | Expression::DimFragment { items, .. } => items,
+                _ => {
+                    return Err(EditError::FieldMismatch(
+                        "case branch does not contain a context fragment".to_owned(),
+                    ))
+                }
+            };
+            Ok(items)
+        }
         _ => Err(EditError::FieldMismatch(
             "parent has no item sequence".to_owned(),
         )),
@@ -3237,6 +3302,18 @@ fn items_at_mut<'a>(
         [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block)] => {
             Ok(&mut language.traits[*trait_index].blocks[*block].items)
         }
+        _ if parent.kind == NodeKind::CaseBranch => {
+            let branch = case_branch_at_mut(language, &parent.address)?;
+            let items = match &mut branch.result {
+                Expression::SignFragment(items) | Expression::DimFragment { items, .. } => items,
+                _ => {
+                    return Err(EditError::FieldMismatch(
+                        "case branch does not contain a context fragment".to_owned(),
+                    ))
+                }
+            };
+            Ok(items)
+        }
         _ => Err(EditError::FieldMismatch(
             "parent has no item sequence".to_owned(),
         )),
@@ -3244,43 +3321,211 @@ fn items_at_mut<'a>(
 }
 
 fn item_at_address<'a>(language: &'a Language, address: &NodeAddress) -> Option<&'a SignItem> {
-    match address.0.as_slice() {
-        [AddressSegment::Signs(sign), AddressSegment::Items(item)] => {
-            language.signs.get(*sign)?.items.get(*item)
+    fn expression_item_at<'a>(
+        expression: &'a Expression,
+        path: &[AddressSegment],
+    ) -> Option<&'a SignItem> {
+        match expression {
+            Expression::Projection { value, .. } => expression_item_at(value, path),
+            Expression::Case(case) => {
+                let [AddressSegment::CaseBranches(branch), rest @ ..] = path else {
+                    return None;
+                };
+                let result = &case.branches.get(*branch)?.result;
+                match rest {
+                    [AddressSegment::Items(item), tail @ ..] => {
+                        let items = match result {
+                            Expression::SignFragment(items)
+                            | Expression::DimFragment { items, .. } => items,
+                            _ => return None,
+                        };
+                        nested_item_at(items.get(*item)?, tail)
+                    }
+                    [AddressSegment::CaseResult, tail @ ..] => expression_item_at(result, tail),
+                    _ => None,
+                }
+            }
+            Expression::SignFragment(items) | Expression::DimFragment { items, .. } => {
+                let [AddressSegment::Items(item), tail @ ..] = path else {
+                    return None;
+                };
+                nested_item_at(items.get(*item)?, tail)
+            }
+            _ => None,
         }
-        [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block), AddressSegment::Items(item)] => {
-            language
-                .traits
-                .get(*trait_index)?
-                .blocks
-                .get(*block)?
-                .items
-                .get(*item)
-        }
-        _ => None,
     }
+
+    fn nested_item_at<'a>(item: &'a SignItem, path: &[AddressSegment]) -> Option<&'a SignItem> {
+        if path.is_empty() {
+            return Some(item);
+        }
+        match item {
+            SignItem::SignExpression(expression) => {
+                expression_item_at(&expression.expression, path)
+            }
+            SignItem::FeatureExpression(expression) => {
+                expression_item_at(&expression.expression, path)
+            }
+            SignItem::RoleExpression(expression) => {
+                expression_item_at(&expression.expression, path)
+            }
+            SignItem::Realization(realization) => {
+                let [AddressSegment::CaseExpression, tail @ ..] = path else {
+                    return None;
+                };
+                let case = realization.expression.as_ref()?;
+                let [AddressSegment::CaseBranches(branch), rest @ ..] = tail else {
+                    return None;
+                };
+                let result = &case.branches.get(*branch)?.result;
+                match rest {
+                    [AddressSegment::Items(index), nested @ ..] => {
+                        let items = match result {
+                            Expression::SignFragment(items)
+                            | Expression::DimFragment { items, .. } => items,
+                            _ => return None,
+                        };
+                        nested_item_at(items.get(*index)?, nested)
+                    }
+                    [AddressSegment::CaseResult, nested @ ..] => expression_item_at(result, nested),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    let (root, tail) = match address.0.as_slice() {
+        [AddressSegment::Signs(sign), AddressSegment::Items(item), tail @ ..] => {
+            (language.signs.get(*sign)?.items.get(*item)?, tail)
+        }
+        [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block), AddressSegment::Items(item), tail @ ..] => {
+            (
+                language
+                    .traits
+                    .get(*trait_index)?
+                    .blocks
+                    .get(*block)?
+                    .items
+                    .get(*item)?,
+                tail,
+            )
+        }
+        _ => return None,
+    };
+    nested_item_at(root, tail)
+}
+
+fn item_at_address_mut_option<'a>(
+    language: &'a mut Language,
+    address: &NodeAddress,
+) -> Option<&'a mut SignItem> {
+    fn expression_item_at_mut<'a>(
+        expression: &'a mut Expression,
+        path: &[AddressSegment],
+    ) -> Option<&'a mut SignItem> {
+        match expression {
+            Expression::Projection { value, .. } => expression_item_at_mut(value, path),
+            Expression::Case(case) => {
+                let [AddressSegment::CaseBranches(branch), rest @ ..] = path else {
+                    return None;
+                };
+                let result = &mut case.branches.get_mut(*branch)?.result;
+                match rest {
+                    [AddressSegment::Items(item), tail @ ..] => {
+                        let items = match result {
+                            Expression::SignFragment(items)
+                            | Expression::DimFragment { items, .. } => items,
+                            _ => return None,
+                        };
+                        nested_item_at_mut(items.get_mut(*item)?, tail)
+                    }
+                    [AddressSegment::CaseResult, tail @ ..] => expression_item_at_mut(result, tail),
+                    _ => None,
+                }
+            }
+            Expression::SignFragment(items) | Expression::DimFragment { items, .. } => {
+                let [AddressSegment::Items(item), tail @ ..] = path else {
+                    return None;
+                };
+                nested_item_at_mut(items.get_mut(*item)?, tail)
+            }
+            _ => None,
+        }
+    }
+
+    fn nested_item_at_mut<'a>(
+        item: &'a mut SignItem,
+        path: &[AddressSegment],
+    ) -> Option<&'a mut SignItem> {
+        if path.is_empty() {
+            return Some(item);
+        }
+        match item {
+            SignItem::SignExpression(expression) => {
+                expression_item_at_mut(&mut expression.expression, path)
+            }
+            SignItem::FeatureExpression(expression) => {
+                expression_item_at_mut(&mut expression.expression, path)
+            }
+            SignItem::RoleExpression(expression) => {
+                expression_item_at_mut(&mut expression.expression, path)
+            }
+            SignItem::Realization(realization) => {
+                let [AddressSegment::CaseExpression, tail @ ..] = path else {
+                    return None;
+                };
+                let case = realization.expression.as_mut()?;
+                let [AddressSegment::CaseBranches(branch), rest @ ..] = tail else {
+                    return None;
+                };
+                let result = &mut case.branches.get_mut(*branch)?.result;
+                match rest {
+                    [AddressSegment::Items(index), nested @ ..] => {
+                        let items = match result {
+                            Expression::SignFragment(items)
+                            | Expression::DimFragment { items, .. } => items,
+                            _ => return None,
+                        };
+                        nested_item_at_mut(items.get_mut(*index)?, nested)
+                    }
+                    [AddressSegment::CaseResult, nested @ ..] => {
+                        expression_item_at_mut(result, nested)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    let (root, tail) = match address.0.as_slice() {
+        [AddressSegment::Signs(sign), AddressSegment::Items(item), tail @ ..] => {
+            (language.signs.get_mut(*sign)?.items.get_mut(*item)?, tail)
+        }
+        [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block), AddressSegment::Items(item), tail @ ..] => {
+            (
+                language
+                    .traits
+                    .get_mut(*trait_index)?
+                    .blocks
+                    .get_mut(*block)?
+                    .items
+                    .get_mut(*item)?,
+                tail,
+            )
+        }
+        _ => return None,
+    };
+    nested_item_at_mut(root, tail)
 }
 
 fn item_at_address_mut<'a>(
     language: &'a mut Language,
     address: &NodeAddress,
 ) -> Result<&'a mut SignItem, EditError> {
-    match address.0.as_slice() {
-        [AddressSegment::Signs(sign), AddressSegment::Items(item)] => language
-            .signs
-            .get_mut(*sign)
-            .and_then(|sign| sign.items.get_mut(*item))
-            .ok_or_else(|| EditError::FieldMismatch("item address is stale".to_owned())),
-        [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block), AddressSegment::Items(item)] => {
-            language
-                .traits
-                .get_mut(*trait_index)
-                .and_then(|trait_def| trait_def.blocks.get_mut(*block))
-                .and_then(|block| block.items.get_mut(*item))
-                .ok_or_else(|| EditError::FieldMismatch("item address is stale".to_owned()))
-        }
-        _ => Err(EditError::FieldMismatch("expected item address".to_owned())),
-    }
+    item_at_address_mut_option(language, address)
+        .ok_or_else(|| EditError::FieldMismatch("item address is stale".to_owned()))
 }
 
 fn rule_at<'a>(language: &'a Language, address: &NodeAddress) -> Result<&'a Rule, EditError> {
@@ -3566,6 +3811,9 @@ fn rewrite_local_slot_refs_in_expression(expression: &mut Expression, old: &str,
         Expression::Projection { value, .. } => {
             rewrite_local_slot_refs_in_expression(value, old, new)
         }
+        Expression::SignFragment(items) | Expression::DimFragment { items, .. } => {
+            rewrite_local_slot_refs_in_items(items, old, new)
+        }
         Expression::PhonTemplate(template) => *template = rewrite_slot_template(template, old, new),
         Expression::Slot(slot) if slot == old => *slot = new.to_owned(),
         Expression::Case(case) => rewrite_local_slot_refs_in_case(case, old, new),
@@ -3642,6 +3890,9 @@ fn rewrite_application_parameters_in_expression(
         }
         Expression::Projection { value, .. } => {
             rewrite_application_parameters_in_expression(value, callees, old, new)
+        }
+        Expression::SignFragment(items) | Expression::DimFragment { items, .. } => {
+            rewrite_application_parameters_in_items(items, callees, old, new)
         }
         Expression::Case(case) => {
             for branch in &mut case.branches {
@@ -4040,8 +4291,8 @@ fn constraint_value(constraint: &BinaryConstraint) -> String {
 
 fn case_header_value(case: &TypedCase) -> String {
     format!(
-        "Case(expected={:?},scrutinee={:?})",
-        case.expected, case.scrutinee
+        "Case(selection={:?},expected={:?},scrutinee={:?})",
+        case.selection, case.expected, case.scrutinee
     )
 }
 
@@ -4094,6 +4345,10 @@ fn expression_value(expression: &Expression) -> String {
         }
         Expression::Projection { value, dimension } => {
             format!("Projection({dimension:?},{})", expression_value(value))
+        }
+        Expression::SignFragment(items) => format!("SignContext(items={})", items.len()),
+        Expression::DimFragment { dim, items } => {
+            format!("{}Context(items={})", dim.keyword(), items.len())
         }
         Expression::PhonTemplate(value) => format!("PhonTemplate({value:?})"),
         Expression::EnumValue(value) => format!("EnumValue({value:?})"),

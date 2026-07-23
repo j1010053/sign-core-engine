@@ -3,8 +3,8 @@ use conlang_language::system::{
     compile_system, CandidateSelector, DerivationContext, SignValue, SystemError,
 };
 use conlang_language::{
-    CompileSystemError, Dim, FeatureDecl, Language, LanguageDocument, LanguageSchema, SignItem,
-    SourceLocation,
+    CaseBranchStatus, CaseSelection, CompileSystemError, Dim, FeatureDecl, Language,
+    LanguageDocument, LanguageSchema, SignItem, SourceLocation,
 };
 
 const FP_SOURCE: &str = r#"schema conlang.lang/v2
@@ -65,6 +65,371 @@ fn v2_round_trip_keeps_context_typed_case() {
     assert_eq!(Language::parse(&canonical).unwrap().dump(), canonical);
     assert!(canonical.contains("case stem.phon:"));
     assert!(canonical.contains("en_3sg({$self})"));
+}
+
+#[test]
+fn sign_context_case_merges_anonymous_trait_fragment_into_the_same_sign() {
+    let source = r#"schema conlang.lang/v2
+
+trait FragmentTestVerb:
+
+trait FragmentThirdSingular:
+
+trait ThirdPersonFragment:
+    belongs FragmentThirdSingular
+    syn:
+        feature:
+            inflection = enum(base, third)
+            inflection = third
+    sem:
+        exponent = third_singular
+    phon:
+        /walks/
+
+sign walk:
+    belongs FragmentTestVerb
+    syn:
+        feature:
+            trigger = enum(on, off)
+    phon:
+        /walk/
+    case:
+        $self.syn.trigger == on:
+            ThirdPersonFragment
+            prag:
+                selected = yes
+"#;
+    let parsed = Language::parse(source).expect("SignContext fragment parses");
+    let canonical = parsed.dump();
+    assert_eq!(Language::parse(&canonical).unwrap().dump(), canonical);
+    assert!(canonical.contains("ThirdPersonFragment"));
+    assert!(canonical.contains("selected = yes"));
+
+    let system = compile_system(parsed).expect("trait fragment compiles");
+    let base = system.evaluate_sign("walk").unwrap();
+    let base_id = base.sign.id.clone();
+    let evaluated = system
+        .evaluate_sign_expression(
+            "walk",
+            &DerivationContext::new().feature(Dim::Syn, "trigger", "on"),
+        )
+        .unwrap();
+    let SignValue::Stored(stored) = evaluated.value else {
+        panic!("a SignContext fragment must not create an Applied Sign entity")
+    };
+    assert_eq!(stored.sign.id, base_id, "fragment merge preserves SignId");
+    assert_eq!(stored.sign.name, "walk");
+    assert!(stored
+        .sign
+        .items
+        .iter()
+        .any(|item| matches!(item, SignItem::Belongs(name) if name == "FragmentThirdSingular")));
+    assert!(stored.sign.items.iter().any(|item| {
+        matches!(item, SignItem::FeatureValue(value)
+            if value.dim == Dim::Syn
+                && value.name == "inflection"
+                && value.value == "third")
+    }));
+    assert!(stored.sign.items.iter().any(
+        |item| matches!(item, SignItem::Def(def) if def.path == "phon" && def.value == "/walks/")
+    ));
+    assert!(stored.sign.items.iter().any(
+        |item| matches!(item, SignItem::Def(def) if def.path == "sem.exponent" && def.value == "third_singular")
+    ));
+    assert!(stored.sign.items.iter().any(
+        |item| matches!(item, SignItem::Def(def) if def.path == "prag.selected" && def.value == "yes")
+    ));
+
+    let unmatched = system
+        .evaluate_sign_expression(
+            "walk",
+            &DerivationContext::new().feature(Dim::Syn, "trigger", "off"),
+        )
+        .unwrap();
+    let SignValue::Stored(unmatched) = unmatched.value else {
+        panic!("unmatched case returns the base Sign")
+    };
+    assert_eq!(unmatched.sign.id, base_id);
+    assert!(unmatched.sign.items.iter().any(
+        |item| matches!(item, SignItem::Def(def) if def.path == "phon" && def.value == "/walk/")
+    ));
+    assert!(!unmatched
+        .sign
+        .items
+        .iter()
+        .any(|item| matches!(item, SignItem::Belongs(name) if name == "FragmentThirdSingular")));
+}
+
+#[test]
+fn when_guards_share_one_frozen_pre_merge_snapshot() {
+    let source = r#"schema conlang.lang/v2
+
+sign cumulative:
+    syn:
+        feature:
+            trigger = enum(on, off)
+            trigger = on
+            outcome = enum(base, first, second, fallback)
+            outcome = base
+            leaked = enum(no, yes)
+            leaked = no
+        when:
+            $self.syn.trigger == on:
+                feature:
+                    outcome = first
+            $self.syn.outcome == first:
+                feature:
+                    leaked = yes
+            $self.syn.trigger == on:
+                feature:
+                    outcome = second
+            else:
+                feature:
+                    outcome = fallback
+    sem:
+        when:
+            $self.syn.trigger == on:
+                selected = semantic
+    prag:
+        when:
+            $self.syn.trigger == on:
+                licensed = yes
+    phon:
+        /x/
+"#;
+    let parsed = Language::parse(source).expect("dimension contexts and when parse");
+    let canonical = parsed.dump();
+    assert_eq!(Language::parse(&canonical).unwrap().dump(), canonical);
+    assert!(canonical.contains("        when:\n            $self.syn.trigger == on:"));
+    assert!(canonical.contains("sem:\n        when:"));
+    assert!(canonical.contains("prag:\n        when:"));
+
+    let system = compile_system(parsed).expect("closed dimension fragments compile");
+    let evaluated = system
+        .evaluate_sign_expression("cumulative", &DerivationContext::new())
+        .unwrap();
+    let SignValue::Stored(stored) = evaluated.value else {
+        panic!("when fragments merge into the existing Sign")
+    };
+    let feature = |name: &str| {
+        stored.sign.items.iter().rev().find_map(|item| match item {
+            SignItem::FeatureValue(value) if value.name == name => Some(value.value.as_str()),
+            _ => None,
+        })
+    };
+    assert_eq!(
+        feature("outcome"),
+        Some("second"),
+        "independently matched fragments merge in source order with later-wins"
+    );
+    assert_eq!(
+        feature("leaked"),
+        Some("no"),
+        "the first fragment must not make the second guard match"
+    );
+    assert!(stored.sign.items.iter().any(
+        |item| matches!(item, SignItem::Def(def) if def.path == "sem.selected" && def.value == "semantic")
+    ));
+    assert!(stored.sign.items.iter().any(
+        |item| matches!(item, SignItem::Def(def) if def.path == "prag.licensed" && def.value == "yes")
+    ));
+
+    let syn_records = evaluated
+        .cases
+        .iter()
+        .filter(|record| record.selection == CaseSelection::Accumulate)
+        .take(4)
+        .collect::<Vec<_>>();
+    assert_eq!(syn_records.len(), 4);
+    assert_eq!(syn_records[0].status, CaseBranchStatus::Matched);
+    assert_eq!(syn_records[1].status, CaseBranchStatus::Unmatched);
+    assert_eq!(syn_records[2].status, CaseBranchStatus::Matched);
+    assert_eq!(
+        syn_records[3].status,
+        CaseBranchStatus::Unmatched,
+        "`else` is inactive when any ordinary when branch matched"
+    );
+}
+
+#[test]
+fn when_else_uses_the_same_external_default_policy() {
+    let system = compile_system(
+        Language::parse(
+            r#"schema conlang.lang/v2
+
+sign fallback:
+    syn:
+        feature:
+            trigger = enum(on, off)
+            trigger = off
+            result = enum(base, matched, fallback)
+            result = base
+        when:
+            $self.syn.trigger == on:
+                feature:
+                    result = matched
+            else:
+                feature:
+                    result = fallback
+    phon:
+        /x/
+"#,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let evaluated = system
+        .evaluate_sign_expression("fallback", &DerivationContext::new())
+        .unwrap();
+    let SignValue::Stored(stored) = evaluated.value else {
+        panic!("dimension when produces a stored Sign")
+    };
+    assert!(stored.sign.items.iter().rev().any(|item| {
+        matches!(item, SignItem::FeatureValue(value)
+            if value.name == "result" && value.value == "fallback")
+    }));
+}
+
+#[test]
+fn when_guard_error_aborts_before_any_fragment_commit() {
+    let system = compile_system(
+        Language::parse(
+            r#"schema conlang.lang/v2
+
+trait AtomicNominal:
+    syn:
+        feature:
+            number = enum(singular, plural)
+
+sign atomic:
+    syn:
+        slots:
+            subject [AtomicNominal]
+        feature:
+            trigger = enum(on, off)
+            trigger = on
+            outcome = enum(base, first, second)
+            outcome = base
+        when:
+            $self.syn.trigger == on:
+                feature:
+                    outcome = first
+            $slot.subject.syn.number == singular:
+                feature:
+                    outcome = second
+    phon:
+        /{subject}/
+"#,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let error = system
+        .evaluate_sign_expression("atomic", &DerivationContext::new())
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("required slot \"subject\" has no value for syn.number"),
+        "{error}"
+    );
+
+    let unchanged = system.evaluate_sign("atomic").unwrap();
+    assert!(unchanged.sign.items.iter().rev().any(|item| {
+        matches!(item, SignItem::FeatureValue(value)
+            if value.name == "outcome" && value.value == "base")
+    }));
+}
+
+#[test]
+fn trait_expansion_is_closed_to_sign_context() {
+    let error = Language::parse(
+        r#"schema conlang.lang/v2
+
+trait SuffixFragment:
+    phon:
+        /s/
+
+sign word:
+    phon:
+        /word/
+        realization:
+            case:
+                else:
+                    SuffixFragment
+"#,
+    )
+    .unwrap_err();
+    assert!(
+        error.msg.contains("PhonContext"),
+        "a trait cannot be coerced into a phon fragment: {}",
+        error.msg
+    );
+}
+
+#[test]
+fn sign_context_fragment_is_checked_as_a_typed_sign_body() {
+    let error = compile_system(
+        Language::parse(
+            r#"schema conlang.lang/v2
+
+sign fragment_schema:
+    syn:
+        feature:
+            mode = enum(a, b)
+    phon:
+        /x/
+    case:
+        else:
+            syn:
+                feature:
+                    mode = outside
+"#,
+        )
+        .unwrap(),
+    )
+    .unwrap_err();
+    let CompileSystemError::Validation(report) = error else {
+        panic!("invalid fragment must fail static validation")
+    };
+    assert!(report
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "FEATURE_VALUE_OUT_OF_DOMAIN"));
+
+    let system = compile_system(
+        Language::parse(
+            r#"schema conlang.lang/v2
+
+sign nested_fragment_schema:
+    phon:
+        /x/
+    case:
+        else:
+            syn:
+                feature:
+                    mode = enum(a, b)
+                    mode = a
+            case:
+                else:
+                    syn:
+                        feature:
+                            mode = b
+"#,
+        )
+        .unwrap(),
+    )
+    .expect("a nested fragment sees declarations in its enclosing SignContext");
+    let evaluated = system
+        .evaluate_sign_expression("nested_fragment_schema", &DerivationContext::new())
+        .unwrap();
+    let SignValue::Stored(evaluated) = evaluated.value else {
+        panic!("fragment merging keeps the stored Sign identity")
+    };
+    assert!(evaluated.sign.items.iter().rev().any(|item| {
+        matches!(item, SignItem::FeatureValue(value)
+            if value.name == "mode" && value.value == "b")
+    }));
 }
 
 #[test]
