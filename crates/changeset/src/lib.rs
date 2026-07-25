@@ -2542,6 +2542,91 @@ fn render_item_block(item: &SignItem) -> String {
         .join("\n")
 }
 
+/// Parse an `insert into <case> … :` block into `CaseBranch` payloads. The block
+/// is re-indented under a synthetic case whose keyword/scrutinee mirror the
+/// target case, so the branch grammar parses in the right context. Multi-branch
+/// blocks fan out. Scoped to `SignContext` cases (`case:`/`when:` at Sign level).
+fn parse_case_branch_block(
+    block: &str,
+    case: &conlang_language::TypedCase,
+) -> Result<Vec<DetachedNode>, ReplayError> {
+    if case.expected != conlang_language::ExpressionType::SignContext {
+        return Err(ReplayError::Parse(
+            "case-branch insert currently supports SignContext `case:`/`when:` cases".to_owned(),
+        ));
+    }
+    let keyword = match case.selection {
+        conlang_language::CaseSelection::FirstMatch => "case",
+        conlang_language::CaseSelection::Accumulate => "when",
+    };
+    let header = match &case.scrutinee {
+        Some(scrutinee) => format!("    {keyword} {scrutinee}:"),
+        None => format!("    {keyword}:"),
+    };
+    let indented = block
+        .lines()
+        .map(|line| {
+            if line.trim().is_empty() {
+                String::new()
+            } else {
+                format!("    {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let wrapped = format!("sign {FRAGMENT_SIGN}:\n{header}\n{indented}");
+    let language = Language::parse(&wrapped)
+        .map_err(|error| ReplayError::Parse(format!("insert case branch: {error}")))?;
+    let branches = language
+        .signs
+        .first()
+        .and_then(|sign| sign.items.first())
+        .and_then(|item| match item {
+            SignItem::SignExpression(expr) => match &expr.expression {
+                Expression::Case(case) => Some(&case.branches),
+                _ => None,
+            },
+            _ => None,
+        })
+        .filter(|branches| !branches.is_empty())
+        .ok_or_else(|| ReplayError::Parse("insert block produced no case branch".to_owned()))?;
+    Ok(branches
+        .iter()
+        .cloned()
+        .map(DetachedNode::CaseBranch)
+        .collect())
+}
+
+/// Render one `CaseBranch` back to its block form (inverse of the branch arm of
+/// [`parse_case_branch_block`]): print it inside a synthetic `SignContext` case
+/// and strip the `sign …:` + `case:` headers.
+fn render_case_branch_block(branch: &CaseBranch) -> String {
+    let case = conlang_language::TypedCase {
+        selection: conlang_language::CaseSelection::FirstMatch,
+        expected: conlang_language::ExpressionType::SignContext,
+        scrutinee: None,
+        name: None,
+        branches: vec![branch.clone()],
+        source: conlang_language::SourceLocation::unknown(),
+    };
+    let mut fragment = Language::new();
+    fragment.signs.push(SignDef {
+        id: conlang_language::SignId::synthetic(),
+        name: FRAGMENT_SIGN.to_owned(),
+        items: vec![SignItem::SignExpression(conlang_language::SignExpression {
+            expression: Expression::Case(Box::new(case)),
+            source: conlang_language::SourceLocation::unknown(),
+        })],
+    });
+    fragment
+        .dump()
+        .lines()
+        .skip(2)
+        .map(|line| line.strip_prefix("        ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn resolve_operation(
     operation: &UnresolvedOperation,
     document: &LanguageDocument,
@@ -2595,10 +2680,21 @@ fn resolve_operation(
         } => {
             let parent = resolve_selector(target, document)?;
             let anchor = resolve_anchor(anchor, document)?;
-            // A multi-item block fans out to one `Insert` per item, all sharing
-            // the operation's parent/anchor; replayed in order they append in
-            // source order and the statement validates only its final state.
-            Ok(parse_insert_block(block)?
+            // A Case target takes case-branch blocks (parsed in the target
+            // case's context); any other target takes node/item fragments. Both
+            // fan out to one `Insert` per payload, sharing parent/anchor, so the
+            // statement validates only its final state.
+            let payloads = if parent.expected == NodeKind::Case {
+                let entry = ensure_target(document, &parent)
+                    .map_err(|error| ReplayError::Selector(error.to_string()))?;
+                let case = case_at(document.language(), &entry.address).ok_or_else(|| {
+                    ReplayError::Selector("target is not a resolvable case".to_owned())
+                })?;
+                parse_case_branch_block(block, case)?
+            } else {
+                parse_insert_block(block)?
+            };
+            Ok(payloads
                 .into_iter()
                 .map(|subtree| PrimitiveEdit::Insert {
                     parent: parent.clone(),
@@ -2773,6 +2869,22 @@ impl ResolvedChangeSet {
                             dump_anchor(anchor)
                         ));
                         for line in render_item_block(item).lines() {
+                            output.push_str("            ");
+                            output.push_str(line);
+                            output.push('\n');
+                        }
+                    }
+                    PrimitiveEdit::Insert {
+                        parent,
+                        anchor,
+                        subtree: DetachedNode::CaseBranch(branch),
+                    } => {
+                        output.push_str(&format!(
+                            "        insert into {} at {}:\n",
+                            dump_node(parent),
+                            dump_anchor(anchor)
+                        ));
+                        for line in render_case_branch_block(branch).lines() {
                             output.push_str("            ");
                             output.push_str(line);
                             output.push('\n');

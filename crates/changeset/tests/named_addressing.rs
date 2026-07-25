@@ -126,3 +126,43 @@ fn named_case_and_branch_round_trip_and_address() {
         .unwrap();
     assert!(resolved2.dump().contains("delete node(case_branch, @"));
 }
+
+/// Step-14 補完:往具名 case 插入一個 case-branch(SignContext guard 分支),
+/// 定址 case["agr"];降階 Insert{CaseBranch};round-trip 穩定。
+#[test]
+fn inserts_a_case_branch_into_a_named_case() {
+    let base = LanguageDocument::import_new_root(CASE_SOURCE, "evo:root").unwrap();
+    let spec = LibrarySpec::default();
+    let mut source = change_set_prelude(&base, &spec, "evo:cb").unwrap();
+    source.push_str(concat!(
+        "\n    statement 0:\n",
+        "        insert into sign(\"walk\").case[\"agr\"] at start:\n",
+        "            $self.syn.number == plural:\n",
+        "                belongs Zverb\n",
+    ));
+    let resolved = UnresolvedChangeSet::parse(&source)
+        .unwrap()
+        .resolve(&base, &spec)
+        .unwrap();
+    assert_eq!(resolved.statements[0].edits.len(), 1);
+    let dump = resolved.dump();
+    assert!(dump.contains("insert into node(case, @"), "{dump}");
+    assert!(dump.contains("$self.syn.number == plural"), "{dump}");
+
+    let round = UnresolvedChangeSet::parse(&dump)
+        .unwrap()
+        .resolve(&base, &spec)
+        .unwrap();
+    assert_eq!(round.dump(), dump, "case-branch round-trip 穩定");
+
+    let doc = ChangeInterpreter::new(base, spec, "evo:cb")
+        .unwrap()
+        .run(&resolved)
+        .unwrap()
+        .document;
+    assert!(
+        doc.source().contains("$self.syn.number == plural"),
+        "分支寫入 case:\n{}",
+        doc.source()
+    );
+}

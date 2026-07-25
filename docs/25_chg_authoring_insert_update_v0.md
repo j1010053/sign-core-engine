@@ -295,11 +295,19 @@ workspace 278 綠、clippy 0）：
   dump 對稱 round-trip；**else/then 互斥被強制**（edit 重序列化 re-parse，parse-time 不變式把關）。
   測試 `branch_insert.rs` 4。
 
+已落地（續）：
+
+- **case-branch insert**：`insert into sign("x").case["…"] at <pos>:` ＋ branch block →
+  `Insert{CaseBranch}`（wrapper 以 target case 的 keyword/scrutinee 重建語境解析；多 branch fan
+  out）；dump 經 SignContext wrapper 還原、round-trip 穩定。**限 SignContext `case:`/`when:`**。
+  `case[n]`/`case["x"]`／`branch[m]`/`branch["x"]` 定址已補（§3.1）。
+
 尚未落地（皆有明確原因，非遺漏）：
 
-- **case-branch / realization-branch insert**——branch payload 非獨立 `.lang` item（`== v: => r`
-  只在 `case:` 內、realization branch 只在 `realization:` 內解析），須 typed/wrapper parse；且
-  realization branch 的父 Realization node、case 的 `case[n]`/`branch[m]` 定址待補。
+- **非 SignContext case 的 branch insert**（Feature/Syn/Sem/Prag/Phon typed case）——須依 target
+  expected type 重建 typed 語境 wrapper，明確拒絕（`supports SignContext … only`）。
+- **realization-branch insert**——realization branch 只在 `realization:` 內解析，且父 Realization
+  node 尚無定址段。
 - **符號式確定詞**（before else／after guard／#n，§3.3–3.5）——目前以 `.else[m]`/`.rule[n]` 路徑段
   等效表達；符號糖為便利層。
 - **剩餘 struct 值 update 欄位**（SlotConstraint/FeatureValue/RoleBinding/SlotMap/Constraint/
