@@ -1883,6 +1883,39 @@ fn unquote_change_value(value: &str) -> String {
 }
 
 fn parse_statement_body(ordinal: u64, body: &[String]) -> Result<UnresolvedStatement, ReplayError> {
+    // Split the body into operation chunks: a line at indent 0 (after the outer
+    // 8-space strip) starts a new operation; deeper block lines belong to the
+    // current one. This lets a statement hold several operations (e.g. the
+    // per-item inserts a fan-out lowers to) and validate only its final state.
+    let mut chunks: Vec<Vec<String>> = Vec::new();
+    for line in body {
+        if line.chars().next().is_some_and(|c| !c.is_whitespace()) {
+            chunks.push(vec![line.clone()]);
+        } else {
+            chunks
+                .last_mut()
+                .ok_or_else(|| {
+                    ReplayError::Parse(format!(
+                        "statement {ordinal} has an indented line before any operation"
+                    ))
+                })?
+                .push(line.clone());
+        }
+    }
+    if chunks.is_empty() {
+        return Err(ReplayError::Parse(format!("statement {ordinal} is empty")));
+    }
+    let operations = chunks
+        .iter()
+        .map(|chunk| parse_operation(ordinal, chunk))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(UnresolvedStatement {
+        ordinal,
+        operations,
+    })
+}
+
+fn parse_operation(ordinal: u64, body: &[String]) -> Result<UnresolvedOperation, ReplayError> {
     let first = body
         .first()
         .ok_or_else(|| ReplayError::Parse(format!("statement {ordinal} is empty")))?
@@ -1973,10 +2006,7 @@ fn parse_statement_body(ordinal: u64, body: &[String]) -> Result<UnresolvedState
             "unsupported primitive statement {ordinal}: {first}"
         )));
     };
-    Ok(UnresolvedStatement {
-        ordinal,
-        operations: vec![operation],
-    })
+    Ok(operation)
 }
 
 impl UnresolvedChangeSet {
@@ -2100,7 +2130,7 @@ impl UnresolvedChangeSet {
         for statement in &self.statements {
             let mut edits = Vec::new();
             for operation in &statement.operations {
-                edits.push(resolve_operation(operation, &working)?);
+                edits.extend(resolve_operation(operation, &working)?);
             }
             let (candidate, _) =
                 apply_statement_structural(&working, statement.ordinal, &edits, libraries)?;
@@ -2375,9 +2405,11 @@ fn stage_keyword(stage: Stage) -> &'static str {
 /// `.lang` parser/printer (and its dimension validation) is reused verbatim.
 const FRAGMENT_SIGN: &str = "chg_fragment";
 
-/// Parse an `insert into … :` block (a verbatim `.lang` fragment) into exactly
-/// one detached payload: a whole `trait`/`sign`, or a single sign-body item.
-fn parse_insert_block(block: &str) -> Result<DetachedNode, ReplayError> {
+/// Parse an `insert into … :` block (a verbatim `.lang` fragment) into one or
+/// more detached payloads: a whole `trait`/`sign`, or the sign-body items of a
+/// dimension fragment (each item becomes its own `Insert`, so a multi-item
+/// block fans out — §④).
+fn parse_insert_block(block: &str) -> Result<Vec<DetachedNode>, ReplayError> {
     let head = block
         .lines()
         .find(|line| !line.trim().is_empty())
@@ -2393,7 +2425,7 @@ fn parse_insert_block(block: &str) -> Result<DetachedNode, ReplayError> {
                 "insert block must contain exactly one trait".to_owned(),
             ));
         }
-        return Ok(DetachedNode::Trait(language.traits[0].clone()));
+        return Ok(vec![DetachedNode::Trait(language.traits[0].clone())]);
     }
     if head.starts_with("sign ") {
         let language = parse_lang(block)?;
@@ -2402,27 +2434,23 @@ fn parse_insert_block(block: &str) -> Result<DetachedNode, ReplayError> {
                 "insert block must contain exactly one sign".to_owned(),
             ));
         }
-        return Ok(DetachedNode::Sign(language.signs[0].clone()));
+        return Ok(vec![DetachedNode::Sign(language.signs[0].clone())]);
     }
     // Otherwise the block is a sign-body item fragment: wrap it in a synthetic
     // sign so the dimension keywords (`syn:`/`phon:`/`slots:`/…) parse in
-    // context, then extract the single item.
+    // context, then take each produced item.
     let language = parse_lang(&format!("sign {FRAGMENT_SIGN}:\n{block}"))?;
     let items = language
         .signs
         .first()
         .map(|sign| sign.items.as_slice())
         .unwrap_or_default();
-    match items {
-        [item] => Ok(DetachedNode::Item(item.clone())),
-        [] => Err(ReplayError::Parse(
+    if items.is_empty() {
+        return Err(ReplayError::Parse(
             "insert block produced no item".to_owned(),
-        )),
-        many => Err(ReplayError::Parse(format!(
-            "insert block must contain exactly one item, got {}",
-            many.len()
-        ))),
+        ));
     }
+    Ok(items.iter().cloned().map(DetachedNode::Item).collect())
 }
 
 /// Render a single sign-body item back to its `.lang` block form (inverse of
@@ -2447,7 +2475,7 @@ fn render_item_block(item: &SignItem) -> String {
 fn resolve_operation(
     operation: &UnresolvedOperation,
     document: &LanguageDocument,
-) -> Result<PrimitiveEdit, ReplayError> {
+) -> Result<Vec<PrimitiveEdit>, ReplayError> {
     match operation {
         UnresolvedOperation::Update {
             selector,
@@ -2455,23 +2483,23 @@ fn resolve_operation(
             value,
         } => {
             let node = resolve_selector(selector, document)?;
-            Ok(PrimitiveEdit::Update {
+            Ok(vec![PrimitiveEdit::Update {
                 change: update_for(&node, field, value)?,
                 node,
-            })
+            }])
         }
-        UnresolvedOperation::Delete(selector) => Ok(PrimitiveEdit::Delete {
+        UnresolvedOperation::Delete(selector) => Ok(vec![PrimitiveEdit::Delete {
             node: resolve_selector(selector, document)?,
-        }),
+        }]),
         UnresolvedOperation::Move {
             node,
             parent,
             anchor,
-        } => Ok(PrimitiveEdit::Move {
+        } => Ok(vec![PrimitiveEdit::Move {
             node: resolve_selector(node, document)?,
             new_parent: resolve_selector(parent, document)?,
             anchor: resolve_anchor(anchor, document)?,
-        }),
+        }]),
         UnresolvedOperation::InsertSign {
             parent,
             anchor,
@@ -2484,21 +2512,31 @@ fn resolve_operation(
                     "insert sign fragment must contain exactly one sign".to_owned(),
                 ));
             }
-            Ok(PrimitiveEdit::Insert {
+            Ok(vec![PrimitiveEdit::Insert {
                 parent: resolve_selector(parent, document)?,
                 anchor: resolve_anchor(anchor, document)?,
                 subtree: DetachedNode::Sign(language.signs[0].clone()),
-            })
+            }])
         }
         UnresolvedOperation::InsertBlock {
             target,
             anchor,
             block,
-        } => Ok(PrimitiveEdit::Insert {
-            parent: resolve_selector(target, document)?,
-            anchor: resolve_anchor(anchor, document)?,
-            subtree: parse_insert_block(block)?,
-        }),
+        } => {
+            let parent = resolve_selector(target, document)?;
+            let anchor = resolve_anchor(anchor, document)?;
+            // A multi-item block fans out to one `Insert` per item, all sharing
+            // the operation's parent/anchor; replayed in order they append in
+            // source order and the statement validates only its final state.
+            Ok(parse_insert_block(block)?
+                .into_iter()
+                .map(|subtree| PrimitiveEdit::Insert {
+                    parent: parent.clone(),
+                    anchor: anchor.clone(),
+                    subtree,
+                })
+                .collect())
+        }
         UnresolvedOperation::Clone { source, name } => {
             let reference = resolve_selector(source, document)?;
             let entry = ensure_target(document, &reference)
@@ -2517,11 +2555,11 @@ fn resolve_operation(
             // The Insert primitive reassigns a fresh SignId, RuleIds and stable
             // NodeIds, so the clone is a new entity; only the name is authored.
             sign.name = name.clone();
-            Ok(PrimitiveEdit::Insert {
+            Ok(vec![PrimitiveEdit::Insert {
                 parent: document.root_ref(),
                 anchor: Anchor::End,
                 subtree: DetachedNode::Sign(sign),
-            })
+            }])
         }
     }
 }

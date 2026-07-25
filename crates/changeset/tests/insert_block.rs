@@ -92,20 +92,71 @@ fn insert_block_round_trips_through_dump() {
     assert_eq!(round.dump(), dump, "dump→parse→resolve→dump 穩定");
 }
 
+/// §④:一個多 item block 展成 N 個 `Insert`(同 statement,只驗最終態),
+/// 依來源序插入;dump→parse→resolve→dump 逐位元穩定(正規形 = 每 item 一 block)。
 #[test]
-fn multi_item_block_is_rejected() {
+fn multi_item_block_fans_out_to_ordered_inserts() {
     let base = base();
     let spec = LibrarySpec::default();
-    let mut source = change_set_prelude(&base, &spec, "evo:multi").unwrap();
+    let mut source = change_set_prelude(&base, &spec, "evo:fanout").unwrap();
     source.push_str(
         "\n    statement 0:\n        insert into sign(\"dog\") at end:\n            syn:\n                slots:\n                    agent [LocalNoun]\n                    theme [LocalNoun]\n",
     );
-    let err = UnresolvedChangeSet::parse(&source)
+    let resolved = UnresolvedChangeSet::parse(&source)
         .unwrap()
         .resolve(&base, &spec)
-        .unwrap_err();
+        .unwrap();
+    // 一個 operation → 兩個 primitive edit(fan-out)。
+    assert_eq!(resolved.statements.len(), 1);
+    assert_eq!(resolved.statements[0].edits.len(), 2);
+
+    let doc = ChangeInterpreter::new(base.clone(), spec.clone(), "evo:fanout")
+        .unwrap()
+        .run(&resolved)
+        .unwrap()
+        .document;
+    let rendered = doc.source();
+    assert!(rendered.contains("agent [LocalNoun]"));
+    assert!(rendered.contains("theme [LocalNoun]"));
+    // 來源序保留:agent 在 theme 之前。
     assert!(
-        format!("{err}").contains("exactly one item"),
-        "expected single-item rejection, got {err}"
+        rendered.find("agent").unwrap() < rendered.find("theme").unwrap(),
+        "source order preserved"
     );
+
+    // 正規形 = 每 item 一 block;round-trip 穩定。
+    let dump = resolved.dump();
+    let round = UnresolvedChangeSet::parse(&dump)
+        .unwrap()
+        .resolve(&base, &spec)
+        .unwrap();
+    assert_eq!(round.dump(), dump);
+    assert_eq!(round.statements[0].edits.len(), 2, "正規形仍 2 個 edit");
+}
+
+/// 多 operation 同一 statement:update + insert 混排(皆定址 statement 起始態),
+/// 一起套用、只驗最終態一次。
+#[test]
+fn a_statement_may_hold_multiple_operations() {
+    let base = base();
+    let spec = LibrarySpec::default();
+    let mut source = change_set_prelude(&base, &spec, "evo:multiop").unwrap();
+    source.push_str(concat!(
+        "\n    statement 0:\n",
+        "        update sign(\"dog\").def[phon].value = /dok/\n",
+        "        insert into sign(\"dog\") at end:\n            syn:\n                slots:\n                    agent [LocalNoun]\n",
+    ));
+    let resolved = UnresolvedChangeSet::parse(&source)
+        .unwrap()
+        .resolve(&base, &spec)
+        .unwrap();
+    assert_eq!(resolved.statements[0].edits.len(), 2, "update + insert 同句");
+    let doc = ChangeInterpreter::new(base, spec, "evo:multiop")
+        .unwrap()
+        .run(&resolved)
+        .unwrap()
+        .document;
+    let rendered = doc.source();
+    assert!(rendered.contains("/dok/"), "update 生效");
+    assert!(rendered.contains("agent [LocalNoun]"), "insert 生效");
 }
