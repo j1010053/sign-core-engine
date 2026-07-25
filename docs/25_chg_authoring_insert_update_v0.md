@@ -285,6 +285,11 @@ workspace 278 綠、clippy 0）：
 
 - **nameless 定址定案**：`sign("x").rule[n]`／`.else[m]`／`.then[m]`／`.realization[k]`（§3.1），
   resolve 釘成 `node(<kind>,@ns:ord)`。
+- **具名標籤（P 系列取徑 B，owner 裁定；不動 sign 扁平結構）**：`Rule`/`TypedCase`/`CaseBranch`
+  各加 `name: Option<String>`，`@name <label>` 後綴宣告（rule 為 `@stage` 之內、case/branch 為 `:`
+  之前），printer 僅 Some 時輸出（unnamed 零 golden churn）。keyed 定址 `rule["x"]`／`case["x"]`／
+  `branch["x"]`（`["…"]` 或非數字＝keyed，數字＝序數），dump 仍釘穩定 `node(kind,@id)`。
+  測試 `named_addressing.rs` 4。
 - **else/then branch insert**：`insert into sign("x").rule[n] at <pos>:` ＋ `else <body>`／
   `then <body>` → `Insert{RuleElseBranch/RuleThenBranch}`；`before/after <sibling-path>` 定序；
   dump 對稱 round-trip；**else/then 互斥被強制**（edit 重序列化 re-parse，parse-time 不變式把關）。
