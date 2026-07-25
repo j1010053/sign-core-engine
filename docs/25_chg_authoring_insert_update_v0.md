@@ -1,0 +1,289 @@
+# `.chg` 授權語法 v0：insert / update over 四原語（Step 15 前置設計）
+
+> **設計稿，未實作。** 本文定義 `.chg` 上 `insert`／`update` 的**授權表層**，作為 Step 15
+> 的前置設計。權威操作仍只有 **Insert／Delete／Update／Move** 四原語（P23）；本語法一律
+> **降階**成四原語，resolve／dump 後的 ChangeSet **只含四原語**。Step 14 契約（docs/22）不變。
+>
+> **鐵律**：`insert`／`update` 的 **target 只能是 `.lang` 關鍵字**。`.chg` 不自創任何節點型別或
+> payload 語法——框架動詞（`insert`／`update`／`at`）之外，一切內容都是逐字的 `.lang` fragment，
+> 由既有 `.lang` parser 解析。故「能 insert／update 的物件」＝「`.lang` 能寫的關鍵字」，一一對應。
+
+---
+
+## 0. 單一文法原則
+
+```
+.chg = 框架動詞（insert / update / at / selector / position）  ＋  .lang block（逐字）
+```
+
+- **框架**只負責：定位（selector）、位置（position）、動作（insert/update/delete/move）。
+- **內容**（block）永遠是 `.lang` 片段，首關鍵字即 `.lang` 關鍵字（`sign`/`trait`/`syn`/`sem`/
+  `prag`/`phon`/`slot`/`slots`/`slot_features`/`feature`/`roles`/`constraints`/`map`/`belongs`/
+  `case`/`when`/`else`/`then`/`realization` …）。
+- 好處：單一 parser；block 的 dump ＝ `.lang` fragment（round-trip 天然對稱）；phon 的 Tshiatūn
+  規則免費支援（§5.2）。
+
+---
+
+## 1. 三層物件分類
+
+| 層 | 定義 | 成員 |
+|---|---|---|
+| **① 公開 insert target** | 使用者可見、可重複、有位置語意、對應 `.lang` 關鍵字 | Sign／Trait（→ language）；17 種 sign body item；4 條 branch 鏈 |
+| **② container** | AST 中能容納子節點的節點（insert 的 target 側；多數同時是 ① 的 payload） | Language, Sign, Trait, Block, Case, Rule, Realization |
+| **③ dump-only** | 為 round-trip 必序列化，但**無公開 insert 語法**，改走 update/set | DslDeclaration, Prosody, Distribution |
+
+③ 三者是 `Language` 直屬**非構式**欄位（`dsl_decls: Vec<String>`／`prosody: Vec<String>`／
+`distribution: Vec<(String,String)>`），自然編輯是設值／upsert，非位置插入：
+
+- `DslDeclaration`（`Feature`/`Symbol`/`Class`/`Melody`/`Spell-out`/`Parse`）→ 專屬 `dsl` op 或文字級。
+- `Prosody`（`prosody = μ σ Ft ω φ ι U`）→ `update language.prosody = …`（singleton 設值）。
+- `Distribution`（`distribution:` + `key = value`）→ `set distribution[key] = value`（upsert）。
+
+三者仍進 dump 白名單（primitive 的 delete+insert／fork replay 需重建），但 `insert into … at …` 文法不含。
+
+---
+
+## 2. `insert`：target · position · block
+
+```
+insert into <target> at <position>:
+    <block>            # 逐字 .lang fragment
+```
+
+- **`<target>`**（container selector，皆由 `.lang` 關鍵字衍生）：
+  `language` ｜ `sign("NAME")` ｜ `trait("NAME")` ｜ 維度路徑 `sign("NAME").syn`（見 §3 selector）
+  ｜穩定形 `node(<kind>, @ns:ord)`。
+- **`<position>`**：見 §3。
+- **`<block>`**：`.lang` fragment，首關鍵字選 payload 種類：
+
+| `.lang` block 首關鍵字 | 產生節點 | 合法 target |
+|---|---|---|
+| `sign NAME:` | SignDef（**配全新身分**：SignId/RuleId/NodeId 全刷新） | language |
+| `trait NAME:` | TraitDef | language |
+| `syn:` / `sem:` / `prag:` | dim fragment（多 items，僅該維，無 belongs/trait/realization） | sign／block |
+| `phon:` | `/…/` 模板 ／ phon Def ／ **Tshiatūn 規則** ／ `realization:` | sign |
+| `sign:`（匿名） | SignContext fragment（混維＋belongs，合併回 sign，**不建新 SignId**） | sign |
+| `slot NAME [F]?` | Slot | sign.syn |
+| `slots:` / `slot_features:` | Slot ／ SlotFeatureBinding | sign.syn |
+| `feature:` | FeatureDecl/Value/Expression/Rule | sign.\<dim\> |
+| `map SLOT OP …` | SlotMap | sign.syn |
+| `roles:` | RoleDecl/Binding/Expression | sign.sem |
+| `constraints:` | BinaryConstraint | sign（sign 級） |
+| `belongs X` | Belongs | sign |
+| `NAME[n]` | TraitUse | sign |
+| `field => value / guard` | Rule（維度依 target 語境） | sign.\<dim\> |
+| `case`/`when …:` | Case（SignExpression） | sign.\<dim\> |
+| `realization:` | Realization ＋ branches | sign.phon |
+| `else …` / `then …` | RuleElseBranch／RuleThenBranch | rule（互斥，§5.4） |
+| `path = value` | Def | sign.\<dim\> |
+
+> `clone <sign> as <name>` 是既有授權糖，降階為單一 `Insert{Sign}`；不新增原語。
+
+---
+
+## 3. 位置確定（position）
+
+### 3.1 selector（定位既存節點）
+
+`language` ｜ `sign("NAME")` ｜ `trait("NAME")` ｜ authoring path `sign("NAME").syn.class`
+（`.name`／`[key]`／`~tier`）｜穩定形 `node(<kind>, @ns:ord)`。resolve 後名字型 selector 一律
+釘成 `node(...)`。
+
+### 3.2 `at <determiner>` 三種語意
+
+| target list | `at end` 意思 | 可用 determiner |
+|---|---|---|
+| **canonical-unordered**（Sign/Trait/Distribution） | **佔位符**：引擎忽略，真實位置由 **key 排序**算（`end` ≠「最後」） | **只准 `end`** |
+| **singleton**（Prosody） | 空時才准放 | 只 `end` |
+| **ordered**（Items/Blocks/**CaseBranch/else/then/Realization**） | **字面** append | `first/last`、`before/after <ref>` |
+
+**items group-aware**：sign 的 `items` 依 `item_group` 分區；`start/end` 是**該群**頭尾，`before/after`
+的錨**必須同群**（否則 `AnchorInvalid`）。branch 鏈不分群，`end` ＝ 字面最後一支。
+
+### 3.3 有序區塊的符號式 `<ref>`（給 nameless branch）
+
+branch 無名字，`before/after` 若只吃穩定 NodeId 幾乎無法手寫。提供符號式參照，resolve 時釘成
+`node(<kind>,@ns:ord)`：
+
+| `<ref>` | 意義 | 穩定性 |
+|---|---|---|
+| `#n` | 第 n 支（0-based） | 隨重排失效 |
+| `guard "<expr>"` / `== <value>` | condition 命中的那支 | **對重排穩定** |
+| `else` / `default` | `CaseCondition::Else` ／ realization `guard=None` 的 catch-all | 每鏈至多一 |
+| `node(<kind>,@ns:ord)` | 穩定 NodeId | **canonical** |
+
+### 3.4 determiner 分級
+
+| target list | 合法 determiner |
+|---|---|
+| Sign／Trait／Distribution | **僅 `at end`** |
+| Items（group-aware） | `first/last`、`before/after #n\|node(...)`（限同群） |
+| CaseBranch | ＋ `before/after guard\|==\|else` |
+| else／then 鏈 | ＋ `before/after guard\|#n\|else` |
+| Realization 分支 | ＋ `before/after guard\|else` |
+
+### 3.5 有序區塊安全設計（順序＝語意）
+
+first-match（`case:`、Lexurgy `else`）下順序即優先序；`at end` 常是陷阱（插在 catch-all 之後 ＝
+dead branch）。故：
+
+1. **first-match 不預設 `end`**：省略位置時預設 `before else`（無 Else 才 fallback `last`）。
+2. **出口驗證**：first-match 區塊「Else 之後不得有 guarded branch」→ 插入後 `check_document` 報
+   unreachable-branch，把慣例升級為不變式。
+
+---
+
+## 4. `update`：兩層（不需 position）
+
+### 4.1 Tier-1 純量欄位
+
+```
+update <selector>.<field> = <value>
+```
+
+現有 8 個對應（`update_for`／`dump_update`）：
+
+| target kind | field → NodeUpdate |
+|---|---|
+| Sign/Trait | `name` → Rename |
+| Definition | `path` → DefinitionPath；`value` → DefinitionValue |
+| Rule/FeatureRule | `body` → RuleBody |
+| Else/Then branch | `body` → RuleBranchBody |
+| Slot | `name` → SlotName |
+| RealizationBranch | `template` → RealizationTemplate |
+| Case | `selection` → CaseSelection（`case`/`when`） |
+
+**待補（20 個 `NodeUpdate` 未接表層）**：TraitGlobal、RuleStage、RuleDimension、SlotConstraint、
+SlotOptional、TraitUse、Belongs、FeatureDeclaration、FeatureValue、SlotFeatureBinding、SlotMap、
+RoleDeclaration、RoleBinding、RealizationGuard、CaseBranch、SignApplication、Constraint，以及
+③ 的 DslDeclaration／Prosody／Distribution。原則：`update_for`（讀）與 `dump_update`（寫）**對稱**補齊。
+sign 級 metadata（`origin`/`provenance`/`lifecycle`/`entrenchment`）走 top-level Def path。
+
+### 4.2 Tier-2 維度片段整替（block-valued，糖）
+
+替換整個維度切片時用 block 形式（block 仍是 `.lang` fragment）：
+
+```
+update <target>.<dim>:
+    <該維 fragment>
+```
+
+語意：以 fragment **取代** target 該維 items。降階 ＝ **delete 舊維 items ＋ insert 新 fragment
+items**（同一 atomic statement）。`.sign:`（匿名 SignContext）整替混維切片。
+
+---
+
+## 5. block 內容參考（`.lang` 關鍵字語意）
+
+### 5.1 維度子區塊（皆 `.lang` 既有語法）
+
+```
+syn:
+    slots:
+        agent [Nominal]
+        theme [Nominal]?                 # ? = optional
+    slot_features:                       # SlotFeatureBinding
+        agent.person = 3                          # enum literal
+        theme.number = $slot.agent.syn.number     # frozen 讀 filler syn
+    feature:                             # FeatureDecl/Value/Expression/Rule
+        transitivity = enum(transitive, intransitive)
+        transitivity = transitive
+        class => transitive / [Verb]
+    map agent rename actor               # SlotMap
+    class => transitive / [Verb]         # syn Rule
+
+sem:
+    roles:                               # 僅 sem 內
+        agent = actor                             # 綁定
+        theme => : case ...                       # RoleExpression
+    senses[core].concept = GIVE          # Def（Path）
+
+constraints:                             # sign 級（語意屬 syn）
+    agree(agent.number, theme.number)    # predicate(left, right)，恰兩運算元
+```
+
+### 5.2 `realization:` vs `phon:`（form 選形 vs 純音韻）
+
+- **`realization:`**：`RealizationBranch { template:/…/, guard:Option }`；guard **唯讀** `$self`／frozen
+  `$slot`（跨維讀取 syn 範疇/feature/filler）→ **選一個 phon template**。是 form 端 spell-out／選形橋，
+  **讀取／投影**他維、**不改**他維（P44）。phon 的分支（guard/else/case）一律住這裡。
+- **`phon:` 直接規則**：`b => p / _ #` → `Rule{dim:Phon}` ＝ **純音韻改寫（Tshiatūn rule）**，
+  不讀他維、不分支。codegen 放進 `CompiledGrammar.phon_source` 交 Tshiatūn 跑（雙軌 8.1–8.6 為證）。
+- 邊界：匿名 PhonContext fragment 只收 template／full-sign projection，trait 不可展開到 phon；
+  檔首 `Feature`/`Symbol`/`Class` 是 dsl_decls（③），非 per-sign phon rule。
+
+### 5.3 `field` 三義
+
+| 語境 | field 是 | 文法 |
+|---|---|---|
+| Def `field = value` | 一條 **Path** | `anchor`（`.name`\|`[key]`\|`~tier`）* |
+| syn/sem/prag rule `field => …` | 一個**已宣告 feature 名** | 單一 identifier |
+| phon rule `b => p` | **音韻 pattern**（非 field） | Tshiatūn 改寫式 |
+
+### 5.4 case/when、else/then
+
+- `case:`＝FirstMatch（第一 Matched 勝）；`when:`＝Accumulate（所有 Matched 依來源序合併）。
+- `else` 鏈＝Lexurgy 第一匹配 fallback；`then` 鏈＝循序（下一支讀更新後狀態）；**同一 rule 上互斥**。
+- 四者皆 ordered，位置語意由 §3.3–3.5 的符號式 determiner 表達。
+
+---
+
+## 6. 降階與前置
+
+| 表層 | 降階為四原語 |
+|---|---|
+| `insert … sign/trait …` | 1×`Insert{Sign/Trait}` |
+| `insert … 維/sign/case/else 片段`（N items） | **N×`Insert{Item/Branch}`**（同一 statement，只驗最終態） |
+| `insert … branch` | 1×`Insert{CaseBranch/RuleElse/RuleThen/RealizationBranch}` |
+| `update …field = v` | 1×`Update` |
+| `update …dim:` fragment | **delete 舊 + insert 新**（同一 atomic statement） |
+
+**兩個底層前置（必先補）：**
+
+1. **§② item／branch 的 dump·parse 對稱**：現 `dump` 只序列化 `Insert{Sign}`，其餘吐空 →
+   片段降階出的 `Insert{Item/Branch}` 無法落盤、round-trip 破。**第一步。**
+2. **§④ 一句多原語**：片段＝N primitive、整替＝delete+insert，都要「一句多 edit、只驗最終態」。
+   原語層已支援（`statement_may_temporarily_dangle` 證過），只差表層 parser 放行。
+
+**驗證零新增**：複用 `item_allowed_in_context(item, dim)` 與 `expression_matches_type` 把 `.chg`
+開口接上既有維度驗證。
+
+---
+
+## 6.5 實作進度（2026-07-24）
+
+已落地（`crates/changeset`，`insert_block.rs` 5 + `update_fields.rs` 3 測試，workspace 276 綠）：
+
+- **通用單一 payload insert**：`insert into <target> at <pos>:` ＋ 逐字 `.lang` block →
+  `trait NAME:` 或**單一 item**（含 `phon:` 下的 Tshiatūn 規則、`syn: slots:` 單一 slot），降階為
+  一個 `Insert`。多 item block **明確拒絕**（`exactly one item`）——多 item fan-out 待 §④。
+- **dump 對稱**：`Insert{Trait}`／`Insert{Item}` 經 wrapper-print 還原 `insert into … :`；
+  `dump→parse→resolve→dump` 逐位元穩定。
+- **update 欄位擴充（6）**：`trait.global`、`slot.optional`、`belongs.target`、`rule.dim`、
+  `rule.stage`、`realization.guard`（對稱 `update_for`／`dump_update`）。
+
+尚未落地（本文其餘）：§④ 多 item fan-out；branch insert（case-branch/else/then/realization）＋
+符號式確定詞（before else／after guard，§3.3–3.5）；Tier-2 維度片段整替；剩餘 struct 值 update 欄位
+（SlotConstraint/FeatureValue/RoleBinding/SlotMap/Constraint/…）；③ 的 `set distribution`／
+`update language.prosody` 與其 dump 白名單。
+
+## 7. 實作順序建議
+
+1. **§②** item／branch insert 的 dump·parse 對稱（含 ③ 三項進 dump 白名單）。
+2. `insert into … at …:` ＋ block dispatch（先 `syn/sem/prag/phon` 維片段，再 `sign:` 匿名、branch）。
+3. 有序 list 的 `before/after guard|else|#n` 確定詞 ＋ §3.5 兩條安全設計。
+4. **§④** atomic 多原語 statement。
+5. `update` Tier-1 詞彙泛化（`update_for`／`dump_update` 對稱補 28）。
+6. `update` Tier-2 維度片段整替；`③` 的 `update language.prosody` / `set distribution[...]`。
+
+不逐 kind 硬幹，而按**降階形狀**收斂成 4 條泛型路徑：容器級 node insert／item 級 insert／branch 級
+insert／update 欄位泛化。
+
+---
+
+## 8. 邊界
+
+- 不承諾舊 v1 `.chg` 相容（v1 已硬移除，docs/22）。
+- Application 是 expression 內部件、非獨立 insert target（有 `SignApplication` update 但無定址位）。
+- 本文為 v0 設計稿；封板前不得宣稱已實作。實作各步以測試出口收尾（CLAUDE.md §0-2）。

@@ -1617,6 +1617,22 @@ enum UnresolvedOperation {
         anchor: UnresolvedAnchor,
         source: String,
     },
+    /// General single-payload insert: the block is a verbatim `.lang` fragment
+    /// yielding exactly one node (a `trait NAME:` / `sign NAME:`, or one sign
+    /// body item). Lowers to a single `Insert`; the block reuses the `.lang`
+    /// grammar and its dimension validation.
+    InsertBlock {
+        target: Selector,
+        anchor: UnresolvedAnchor,
+        block: String,
+    },
+    /// Authoring sugar: copy an existing sign under a fresh name. Lowers to a
+    /// single `Insert` of a deep copy, so the resolved/dumped ChangeSet holds
+    /// only the four primitives — `clone` never persists as its own operation.
+    Clone {
+        source: Selector,
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1899,6 +1915,39 @@ fn parse_statement_body(ordinal: u64, body: &[String]) -> Result<UnresolvedState
             node: parse_selector(node)?,
             parent: parse_selector(parent)?,
             anchor: parse_anchor(anchor)?,
+        }
+    } else if let Some(rest) = first.strip_prefix("clone ") {
+        let (source, name) = rest.rsplit_once(" as ").ok_or_else(|| {
+            ReplayError::Parse(format!("clone has no `as <name>` in statement {ordinal}"))
+        })?;
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(ReplayError::Parse(format!(
+                "clone has an empty name in statement {ordinal}"
+            )));
+        }
+        UnresolvedOperation::Clone {
+            source: parse_selector(source)?,
+            name: name.to_owned(),
+        }
+    } else if let Some(rest) = first.strip_prefix("insert into ") {
+        let (target, anchor) = rest
+            .strip_suffix(':')
+            .unwrap_or(rest)
+            .rsplit_once(" at ")
+            .ok_or_else(|| {
+                ReplayError::Parse(format!("insert has no `at` in statement {ordinal}"))
+            })?;
+        let block = body.iter().skip(1).cloned().collect::<Vec<_>>().join("\n");
+        if block.trim().is_empty() {
+            return Err(ReplayError::Parse(format!(
+                "insert statement {ordinal} has no .lang block"
+            )));
+        }
+        UnresolvedOperation::InsertBlock {
+            target: parse_selector(target)?,
+            anchor: parse_anchor(anchor)?,
+            block,
         }
     } else if let Some(rest) = first.strip_prefix("insert sign under ") {
         let (parent, anchor) = rest
@@ -2273,11 +2322,126 @@ fn update_for(reference: &NodeRef, field: &str, value: &str) -> Result<NodeUpdat
                 "case selection must be `case` or `when`, got {value:?}"
             ))),
         },
+        (NodeKind::Trait, "global") => Ok(NodeUpdate::TraitGlobal(parse_bool(value)?)),
+        (NodeKind::Slot, "optional") => Ok(NodeUpdate::SlotOptional(parse_bool(value)?)),
+        (NodeKind::Belongs, "target") => Ok(NodeUpdate::Belongs(value.to_owned())),
+        (NodeKind::Rule | NodeKind::FeatureRule, "dim") => Ok(NodeUpdate::RuleDimension(
+            Dim::parse(value)
+                .ok_or_else(|| ReplayError::Selector(format!("unknown dim {value:?}")))?,
+        )),
+        (NodeKind::Rule | NodeKind::FeatureRule, "stage") => {
+            Ok(NodeUpdate::RuleStage(parse_stage(value)?))
+        }
+        (NodeKind::RealizationBranch, "guard") => Ok(NodeUpdate::RealizationGuard(
+            (!value.trim().is_empty()).then(|| value.to_owned()),
+        )),
         _ => Err(ReplayError::Selector(format!(
             "field {field:?} is not editable on {:?}",
             reference.expected
         ))),
     }
+}
+
+fn parse_bool(value: &str) -> Result<bool, ReplayError> {
+    match value.trim() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        other => Err(ReplayError::Selector(format!(
+            "expected `true` or `false`, got {other:?}"
+        ))),
+    }
+}
+
+fn parse_stage(value: &str) -> Result<Stage, ReplayError> {
+    match value.trim() {
+        "stem" => Ok(Stage::Stem),
+        "word" => Ok(Stage::Word),
+        "phrase" => Ok(Stage::Phrase),
+        other => Err(ReplayError::Selector(format!(
+            "stage must be stem/word/phrase, got {other:?}"
+        ))),
+    }
+}
+
+fn stage_keyword(stage: Stage) -> &'static str {
+    match stage {
+        Stage::Stem => "stem",
+        Stage::Word => "word",
+        Stage::Phrase => "phrase",
+    }
+}
+
+/// Wrapper name for synthesising a one-item `.lang` fragment so the whole
+/// `.lang` parser/printer (and its dimension validation) is reused verbatim.
+const FRAGMENT_SIGN: &str = "chg_fragment";
+
+/// Parse an `insert into … :` block (a verbatim `.lang` fragment) into exactly
+/// one detached payload: a whole `trait`/`sign`, or a single sign-body item.
+fn parse_insert_block(block: &str) -> Result<DetachedNode, ReplayError> {
+    let head = block
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(str::trim)
+        .unwrap_or("");
+    let parse_lang = |source: &str| {
+        Language::parse(source).map_err(|error| ReplayError::Parse(format!("insert .lang: {error}")))
+    };
+    if head.starts_with("trait ") || head.starts_with("global trait ") {
+        let language = parse_lang(block)?;
+        if language.traits.len() != 1 || !language.signs.is_empty() {
+            return Err(ReplayError::Parse(
+                "insert block must contain exactly one trait".to_owned(),
+            ));
+        }
+        return Ok(DetachedNode::Trait(language.traits[0].clone()));
+    }
+    if head.starts_with("sign ") {
+        let language = parse_lang(block)?;
+        if language.signs.len() != 1 || !language.traits.is_empty() {
+            return Err(ReplayError::Parse(
+                "insert block must contain exactly one sign".to_owned(),
+            ));
+        }
+        return Ok(DetachedNode::Sign(language.signs[0].clone()));
+    }
+    // Otherwise the block is a sign-body item fragment: wrap it in a synthetic
+    // sign so the dimension keywords (`syn:`/`phon:`/`slots:`/…) parse in
+    // context, then extract the single item.
+    let language = parse_lang(&format!("sign {FRAGMENT_SIGN}:\n{block}"))?;
+    let items = language
+        .signs
+        .first()
+        .map(|sign| sign.items.as_slice())
+        .unwrap_or_default();
+    match items {
+        [item] => Ok(DetachedNode::Item(item.clone())),
+        [] => Err(ReplayError::Parse(
+            "insert block produced no item".to_owned(),
+        )),
+        many => Err(ReplayError::Parse(format!(
+            "insert block must contain exactly one item, got {}",
+            many.len()
+        ))),
+    }
+}
+
+/// Render a single sign-body item back to its `.lang` block form (inverse of
+/// the item branch of [`parse_insert_block`]): print a synthetic one-item sign,
+/// drop the `sign …:` header and dedent one level.
+fn render_item_block(item: &SignItem) -> String {
+    let mut fragment = Language::new();
+    fragment.signs.push(SignDef {
+        id: conlang_language::SignId::synthetic(),
+        name: FRAGMENT_SIGN.to_owned(),
+        items: vec![item.clone()],
+    });
+    let dumped = fragment.dump();
+    dumped
+        .lines()
+        .skip(1)
+        .map(|line| line.strip_prefix("    ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn resolve_operation(
@@ -2326,6 +2490,39 @@ fn resolve_operation(
                 subtree: DetachedNode::Sign(language.signs[0].clone()),
             })
         }
+        UnresolvedOperation::InsertBlock {
+            target,
+            anchor,
+            block,
+        } => Ok(PrimitiveEdit::Insert {
+            parent: resolve_selector(target, document)?,
+            anchor: resolve_anchor(anchor, document)?,
+            subtree: parse_insert_block(block)?,
+        }),
+        UnresolvedOperation::Clone { source, name } => {
+            let reference = resolve_selector(source, document)?;
+            let entry = ensure_target(document, &reference)
+                .map_err(|error| ReplayError::Selector(error.to_string()))?;
+            let detached = detached_at(document.language(), entry)
+                .map_err(|error| ReplayError::Selector(error.to_string()))?;
+            let mut sign = match detached {
+                DetachedNode::Sign(sign) => sign,
+                other => {
+                    return Err(ReplayError::Selector(format!(
+                        "clone supports only signs, not {:?}",
+                        other.kind()
+                    )))
+                }
+            };
+            // The Insert primitive reassigns a fresh SignId, RuleIds and stable
+            // NodeIds, so the clone is a new entity; only the name is authored.
+            sign.name = name.clone();
+            Ok(PrimitiveEdit::Insert {
+                parent: document.root_ref(),
+                anchor: Anchor::End,
+                subtree: DetachedNode::Sign(sign),
+            })
+        }
     }
 }
 
@@ -2370,6 +2567,14 @@ fn dump_update(change: &NodeUpdate) -> Option<(&'static str, String)> {
             }
             .to_owned(),
         )),
+        NodeUpdate::TraitGlobal(value) => Some(("global", value.to_string())),
+        NodeUpdate::SlotOptional(value) => Some(("optional", value.to_string())),
+        NodeUpdate::Belongs(value) => Some(("target", value.clone())),
+        NodeUpdate::RuleDimension(dim) => Some(("dim", dim.keyword().to_owned())),
+        NodeUpdate::RuleStage(stage) => Some(("stage", stage_keyword(*stage).to_owned())),
+        NodeUpdate::RealizationGuard(guard) => {
+            Some(("guard", guard.clone().unwrap_or_default()))
+        }
         _ => None,
     }
 }
@@ -2426,6 +2631,40 @@ impl ResolvedChangeSet {
                         let mut fragment = Language::new();
                         fragment.signs.push(sign.clone());
                         for line in fragment.dump().lines() {
+                            output.push_str("            ");
+                            output.push_str(line);
+                            output.push('\n');
+                        }
+                    }
+                    PrimitiveEdit::Insert {
+                        parent,
+                        anchor,
+                        subtree: DetachedNode::Trait(trait_def),
+                    } => {
+                        output.push_str(&format!(
+                            "        insert into {} at {}:\n",
+                            dump_node(parent),
+                            dump_anchor(anchor)
+                        ));
+                        let mut fragment = Language::new();
+                        fragment.traits.push(trait_def.clone());
+                        for line in fragment.dump().lines() {
+                            output.push_str("            ");
+                            output.push_str(line);
+                            output.push('\n');
+                        }
+                    }
+                    PrimitiveEdit::Insert {
+                        parent,
+                        anchor,
+                        subtree: DetachedNode::Item(item),
+                    } => {
+                        output.push_str(&format!(
+                            "        insert into {} at {}:\n",
+                            dump_node(parent),
+                            dump_anchor(anchor)
+                        ));
+                        for line in render_item_block(item).lines() {
                             output.push_str("            ");
                             output.push_str(line);
                             output.push('\n');
