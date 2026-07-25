@@ -2436,6 +2436,15 @@ fn parse_insert_block(block: &str) -> Result<Vec<DetachedNode>, ReplayError> {
         }
         return Ok(vec![DetachedNode::Sign(language.signs[0].clone())]);
     }
+    // Rule-chain branches: the body after `else `/`then ` is an opaque rule
+    // line (a `DetachedNode::RuleElseBranch`/`RuleThenBranch` string). The
+    // parent Rule is addressed with a `…rule[n]` authoring path.
+    if let Some(rest) = head.strip_prefix("else ") {
+        return Ok(vec![DetachedNode::RuleElseBranch(rest.trim().to_owned())]);
+    }
+    if let Some(rest) = head.strip_prefix("then ") {
+        return Ok(vec![DetachedNode::RuleThenBranch(rest.trim().to_owned())]);
+    }
     // Otherwise the block is a sign-body item fragment: wrap it in a synthetic
     // sign so the dimension keywords (`syn:`/`phon:`/`slots:`/…) parse in
     // context, then take each produced item.
@@ -2707,6 +2716,26 @@ impl ResolvedChangeSet {
                             output.push_str(line);
                             output.push('\n');
                         }
+                    }
+                    PrimitiveEdit::Insert {
+                        parent,
+                        anchor,
+                        subtree:
+                            subtree @ (DetachedNode::RuleElseBranch(_)
+                            | DetachedNode::RuleThenBranch(_)),
+                    } => {
+                        let (keyword, body) = match subtree {
+                            DetachedNode::RuleElseBranch(body) => ("else", body),
+                            DetachedNode::RuleThenBranch(body) => ("then", body),
+                            _ => unreachable!(),
+                        };
+                        output.push_str(&format!(
+                            "        insert into {} at {}:\n            {} {}\n",
+                            dump_node(parent),
+                            dump_anchor(anchor),
+                            keyword,
+                            body
+                        ));
                     }
                     PrimitiveEdit::Insert { .. } => {}
                 }

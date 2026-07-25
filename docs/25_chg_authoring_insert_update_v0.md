@@ -86,9 +86,23 @@ insert into <target> at <position>:
 
 ### 3.1 selector（定位既存節點）
 
-`language` ｜ `sign("NAME")` ｜ `trait("NAME")` ｜ authoring path `sign("NAME").syn.class`
-（`.name`／`[key]`／`~tier`）｜穩定形 `node(<kind>, @ns:ord)`。resolve 後名字型 selector 一律
-釘成 `node(...)`。
+`language` ｜ `sign("NAME")` ｜ `trait("NAME")` ｜ **authoring path** ｜穩定形
+`node(<kind>, @ns:ord)`。resolve 後名字/路徑型 selector 一律釘成 `node(...)`。
+
+**nameless rule/case/branch 定址（已定案，`resolve_path_child` 實作）**——無名節點以
+**typed 路徑段**定址，掛在 `sign("x")`/`trait("x")` 之下：
+
+| 路徑段 | 目標 | 選法 |
+|---|---|---|
+| `.rule[n]` | 第 n 個 Rule/FeatureRule | 序數 |
+| `.else[m]` / `.then[m]` | rule 的第 m 個 else/then 分支 | 序數（接在 `.rule[n]` 後） |
+| `.realization[k]` | 第 k 個 realization 分支 | 序數 |
+| `.case[n]` / `.branch[m]` | 第 n 個 case ／ 其第 m 個 branch | 序數（**待補**） |
+| `.block[n]` | trait block | 序數 |
+| `.def[path]` / `.slot[name]` / `.role[name]` | Def／Slot／Role | keyed |
+
+例：`sign("dog").rule[0]`（父 rule）、`sign("dog").rule[0].else[0]`（sibling 分支，供
+`before/after` 定位）。序數對重排敏感，故 dump 一律釘成穩定 `node(<kind>,@ns:ord)`。
 
 ### 3.2 `at <determiner>` 三種語意
 
@@ -267,12 +281,22 @@ workspace 278 綠、clippy 0）：
 - **update 欄位（8→14）**：＋`trait.global`／`slot.optional`／`belongs.target`／`rule.dim`／
   `rule.stage`／`realization.guard`（對稱 `update_for`／`dump_update`）。
 
+已落地（續）：
+
+- **nameless 定址定案**：`sign("x").rule[n]`／`.else[m]`／`.then[m]`／`.realization[k]`（§3.1），
+  resolve 釘成 `node(<kind>,@ns:ord)`。
+- **else/then branch insert**：`insert into sign("x").rule[n] at <pos>:` ＋ `else <body>`／
+  `then <body>` → `Insert{RuleElseBranch/RuleThenBranch}`；`before/after <sibling-path>` 定序；
+  dump 對稱 round-trip；**else/then 互斥被強制**（edit 重序列化 re-parse，parse-time 不變式把關）。
+  測試 `branch_insert.rs` 4。
+
 尚未落地（皆有明確原因，非遺漏）：
 
-- **branch insert**（case-branch/else/then/realization）＋**符號式確定詞**（before else／after
-  guard／#n，§3.3–3.5）——branch 非獨立 `.lang` item 且父 Rule/Case **無名**，須先定案 nameless
-  父定址與確定詞語法（owner territory）。**注意**：插入**整個** `case`/`when`（含其 branches）已由
-  通用 item insert 支援；缺的只是往**既有** case/rule **追加單一 branch**。
+- **case-branch / realization-branch insert**——branch payload 非獨立 `.lang` item（`== v: => r`
+  只在 `case:` 內、realization branch 只在 `realization:` 內解析），須 typed/wrapper parse；且
+  realization branch 的父 Realization node、case 的 `case[n]`/`branch[m]` 定址待補。
+- **符號式確定詞**（before else／after guard／#n，§3.3–3.5）——目前以 `.else[m]`/`.rule[n]` 路徑段
+  等效表達；符號糖為便利層。
 - **剩餘 struct 值 update 欄位**（SlotConstraint/FeatureValue/RoleBinding/SlotMap/Constraint/
   SignApplication/CaseBranch）——各需值語法子 parser。
 - **③ set-ops**：`set distribution[key]=v`／`update language.prosody`＝… 及其 dump 白名單。
