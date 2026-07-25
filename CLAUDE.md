@@ -8,9 +8,9 @@
 
 1. **規格已凍結,以編號決策為準。** 全部設計爭議都已裁決並編號:D1–D28(語法/本體論)、
    A1–A4 / B5–B9 / C10–C11(執行語意)、I1–I18(實作層,docs/05 §9)、
-   **P1–P44(架構修補層;P1–P19 權威=《架構修補彙整 01–04》§1 總表、P20–P28 權威=《修補05》§11、
-   P29–P37 權威=《修補06 插件服務與DSL API》§8、P38–P44 權威=《修補07 共時四維系統》§9;
-   個別修補文件與彙整出入處以彙整/最新修補為準;P7 已廢止→P14)**。
+   **P1–P45(架構修補層;P1–P19 權威=《架構修補彙整 01–04》§1 總表、P20–P28 權威=《修補05》§11、
+   P29–P37 權威=《修補06 插件服務與DSL API》§8、P38–P44 權威=《修補07 共時四維系統》§9、
+   P45 權威=《修補08 具名可定址節點》;個別修補文件與彙整出入處以彙整/最新修補為準;P7 已廢止→P14)**。
    任何實作若與編號決策矛盾,**停下來明確指出衝突**,不要自行變通。規格未覆蓋的新問題:
    實作層提案編 I 系列入 docs/05 §9;架構層變更走 P 系列。
 2. **每個開發階段必須以測試出口收尾。** 不存在「做完但沒有測試綠燈」的階段
@@ -44,6 +44,7 @@
 | `架構2.0總鳥瞰_v1.0.md` | **2.0 單一入口**:Language/ChangeSet 雙軌全圖、四條資訊流、Debug 模塊化、**新實作順序(步驟 8–22,M1–M4)** |
 | `架構修補05_Primitive與檔案格式_v0.1.md` | **P20–P28 權威**:DSL 獨立性、IR dump/canonical printer、條件語法(else/Path/tier-adjacency)、四原語、Ref 模型、.lang/.chg 檔案格式 |
 | `架構修補06_插件服務與DSL_API_v0.1.md` | **P29–P37 權威**:插件系統(資料層/程式碼層分離)、外部服務生命週期(ServiceRef→resolve→執行→驗證→History)、音變 DSL 最小對外 API(承 P5/P22 鐵律)。完整插件仍是設計層；embedded std 已先實作 package code/data/config 子集。 |
+| `架構修補08_具名可定址節點_v0.1.md` | **P45 權威**:Rule/TypedCase/CaseBranch 可選 `@name` 標籤 + keyed 定址(`rule["x"]`/`case["x"]`/`branch["x"]`);承 P24/P25/P26,標籤不取代穩定 id。取徑 B(不動 sign 扁平結構) |
 | `架構修補07_共時四維系統_v0.1.md` | **P38–P44 權威**:phon/syn/sem/prag 四維獨立(OntologyRegistry)、Defs+typed projection/patch、`belongs`(取代 provides)、valence=slots、construction-as-Sign+slot mapping、Lexurgy 式 Else 三分、四維同步規則;路線圖插入步驟 12a–12e(M1++,M2 前) |
 | `14_共時lang語法與資料貼合度_v0.1.md` | **共時 surface 實作對照**:巢狀 Path、`.lang` SlotMap、typed sign metadata，以及 Language 與 Evidence/Attestation 的 type/token 邊界。 |
 | `15_std_Grambank預設traits_v0.1.md` | **stdlib 資料對照**:修補06 package 分層、Grambank v1.0 的 25 項 trait 子集、0/1/? 知識狀態、行為映射、限制與測試證據。 |
