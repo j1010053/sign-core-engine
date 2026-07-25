@@ -160,3 +160,20 @@ fn a_statement_may_hold_multiple_operations() {
     assert!(rendered.contains("/dok/"), "update 生效");
     assert!(rendered.contains("agent [LocalNoun]"), "insert 生效");
 }
+
+/// 廣度:通用 item insert 重用 `.lang` parser,故涵蓋整個 item 分類法
+/// (feature 宣告 / sem Def path),不限 slot/rule。
+#[test]
+fn generic_item_insert_covers_feature_and_def_items() {
+    let feat = resolve_and_run(
+        "\n    statement 0:\n        insert into sign(\"dog\") at end:\n            syn:\n                feature:\n                    transitivity = enum(transitive, intransitive)\n",
+        "evo:feat",
+    );
+    assert!(feat.source().contains("transitivity = enum(transitive, intransitive)"));
+
+    let def = resolve_and_run(
+        "\n    statement 0:\n        insert into sign(\"dog\") at end:\n            sem:\n                senses[core].concept = DOG\n",
+        "evo:def",
+    );
+    assert!(def.source().contains("senses[core].concept = DOG"));
+}
