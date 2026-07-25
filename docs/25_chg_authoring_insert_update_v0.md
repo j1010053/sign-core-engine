@@ -251,22 +251,32 @@ constraints:                             # sign 級（語意屬 syn）
 
 ---
 
-## 6.5 實作進度（2026-07-24）
+## 6.5 實作進度（2026-07-24，branch `wuc-claudecode`）
 
-已落地（`crates/changeset`，`insert_block.rs` 5 + `update_fields.rs` 3 測試，workspace 276 綠）：
+已落地（`crates/changeset`，`insert_block.rs` 7 + `update_fields.rs` 3 + `clone_keyword.rs` 5，
+workspace 278 綠、clippy 0）：
 
-- **通用單一 payload insert**：`insert into <target> at <pos>:` ＋ 逐字 `.lang` block →
-  `trait NAME:` 或**單一 item**（含 `phon:` 下的 Tshiatūn 規則、`syn: slots:` 單一 slot），降階為
-  一個 `Insert`。多 item block **明確拒絕**（`exactly one item`）——多 item fan-out 待 §④。
-- **dump 對稱**：`Insert{Trait}`／`Insert{Item}` 經 wrapper-print 還原 `insert into … :`；
-  `dump→parse→resolve→dump` 逐位元穩定。
-- **update 欄位擴充（6）**：`trait.global`、`slot.optional`、`belongs.target`、`rule.dim`、
-  `rule.stage`、`realization.guard`（對稱 `update_for`／`dump_update`）。
+- **通用 insert**：`insert into <target> at <pos>:` ＋ 逐字 `.lang` block → `trait NAME:` 或
+  **sign body items**。因**重用 `.lang` parser（wrapper-synthesis）**，直接涵蓋整個 `SignItem`
+  分類法（slot/rule/**phon Tshiatūn 規則**/feature/Def/…），非逐 kind 硬接。
+- **§④ fan-out + 一句多原語**：`resolve_operation → Vec<PrimitiveEdit>`；多 item block 展成
+  N 個 `Insert`（同 statement、只驗最終態、來源序）；`parse_statement_body` 依縮排切多 operation
+  chunk（indent-0 = 新 operation），單句可含多操作，皆定址 statement 起始態（atomic snapshot）。
+- **dump 對稱**：`Insert{Trait}`／`Insert{Item}` 經 wrapper-print 還原；正規形＝每 primitive 一
+  block；`dump→parse→resolve→dump` 逐位元穩定。
+- **update 欄位（8→14）**：＋`trait.global`／`slot.optional`／`belongs.target`／`rule.dim`／
+  `rule.stage`／`realization.guard`（對稱 `update_for`／`dump_update`）。
 
-尚未落地（本文其餘）：§④ 多 item fan-out；branch insert（case-branch/else/then/realization）＋
-符號式確定詞（before else／after guard，§3.3–3.5）；Tier-2 維度片段整替；剩餘 struct 值 update 欄位
-（SlotConstraint/FeatureValue/RoleBinding/SlotMap/Constraint/…）；③ 的 `set distribution`／
-`update language.prosody` 與其 dump 白名單。
+尚未落地（皆有明確原因，非遺漏）：
+
+- **branch insert**（case-branch/else/then/realization）＋**符號式確定詞**（before else／after
+  guard／#n，§3.3–3.5）——branch 非獨立 `.lang` item 且父 Rule/Case **無名**，須先定案 nameless
+  父定址與確定詞語法（owner territory）。**注意**：插入**整個** `case`/`when`（含其 branches）已由
+  通用 item insert 支援；缺的只是往**既有** case/rule **追加單一 branch**。
+- **剩餘 struct 值 update 欄位**（SlotConstraint/FeatureValue/RoleBinding/SlotMap/Constraint/
+  SignApplication/CaseBranch）——各需值語法子 parser。
+- **③ set-ops**：`set distribution[key]=v`／`update language.prosody`＝… 及其 dump 白名單。
+- **Tier-2 維度片段整替**（`update <sign>.<dim>:` = delete 舊 + insert 新）。
 
 ## 7. 實作順序建議
 
