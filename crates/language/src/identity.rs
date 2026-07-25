@@ -1906,6 +1906,7 @@ sign root:
             selection: crate::CaseSelection::FirstMatch,
             expected: crate::ExpressionType::SignContext,
             scrutinee: None,
+            name: None,
             branches: vec![crate::CaseBranch {
                 condition: crate::CaseCondition::Else,
                 result: crate::Expression::Projection {
@@ -1913,6 +1914,7 @@ sign root:
                     dimension: crate::SignProjection::Syn,
                 },
                 belongs: Vec::new(),
+                name: None,
                 source: crate::SourceLocation::line(7),
             }],
             source: crate::SourceLocation::line(7),
