@@ -508,6 +508,9 @@ pub struct BinaryConstraint {
 pub struct Rule {
     /// 穩定 ID(fossilize/generalize 的 move 對象;P25 定址靠它)。
     pub id: RuleId,
+    /// 可選人類可讀標籤(P 系列取徑 B):`@name <label>` 後綴宣告,供 keyed 定址
+    /// `rule["label"]`。`None` = 匿名(仍可用序數/穩定 id 定址)。
+    pub name: Option<String>,
     /// 主分支原文(`a => ə / _#`),不含 `@stage` 與 else。
     pub body: String,
     pub stage: Stage,
@@ -780,6 +783,7 @@ impl Language {
     pub fn rule_dim(&mut self, body: impl Into<String>, stage: Stage, dim: Dim) -> Rule {
         Rule {
             id: self.fresh_rule_id(),
+            name: None,
             body: body.into(),
             stage,
             dim,

@@ -2247,11 +2247,30 @@ fn resolve_path_child(
             .filter(|entry| entry.kind == NodeKind::Block)
             .nth(numeric()?)
             .copied(),
-        "rule" => children
-            .iter()
-            .filter(|entry| matches!(entry.kind, NodeKind::Rule | NodeKind::FeatureRule))
-            .nth(numeric()?)
-            .copied(),
+        "rule" => {
+            // `rule[n]` = ordinal; `rule["name"]` or `rule[name]` (non-numeric)
+            // = keyed by the rule's `@name` label.
+            let keyed = match argument.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+                Some(name) => Some(name),
+                None if argument.parse::<usize>().is_err() => Some(argument),
+                None => None,
+            };
+            let mut rules = children
+                .iter()
+                .filter(|entry| matches!(entry.kind, NodeKind::Rule | NodeKind::FeatureRule));
+            match keyed {
+                Some(name) => rules
+                    .find(|entry| {
+                        matches!(
+                            item_at_address(document.language(), &entry.address),
+                            Some(SignItem::Rule(rule) | SignItem::FeatureRule(rule))
+                                if rule.name.as_deref() == Some(name)
+                        )
+                    })
+                    .copied(),
+                None => rules.nth(numeric()?).copied(),
+            }
+        }
         "then" => children
             .iter()
             .filter(|entry| entry.kind == NodeKind::RuleThenBranch)

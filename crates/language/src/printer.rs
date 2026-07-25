@@ -30,8 +30,12 @@ fn def_dim(path: &str) -> Option<&str> {
 }
 
 fn push_rule(out: &mut String, indent: &str, r: &crate::Rule) {
+    let label = match &r.name {
+        Some(name) => format!(" @name {name}"),
+        None => String::new(),
+    };
     out.push_str(&format!(
-        "{indent}{} @stage {}\n",
+        "{indent}{}{label} @stage {}\n",
         r.body,
         stage_str(r.stage)
     ));

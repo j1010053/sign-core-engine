@@ -146,6 +146,7 @@ fn leaf_text(a: &Artifacts, sign: &CompiledSign) -> Result<String, WordError> {
     for r in phon_rules {
         let rule = Rule {
             id: r.rule_id.clone(),
+            name: None,
             body: r.body.clone(),
             stage: r.stage,
             dim: r.dim,

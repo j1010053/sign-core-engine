@@ -662,7 +662,8 @@ fn parse_slot_map(l: &str, line: usize) -> Result<Option<SlotMapOp>, ParseError>
 
 /// 規則行 → Rule(尾綴 `@stage`;body 原文;維度依所在區塊 I25/P44)。
 fn parse_rule(lang: &mut Language, l: &str, line: usize, dim: Dim) -> Result<Rule, ParseError> {
-    let (body, stage) = match l.rsplit_once(" @stage ") {
+    // `@stage` is the outermost suffix (parsed first); `@name <label>` is inner.
+    let (rest, stage) = match l.rsplit_once(" @stage ") {
         Some((b, s)) => {
             let stage = match s.trim() {
                 "stem" => Stage::Stem,
@@ -674,7 +675,18 @@ fn parse_rule(lang: &mut Language, l: &str, line: usize, dim: Dim) -> Result<Rul
         }
         None => (l, Stage::Word),
     };
+    let (body, name) = match rest.rsplit_once(" @name ") {
+        Some((b, label)) => {
+            let label = label.trim();
+            if !ident_ok(label) {
+                return Err(err(line, "rule label must be a single identifier"));
+            }
+            (b.trim(), Some(label.to_owned()))
+        }
+        None => (rest, None),
+    };
     let mut rule = lang.rule_dim(body, stage, dim);
+    rule.name = name;
     rule.source = SourceLocation::line(line);
     Ok(rule)
 }
