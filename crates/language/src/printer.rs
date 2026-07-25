@@ -114,9 +114,16 @@ fn push_case(out: &mut String, indent: &str, case: &TypedCase) {
         CaseSelection::FirstMatch => "case",
         CaseSelection::Accumulate => "when",
     };
+    let case_label = case
+        .name
+        .as_ref()
+        .map(|name| format!(" @name {name}"))
+        .unwrap_or_default();
     match &case.scrutinee {
-        Some(scrutinee) => out.push_str(&format!("{indent}{keyword} {scrutinee}:\n")),
-        None => out.push_str(&format!("{indent}{keyword}:\n")),
+        Some(scrutinee) => {
+            out.push_str(&format!("{indent}{keyword} {scrutinee}{case_label}:\n"))
+        }
+        None => out.push_str(&format!("{indent}{keyword}{case_label}:\n")),
     }
     let branch_indent = format!("{indent}    ");
     let result_indent = format!("{branch_indent}    ");
@@ -126,7 +133,12 @@ fn push_case(out: &mut String, indent: &str, case: &TypedCase) {
             CaseCondition::Guard(guard) => guard.clone(),
             CaseCondition::Else => "else".to_owned(),
         };
-        out.push_str(&format!("{branch_indent}{condition}:\n"));
+        let branch_label = branch
+            .name
+            .as_ref()
+            .map(|name| format!(" @name {name}"))
+            .unwrap_or_default();
+        out.push_str(&format!("{branch_indent}{condition}{branch_label}:\n"));
         match &branch.result {
             Expression::Case(nested) => push_case(out, &result_indent, nested),
             Expression::SignFragment(items) => {

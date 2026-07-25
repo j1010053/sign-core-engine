@@ -437,6 +437,8 @@ pub struct CaseBranch {
     pub result: Expression,
     /// Only meaningful for `case<SignContext>`; type checking rejects it elsewhere.
     pub belongs: Vec<String>,
+    /// 可選標籤(P 系列取徑 B):`@name <label>` → keyed 定址 `branch["label"]`。
+    pub name: Option<String>,
     pub source: SourceLocation,
 }
 
@@ -445,6 +447,8 @@ pub struct TypedCase {
     pub selection: CaseSelection,
     pub expected: ExpressionType,
     pub scrutinee: Option<String>,
+    /// 可選標籤(P 系列取徑 B):`@name <label>` → keyed 定址 `case["label"]`。
+    pub name: Option<String>,
     pub branches: Vec<CaseBranch>,
     pub source: SourceLocation,
 }

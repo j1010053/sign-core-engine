@@ -2223,6 +2223,28 @@ fn selector_argument(segment: &str) -> Result<(&str, &str), ReplayError> {
         .ok_or_else(|| ReplayError::Selector(format!("malformed path segment {segment:?}")))
 }
 
+/// `[n]` = ordinal（回傳 None）；`["name"]` 或非數字 `[name]` = keyed（回傳 Some(name)）。
+fn keyed_name(argument: &str) -> Option<&str> {
+    match argument.strip_prefix('"').and_then(|rest| rest.strip_suffix('"')) {
+        Some(name) => Some(name),
+        None if argument.parse::<usize>().is_err() => Some(argument),
+        None => None,
+    }
+}
+
+/// 取 case-branch 位址對應的 `@name` 標籤。
+fn branch_name_at<'a>(language: &'a Language, address: &NodeAddress) -> Option<&'a str> {
+    let (last, rest) = address.0.split_last()?;
+    let AddressSegment::CaseBranches(index) = last else {
+        return None;
+    };
+    case_at(language, &NodeAddress(rest.to_vec()))?
+        .branches
+        .get(*index)?
+        .name
+        .as_deref()
+}
+
 fn resolve_path_child(
     document: &LanguageDocument,
     parent: &NodeRef,
@@ -2248,17 +2270,11 @@ fn resolve_path_child(
             .nth(numeric()?)
             .copied(),
         "rule" => {
-            // `rule[n]` = ordinal; `rule["name"]` or `rule[name]` (non-numeric)
-            // = keyed by the rule's `@name` label.
-            let keyed = match argument.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
-                Some(name) => Some(name),
-                None if argument.parse::<usize>().is_err() => Some(argument),
-                None => None,
-            };
+            // `rule[n]` = ordinal; `rule["name"]`/`rule[name]` = keyed `@name` label.
             let mut rules = children
                 .iter()
                 .filter(|entry| matches!(entry.kind, NodeKind::Rule | NodeKind::FeatureRule));
-            match keyed {
+            match keyed_name(argument) {
                 Some(name) => rules
                     .find(|entry| {
                         matches!(
@@ -2269,6 +2285,32 @@ fn resolve_path_child(
                     })
                     .copied(),
                 None => rules.nth(numeric()?).copied(),
+            }
+        }
+        "case" => {
+            let mut cases = children
+                .iter()
+                .filter(|entry| entry.kind == NodeKind::Case);
+            match keyed_name(argument) {
+                Some(name) => cases
+                    .find(|entry| {
+                        case_at(document.language(), &entry.address)
+                            .and_then(|case| case.name.as_deref())
+                            == Some(name)
+                    })
+                    .copied(),
+                None => cases.nth(numeric()?).copied(),
+            }
+        }
+        "branch" => {
+            let mut branches = children
+                .iter()
+                .filter(|entry| entry.kind == NodeKind::CaseBranch);
+            match keyed_name(argument) {
+                Some(name) => branches
+                    .find(|entry| branch_name_at(document.language(), &entry.address) == Some(name))
+                    .copied(),
+                None => branches.nth(numeric()?).copied(),
             }
         }
         "then" => children

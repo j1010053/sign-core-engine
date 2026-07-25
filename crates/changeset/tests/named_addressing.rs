@@ -73,3 +73,56 @@ fn unknown_rule_label_is_rejected() {
         .unwrap_err();
     assert!(matches!(err, ReplayError::Selector(_)), "got {err}");
 }
+
+const CASE_SOURCE: &str = r#"Symbol w
+
+trait Zverb:
+trait Zfinite:
+
+sign walk:
+    belongs Zverb
+    syn:
+        feature:
+            number = enum(singular, plural)
+    phon:
+        /walk/
+    case @name agr:
+        $self.syn.number == singular @name sg:
+            belongs Zfinite
+        else @name other:
+            belongs Zverb
+"#;
+
+#[test]
+fn named_case_and_branch_round_trip_and_address() {
+    let base = LanguageDocument::import_new_root(CASE_SOURCE, "evo:root").unwrap();
+    // round-trip: case/branch 標籤在 canonical dump 保留。
+    let src = base.source();
+    assert!(src.contains("case @name agr:"), "{src}");
+    assert!(src.contains("@name sg:"), "{src}");
+
+    // case["agr"] 定址 → 改 selection。
+    let spec = LibrarySpec::default();
+    let mut source = change_set_prelude(&base, &spec, "evo:case").unwrap();
+    source.push_str("\n    statement 0:\n        update sign(\"walk\").case[\"agr\"].selection = when\n");
+    let resolved = UnresolvedChangeSet::parse(&source)
+        .unwrap()
+        .resolve(&base, &spec)
+        .unwrap();
+    assert!(resolved.dump().contains("update node(case, @"));
+    let doc = ChangeInterpreter::new(base.clone(), spec.clone(), "evo:case")
+        .unwrap()
+        .run(&resolved)
+        .unwrap()
+        .document;
+    assert!(doc.source().contains("when @name agr:"), "selection→when:\n{}", doc.source());
+
+    // branch["sg"] 定址 → delete 該分支。
+    let mut source2 = change_set_prelude(&base, &spec, "evo:branch").unwrap();
+    source2.push_str("\n    statement 0:\n        delete sign(\"walk\").case[\"agr\"].branch[\"sg\"]\n");
+    let resolved2 = UnresolvedChangeSet::parse(&source2)
+        .unwrap()
+        .resolve(&base, &spec)
+        .unwrap();
+    assert!(resolved2.dump().contains("delete node(case_branch, @"));
+}

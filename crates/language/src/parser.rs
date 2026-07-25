@@ -311,7 +311,8 @@ fn parse_typed_case(
     let Some(scrutinee) = case_head.strip_suffix(':') else {
         return Err(err(head.no, "case header must end with `:`"));
     };
-    let scrutinee = scrutinee.trim();
+    let (scrutinee, case_name) = split_name_suffix(scrutinee);
+    let case_name = validate_label(case_name, head.no)?;
     let scrutinee = (!scrutinee.is_empty()).then(|| scrutinee.to_owned());
     let mut index = start + 1;
     while index < body.len() && body[index].text.is_empty() {
@@ -335,7 +336,8 @@ fn parse_typed_case(
         let Some(label) = branch.text.strip_suffix(':') else {
             return Err(err(branch.no, "case branch header must end with `:`"));
         };
-        let label = label.trim();
+        let (label, branch_name) = split_name_suffix(label);
+        let branch_name = validate_label(branch_name, branch.no)?;
         if saw_else && !matches!(label, "else" | "Else") {
             return Err(err(branch.no, "case branch cannot follow `else`"));
         }
@@ -437,6 +439,7 @@ fn parse_typed_case(
             condition,
             result,
             belongs,
+            name: branch_name,
             source: SourceLocation::line(branch.no),
         });
     }
@@ -445,6 +448,7 @@ fn parse_typed_case(
             selection,
             expected,
             scrutinee,
+            name: case_name,
             branches,
             source: SourceLocation::line(head.no),
         },
@@ -661,6 +665,27 @@ fn parse_slot_map(l: &str, line: usize) -> Result<Option<SlotMapOp>, ParseError>
 }
 
 /// 規則行 → Rule(尾綴 `@stage`;body 原文;維度依所在區塊 I25/P44)。
+/// 拆 `… @name <label>` 後綴(或整行 `@name <label>`):回傳 (剩餘, Option<label>)。
+fn split_name_suffix(text: &str) -> (&str, Option<&str>) {
+    let text = text.trim();
+    if let Some(rest) = text.strip_prefix("@name ") {
+        return ("", Some(rest.trim()));
+    }
+    if let Some((head, name)) = text.rsplit_once(" @name ") {
+        return (head.trim(), Some(name.trim()));
+    }
+    (text, None)
+}
+
+/// 標籤須為單一識別字。
+fn validate_label(label: Option<&str>, line: usize) -> Result<Option<String>, ParseError> {
+    match label {
+        Some(name) if ident_ok(name) => Ok(Some(name.to_owned())),
+        Some(_) => Err(err(line, "label must be a single identifier")),
+        None => Ok(None),
+    }
+}
+
 fn parse_rule(lang: &mut Language, l: &str, line: usize, dim: Dim) -> Result<Rule, ParseError> {
     // `@stage` is the outermost suffix (parsed first); `@name <label>` is inner.
     let (rest, stage) = match l.rsplit_once(" @stage ") {
