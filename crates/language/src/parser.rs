@@ -1238,6 +1238,14 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             text.split_once('=')
         };
         if let Some((field, _)) = definition {
+            if dim == DimKw::Phon {
+                // phon has no consumable `field = value` metadata: only a `/…/`
+                // UR template, a rule, or `realization:`.
+                return Err(err(
+                    no,
+                    "`phon:` takes a `/…/` UR template, a rule, or `realization:` — not a `field = value` definition",
+                ));
+            }
             let field = field.trim();
             let path = format!("{}.{}", dim.prefix(), field);
             parse_path(&path)

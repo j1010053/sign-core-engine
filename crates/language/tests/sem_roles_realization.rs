@@ -702,3 +702,24 @@ sign s:
 ";
     assert!(Language::parse(typed).is_ok(), "typed realization must parse");
 }
+
+/// `phon:` 不再接受 latent 的 `field = value` Def(無消費者);只收 `/…/` UR、
+/// 規則、`realization:`。
+#[test]
+fn phon_field_equals_value_definition_is_rejected() {
+    let src = "\
+Symbol x
+
+sign s:
+    phon:
+        /x/
+        stress = high
+";
+    let err = Language::parse(src).expect_err("phon field=value must not parse");
+    assert!(
+        format!("{err:?}").contains("field = value"),
+        "expected phon field-def rejection, got {err:?}"
+    );
+    // 對照:UR + 規則仍可解析。
+    assert!(Language::parse("Symbol x\nSymbol y\n\nsign s:\n    phon:\n        /x/\n        x => y\n").is_ok());
+}
