@@ -53,8 +53,11 @@ sign TutorialNP:
     phon:
         /{stem}/
         realization:
-            /{stem}s/ / $self.syn.number == plural
-            else /{stem}/
+            case:
+                $self.syn.number == plural:
+                    /{stem}s/
+                else:
+                    /{stem}/
 
 sign TutorialClause:
     belongs TutorialClauseFrame

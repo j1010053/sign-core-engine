@@ -159,8 +159,11 @@ sign EnglishCountNounForm:
     phon:
         /{stem}/
         realization:
-            /{stem}s/ / $self.syn.number == plural
-            else /{stem}/
+            case:
+                $self.syn.number == plural:
+                    /{stem}s/
+                else:
+                    /{stem}/
 ```
 
 `realization:` branch 是完整 phon template。guard 只能讀 `$self` 與 frozen `$slot`，不能寫 Syn/Sem/Prag。按書寫順序 first-match；Error 不進 fallback；所有 guard Unmatched 時使用 deep/default template。選中後先展開 `{slot}`，若仍有 `{...}`、`$self`、`$slot` 或非 phon metadata，即為 error。
