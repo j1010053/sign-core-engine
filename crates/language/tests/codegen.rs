@@ -253,3 +253,35 @@ fn empty_and_decls_only_languages_codegen() {
     assert!(a.grammar.program.rules.is_empty());
     assert!(a.grammar.phon_source.contains("Symbol a"));
 }
+
+/// P46 取徑 A(slice 1):phon `name:` 前綴 → 具名 rule;canonical dump 用前綴;
+/// codegen 排放 Lexurgy `name:` 標籤(非合成 rN:)。
+#[test]
+fn phon_named_rule_uses_lexurgy_name_prefix_and_label() {
+    let src = "\
+Symbol a
+Symbol b
+
+global trait Core:
+    phon:
+        lenition: a => b
+";
+    let l = Language::parse(src).expect("named phon rule parses");
+    let dumped = l.dump();
+    assert!(dumped.contains("lenition: a => b"), "canonical 前綴:\n{dumped}");
+    assert_eq!(
+        Language::parse(&dumped).unwrap().dump(),
+        dumped,
+        "round-trip 穩定"
+    );
+    let a = codegen::compile_full(&l).unwrap();
+    assert!(
+        a.grammar.phon_source.contains("lenition:"),
+        "phon_source 用 Lexurgy 名:\n{}",
+        a.grammar.phon_source
+    );
+    assert!(
+        !a.grammar.phon_source.contains("r0:"),
+        "具名 rule 不用合成 rN 標籤"
+    );
+}

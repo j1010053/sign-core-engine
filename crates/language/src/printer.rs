@@ -30,15 +30,21 @@ fn def_dim(path: &str) -> Option<&str> {
 }
 
 fn push_rule(out: &mut String, indent: &str, r: &crate::Rule) {
-    let label = match &r.name {
-        Some(name) => format!(" @name {name}"),
-        None => String::new(),
-    };
-    out.push_str(&format!(
-        "{indent}{}{label} @stage {}\n",
-        r.body,
-        stage_str(r.stage)
-    ));
+    // phon names use the Lexurgy-style `name:` prefix (P46 取徑 A); other
+    // dimensions keep the `@name` suffix (P45).
+    match (&r.name, r.dim) {
+        (Some(name), crate::Dim::Phon) => out.push_str(&format!(
+            "{indent}{name}: {} @stage {}\n",
+            r.body,
+            stage_str(r.stage)
+        )),
+        (Some(name), _) => out.push_str(&format!(
+            "{indent}{} @name {name} @stage {}\n",
+            r.body,
+            stage_str(r.stage)
+        )),
+        (None, _) => out.push_str(&format!("{indent}{} @stage {}\n", r.body, stage_str(r.stage))),
+    }
     for e in &r.else_chain {
         out.push_str(&format!("{indent}    else {e}\n")); // Lexurgy Else(P43)
     }

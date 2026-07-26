@@ -665,6 +665,29 @@ fn parse_slot_map(l: &str, line: usize) -> Result<Option<SlotMapOp>, ParseError>
 }
 
 /// 規則行 → Rule(尾綴 `@stage`;body 原文;維度依所在區塊 I25/P44)。
+/// Lexurgy 式命名前綴(P46 取徑 A,限 phon):`name: <rule>`。name 可含連字號;
+/// 空 body、含空白的 head、保留字(Scan/stage/Then/Else/realization/case/when/
+/// propagate)不視為名。回傳 (name, 規則本文)。
+fn lexurgy_name_prefix(text: &str) -> Option<(String, &str)> {
+    let (head, rest) = text.split_once(':')?;
+    let name = head.trim();
+    let rest = rest.trim();
+    if name.is_empty()
+        || rest.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        || matches!(
+            name,
+            "Scan" | "stage" | "Then" | "Else" | "then" | "else" | "realization" | "case"
+                | "when" | "propagate" | "Propagate"
+        )
+    {
+        return None;
+    }
+    Some((name.to_owned(), rest))
+}
+
 /// 拆 `… @name <label>` 後綴(或整行 `@name <label>`):回傳 (剩餘, Option<label>)。
 fn split_name_suffix(text: &str) -> (&str, Option<&str>) {
     let text = text.trim();
@@ -1256,7 +1279,13 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                 value: value.trim().to_owned(),
             }));
         } else {
-            let r = parse_rule(lang, text, no, dim.to_dim())?;
+            // phon: accept a Lexurgy-style `name:` prefix (P46 取徑 A, inline).
+            let (prefix_name, rule_text) = match (dim, lexurgy_name_prefix(text)) {
+                (DimKw::Phon, Some((name, rest))) => (Some(name), rest),
+                _ => (None, text),
+            };
+            let mut r = parse_rule(lang, rule_text, no, dim.to_dim())?;
+            r.name = prefix_name.or(r.name);
             blocks.last_mut().unwrap().items.push(SignItem::Rule(r));
         }
     }

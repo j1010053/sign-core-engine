@@ -162,7 +162,12 @@ fn emit_rule_mapped(
             }
         }
     } else {
-        out.push_str(&format!("r{n}:\n"));
+        // A named phon rule (P46 取徑 A) emits its Lexurgy `name:` label; an
+        // unnamed rule keeps the synthetic `rN:` label.
+        out.push_str(&format!(
+            "{}:\n",
+            r.name.clone().unwrap_or_else(|| format!("r{n}"))
+        ));
         *n += 1;
         if r.stage != Stage::Word {
             out.push_str(&format!("    stage: {}\n", stage_str(r.stage)));
