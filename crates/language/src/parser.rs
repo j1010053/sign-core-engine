@@ -26,7 +26,7 @@ use crate::path::parse_path;
 use crate::{
     BinaryConstraint, Block, CaseBranch, CaseCondition, CaseSelection, ConstraintPredicate, Def,
     Dim, Expression, ExpressionType, FeatureDecl, FeatureExpression, FeatureValue, Language,
-    Realization, RoleBinding, RoleDecl, RoleExpression, Rule,
+    PhonBlock, Realization, RoleBinding, RoleDecl, RoleExpression, Rule,
     SignApplication, SignArgument, SignArgumentValue, SignExpression, SignItem, SignProjection,
     Slot, SlotConstraint, SlotFeatureBinding, SlotMapOp, SourceLocation, Stage, TraitDef,
     TypedCase,
@@ -688,6 +688,94 @@ fn lexurgy_name_prefix(text: &str) -> Option<(String, &str)> {
     Some((name.to_owned(), rest))
 }
 
+/// phon block 頭(P46 S2):`<name>:`(冒號後無內容);後接縮排 body 即結構化 block。
+fn phon_block_header(text: &str) -> Option<String> {
+    let name = text.strip_suffix(':')?.trim();
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        || matches!(
+            name,
+            "Scan" | "stage" | "Then" | "Else" | "then" | "else" | "realization" | "case"
+                | "when" | "propagate" | "Propagate"
+        )
+    {
+        return None;
+    }
+    Some(name.to_owned())
+}
+
+/// `Then:`/`Else:` 邊界:回傳 (is_then, inline 語句)。
+fn phon_block_boundary(text: &str) -> Option<(bool, Option<String>)> {
+    for (kw, is_then) in [("Then", true), ("then", true), ("Else", false), ("else", false)] {
+        if let Some(rest) = text.strip_prefix(kw) {
+            if let Some(after) = rest.strip_prefix(':') {
+                let inline = after.trim();
+                return Some((is_then, (!inline.is_empty()).then(|| inline.to_owned())));
+            }
+        }
+    }
+    None
+}
+
+/// 把 `name:` 下的縮排 body 解析成結構化 `PhonBlock`(對映引擎 `RuleBlock`)。
+/// leading 語句 = 第一個 Leaf;`Then:`/`Else:`(inline 或縮排子 block)開後續 block;
+/// 同層不得混 Then/Else。
+fn parse_phon_block(lines: &[Line]) -> Result<PhonBlock, ParseError> {
+    let mut first: Vec<String> = Vec::new();
+    let mut subs: Vec<PhonBlock> = Vec::new();
+    let mut is_then: Option<bool> = None;
+    let mut i = 0usize;
+    while i < lines.len() {
+        let ln = &lines[i];
+        if ln.text.is_empty() {
+            i += 1;
+            continue;
+        }
+        let text = ln.text.trim();
+        if let Some((then, inline)) = phon_block_boundary(text) {
+            if is_then.is_some_and(|k| k != then) {
+                return Err(err(ln.no, "cannot mix `Then:` and `Else:` at one block level"));
+            }
+            is_then = Some(then);
+            let sub = if let Some(stmt) = inline {
+                PhonBlock::Leaf(vec![stmt])
+            } else {
+                let start = i + 1;
+                let mut j = start;
+                while j < lines.len() && (lines[j].text.is_empty() || lines[j].indent > ln.indent) {
+                    j += 1;
+                }
+                let sub = parse_phon_block(&lines[start..j])?;
+                i = j - 1;
+                sub
+            };
+            subs.push(sub);
+        } else if is_then.is_some() {
+            return Err(err(
+                ln.no,
+                "statement after a `Then:`/`Else:` boundary must sit inside its block",
+            ));
+        } else {
+            first.push(text.to_owned());
+        }
+        i += 1;
+    }
+    Ok(match is_then {
+        None => PhonBlock::Leaf(first),
+        Some(then) => {
+            let mut blocks = vec![PhonBlock::Leaf(first)];
+            blocks.extend(subs);
+            if then {
+                PhonBlock::Then(blocks)
+            } else {
+                PhonBlock::Else(blocks)
+            }
+        }
+    })
+}
+
 /// 拆 `… @name <label>` 後綴(或整行 `@name <label>`):回傳 (剩餘, Option<label>)。
 fn split_name_suffix(text: &str) -> (&str, Option<&str>) {
     let text = text.trim();
@@ -1278,6 +1366,24 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                 path: format!("{}.{}", dim.prefix(), field.trim()),
                 value: value.trim().to_owned(),
             }));
+        } else if dim == DimKw::Phon
+            && phon_block_header(text).is_some()
+            && index < body.len()
+            && body[index].indent > ind
+        {
+            // phon: bare `name:` header + indented body = structured Lexurgy block
+            // (P46 S2).
+            let name = phon_block_header(text).expect("checked above");
+            let start = index;
+            while index < body.len() && (body[index].text.is_empty() || body[index].indent > ind) {
+                index += 1;
+            }
+            let block = parse_phon_block(&body[start..index])?;
+            let mut r = lang.rule_dim(String::new(), Stage::Word, Dim::Phon);
+            r.name = Some(name);
+            r.phon_block = Some(block);
+            r.source = SourceLocation::line(no);
+            blocks.last_mut().unwrap().items.push(SignItem::Rule(r));
         } else {
             // phon: accept a Lexurgy-style `name:` prefix (P46 取徑 A, inline).
             let (prefix_name, rule_text) = match (dim, lexurgy_name_prefix(text)) {

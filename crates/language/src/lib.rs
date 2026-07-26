@@ -499,6 +499,17 @@ pub struct BinaryConstraint {
 
 /// Rule(`=>`):狀態轉換,同 stage 內依書寫順序(P18)。
 /// 步驟 8 以 raw body 承載(I15-c);env/action/else 結構化屬步驟 9。
+/// 結構化 Lexurgy phon block(P46 取徑 A),1:1 對映引擎 `tshiatun_dsl` 的 `RuleBlock`:
+/// `Leaf` 多語句同時套用;`Then` 逐 block commit 接力(Sequential);`Else` 第一個 match 的
+/// block 整組勝出、其餘不跑(FirstMatching);`Propagate` 迭代到 fixpoint。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PhonBlock {
+    Leaf(Vec<String>),
+    Then(Vec<PhonBlock>),
+    Else(Vec<PhonBlock>),
+    Propagate(Box<PhonBlock>),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rule {
     /// 穩定 ID(fossilize/generalize 的 move 對象;P25 定址靠它)。
@@ -506,6 +517,10 @@ pub struct Rule {
     /// 可選人類可讀標籤(P 系列取徑 B):`@name <label>` 後綴宣告,供 keyed 定址
     /// `rule["label"]`。`None` = 匿名(仍可用序數/穩定 id 定址)。
     pub name: Option<String>,
+    /// P46 取徑 A(限 phon):結構化 Lexurgy block(`Then:`/`Else:` 巢狀,對映引擎
+    /// `RuleBlock`)。`Some` 時 codegen/printer 以此為準,`body`/`else_chain`/`then_chain`
+    /// 空置;`None` = 沿用扁平 body + 鏈(向後相容,syn/sem/prag 的 P43 Else 亦走此路)。
+    pub phon_block: Option<PhonBlock>,
     /// 主分支原文(`a => ə / _#`),不含 `@stage` 與 else。
     pub body: String,
     pub stage: Stage,
@@ -779,6 +794,7 @@ impl Language {
         Rule {
             id: self.fresh_rule_id(),
             name: None,
+            phon_block: None,
             body: body.into(),
             stage,
             dim,

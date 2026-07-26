@@ -29,7 +29,42 @@ fn def_dim(path: &str) -> Option<&str> {
     DIMS.contains(&head).then_some(head)
 }
 
+/// 印結構化 `PhonBlock`(P46 S2):leading block 直接印;後續冠 `Then:`/`Else:` 縮排。
+fn push_phon_block(out: &mut String, block: &crate::PhonBlock, indent: &str) {
+    match block {
+        crate::PhonBlock::Leaf(stmts) => {
+            for statement in stmts {
+                out.push_str(indent);
+                out.push_str(statement);
+                out.push('\n');
+            }
+        }
+        crate::PhonBlock::Then(blocks) | crate::PhonBlock::Else(blocks) => {
+            let keyword = if matches!(block, crate::PhonBlock::Then(_)) {
+                "Then"
+            } else {
+                "Else"
+            };
+            if let Some(first) = blocks.first() {
+                push_phon_block(out, first, indent);
+            }
+            let inner = format!("{indent}    ");
+            for sub in blocks.iter().skip(1) {
+                out.push_str(&format!("{indent}{keyword}:\n"));
+                push_phon_block(out, sub, &inner);
+            }
+        }
+        crate::PhonBlock::Propagate(inner) => push_phon_block(out, inner, indent),
+    }
+}
+
 fn push_rule(out: &mut String, indent: &str, r: &crate::Rule) {
+    // P46 S2: a structured phon block prints as `name:` + recursive block.
+    if let Some(block) = &r.phon_block {
+        out.push_str(&format!("{indent}{}:\n", r.name.as_deref().unwrap_or("")));
+        push_phon_block(out, block, &format!("{indent}    "));
+        return;
+    }
     // phon names use the Lexurgy-style `name:` prefix (P46 取徑 A); other
     // dimensions keep the `@name` suffix (P45).
     match (&r.name, r.dim) {

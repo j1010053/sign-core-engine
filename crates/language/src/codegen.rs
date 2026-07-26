@@ -103,6 +103,36 @@ pub(crate) fn emit_rule(out: &mut String, n: &mut u32, r: &Rule) -> Result<(), C
     emit_rule_mapped(out, n, r, &mut Vec::new())
 }
 
+/// 排放結構化 `PhonBlock`(P46 S2)→ `.qy`:leading block 直接印;後續 block 冠
+/// `Then:`/`Else:` 邊界並縮排。
+fn emit_phon_block(out: &mut String, block: &crate::PhonBlock, indent: &str) {
+    match block {
+        crate::PhonBlock::Leaf(stmts) => {
+            for statement in stmts {
+                out.push_str(indent);
+                out.push_str(statement);
+                out.push('\n');
+            }
+        }
+        crate::PhonBlock::Then(blocks) | crate::PhonBlock::Else(blocks) => {
+            let keyword = if matches!(block, crate::PhonBlock::Then(_)) {
+                "Then"
+            } else {
+                "Else"
+            };
+            if let Some(first) = blocks.first() {
+                emit_phon_block(out, first, indent);
+            }
+            let inner = format!("{indent}    ");
+            for sub in blocks.iter().skip(1) {
+                out.push_str(&format!("{indent}{keyword}:\n"));
+                emit_phon_block(out, sub, &inner);
+            }
+        }
+        crate::PhonBlock::Propagate(inner) => emit_phon_block(out, inner, indent),
+    }
+}
+
 fn generated_line(out: &str) -> usize {
     out.bytes().filter(|byte| *byte == b'\n').count() + 1
 }
@@ -140,6 +170,17 @@ fn emit_rule_mapped(
             .map(str::to_owned)
             .collect::<Vec<_>>()
     };
+    if let Some(block) = &r.phon_block {
+        // P46 S2: structured Lexurgy block → `.qy` verbatim.
+        let label = r.name.clone().unwrap_or_else(|| format!("r{n}"));
+        *n += 1;
+        out.push_str(&format!("{label}:\n"));
+        if r.stage != Stage::Word {
+            out.push_str(&format!("    stage: {}\n", stage_str(r.stage)));
+        }
+        emit_phon_block(out, block, "    ");
+        return Ok(());
+    }
     if r.body.starts_with("Scan ") {
         if r.stage != Stage::Word {
             return Err(CodegenError::ScanStageUnsupported {

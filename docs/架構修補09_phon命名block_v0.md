@@ -61,12 +61,22 @@ lenition:                 # 命名 rule = block(name: 前綴;名可含連字號 
 - 測試 `codegen.rs::phon_named_rule_uses_lexurgy_name_prefix_and_label`;workspace 290 綠、
   無 golden churn、clippy 0。
 
+### slice 2(已落地 2026-07-24)
+- **結構化 `PhonBlock` IR**(`Leaf`/`Then`/`Else`/`Propagate`,1:1 對映引擎 `RuleBlock`),
+  掛為 `Rule.phon_block: Option<PhonBlock>`——**避開新 SignItem 的 36-arm cascade**,且
+  `else_chain`/`then_chain` 保留給共用的 P43 路徑(phon rule 對 synchronic 為 no-op)。
+- **parser**:phon 裸 `name:` 頭 + 縮排 body → `parse_phon_block`(遞迴;`Then:`/`Else:` inline
+  或縮排;同層不得混)。**printer/codegen** 遞迴排放 `.qy` block。round-trip 穩定。
+- 測試 `codegen.rs::phon_structured_block_then_and_else_codegen_flat`;workspace 291 綠。
+- **界線**:**巢狀 Then/Else 由引擎限制**——tshiatūn 現行 parser 只收 **flat 單層** Then 或
+  Else(混/巢狀需 upstream「grouped-block parser」,其 `ast.rs` 已備 IR、待補)。`.lang` IR
+  可表達巢狀(forward-compatible),但 codegen 出的巢狀 `.qy` 目前會被引擎拒。**L1 部分解**
+  (單層 ✓,巢狀待 upstream)。
+
 ### 尚未落地(staged)
-- **S2 縮排 body + `Then:`/`Else:` 巢狀**:把 phon rule 升級成結構化 block IR
-  (`Simultaneous/Sequential/FirstMatching/Propagate`,1:1 對映引擎 `RuleBlock`),取代扁平
-  `else_chain`/`then_chain`。**解 L1/L2/L5**。
-- **S3 語句級定址 + 四原語**:`rule["lenition"].then[0].stmt[k]` 定址/insert/move。**解 L2**。
+- **S3 語句級定址 + 四原語**:`rule["lenition"].leaf[k]`/`.then[n]` 定址/insert/move。**解 L2**。
 - **S4 `propagate` 語法**(header/邊界)。**解 L3**。
+- **巢狀 Then/Else**:待 tshiatūn upstream 補 grouped-block parser。
 
 ## 相容性
 - **P44**:block 屬 phon 維。相容。
