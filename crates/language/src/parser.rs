@@ -26,7 +26,7 @@ use crate::path::parse_path;
 use crate::{
     BinaryConstraint, Block, CaseBranch, CaseCondition, CaseSelection, ConstraintPredicate, Def,
     Dim, Expression, ExpressionType, FeatureDecl, FeatureExpression, FeatureValue, Language,
-    Realization, RealizationBranch, RoleBinding, RoleDecl, RoleExpression, Rule,
+    Realization, RoleBinding, RoleDecl, RoleExpression, Rule,
     SignApplication, SignArgument, SignArgumentValue, SignExpression, SignItem, SignProjection,
     Slot, SlotConstraint, SlotFeatureBinding, SlotMapOp, SourceLocation, Stage, TraitDef,
     TypedCase,
@@ -1122,57 +1122,17 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                 let Some(SignItem::Realization(realization)) = item else {
                     return Err(err(no, "internal realization block state is invalid"));
                 };
-                if !realization.branches.is_empty() || realization.expression.is_some() {
-                    return Err(err(
-                        no,
-                        "realization may contain one typed case or V1 branches",
-                    ));
+                if realization.expression.is_some() {
+                    return Err(err(no, "realization may contain one typed case"));
                 }
                 realization.expression = Some(case);
                 index = next;
                 continue;
             }
-            let (is_else, branch) = text
-                .strip_prefix("else ")
-                .map(|rest| (true, rest.trim()))
-                .unwrap_or((false, text));
-            if !branch.starts_with('/') {
-                return Err(err(
-                    no,
-                    "realization branch must begin with a complete `/.../` template",
-                ));
-            }
-            let Some(end) = branch[1..].find('/').map(|offset| offset + 1) else {
-                return Err(err(no, "realization template is missing its closing `/`"));
-            };
-            let template = branch[..=end].to_owned();
-            let tail = branch[end + 1..].trim();
-            let guard = if is_else {
-                if !tail.is_empty() {
-                    return Err(err(no, "`else` realization cannot have a guard"));
-                }
-                None
-            } else if tail.is_empty() {
-                return Err(err(no, "non-`else` realization branch requires a guard"));
-            } else {
-                let Some(guard) = tail.strip_prefix('/').map(str::trim) else {
-                    return Err(err(no, "realization guard must follow ` / `"));
-                };
-                if guard.is_empty() {
-                    return Err(err(no, "realization guard cannot be empty"));
-                }
-                Some(guard.to_owned())
-            };
-            let item = blocks.last_mut().unwrap().items.last_mut();
-            let Some(SignItem::Realization(realization)) = item else {
-                return Err(err(no, "internal realization block state is invalid"));
-            };
-            realization.branches.push(RealizationBranch {
-                template,
-                guard,
-                source: SourceLocation::line(no),
-            });
-            continue;
+            return Err(err(
+                no,
+                "realization must contain a `case:` selecting phon templates by guard",
+            ));
         }
         if text == "slots:" {
             if dim != DimKw::Syn {

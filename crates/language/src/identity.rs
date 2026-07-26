@@ -978,31 +978,18 @@ fn enumerate_item_children(
             }
         }
         SignItem::Realization(Realization {
-            branches,
-            expression,
+            expression: Some(case),
         }) => {
-            for (index, _) in branches.iter().enumerate() {
-                push_entry(
-                    entries,
-                    namespace,
-                    next,
-                    NodeKind::RealizationBranch,
-                    Some(parent.clone()),
-                    address.child(AddressSegment::RealizationBranches(index)),
-                );
-            }
-            if let Some(case) = expression {
-                let case_address = address.child(AddressSegment::CaseExpression);
-                let case_id = push_entry(
-                    entries,
-                    namespace,
-                    next,
-                    NodeKind::Case,
-                    Some(parent.clone()),
-                    case_address.clone(),
-                );
-                enumerate_case(case, &case_address, &case_id, namespace, next, entries);
-            }
+            let case_address = address.child(AddressSegment::CaseExpression);
+            let case_id = push_entry(
+                entries,
+                namespace,
+                next,
+                NodeKind::Case,
+                Some(parent.clone()),
+                case_address.clone(),
+            );
+            enumerate_case(case, &case_address, &case_id, namespace, next, entries);
         }
         SignItem::SignExpression(expression) => enumerate_root_expression_children(
             &expression.expression,

@@ -19,7 +19,7 @@ use conlang_language::{
     CaseBranch, CompileSystemError, CompiledSystem, Def, Dim, Expression, FeatureDecl,
     FeatureValue, IdentityError, IdentityManifestV2, Language, LanguageDocument, LibraryId,
     LibrarySpec, NodeAddress, NodeEntryV1, NodeId, NodeKind, NodeRef, Realization,
-    RealizationBranch, RoleBinding, RoleDecl, Rule, Severity, SignApplication, SignArgumentValue,
+    RoleBinding, RoleDecl, Rule, Severity, SignApplication, SignArgumentValue,
     SignDef, SignItem, Slot, SlotConstraint, SlotFeatureBinding, SlotMapOp, Stage, TraitDef,
     TypedCase, ValidationReport,
 };
@@ -44,7 +44,6 @@ pub enum DetachedNode {
     Item(SignItem),
     RuleElseBranch(String),
     RuleThenBranch(String),
-    RealizationBranch(RealizationBranch),
     CaseBranch(CaseBranch),
 }
 
@@ -60,7 +59,6 @@ impl DetachedNode {
             DetachedNode::Item(item) => item_kind(item),
             DetachedNode::RuleElseBranch(_) => NodeKind::RuleElseBranch,
             DetachedNode::RuleThenBranch(_) => NodeKind::RuleThenBranch,
-            DetachedNode::RealizationBranch(_) => NodeKind::RealizationBranch,
             DetachedNode::CaseBranch(_) => NodeKind::CaseBranch,
         }
     }
@@ -91,8 +89,6 @@ pub enum NodeUpdate {
     SlotMap(SlotMapOp),
     RoleDeclaration(RoleDecl),
     RoleBinding(RoleBinding),
-    RealizationTemplate(String),
-    RealizationGuard(Option<String>),
     CaseSelection(conlang_language::CaseSelection),
     CaseBranch(CaseBranch),
     SignApplication(SignApplication),
@@ -630,10 +626,6 @@ fn insertion_site(
             let rule = rule_at(language, &parent.address)?;
             (ListKey::RuleThen, rule.then_chain.len(), None)
         }
-        (NodeKind::Realization, NodeKind::RealizationBranch) => {
-            let realization = realization_at(language, &parent.address)?;
-            (ListKey::Realization, realization.branches.len(), None)
-        }
         (NodeKind::Case, NodeKind::CaseBranch) => {
             let case = case_at(language, &parent.address).ok_or_else(|| {
                 EditError::FieldMismatch("case parent address is stale".to_owned())
@@ -808,11 +800,6 @@ fn insert_payload(
                 .then_chain
                 .insert(index, value)
         }
-        DetachedNode::RealizationBranch(value) if parent.kind == NodeKind::Realization => {
-            realization_at_mut(language, &parent.address)?
-                .branches
-                .insert(index, value)
-        }
         DetachedNode::CaseBranch(value) if parent.kind == NodeKind::Case => {
             case_at_mut(language, &parent.address)?
                 .branches
@@ -895,9 +882,6 @@ fn child_addresses(
             }
         }
         NodeKind::Realization => {
-            for index in 0..realization_at(language, address)?.branches.len() {
-                children.push(address.child(AddressSegment::RealizationBranches(index)));
-            }
             if realization_at(language, address)?.expression.is_some() {
                 children.push(address.child(AddressSegment::CaseExpression));
             }
@@ -1003,11 +987,6 @@ fn delete_nested_payload(
         }
         Some(AddressSegment::RuleThen(index)) => {
             rule_at_mut(language, &address)?.then_chain.remove(*index);
-        }
-        Some(AddressSegment::RealizationBranches(index)) => {
-            realization_at_mut(language, &address)?
-                .branches
-                .remove(*index);
         }
         Some(AddressSegment::CaseBranches(index)) => {
             case_at_mut(language, &address)?.branches.remove(*index);
@@ -1254,14 +1233,6 @@ fn update_payload(
             *item_at_address_mut(language, &node.address)? = SignItem::RoleBinding(value);
             Ok(None)
         }
-        (NodeKind::RealizationBranch, NodeUpdate::RealizationTemplate(value)) => {
-            realization_branch_at_mut(language, &node.address)?.template = value;
-            Ok(None)
-        }
-        (NodeKind::RealizationBranch, NodeUpdate::RealizationGuard(value)) => {
-            realization_branch_at_mut(language, &node.address)?.guard = value;
-            Ok(None)
-        }
         (NodeKind::Case, NodeUpdate::CaseSelection(value)) => {
             case_at_mut(language, &node.address)?.selection = value;
             Ok(None)
@@ -1468,11 +1439,6 @@ fn detached_at(language: &Language, node: &NodeEntryV1) -> Result<DetachedNode, 
                 Some(AddressSegment::RuleThen(index)) => Ok(DetachedNode::RuleThenBranch(
                     rule_at(language, &parent)?.then_chain[*index].clone(),
                 )),
-                Some(AddressSegment::RealizationBranches(index)) => {
-                    Ok(DetachedNode::RealizationBranch(
-                        realization_at(language, &parent)?.branches[*index].clone(),
-                    ))
-                }
                 Some(AddressSegment::CaseBranches(index)) => Ok(DetachedNode::CaseBranch(
                     case_at(language, &parent)
                         .ok_or_else(|| field_mismatch(node, "move"))?
@@ -2344,24 +2310,6 @@ fn resolve_path_child(
                     Some(SignItem::RoleDecl(role)) if role.name == argument
                 )
         }),
-        "realization" => {
-            let index = numeric()?;
-            let realization = children
-                .iter()
-                .find(|entry| entry.kind == NodeKind::Realization)
-                .copied();
-            realization.and_then(|realization| {
-                document
-                    .identities()
-                    .nodes
-                    .iter()
-                    .filter(|entry| {
-                        entry.parent.as_ref() == Some(&realization.id)
-                            && entry.kind == NodeKind::RealizationBranch
-                    })
-                    .nth(index)
-            })
-        }
         other => {
             return Err(ReplayError::Selector(format!(
                 "unknown path selector {other:?}"
@@ -2399,9 +2347,6 @@ fn update_for(reference: &NodeRef, field: &str, value: &str) -> Result<NodeUpdat
             Ok(NodeUpdate::RuleBranchBody(value.to_owned()))
         }
         (NodeKind::Slot, "name") => Ok(NodeUpdate::SlotName(value.to_owned())),
-        (NodeKind::RealizationBranch, "template") => {
-            Ok(NodeUpdate::RealizationTemplate(value.to_owned()))
-        }
         (NodeKind::Case, "selection") => match value {
             "case" | "first_match" => Ok(NodeUpdate::CaseSelection(
                 conlang_language::CaseSelection::FirstMatch,
@@ -2423,9 +2368,6 @@ fn update_for(reference: &NodeRef, field: &str, value: &str) -> Result<NodeUpdat
         (NodeKind::Rule | NodeKind::FeatureRule, "stage") => {
             Ok(NodeUpdate::RuleStage(parse_stage(value)?))
         }
-        (NodeKind::RealizationBranch, "guard") => Ok(NodeUpdate::RealizationGuard(
-            (!value.trim().is_empty()).then(|| value.to_owned()),
-        )),
         _ => Err(ReplayError::Selector(format!(
             "field {field:?} is not editable on {:?}",
             reference.expected
@@ -2762,7 +2704,6 @@ fn dump_update(change: &NodeUpdate) -> Option<(&'static str, String)> {
             Some(("body", value.clone()))
         }
         NodeUpdate::SlotName(value) => Some(("name", value.clone())),
-        NodeUpdate::RealizationTemplate(value) => Some(("template", value.clone())),
         NodeUpdate::CaseSelection(value) => Some((
             "selection",
             match value {
@@ -2776,9 +2717,6 @@ fn dump_update(change: &NodeUpdate) -> Option<(&'static str, String)> {
         NodeUpdate::Belongs(value) => Some(("target", value.clone())),
         NodeUpdate::RuleDimension(dim) => Some(("dim", dim.keyword().to_owned())),
         NodeUpdate::RuleStage(stage) => Some(("stage", stage_keyword(*stage).to_owned())),
-        NodeUpdate::RealizationGuard(guard) => {
-            Some(("guard", guard.clone().unwrap_or_default()))
-        }
         _ => None,
     }
 }
@@ -3332,11 +3270,6 @@ fn kind_at(language: &Language, address: &NodeAddress) -> Option<NodeKind> {
                     if *index < rule_at(language, &parent).ok()?.then_chain.len() =>
                 {
                     Some(NodeKind::RuleThenBranch)
-                }
-                AddressSegment::RealizationBranches(index)
-                    if *index < realization_at(language, &parent).ok()?.branches.len() =>
-                {
-                    Some(NodeKind::RealizationBranch)
                 }
                 AddressSegment::CaseExpression => realization_at(language, &parent)
                     .ok()?
@@ -4036,17 +3969,6 @@ fn realization_at<'a>(
     }
 }
 
-fn realization_at_mut<'a>(
-    language: &'a mut Language,
-    address: &NodeAddress,
-) -> Result<&'a mut Realization, EditError> {
-    match item_at_address_mut(language, address)? {
-        SignItem::Realization(value) => Ok(value),
-        _ => Err(EditError::FieldMismatch(
-            "expected realization address".to_owned(),
-        )),
-    }
-}
 
 fn definition_at_mut<'a>(
     language: &'a mut Language,
@@ -4242,12 +4164,8 @@ fn rewrite_local_slot_refs_in_items(items: &mut [SignItem], old: &str, new: &str
                 def.value = rewrite_slot_accesses(&def.value, old, new);
             }
             SignItem::Realization(realization) => {
-                for branch in &mut realization.branches {
-                    branch.template = rewrite_slot_template(&branch.template, old, new);
-                    if let Some(guard) = &mut branch.guard {
-                        *guard = rewrite_slot_accesses(guard, old, new);
-                    }
-                }
+                // Typed realization case slot-renames flow through the shared
+                // case-expression rewrite; the former flat branches are gone.
                 if let Some(case) = &mut realization.expression {
                     rewrite_local_slot_refs_in_case(case, old, new);
                 }
@@ -4446,22 +4364,6 @@ fn rewrite_slot_accesses(source: &str, old: &str, new: &str) -> String {
 
 fn is_identifier_character(character: char) -> bool {
     character.is_alphanumeric() || matches!(character, '_' | '-' | ':' | '/')
-}
-
-fn realization_branch_at_mut<'a>(
-    language: &'a mut Language,
-    address: &NodeAddress,
-) -> Result<&'a mut RealizationBranch, EditError> {
-    let parent = address.parent().ok_or(EditError::RootImmutable)?;
-    let Some(AddressSegment::RealizationBranches(index)) = address.0.last() else {
-        return Err(EditError::FieldMismatch(
-            "expected realization branch".to_owned(),
-        ));
-    };
-    realization_at_mut(language, &parent)?
-        .branches
-        .get_mut(*index)
-        .ok_or_else(|| EditError::FieldMismatch("branch address is stale".to_owned()))
 }
 
 fn rewrite_sign_refs(language: &mut Language, old: &str, new: &str) {
@@ -4728,12 +4630,6 @@ fn debug_value(language: &Language, entry: &NodeEntryV1) -> String {
                     rule_at(language, &parent)
                         .ok()
                         .and_then(|rule| rule.then_chain.get(*index))
-                ),
-                Some(AddressSegment::RealizationBranches(index)) => format!(
-                    "{:?}",
-                    realization_at(language, &parent)
-                        .ok()
-                        .and_then(|value| value.branches.get(*index))
                 ),
                 Some(AddressSegment::CaseExpression) => case_at(language, &entry.address)
                     .map(case_header_value)

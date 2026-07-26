@@ -221,8 +221,11 @@ sign InnerNominal:
     phon:
         /{{stem}}/
         realization:
-            /{{stem}}a/ / $self.syn.case == accusative
-            else /{{stem}}/
+            case:
+                $self.syn.case == accusative:
+                    /{{stem}}a/
+                else:
+                    /{{stem}}/
 sign OuterCase:
     syn:
         slots:

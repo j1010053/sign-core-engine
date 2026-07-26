@@ -1526,7 +1526,9 @@ trait EnrichedContract:
             theme = {adjunct}
     phon:
         realization:
-            /{adjunct}/ / $self.syn.committed == yes
+            case:
+                $self.syn.committed == yes:
+                    /{adjunct}/
 
 sign seed:
     belongs ContractAtom

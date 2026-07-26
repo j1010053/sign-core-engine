@@ -1814,32 +1814,6 @@ fn realize_stored_filler(
                     }
                 }
             }
-            for branch in &realization.branches {
-                if selected.is_some() {
-                    break;
-                }
-                if let Some(guard) = &branch.guard {
-                    let (status, _, _, error) = synchronic::evaluate_token_guard(token, guard, reg);
-                    match status {
-                        RuleStatus::Matched => {
-                            selected = Some(branch.template.clone());
-                            break;
-                        }
-                        RuleStatus::Unmatched => continue,
-                        RuleStatus::Error => {
-                            return Err(CxgError::FillerRealizationGuard {
-                                filler: material.name.clone(),
-                                message: error.unwrap_or_else(|| {
-                                    "unknown realization guard error".to_owned()
-                                }),
-                            });
-                        }
-                    }
-                } else {
-                    selected = Some(branch.template.clone());
-                    break;
-                }
-            }
         }
         let input = if let Some(template) = selected.as_deref() {
             token.expand_phon_template(template)?
@@ -1924,31 +1898,6 @@ fn realize_stored_filler(
                 }
                 break;
             }
-        }
-    }
-    for branch in &realization.branches {
-        if selected.is_some() {
-            break;
-        }
-        if let Some(guard) = &branch.guard {
-            let (status, _, _, error) = synchronic::evaluate_sign_guard(sign, guard, reg);
-            match status {
-                RuleStatus::Matched => {
-                    selected = Some(branch.template.as_str());
-                    break;
-                }
-                RuleStatus::Unmatched => continue,
-                RuleStatus::Error => {
-                    return Err(CxgError::FillerRealizationGuard {
-                        filler: material.name.clone(),
-                        message: error
-                            .unwrap_or_else(|| "unknown realization guard error".to_owned()),
-                    });
-                }
-            }
-        } else {
-            selected = Some(branch.template.as_str());
-            break;
         }
     }
     let Some(template) = selected else {

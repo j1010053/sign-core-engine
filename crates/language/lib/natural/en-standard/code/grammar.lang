@@ -440,8 +440,11 @@ sign EnglishIntransitiveClause:
     phon:
         /{subject} {predicate}/
         realization:
-            /{subject} {predicate}s/ / $self.syn.finite_form == third_singular
-            else /{subject} {predicate}/
+            case:
+                $self.syn.finite_form == third_singular:
+                    /{subject} {predicate}s/
+                else:
+                    /{subject} {predicate}/
 
 sign EnglishSVOTransitiveClause:
     belongs EnglishConstruction
@@ -469,8 +472,11 @@ sign EnglishSVOTransitiveClause:
     phon:
         /{subject} {predicate} {object}/
         realization:
-            /{subject} {predicate}s {object}/ / $self.syn.finite_form == third_singular
-            else /{subject} {predicate} {object}/
+            case:
+                $self.syn.finite_form == third_singular:
+                    /{subject} {predicate}s {object}/
+                else:
+                    /{subject} {predicate} {object}/
 
 sign EnglishCopularPredication:
     belongs EnglishConstruction
@@ -540,8 +546,11 @@ sign EnglishPolarQuestion:
     phon:
         /{auxiliary} {subject} {clause}/
         realization:
-            /does {subject} {clause}/ / $self.syn.finite_form == third_singular
-            else /{auxiliary} {subject} {clause}/
+            case:
+                $self.syn.finite_form == third_singular:
+                    /does {subject} {clause}/
+                else:
+                    /{auxiliary} {subject} {clause}/
 
 sign EnglishPeriphrasticPassive:
     belongs EnglishConstruction
@@ -560,5 +569,8 @@ sign EnglishPeriphrasticPassive:
     phon:
         /{patient} {auxiliary} {predicate} by {agent}/
         realization:
-            /{patient} is {predicate} by {agent}/ / $self.syn.finite_form == third_singular
-            else /{patient} {auxiliary} {predicate} by {agent}/
+            case:
+                $self.syn.finite_form == third_singular:
+                    /{patient} is {predicate} by {agent}/
+                else:
+                    /{patient} {auxiliary} {predicate} by {agent}/

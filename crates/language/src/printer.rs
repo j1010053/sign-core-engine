@@ -360,17 +360,6 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                         if let Some(case) = &realization.expression {
                             push_case(out, "            ", case);
                         }
-                        for branch in &realization.branches {
-                            match &branch.guard {
-                                Some(guard) => out.push_str(&format!(
-                                    "            {} / {}\n",
-                                    branch.template, guard
-                                )),
-                                None => {
-                                    out.push_str(&format!("            else {}\n", branch.template))
-                                }
-                            }
-                        }
                     }
                 }
             }

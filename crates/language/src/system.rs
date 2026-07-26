@@ -1170,7 +1170,7 @@ fn validate_typed_schemas(
             SignItem::Realization(realization) => Some(realization),
             _ => None,
         }) {
-            if realization.branches.is_empty() && realization.expression.is_none() {
+            if realization.expression.is_none() {
                 report.push(Diagnostic::new(
                     Severity::Error,
                     "REALIZATION_EMPTY",
@@ -1249,76 +1249,6 @@ fn validate_typed_schemas(
                                 format!("{owner:?} realization template: {error}"),
                             )),
                         }
-                    }
-                }
-            }
-            let mut saw_else = false;
-            for branch in &realization.branches {
-                if branch.guard.is_none() {
-                    if saw_else {
-                        report.push(Diagnostic::new(
-                            Severity::Error,
-                            "REALIZATION_MULTIPLE_ELSE",
-                            format!("{owner:?} has more than one realization else branch"),
-                        ));
-                    }
-                    saw_else = true;
-                } else if saw_else {
-                    report.push(Diagnostic::new(
-                        Severity::Error,
-                        "REALIZATION_BRANCH_AFTER_ELSE",
-                        format!("{owner:?} has a guarded realization after else"),
-                    ));
-                }
-                let inner = branch
-                    .template
-                    .strip_prefix('/')
-                    .and_then(|value| value.strip_suffix('/'));
-                if inner.is_none() {
-                    report.push(Diagnostic::new(
-                        Severity::Error,
-                        "REALIZATION_INVALID_TEMPLATE",
-                        format!("{owner:?} realization must be a complete `/.../` template"),
-                    ));
-                    continue;
-                }
-                let Some(inner) = inner else {
-                    continue;
-                };
-                match template_references(inner) {
-                    Ok(references) => {
-                        for reference in references {
-                            if !slots.iter().any(|slot| slot.name == reference) {
-                                report.push(Diagnostic::new(
-                                    Severity::Error,
-                                    "REALIZATION_UNKNOWN_SLOT",
-                                    format!("{owner:?} realization refers to unknown slot {reference:?}"),
-                                ));
-                            }
-                        }
-                    }
-                    Err(error) => report.push(Diagnostic::new(
-                        Severity::Error,
-                        "REALIZATION_INVALID_TEMPLATE",
-                        format!("{owner:?} realization template: {error}"),
-                    )),
-                }
-                if let Some(guard) = &branch.guard {
-                    if let Err(error) =
-                        synchronic::validate_realization_guard(guard, registry, &slots)
-                    {
-                        report.push(
-                            Diagnostic::new(
-                                Severity::Error,
-                                "REALIZATION_INVALID_GUARD",
-                                format!("{owner:?}: {error}"),
-                            )
-                            .with_sources(vec![DiagnosticSource {
-                                owner: owner.clone(),
-                                path: Some("phon.realization".to_owned()),
-                                location: branch.source,
-                            }]),
-                        );
                     }
                 }
             }
@@ -2127,20 +2057,6 @@ fn validate_constructions_and_local_phon(
                 SignItem::Realization(realization) => Some(realization),
                 _ => None,
             }) {
-                for branch in &realization.branches {
-                    if let Some(inner) = branch
-                        .template
-                        .strip_prefix('/')
-                        .and_then(|value| value.strip_suffix('/'))
-                    {
-                        if let Ok(references) = template_references(inner) {
-                            used_slots.extend(references);
-                        }
-                    }
-                    if let Some(guard) = &branch.guard {
-                        used_slots.extend(synchronic::realization_guard_slot_references(guard));
-                    }
-                }
                 if let Some(case) = &realization.expression {
                     if let Some((slot, "phon")) = case
                         .scrutinee
@@ -2150,6 +2066,10 @@ fn validate_constructions_and_local_phon(
                         used_slots.insert(slot.to_owned());
                     }
                     for branch in &case.branches {
+                        if let crate::CaseCondition::Guard(guard) = &branch.condition {
+                            used_slots
+                                .extend(synchronic::realization_guard_slot_references(guard));
+                        }
                         if let Expression::PhonTemplate(template) = &branch.result {
                             if let Some(inner) = template
                                 .strip_prefix('/')
@@ -3948,9 +3868,8 @@ impl CompiledSystem {
             SignItem::Realization(realization) => Some(realization),
             _ => None,
         });
-        let mut selected = None;
-        let mut slot_reads = Vec::new();
-        let mut self_reads = Vec::new();
+        let slot_reads = Vec::new();
+        let self_reads = Vec::new();
         let mut cases = Vec::new();
         let mut nested_rules = Vec::new();
         let default = token.phon_form()?;
@@ -3965,45 +3884,9 @@ impl CompiledSystem {
                     &mut nested_rules,
                 )?);
             }
-            for (index, branch) in realization
-                .branches
-                .iter()
-                .enumerate()
-                .take(if typed.is_none() { usize::MAX } else { 0 })
-            {
-                if let Some(guard) = &branch.guard {
-                    let (status, slots, self_values, error) =
-                        synchronic::evaluate_token_guard(token, guard, &self.ontology);
-                    slot_reads.extend(slots);
-                    self_reads.extend(self_values);
-                    match status {
-                        RuleStatus::Matched => {
-                            selected = Some((index, branch));
-                            break;
-                        }
-                        RuleStatus::Unmatched => continue,
-                        RuleStatus::Error => {
-                            return Err(SystemError::RealizationGuard(
-                                error.unwrap_or_else(|| {
-                                    "unknown realization guard error".to_owned()
-                                }),
-                            ));
-                        }
-                    }
-                } else {
-                    selected = Some((index, branch));
-                    break;
-                }
-            }
         }
         let (input, branch, source) = if let Some(result) = typed {
             result
-        } else if let Some((index, selected)) = selected {
-            (
-                token.expand_phon_template(&selected.template)?,
-                Some(index),
-                selected.source,
-            )
         } else {
             (default, None, SourceLocation::unknown())
         };

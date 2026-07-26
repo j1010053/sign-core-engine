@@ -309,20 +309,11 @@ pub struct RoleBinding {
     pub source: SourceLocation,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RealizationBranch {
-    /// Complete `/.../` phon template.
-    pub template: String,
-    /// Read-only guard over `$self` and frozen `$slot`; `None` is `else`.
-    pub guard: Option<String>,
-    pub source: SourceLocation,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Realization {
-    pub branches: Vec<RealizationBranch>,
-    /// V2 context-typed expression.  Legacy flat branches remain available so
-    /// a V1 document can be parsed and dumped byte-for-byte compatibly.
+    /// Context-typed realization: a `PhonContext` `case:` selecting a full phon
+    /// template by guard (shared typed-case machinery; the former flat V1
+    /// `RealizationBranch` list was removed with the v1 path).
     pub expression: Option<TypedCase>,
 }
 
