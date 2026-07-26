@@ -79,6 +79,11 @@ pub enum NodeKind {
     Rule,
     RuleElseBranch,
     RuleThenBranch,
+    /// A single statement line inside a phon `PhonBlock::Leaf` (P46 S3).
+    PhonStatement,
+    /// One element of a phon `PhonBlock::Then`/`Else` vec — itself a recursive
+    /// `PhonBlock` (P46 S3).
+    PhonBlockNode,
     RealizationBranch,
     Application,
     Case,
@@ -159,6 +164,14 @@ pub enum AddressSegment {
     Items(usize),
     RuleElse(usize),
     RuleThen(usize),
+    /// Index into a phon `PhonBlock::Leaf` statement list (P46 S3).
+    PhonLeaf(usize),
+    /// Index into a phon `PhonBlock::Then` element vec (P46 S3).
+    PhonThen(usize),
+    /// Index into a phon `PhonBlock::Else` element vec (P46 S3).
+    PhonElse(usize),
+    /// Transparent descent through a phon `PhonBlock::Propagate` (P46 S3).
+    PhonPropagate,
     RealizationBranches(usize),
     CaseExpression,
     CaseBranches(usize),
@@ -667,6 +680,7 @@ fn editable_field(kind: NodeKind, name: &str) -> Option<EditableField> {
         (NodeKind::RuleElseBranch | NodeKind::RuleThenBranch, "body") => {
             Some(EditableField::BranchBody)
         }
+        (NodeKind::PhonStatement, "body") => Some(EditableField::BranchBody),
         (NodeKind::Slot, "name") => Some(EditableField::SlotName),
         (NodeKind::Slot, "constraint") => Some(EditableField::SlotConstraint),
         (NodeKind::Slot | NodeKind::RoleDeclaration, "optional") => Some(EditableField::Optional),
@@ -776,6 +790,73 @@ fn push_entry(
         address,
     });
     id
+}
+
+/// Recursively enumerate a phon `PhonBlock` into addressable nodes (P46 S3).
+/// `address`/`parent` are the enclosing container's address/id (the rule item, or
+/// an outer `PhonBlockNode`). Deterministic order = address order (P26).
+fn enumerate_phon_block(
+    block: &crate::PhonBlock,
+    address: &NodeAddress,
+    parent: &NodeId,
+    namespace: &str,
+    next: &mut u64,
+    entries: &mut Vec<NodeEntryV1>,
+) {
+    match block {
+        crate::PhonBlock::Leaf(statements) => {
+            for (index, _) in statements.iter().enumerate() {
+                push_entry(
+                    entries,
+                    namespace,
+                    next,
+                    NodeKind::PhonStatement,
+                    Some(parent.clone()),
+                    address.child(AddressSegment::PhonLeaf(index)),
+                );
+            }
+        }
+        crate::PhonBlock::Then(elements) | crate::PhonBlock::Else(elements) => {
+            let is_then = matches!(block, crate::PhonBlock::Then(_));
+            for (index, element) in elements.iter().enumerate() {
+                let segment = if is_then {
+                    AddressSegment::PhonThen(index)
+                } else {
+                    AddressSegment::PhonElse(index)
+                };
+                let element_address = address.child(segment);
+                let element_id = push_entry(
+                    entries,
+                    namespace,
+                    next,
+                    NodeKind::PhonBlockNode,
+                    Some(parent.clone()),
+                    element_address.clone(),
+                );
+                enumerate_phon_block(
+                    element,
+                    &element_address,
+                    &element_id,
+                    namespace,
+                    next,
+                    entries,
+                );
+            }
+        }
+        crate::PhonBlock::Propagate(inner) => {
+            // Transparent: no separate node for Propagate in S3; the wrapped
+            // block's children hang under a `PhonPropagate` address segment and
+            // keep the same parent (S4 will add propagate editing).
+            enumerate_phon_block(
+                inner,
+                &address.child(AddressSegment::PhonPropagate),
+                parent,
+                namespace,
+                next,
+                entries,
+            );
+        }
+    }
 }
 
 fn enumerate_item_children(
@@ -975,6 +1056,11 @@ fn enumerate_item_children(
                     Some(parent.clone()),
                     address.child(AddressSegment::RuleThen(index)),
                 );
+            }
+            // P46 S3: structured phon block statements/sub-blocks are addressable
+            // nodes (recursive). Only walked when the rule carries a phon_block.
+            if let Some(block) = &rule.phon_block {
+                enumerate_phon_block(block, address, parent, namespace, next, entries);
             }
         }
         SignItem::Realization(Realization {

@@ -18,10 +18,10 @@ use conlang_language::{
     check_document, compile_document, sha256_hex, AddressSegment, BinaryConstraint, Block,
     CaseBranch, CompileSystemError, CompiledSystem, Def, Dim, Expression, FeatureDecl,
     FeatureValue, IdentityError, IdentityManifestV2, Language, LanguageDocument, LibraryId,
-    LibrarySpec, NodeAddress, NodeEntryV1, NodeId, NodeKind, NodeRef, Realization,
-    RoleBinding, RoleDecl, Rule, Severity, SignApplication, SignArgumentValue,
-    SignDef, SignItem, Slot, SlotConstraint, SlotFeatureBinding, SlotMapOp, Stage, TraitDef,
-    TypedCase, ValidationReport,
+    LibrarySpec, NodeAddress, NodeEntryV1, NodeId, NodeKind, NodeRef, PhonBlock, Realization,
+    RoleBinding, RoleDecl, Rule, Severity, SignApplication, SignArgumentValue, SignDef, SignItem,
+    Slot, SlotConstraint, SlotFeatureBinding, SlotMapOp, Stage, TraitDef, TypedCase,
+    ValidationReport,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,13 +37,20 @@ pub enum Anchor {
 pub enum DetachedNode {
     DslDeclaration(String),
     Prosody(Vec<String>),
-    Distribution { key: String, value: String },
+    Distribution {
+        key: String,
+        value: String,
+    },
     Trait(TraitDef),
     Sign(SignDef),
     Block(Block),
     Item(SignItem),
     RuleElseBranch(String),
     RuleThenBranch(String),
+    /// A single phon `Leaf` statement line (P46 S3).
+    PhonStatement(String),
+    /// A whole phon sub-block — one element of a `Then`/`Else` vec (P46 S3).
+    PhonBlockNode(PhonBlock),
     CaseBranch(CaseBranch),
 }
 
@@ -59,6 +66,8 @@ impl DetachedNode {
             DetachedNode::Item(item) => item_kind(item),
             DetachedNode::RuleElseBranch(_) => NodeKind::RuleElseBranch,
             DetachedNode::RuleThenBranch(_) => NodeKind::RuleThenBranch,
+            DetachedNode::PhonStatement(_) => NodeKind::PhonStatement,
+            DetachedNode::PhonBlockNode(_) => NodeKind::PhonBlockNode,
             DetachedNode::CaseBranch(_) => NodeKind::CaseBranch,
         }
     }
@@ -238,6 +247,10 @@ fn sequence_tag(address: &NodeAddress) -> u8 {
         Some(AddressSegment::CaseBranches(_)) => 12,
         Some(AddressSegment::CaseResult) => 13,
         Some(AddressSegment::ApplicationArguments(_)) => 14,
+        Some(AddressSegment::PhonLeaf(_)) => 15,
+        Some(AddressSegment::PhonThen(_)) => 16,
+        Some(AddressSegment::PhonElse(_)) => 17,
+        Some(AddressSegment::PhonPropagate) => 18,
     }
 }
 
@@ -438,6 +451,9 @@ enum ListKey {
     Items,
     RuleElse,
     RuleThen,
+    PhonLeaf,
+    PhonThen,
+    PhonElse,
     Realization,
     CaseBranches,
 }
@@ -452,6 +468,9 @@ fn segment(key: ListKey, index: usize) -> AddressSegment {
         ListKey::Items => AddressSegment::Items(index),
         ListKey::RuleElse => AddressSegment::RuleElse(index),
         ListKey::RuleThen => AddressSegment::RuleThen(index),
+        ListKey::PhonLeaf => AddressSegment::PhonLeaf(index),
+        ListKey::PhonThen => AddressSegment::PhonThen(index),
+        ListKey::PhonElse => AddressSegment::PhonElse(index),
         ListKey::Realization => AddressSegment::RealizationBranches(index),
         ListKey::CaseBranches => AddressSegment::CaseBranches(index),
     }
@@ -467,6 +486,9 @@ fn segment_index(value: &AddressSegment, key: ListKey) -> Option<usize> {
         | (ListKey::Items, AddressSegment::Items(index))
         | (ListKey::RuleElse, AddressSegment::RuleElse(index))
         | (ListKey::RuleThen, AddressSegment::RuleThen(index))
+        | (ListKey::PhonLeaf, AddressSegment::PhonLeaf(index))
+        | (ListKey::PhonThen, AddressSegment::PhonThen(index))
+        | (ListKey::PhonElse, AddressSegment::PhonElse(index))
         | (ListKey::Realization, AddressSegment::RealizationBranches(index)) => Some(*index),
         (ListKey::CaseBranches, AddressSegment::CaseBranches(index)) => Some(*index),
         _ => None,
@@ -632,6 +654,34 @@ fn insertion_site(
             })?;
             (ListKey::CaseBranches, case.branches.len(), None)
         }
+        // P46 S3: insert a statement into a phon `Leaf`, or a sub-block into a
+        // phon `Then`/`Else`. Parent is a rule (its phon_block root) or a nested
+        // `PhonBlockNode`.
+        (
+            NodeKind::Rule | NodeKind::FeatureRule | NodeKind::PhonBlockNode,
+            NodeKind::PhonStatement,
+        ) => match phon_container_block(language, &parent.address)? {
+            PhonBlock::Leaf(statements) => (ListKey::PhonLeaf, statements.len(), None),
+            _ => {
+                return Err(EditError::ParentKind {
+                    child,
+                    parent: parent.kind,
+                })
+            }
+        },
+        (
+            NodeKind::Rule | NodeKind::FeatureRule | NodeKind::PhonBlockNode,
+            NodeKind::PhonBlockNode,
+        ) => match phon_container_block(language, &parent.address)? {
+            PhonBlock::Then(elements) => (ListKey::PhonThen, elements.len(), None),
+            PhonBlock::Else(elements) => (ListKey::PhonElse, elements.len(), None),
+            _ => {
+                return Err(EditError::ParentKind {
+                    child,
+                    parent: parent.kind,
+                })
+            }
+        },
         (NodeKind::Language, NodeKind::Prosody) if language.prosody.is_empty() => {
             if !matches!(anchor, Anchor::End) {
                 return Err(EditError::AnchorInvalid(
@@ -800,6 +850,40 @@ fn insert_payload(
                 .then_chain
                 .insert(index, value)
         }
+        DetachedNode::PhonStatement(value)
+            if matches!(
+                parent.kind,
+                NodeKind::Rule | NodeKind::FeatureRule | NodeKind::PhonBlockNode
+            ) =>
+        {
+            match phon_container_block_mut(language, &parent.address)? {
+                PhonBlock::Leaf(statements) => statements.insert(index, value),
+                _ => {
+                    return Err(EditError::ParentKind {
+                        child: NodeKind::PhonStatement,
+                        parent: parent.kind,
+                    })
+                }
+            }
+        }
+        DetachedNode::PhonBlockNode(value)
+            if matches!(
+                parent.kind,
+                NodeKind::Rule | NodeKind::FeatureRule | NodeKind::PhonBlockNode
+            ) =>
+        {
+            match phon_container_block_mut(language, &parent.address)? {
+                PhonBlock::Then(elements) | PhonBlock::Else(elements) => {
+                    elements.insert(index, value)
+                }
+                _ => {
+                    return Err(EditError::ParentKind {
+                        child: NodeKind::PhonBlockNode,
+                        parent: parent.kind,
+                    })
+                }
+            }
+        }
         DetachedNode::CaseBranch(value) if parent.kind == NodeKind::Case => {
             case_at_mut(language, &parent.address)?
                 .branches
@@ -880,6 +964,13 @@ fn child_addresses(
             for index in 0..rule.then_chain.len() {
                 children.push(address.child(AddressSegment::RuleThen(index)));
             }
+            if let Some(block) = &rule.phon_block {
+                push_phon_children(block, address, &mut children);
+            }
+        }
+        NodeKind::PhonBlockNode => {
+            let block = phon_container_block(language, address)?;
+            push_phon_children(block, address, &mut children);
         }
         NodeKind::Realization => {
             if realization_at(language, address)?.expression.is_some() {
@@ -987,6 +1078,30 @@ fn delete_nested_payload(
         }
         Some(AddressSegment::RuleThen(index)) => {
             rule_at_mut(language, &address)?.then_chain.remove(*index);
+        }
+        Some(AddressSegment::PhonLeaf(index)) => {
+            match phon_container_block_mut(language, &address)? {
+                PhonBlock::Leaf(statements) => {
+                    statements.remove(*index);
+                }
+                _ => {
+                    return Err(EditError::FieldMismatch(
+                        "phon statement parent is not a Leaf".to_owned(),
+                    ))
+                }
+            }
+        }
+        Some(AddressSegment::PhonThen(index) | AddressSegment::PhonElse(index)) => {
+            match phon_container_block_mut(language, &address)? {
+                PhonBlock::Then(elements) | PhonBlock::Else(elements) => {
+                    elements.remove(*index);
+                }
+                _ => {
+                    return Err(EditError::FieldMismatch(
+                        "phon sub-block parent is not a Then/Else".to_owned(),
+                    ))
+                }
+            }
         }
         Some(AddressSegment::CaseBranches(index)) => {
             case_at_mut(language, &address)?.branches.remove(*index);
@@ -1182,6 +1297,10 @@ fn update_payload(
             NodeUpdate::RuleBranchBody(value),
         ) => {
             set_rule_branch(language, &node.address, value)?;
+            Ok(None)
+        }
+        (NodeKind::PhonStatement, NodeUpdate::RuleBranchBody(value)) => {
+            *phon_statement_at_mut(language, &node.address)? = value;
             Ok(None)
         }
         (NodeKind::Slot, NodeUpdate::SlotName(value)) => {
@@ -1461,6 +1580,29 @@ fn detached_at(language: &Language, node: &NodeEntryV1) -> Result<DetachedNode, 
                             .ok_or_else(|| field_mismatch(node, "move"))?,
                     ))
                 }
+                Some(AddressSegment::PhonLeaf(index)) => {
+                    match phon_container_block(language, &parent)? {
+                        PhonBlock::Leaf(statements) => Ok(DetachedNode::PhonStatement(
+                            statements
+                                .get(*index)
+                                .cloned()
+                                .ok_or_else(|| field_mismatch(node, "move"))?,
+                        )),
+                        _ => Err(field_mismatch(node, "move")),
+                    }
+                }
+                Some(AddressSegment::PhonThen(index) | AddressSegment::PhonElse(index)) => {
+                    let elements = match phon_container_block(language, &parent)? {
+                        PhonBlock::Then(elements) | PhonBlock::Else(elements) => elements,
+                        _ => return Err(field_mismatch(node, "move")),
+                    };
+                    Ok(DetachedNode::PhonBlockNode(
+                        elements
+                            .get(*index)
+                            .cloned()
+                            .ok_or_else(|| field_mismatch(node, "move"))?,
+                    ))
+                }
                 _ => Err(field_mismatch(node, "move")),
             }
         }
@@ -1502,11 +1644,15 @@ fn address_list_position(address: &NodeAddress) -> Result<(ListKey, usize), Edit
         AddressSegment::Items(index) => (ListKey::Items, *index),
         AddressSegment::RuleElse(index) => (ListKey::RuleElse, *index),
         AddressSegment::RuleThen(index) => (ListKey::RuleThen, *index),
+        AddressSegment::PhonLeaf(index) => (ListKey::PhonLeaf, *index),
+        AddressSegment::PhonThen(index) => (ListKey::PhonThen, *index),
+        AddressSegment::PhonElse(index) => (ListKey::PhonElse, *index),
         AddressSegment::RealizationBranches(index) => (ListKey::Realization, *index),
         AddressSegment::CaseBranches(index) => (ListKey::CaseBranches, *index),
         AddressSegment::Prosody
         | AddressSegment::CaseExpression
         | AddressSegment::CaseResult
+        | AddressSegment::PhonPropagate
         | AddressSegment::ApplicationArguments(_) => {
             return Err(EditError::FieldMismatch(
                 "node is not an editable semantic sequence element".to_owned(),
@@ -1717,6 +1863,8 @@ fn parse_kind(value: &str) -> Result<NodeKind, ReplayError> {
         "rule" => Ok(NodeKind::Rule),
         "then" => Ok(NodeKind::RuleThenBranch),
         "else" => Ok(NodeKind::RuleElseBranch),
+        "phon_statement" => Ok(NodeKind::PhonStatement),
+        "phon_block" => Ok(NodeKind::PhonBlockNode),
         "realization_branch" => Ok(NodeKind::RealizationBranch),
         "application" => Ok(NodeKind::Application),
         "case" => Ok(NodeKind::Case),
@@ -1738,6 +1886,8 @@ fn kind_keyword(kind: NodeKind) -> &'static str {
         NodeKind::Rule | NodeKind::FeatureRule => "rule",
         NodeKind::RuleThenBranch => "then",
         NodeKind::RuleElseBranch => "else",
+        NodeKind::PhonStatement => "phon_statement",
+        NodeKind::PhonBlockNode => "phon_block",
         NodeKind::RealizationBranch => "realization_branch",
         NodeKind::Application => "application",
         NodeKind::Case => "case",
@@ -2191,7 +2341,10 @@ fn selector_argument(segment: &str) -> Result<(&str, &str), ReplayError> {
 
 /// `[n]` = ordinal（回傳 None）；`["name"]` 或非數字 `[name]` = keyed（回傳 Some(name)）。
 fn keyed_name(argument: &str) -> Option<&str> {
-    match argument.strip_prefix('"').and_then(|rest| rest.strip_suffix('"')) {
+    match argument
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+    {
         Some(name) => Some(name),
         None if argument.parse::<usize>().is_err() => Some(argument),
         None => None,
@@ -2254,9 +2407,7 @@ fn resolve_path_child(
             }
         }
         "case" => {
-            let mut cases = children
-                .iter()
-                .filter(|entry| entry.kind == NodeKind::Case);
+            let mut cases = children.iter().filter(|entry| entry.kind == NodeKind::Case);
             match keyed_name(argument) {
                 Some(name) => cases
                     .find(|entry| {
@@ -2279,16 +2430,43 @@ fn resolve_path_child(
                 None => branches.nth(numeric()?).copied(),
             }
         }
-        "then" => children
+        // P46 S3: a phon `Leaf` statement.
+        "leaf" => children
             .iter()
-            .filter(|entry| entry.kind == NodeKind::RuleThenBranch)
+            .filter(|entry| matches!(entry.address.0.last(), Some(AddressSegment::PhonLeaf(_))))
             .nth(numeric()?)
             .copied(),
-        "else" => children
-            .iter()
-            .filter(|entry| entry.kind == NodeKind::RuleElseBranch)
-            .nth(numeric()?)
-            .copied(),
+        // `then`/`else` descend into a phon block when the parent has one (a phon
+        // rule's flat then_chain/else_chain is empty); otherwise they address the
+        // flat RuleThenBranch/RuleElseBranch chain.
+        "then" => {
+            let index = numeric()?;
+            children
+                .iter()
+                .filter(|entry| matches!(entry.address.0.last(), Some(AddressSegment::PhonThen(_))))
+                .nth(index)
+                .or_else(|| {
+                    children
+                        .iter()
+                        .filter(|entry| entry.kind == NodeKind::RuleThenBranch)
+                        .nth(index)
+                })
+                .copied()
+        }
+        "else" => {
+            let index = numeric()?;
+            children
+                .iter()
+                .filter(|entry| matches!(entry.address.0.last(), Some(AddressSegment::PhonElse(_))))
+                .nth(index)
+                .or_else(|| {
+                    children
+                        .iter()
+                        .filter(|entry| entry.kind == NodeKind::RuleElseBranch)
+                        .nth(index)
+                })
+                .copied()
+        }
         "def" => children.iter().copied().find(|entry| {
             entry.kind == NodeKind::Definition
                 && matches!(
@@ -2346,6 +2524,7 @@ fn update_for(reference: &NodeRef, field: &str, value: &str) -> Result<NodeUpdat
         (NodeKind::RuleElseBranch | NodeKind::RuleThenBranch, "body") => {
             Ok(NodeUpdate::RuleBranchBody(value.to_owned()))
         }
+        (NodeKind::PhonStatement, "body") => Ok(NodeUpdate::RuleBranchBody(value.to_owned())),
         (NodeKind::Slot, "name") => Ok(NodeUpdate::SlotName(value.to_owned())),
         (NodeKind::Case, "selection") => match value {
             "case" | "first_match" => Ok(NodeUpdate::CaseSelection(
@@ -2419,7 +2598,8 @@ fn parse_insert_block(block: &str) -> Result<Vec<DetachedNode>, ReplayError> {
         .map(str::trim)
         .unwrap_or("");
     let parse_lang = |source: &str| {
-        Language::parse(source).map_err(|error| ReplayError::Parse(format!("insert .lang: {error}")))
+        Language::parse(source)
+            .map_err(|error| ReplayError::Parse(format!("insert .lang: {error}")))
     };
     if head.starts_with("trait ") || head.starts_with("global trait ") {
         let language = parse_lang(block)?;
@@ -2447,6 +2627,10 @@ fn parse_insert_block(block: &str) -> Result<Vec<DetachedNode>, ReplayError> {
     }
     if let Some(rest) = head.strip_prefix("then ") {
         return Ok(vec![DetachedNode::RuleThenBranch(rest.trim().to_owned())]);
+    }
+    // P46 S3: `leaf <stmt>` inserts a single statement line into a phon `Leaf`.
+    if let Some(rest) = head.strip_prefix("leaf ") {
+        return Ok(vec![DetachedNode::PhonStatement(rest.trim().to_owned())]);
     }
     // Otherwise the block is a sign-body item fragment: wrap it in a synthetic
     // sign so the dimension keywords (`syn:`/`phon:`/`slots:`/…) parse in
@@ -2833,11 +3017,13 @@ impl ResolvedChangeSet {
                         anchor,
                         subtree:
                             subtree @ (DetachedNode::RuleElseBranch(_)
-                            | DetachedNode::RuleThenBranch(_)),
+                            | DetachedNode::RuleThenBranch(_)
+                            | DetachedNode::PhonStatement(_)),
                     } => {
                         let (keyword, body) = match subtree {
                             DetachedNode::RuleElseBranch(body) => ("else", body),
                             DetachedNode::RuleThenBranch(body) => ("then", body),
+                            DetachedNode::PhonStatement(body) => ("leaf", body),
                             _ => unreachable!(),
                         };
                         output.push_str(&format!(
@@ -3270,6 +3456,30 @@ fn kind_at(language: &Language, address: &NodeAddress) -> Option<NodeKind> {
                     if *index < rule_at(language, &parent).ok()?.then_chain.len() =>
                 {
                     Some(NodeKind::RuleThenBranch)
+                }
+                AddressSegment::PhonLeaf(index) => {
+                    match phon_container_block(language, &parent).ok()? {
+                        PhonBlock::Leaf(statements) if *index < statements.len() => {
+                            Some(NodeKind::PhonStatement)
+                        }
+                        _ => None,
+                    }
+                }
+                AddressSegment::PhonThen(index) => {
+                    match phon_container_block(language, &parent).ok()? {
+                        PhonBlock::Then(elements) if *index < elements.len() => {
+                            Some(NodeKind::PhonBlockNode)
+                        }
+                        _ => None,
+                    }
+                }
+                AddressSegment::PhonElse(index) => {
+                    match phon_container_block(language, &parent).ok()? {
+                        PhonBlock::Else(elements) if *index < elements.len() => {
+                            Some(NodeKind::PhonBlockNode)
+                        }
+                        _ => None,
+                    }
                 }
                 AddressSegment::CaseExpression => realization_at(language, &parent)
                     .ok()?
@@ -3957,6 +4167,152 @@ fn rule_at_mut<'a>(
     }
 }
 
+// ── P46 S3: phon `PhonBlock` navigation ───────────────────────────────────
+// A phon node address is the rule item address followed by a trailing run of
+// `Phon*` segments. `PhonThen`/`PhonElse`/`PhonPropagate` descend into a
+// sub-block; `PhonLeaf` indexes a statement string (terminal, not a descent).
+
+fn is_phon_segment(segment: &AddressSegment) -> bool {
+    matches!(
+        segment,
+        AddressSegment::PhonLeaf(_)
+            | AddressSegment::PhonThen(_)
+            | AddressSegment::PhonElse(_)
+            | AddressSegment::PhonPropagate
+    )
+}
+
+/// Split an address into (rule-item address, phon path). When the address has no
+/// phon segment the whole address is the rule and the phon path is empty (used
+/// when a rule itself is the phon container — its `phon_block` root).
+fn split_phon_address(address: &NodeAddress) -> (NodeAddress, Vec<AddressSegment>) {
+    match address.0.iter().position(is_phon_segment) {
+        Some(pos) => (
+            NodeAddress(address.0[..pos].to_vec()),
+            address.0[pos..].to_vec(),
+        ),
+        None => (address.clone(), Vec::new()),
+    }
+}
+
+fn walk_phon_block<'a>(block: &'a PhonBlock, path: &[AddressSegment]) -> Option<&'a PhonBlock> {
+    match path.split_first() {
+        None => Some(block),
+        Some((AddressSegment::PhonThen(index), rest)) => match block {
+            PhonBlock::Then(elements) => walk_phon_block(elements.get(*index)?, rest),
+            _ => None,
+        },
+        Some((AddressSegment::PhonElse(index), rest)) => match block {
+            PhonBlock::Else(elements) => walk_phon_block(elements.get(*index)?, rest),
+            _ => None,
+        },
+        Some((AddressSegment::PhonPropagate, rest)) => match block {
+            PhonBlock::Propagate(inner) => walk_phon_block(inner, rest),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn walk_phon_block_mut<'a>(
+    block: &'a mut PhonBlock,
+    path: &[AddressSegment],
+) -> Option<&'a mut PhonBlock> {
+    match path.split_first() {
+        None => Some(block),
+        Some((AddressSegment::PhonThen(index), rest)) => match block {
+            PhonBlock::Then(elements) => walk_phon_block_mut(elements.get_mut(*index)?, rest),
+            _ => None,
+        },
+        Some((AddressSegment::PhonElse(index), rest)) => match block {
+            PhonBlock::Else(elements) => walk_phon_block_mut(elements.get_mut(*index)?, rest),
+            _ => None,
+        },
+        Some((AddressSegment::PhonPropagate, rest)) => match block {
+            PhonBlock::Propagate(inner) => walk_phon_block_mut(inner, rest),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The `PhonBlock` addressed by a container node (a rule with a phon block, or a
+/// `PhonBlockNode`).
+fn phon_container_block<'a>(
+    language: &'a Language,
+    address: &NodeAddress,
+) -> Result<&'a PhonBlock, EditError> {
+    let (rule_address, path) = split_phon_address(address);
+    let root = rule_at(language, &rule_address)?
+        .phon_block
+        .as_ref()
+        .ok_or_else(|| EditError::FieldMismatch("rule has no phon block".to_owned()))?;
+    walk_phon_block(root, &path)
+        .ok_or_else(|| EditError::FieldMismatch("stale phon block address".to_owned()))
+}
+
+fn phon_container_block_mut<'a>(
+    language: &'a mut Language,
+    address: &NodeAddress,
+) -> Result<&'a mut PhonBlock, EditError> {
+    let (rule_address, path) = split_phon_address(address);
+    let root = rule_at_mut(language, &rule_address)?
+        .phon_block
+        .as_mut()
+        .ok_or_else(|| EditError::FieldMismatch("rule has no phon block".to_owned()))?;
+    walk_phon_block_mut(root, &path)
+        .ok_or_else(|| EditError::FieldMismatch("stale phon block address".to_owned()))
+}
+
+/// Direct addressable children of a phon block: `Leaf` → its statements
+/// (`PhonLeaf`), `Then`/`Else` → their elements (`PhonThen`/`PhonElse`),
+/// `Propagate` → transparently its inner block's children under `PhonPropagate`.
+/// Mirrors `enumerate_phon_block` in the identity walker.
+fn push_phon_children(block: &PhonBlock, base: &NodeAddress, out: &mut Vec<NodeAddress>) {
+    match block {
+        PhonBlock::Leaf(statements) => {
+            for index in 0..statements.len() {
+                out.push(base.child(AddressSegment::PhonLeaf(index)));
+            }
+        }
+        PhonBlock::Then(elements) => {
+            for index in 0..elements.len() {
+                out.push(base.child(AddressSegment::PhonThen(index)));
+            }
+        }
+        PhonBlock::Else(elements) => {
+            for index in 0..elements.len() {
+                out.push(base.child(AddressSegment::PhonElse(index)));
+            }
+        }
+        PhonBlock::Propagate(inner) => {
+            push_phon_children(inner, &base.child(AddressSegment::PhonPropagate), out);
+        }
+    }
+}
+
+/// Mutable reference to a phon statement (a `Leaf` line). `address` ends in a
+/// `PhonLeaf(index)` segment; its container block must be a `Leaf`.
+fn phon_statement_at_mut<'a>(
+    language: &'a mut Language,
+    address: &NodeAddress,
+) -> Result<&'a mut String, EditError> {
+    let Some(&AddressSegment::PhonLeaf(index)) = address.0.last() else {
+        return Err(EditError::FieldMismatch(
+            "expected phon statement address".to_owned(),
+        ));
+    };
+    let container = NodeAddress(address.0[..address.0.len() - 1].to_vec());
+    match phon_container_block_mut(language, &container)? {
+        PhonBlock::Leaf(statements) => statements
+            .get_mut(index)
+            .ok_or_else(|| EditError::FieldMismatch("stale phon statement index".to_owned())),
+        _ => Err(EditError::FieldMismatch(
+            "phon statement parent is not a Leaf".to_owned(),
+        )),
+    }
+}
+
 fn realization_at<'a>(
     language: &'a Language,
     address: &NodeAddress,
@@ -3968,7 +4324,6 @@ fn realization_at<'a>(
         )),
     }
 }
-
 
 fn definition_at_mut<'a>(
     language: &'a mut Language,

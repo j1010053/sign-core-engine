@@ -73,10 +73,30 @@ lenition:                 # 命名 rule = block(name: 前綴;名可含連字號 
   可表達巢狀(forward-compatible),但 codegen 出的巢狀 `.qy` 目前會被引擎拒。**L1 部分解**
   (單層 ✓,巢狀待 upstream)。
 
+### slice 3(已落地 2026-07-27)
+- **phon block 語句級定址 + 四原語(解 L2)**:phon block 內每一條語句(`Leaf` 一行)與
+  每一個子 block(`Then`/`Else` 一 element)皆為穩定可定址節點,經 insert/delete/update/move
+  編輯。定址**全遞迴**、沿用選擇器 `.leaf[k]`/`.then[n]`/`.else[n]`(owner 裁定);phon 規則的
+  flat `then_chain`/`else_chain` 為空,故有 `phon_block` 時 `.then`/`.else` 路由進 block,
+  否則維持既有 flat 行為(未具 phon_block 的 rule 不受影響)。
+- **identity**(`identity.rs`):`NodeKind::PhonStatement`/`PhonBlockNode`、`AddressSegment`
+  `PhonLeaf`/`PhonThen`/`PhonElse`/`PhonPropagate`;`enumerate_phon_block` 遞迴走訪(僅
+  `phon_block` 為 `Some` 時,決定性=位址序,P26)。`Propagate` 透明遞迴(S4 再補其編輯)。
+- **changeset**(`lib.rs`):`DetachedNode::PhonStatement`/`PhonBlockNode`、phon 導覽 helper
+  (`split_phon_address`/`walk_phon_block(_mut)`/`phon_container_block(_mut)`/`phon_statement_at_mut`)、
+  四原語具現化(insert/delete/update/move)、`resolve_path_child` 的 `leaf`/`then`/`else` 路由、
+  `kind_at`/`child_addresses`/`address_list_position`/`sequence_tag`/`kind_keyword`/`parse_kind`
+  補齊。leaf 插入 `.chg` 語法 `leaf <stmt>`;statement update 複用 `body` 欄位(`RuleBranchBody`)。
+- 測試 `changeset/tests/phon_block_edits.rs`(11 案:定址/四原語/巢狀 depth-2/round-trip+決定性/
+  越界與 wrong-kind 負例;mutation-tested)。workspace 302 綠、clippy 0、引擎零觸動、wasm 綠。
+- **界線**:sub-block 的**從源插入**(整個新 `Then`/`Else` 子樹)延後——move 既存 sub-block
+  已支援(detach→reattach,無需 `.qy` 解析);bootstrap 空 rule 成 block 亦延後。
+
 ### 尚未落地(staged)
-- **S3 語句級定址 + 四原語**:`rule["lenition"].leaf[k]`/`.then[n]` 定址/insert/move。**解 L2**。
-- **S4 `propagate` 語法**(header/邊界)。**解 L3**。
-- **巢狀 Then/Else**:待 tshiatūn upstream 補 grouped-block parser。
+- **S4 `propagate` 語法**(header/邊界)+ propagate 節點編輯。**解 L3**。
+- **sub-block 從源插入 / bootstrap 空 block**(S3 界線)。
+- **巢狀 Then/Else 引擎側**:tshiatūn `wuc-claudecode` 已補 brace `{ }` grouped-block parser
+  (PR #1);`.lang` codegen 出 brace grouped `.qy` 的對接待辦。
 
 ## 相容性
 - **P44**:block 屬 phon 維。相容。
