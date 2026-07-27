@@ -14,6 +14,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod rewrite;
+
 use conlang_language::{
     check_document, compile_document, sha256_hex, AddressSegment, BinaryConstraint, Block,
     CaseBranch, CompileSystemError, CompiledSystem, Def, DerivationKind, Dim, Expression,
