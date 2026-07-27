@@ -14,6 +14,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+mod call;
 pub mod rewrite;
 
 use conlang_language::{
@@ -1806,6 +1807,82 @@ enum UnresolvedOperation {
         source: Selector,
         name: String,
     },
+    /// 層②③④ **統一呼叫語法**:`name(位置參數, key: value, …)`,可尾接 `:` 帶
+    /// 一段 `.lang` block 當最後一個參數。層級**由名字解析決定**,不靠關鍵字——
+    /// 現階段只有 P16 的 12 個內建 Atomic Rewrite 解析得出來(封閉內建集);
+    /// Recipe/Goal(步驟 16–17)落地後沿用同一文法,不必改 parser。
+    ///
+    /// 與 `clone` 同構:呼叫是**未解析層的授權糖**,`resolve` 時降成四原語,
+    /// `ResolvedChangeSet` 維持 primitive-only(步驟 14 已封板的契約)。
+    Call {
+        name: String,
+        positional: Option<String>,
+        named: Vec<(String, String)>,
+        block: Option<String>,
+    },
+}
+
+/// 切一個具名參數 `key: value`。`key` 必須是識別字,否則視為位置參數
+/// (例如 selector `sign("x")` 內部雖然沒有冒號,仍走這條保護)。
+fn split_named_argument(argument: &str) -> Option<(String, String)> {
+    let (key, value) = argument.split_once(':')?;
+    let key = key.trim();
+    if key.is_empty()
+        || !key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return None;
+    }
+    Some((key.to_owned(), unquote_change_value(value.trim())))
+}
+
+/// 解析 `name(arg, key: value, …)`。回傳 `None` 表示這行不是呼叫語法
+/// (交回給既有的原語語句處理)。
+fn parse_call_head(head: &str) -> Option<(String, Vec<String>)> {
+    let head = head.strip_suffix(':').unwrap_or(head).trim_end();
+    let open = head.find('(')?;
+    let name = head[..open].trim();
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return None;
+    }
+    let args = head[open + 1..].strip_suffix(')')?;
+    let args = args.trim();
+    if args.is_empty() {
+        return Some((name.to_owned(), Vec::new()));
+    }
+    // 以頂層逗號切分(括號內的逗號屬於 selector,如 `sign("a")` 沒有,但保守處理)。
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut current = String::new();
+    for ch in args.chars() {
+        match ch {
+            '(' | '[' => {
+                depth += 1;
+                current.push(ch);
+            }
+            ')' | ']' => {
+                depth = depth.saturating_sub(1);
+                current.push(ch);
+            }
+            ',' if depth == 0 => {
+                parts.push(std::mem::take(&mut current));
+            }
+            _ => current.push(ch),
+        }
+    }
+    parts.push(current);
+    Some((
+        name.to_owned(),
+        parts
+            .into_iter()
+            .map(|part| part.trim().to_owned())
+            .collect(),
+    ))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2181,6 +2258,39 @@ fn parse_operation(ordinal: u64, body: &[String]) -> Result<UnresolvedOperation,
             parent: parse_selector(parent)?,
             anchor: parse_anchor(anchor)?,
             source: fragment,
+        }
+    } else if let Some((name, args)) = parse_call_head(first) {
+        // 層②③④ 統一呼叫。首個不含 `key:` 的參數是位置參數(通常是 selector)。
+        let mut positional = None;
+        let mut named = Vec::new();
+        for arg in args {
+            match split_named_argument(&arg) {
+                Some((key, value)) => named.push((key, value)),
+                None if positional.is_none() && !arg.is_empty() => positional = Some(arg),
+                None if arg.is_empty() => {}
+                None => {
+                    return Err(ReplayError::Parse(format!(
+                        "statement {ordinal}: {name}(…) takes at most one positional argument"
+                    )))
+                }
+            }
+        }
+        let block = if first.trim_end().ends_with(':') {
+            let text = body.iter().skip(1).cloned().collect::<Vec<_>>().join("\n");
+            if text.trim().is_empty() {
+                return Err(ReplayError::Parse(format!(
+                    "statement {ordinal}: {name}(…): has no .lang block"
+                )));
+            }
+            Some(text)
+        } else {
+            None
+        };
+        UnresolvedOperation::Call {
+            name,
+            positional,
+            named,
+            block,
         }
     } else {
         return Err(ReplayError::Parse(format!(
@@ -2928,6 +3038,20 @@ fn resolve_operation(
                 })
                 .collect())
         }
+        UnresolvedOperation::Call {
+            name,
+            positional,
+            named,
+            block,
+        } => call::lower(
+            &call::Call {
+                name,
+                positional: positional.as_deref(),
+                named,
+                block: block.as_deref(),
+            },
+            document,
+        ),
         UnresolvedOperation::Clone { source, name } => {
             let reference = resolve_selector(source, document)?;
             let entry = ensure_target(document, &reference)
