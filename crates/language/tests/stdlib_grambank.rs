@@ -65,7 +65,12 @@ fn packages_exports_and_combined_ontology_are_deterministic() {
             .iter()
             .map(|package| (package.name.as_str(), package.priority))
             .collect::<Vec<_>>(),
-        [("core", 0), ("grambank", 10), ("cxg", 20)]
+        [
+            ("core", 0),
+            ("grammaticalization", 0),
+            ("grambank", 10),
+            ("cxg", 20)
+        ]
     );
     assert!(first.iter().all(|package| package.enabled));
     assert_eq!(
@@ -73,17 +78,26 @@ fn packages_exports_and_combined_ontology_are_deterministic() {
             .iter()
             .map(|package| package.rule_namespace.as_str())
             .collect::<Vec<_>>(),
-        ["std:core", "std:grambank", "std:cxg"]
+        ["std:core", "std:grammaticalization", "std:grambank", "std:cxg"]
     );
-    assert_eq!(first[0].exports.len(), 30);
-    assert_eq!(first[1].exports.len(), 76);
-    assert_eq!(first[2].exports.len(), 27);
+    // 依**名字**查,不用位置索引——加新套件不該弄壞這些斷言。
+    let by_name = |namespace: &str| {
+        first
+            .iter()
+            .find(|package| package.rule_namespace == namespace)
+            .unwrap_or_else(|| panic!("missing {namespace}"))
+    };
+    assert_eq!(by_name("std:core").exports.len(), 30);
+    assert_eq!(by_name("std:grambank").exports.len(), 76);
+    assert_eq!(by_name("std:cxg").exports.len(), 27);
+    // P52 路徑庫:一個參數化 function(機制在 code、路徑在 data)。
+    assert_eq!(by_name("std:grammaticalization").exports.len(), 1);
     assert_eq!(
-        first[2].code_paths,
+        by_name("std:cxg").code_paths,
         ["code/schema.lang", "code/realizations.lang"]
     );
     assert_eq!(
-        first[2]
+        by_name("std:cxg")
             .requires
             .iter()
             .map(ToString::to_string)
@@ -101,8 +115,8 @@ fn packages_exports_and_combined_ontology_are_deterministic() {
         .flat_map(|package| package.exports.iter())
         .map(|export| export.alias.as_str())
         .collect();
-    assert_eq!(stable_ids.len(), 133);
-    assert_eq!(aliases.len(), 133);
+    assert_eq!(stable_ids.len(), 134);
+    assert_eq!(aliases.len(), 134);
 
     for alias in [
         "Semantic",

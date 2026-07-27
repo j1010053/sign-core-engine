@@ -4,7 +4,9 @@
 //! 規格出口只要求「展開 golden」,但只驗展開序列**無法證明它套得上去**(假綠燈),
 //! 故每一項都再把序列餵給 `apply_edit` 實跑,斷言結果 `.lang`。
 
-use conlang_changeset::rewrite::{expand, AdoptSource, AtomicRewrite, ReanalysisTarget, RuleHome};
+use conlang_changeset::rewrite::{
+    expand, AdoptSource, AtomicRewrite, ReanalysisTarget, RuleHome, ServiceContext,
+};
 use conlang_changeset::{apply_edit, PrimitiveEdit};
 use conlang_language::{
     DerivationKind, Language, LanguageDocument, LibrarySpec, SignDef, SignId, SignItem,
@@ -49,7 +51,7 @@ fn base() -> LanguageDocument {
 fn run(rewrite: &AtomicRewrite) -> String {
     let mut document = base();
     let spec = LibrarySpec::default();
-    let edits = expand(rewrite, &document).expect("expand");
+    let edits = expand_off(rewrite, &document).expect("expand");
     assert!(!edits.is_empty(), "a rewrite must expand to ≥1 primitive");
     for edit in edits {
         document = apply_edit(&document, edit, &spec)
@@ -61,8 +63,16 @@ fn run(rewrite: &AtomicRewrite) -> String {
     lang
 }
 
+/// P53:測試一律離線展開(無 live 外部服務)。
+fn expand_off(
+    rewrite: &AtomicRewrite,
+    document: &LanguageDocument,
+) -> Result<Vec<PrimitiveEdit>, conlang_changeset::rewrite::RewriteError> {
+    expand(rewrite, document, &ServiceContext::offline())
+}
+
 fn expand_only(rewrite: &AtomicRewrite) -> Vec<PrimitiveEdit> {
-    expand(rewrite, &base()).expect("expand")
+    expand(rewrite, &base(), &ServiceContext::offline()).expect("expand")
 }
 
 /// 某個 sign 目前宣告的義項名(逐 sign 檢查,避免被別的 sign 的同名義項騙過)。
@@ -179,7 +189,7 @@ fn reanalyze_inserts_a_missing_field() {
 #[test]
 fn reanalyze_boundary_is_explicitly_unsupported() {
     // 不默默近似:成分重新切分尚未支援,必須明確拒絕。
-    let err = expand(
+    let err = expand_off(
         &AtomicRewrite::Reanalyze {
             sign: "book".to_owned(),
             target: ReanalysisTarget::Boundary,
@@ -271,13 +281,13 @@ fn split_moves_named_senses_into_a_new_sign_with_origin() {
         "the source must no longer declare the moved sense:\n{lang}"
     );
     // book 的 split 會拆散 `log from core` 這條邊 → 顯式拒絕(見下)。
-    assert!(expand(&rewrite, &base()).is_err());
+    assert!(expand(&rewrite, &base(), &ServiceContext::offline()).is_err());
 }
 
 #[test]
 fn split_refuses_to_strand_a_derivation_edge() {
     // `log from core`:只搬 log 會讓邊的另一端留在來源 → 懸空。不默默近似。
-    let err = expand(
+    let err = expand_off(
         &AtomicRewrite::Split {
             sign: "book".to_owned(),
             new_name: "logbook".to_owned(),
@@ -304,7 +314,7 @@ fn merge_moves_senses_then_deletes_the_source() {
 
 #[test]
 fn merge_needs_two_different_signs() {
-    let err = expand(
+    let err = expand_off(
         &AtomicRewrite::Merge {
             into: "book".to_owned(),
             from: "book".to_owned(),
@@ -353,7 +363,7 @@ fn adopt_marks_the_borrowed_sign_as_a_loan() {
 fn with_trait_rule() -> LanguageDocument {
     let mut document = base();
     let spec = LibrarySpec::default();
-    for edit in expand(
+    for edit in expand_off(
         &AtomicRewrite::SoundChange {
             home: RuleHome::Global("Core".to_owned()),
             body: "b => k".to_owned(),
@@ -371,7 +381,7 @@ fn with_trait_rule() -> LanguageDocument {
 fn fossilize_moves_a_rule_down_the_ladder() {
     let mut document = with_trait_rule();
     let spec = LibrarySpec::default();
-    let edits = expand(
+    let edits = expand_off(
         &AtomicRewrite::Fossilize {
             rule: "trait(\"Core\").block[0].rule[0]".to_owned(),
             to: RuleHome::Sign("book".to_owned()),
@@ -399,7 +409,7 @@ fn a_wrong_direction_move_is_rejected() {
     // generalize 必須往上;指定一個更低的居所要明確報錯,不默默當成 fossilize。
     // 先真的把規則放進 trait,才是在驗**方向**而不是「位址不存在」。
     let document = with_trait_rule();
-    let err = expand(
+    let err = expand_off(
         &AtomicRewrite::Generalize {
             rule: "trait(\"Core\").block[0].rule[0]".to_owned(),
             to: RuleHome::Sign("book".to_owned()),
@@ -426,8 +436,8 @@ fn expansion_is_deterministic_and_does_not_mutate_the_document() {
         gloss: "FIGURATIVE".to_owned(),
         kind: DerivationKind::Metaphor,
     };
-    let first = expand(&rewrite, &document).unwrap();
-    let second = expand(&rewrite, &document).unwrap();
+    let first = expand_off(&rewrite, &document).unwrap();
+    let second = expand_off(&rewrite, &document).unwrap();
     assert_eq!(first, second, "same input → same expansion");
     assert_eq!(document.source(), before, "expansion never mutates(純函數)");
 }
@@ -457,7 +467,7 @@ fn an_unknown_target_is_rejected_by_every_rewrite_that_addresses_one() {
         },
     ] {
         assert!(
-            expand(&rewrite, &base()).is_err(),
+            expand(&rewrite, &base(), &ServiceContext::offline()).is_err(),
             "expected rejection for {rewrite:?}"
         );
     }

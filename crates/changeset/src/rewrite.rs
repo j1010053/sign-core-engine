@@ -166,6 +166,43 @@ pub enum AtomicRewrite {
     Generalize { rule: String, to: RuleHome },
 }
 
+/// **P53:外部服務接點**(形狀先定,實作留空)。
+///
+/// P30 定 SemanticBackend **必後端**(`drift` 的新語意值本該由它算,目前由呼叫端傳);
+/// P33 要求「允許語句中途暫停、commit 仍整句原子」;P34 定「首次執行呼叫服務並記入
+/// History,**replay 一律讀 History 不重呼叫**」。
+///
+/// 現階段是**只讀 History、無 live 呼叫**的空殼:`lookup` 永遠回 `None`,故所有
+/// rewrite 的行為與此前完全相同。先開好參數是為了避免日後一次改 12 個簽名與所有
+/// 既有呼叫端(含已寫好的 recipe)。
+#[derive(Debug, Clone, Default)]
+pub struct ServiceContext {
+    /// 首次執行時記錄下來的外部服務結果(P34 History 側表)。
+    /// 鍵 = 語句序號 + 呼叫序;replay 時只讀這裡,不重新呼叫服務。
+    recorded: Vec<(String, String)>,
+}
+
+impl ServiceContext {
+    /// 不接任何服務的空殼——現階段所有呼叫端用這個。
+    pub fn offline() -> ServiceContext {
+        ServiceContext::default()
+    }
+
+    /// 由 History 側表重建(P34 replay 路徑)。
+    pub fn from_history(recorded: Vec<(String, String)>) -> ServiceContext {
+        ServiceContext { recorded }
+    }
+
+    /// 查一筆已記錄的服務結果。**目前無 live 呼叫**:查不到就是 `None`,
+    /// 由呼叫端決定要報錯還是走預設值(如 `drift` 目前取呼叫端給的 gloss)。
+    pub fn lookup(&self, key: &str) -> Option<&str> {
+        self.recorded
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.as_str())
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum RewriteError {
     #[error("REWRITE_ADDRESS: {0}")]
@@ -182,7 +219,9 @@ pub enum RewriteError {
 pub fn expand(
     rewrite: &AtomicRewrite,
     document: &LanguageDocument,
+    services: &ServiceContext,
 ) -> Result<Vec<PrimitiveEdit>, RewriteError> {
+    let _ = services; // P53:接點已開,SemanticBackend 等接上時在此消費。
     match rewrite {
         AtomicRewrite::SoundChange { home, body } => {
             let parent = node(document, &home.selector())?;

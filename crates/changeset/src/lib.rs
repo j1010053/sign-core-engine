@@ -15,6 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 mod call;
+pub mod function;
 pub mod rewrite;
 
 use conlang_language::{
@@ -3271,6 +3272,43 @@ impl ResolvedChangeSet {
     }
 }
 
+/// 一個套件進 lock digest 的**全部內容**。抽成獨立函式是為了可直接斷言
+/// 「哪些東西被涵蓋」——digest 漏掉任何一項都會讓對應檔案改了卻不使 lock 失效
+/// (破 P26 可重現性)。
+fn package_lock_content(package: &conlang_language::LibraryPackage) -> String {
+    let mut content = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}\n",
+        package.id,
+        package.version,
+        package.rule_namespace,
+        package.priority,
+        package.code_path,
+        package.data_path
+    );
+    for dependency in &package.requires {
+        content.push_str(&format!("requires {dependency}\n"));
+    }
+    for export in &package.exports {
+        content.push_str(&format!(
+            "export {} {:?} {}\n",
+            export.stable_id, export.kind, export.alias
+        ));
+    }
+    content.push_str(package.code);
+    content.push('\n');
+    // P50 ③:function 原始碼必須進 digest。
+    content.push_str(package.functions);
+    content.push('\n');
+    content.push_str(package.data);
+    content
+}
+
+/// 測試用:讓外部斷言 digest 涵蓋範圍(見 `function_loading.rs`)。
+#[doc(hidden)]
+pub fn __lock_content_for_tests(package: &conlang_language::LibraryPackage) -> String {
+    package_lock_content(package)
+}
+
 fn package_locks(spec: &LibrarySpec) -> Result<Vec<LibraryLock>, ReplayError> {
     let catalog = conlang_language::library::embedded_catalog()
         .map_err(|error| ReplayError::Library(error.to_string()))?;
@@ -3284,27 +3322,7 @@ fn package_locks(spec: &LibrarySpec) -> Result<Vec<LibraryLock>, ReplayError> {
             .iter()
             .find(|package| package.id == id)
             .expect("catalog selection returns catalog IDs");
-        let mut content = format!(
-            "{}\n{}\n{}\n{}\n{}\n{}\n",
-            package.id,
-            package.version,
-            package.rule_namespace,
-            package.priority,
-            package.code_path,
-            package.data_path
-        );
-        for dependency in &package.requires {
-            content.push_str(&format!("requires {dependency}\n"));
-        }
-        for export in &package.exports {
-            content.push_str(&format!(
-                "export {} {:?} {}\n",
-                export.stable_id, export.kind, export.alias
-            ));
-        }
-        content.push_str(package.code);
-        content.push('\n');
-        content.push_str(package.data);
+        let content = package_lock_content(package);
         locks.push(LibraryLock {
             package: package.id.clone(),
             version: package.version.clone(),

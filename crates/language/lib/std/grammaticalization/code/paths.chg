@@ -1,0 +1,16 @@
+# Heine & Kuteva 式斜坡路徑庫(P52)。
+#
+# **機制在 code,路徑在 data**(P29 code/data 判準):30–50 條路徑
+# (GO→未來、WANT→未來、COME→未來…)機制完全相同,只有來源概念與目標語意不同,
+# 故此處只有**一個參數化 function**,路徑本身是 `data/paths.tsv` 的資料列。
+# 官方加新路徑 = 加 data 一行,不改引擎、也不加 function。
+
+package std:grammaticalization:
+    schema = conlang.functions/v1
+
+# 動詞經漂白→重分析→固著→磨損,成為時態/情態標記。
+# 四步對映 P16 的四個 Atomic Rewrite,橫跨 sem→syn→usage→phon 四個家族。
+function VerbToTense(verb [Verb], tense):
+    drift(verb, sense: core, gloss: tense)
+    reanalyze(verb, target: category, to: aux)
+    entrench(verb, delta: 0.3)

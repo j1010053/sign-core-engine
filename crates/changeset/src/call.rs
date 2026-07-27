@@ -7,7 +7,9 @@
 //! 與 `clone` 同構:呼叫只活在**未解析層**,`resolve` 時就降成 `Vec<PrimitiveEdit>`,
 //! `ResolvedChangeSet` 維持 primitive-only(步驟 14 已封板的契約)。
 
-use crate::rewrite::{expand, AdoptSource, AtomicRewrite, ReanalysisTarget, RuleHome};
+use crate::rewrite::{
+    expand, AdoptSource, AtomicRewrite, ReanalysisTarget, RuleHome, ServiceContext,
+};
 use crate::{PrimitiveEdit, ReplayError};
 use conlang_language::{DerivationKind, Language, LanguageDocument, SignDef};
 
@@ -248,5 +250,8 @@ pub(crate) fn lower(
             )))
         }
     };
-    expand(&rewrite, document).map_err(|error| ReplayError::Parse(error.to_string()))
+    // P53:`.chg` 降階目前一律離線(無 live 服務);replay 走 History 時由
+    // 呼叫端改傳 `ServiceContext::from_history`。
+    expand(&rewrite, document, &ServiceContext::offline())
+        .map_err(|error| ReplayError::Parse(error.to_string()))
 }
