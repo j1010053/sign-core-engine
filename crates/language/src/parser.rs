@@ -915,6 +915,11 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
     let mut feature_indent = 0usize;
     let mut in_roles = false;
     let mut roles_indent = 0usize;
+    // §10.3:sem 的 senses / 衍生邊子區塊。
+    let mut in_senses = false;
+    let mut senses_indent = 0usize;
+    let mut in_edges = false;
+    let mut edges_indent = 0usize;
     let mut in_realization = false;
     let mut realization_indent = 0usize;
     let mut in_constraints = false;
@@ -937,6 +942,12 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
         if in_roles && ind <= roles_indent {
             in_roles = false;
         }
+        if in_senses && ind <= senses_indent {
+            in_senses = false;
+        }
+        if in_edges && ind <= edges_indent {
+            in_edges = false;
+        }
         if in_realization && ind <= realization_indent {
             in_realization = false;
         }
@@ -950,6 +961,8 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             in_slot_features = false;
             in_feature = false;
             in_roles = false;
+            in_senses = false;
+            in_edges = false;
             in_realization = false;
             in_constraints = false;
             if text == "==" {
@@ -1014,6 +1027,8 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             && !in_slot_features
             && !in_feature
             && !in_roles
+            && !in_senses
+            && !in_edges
             && !in_realization
             && is_context_head(text)
         {
@@ -1180,6 +1195,72 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             }
             continue;
         }
+        if in_senses {
+            // `name = gloss`
+            let Some((name, gloss)) = text.split_once('=') else {
+                return Err(err(no, "a sense line is `name = gloss`"));
+            };
+            let (name, gloss) = (name.trim(), gloss.trim());
+            if !ident_ok(name) {
+                return Err(err(no, "sense name must be an identifier"));
+            }
+            if gloss.is_empty() {
+                return Err(err(no, "sense gloss must not be empty"));
+            }
+            blocks
+                .last_mut()
+                .unwrap()
+                .items
+                .push(SignItem::Sense(crate::Sense {
+                    name: name.to_owned(),
+                    gloss: gloss.to_owned(),
+                    source: SourceLocation::line(no),
+                }));
+            continue;
+        }
+        if in_edges {
+            // `<to> from <from> <kind> [opaque]`
+            let mut parts = text.split_whitespace();
+            let (Some(to), Some(keyword), Some(from), Some(kind)) =
+                (parts.next(), parts.next(), parts.next(), parts.next())
+            else {
+                return Err(err(
+                    no,
+                    "a sense edge is `<sense> from <sense> <kind> [opaque]`",
+                ));
+            };
+            if keyword != "from" {
+                return Err(err(no, "a sense edge uses the `from` keyword"));
+            }
+            let Some(kind) = crate::DerivationKind::parse(kind) else {
+                return Err(err(
+                    no,
+                    "sense edge kind must be metaphor|metonymy|narrow|broaden",
+                ));
+            };
+            let transparency = match parts.next() {
+                None => crate::SenseTransparency::Transparent,
+                Some(word) => match crate::SenseTransparency::parse(word) {
+                    Some(value) => value,
+                    None => return Err(err(no, "sense edge modifier must be `opaque`")),
+                },
+            };
+            if parts.next().is_some() {
+                return Err(err(no, "trailing text after a sense edge"));
+            }
+            blocks
+                .last_mut()
+                .unwrap()
+                .items
+                .push(SignItem::SenseEdge(crate::SenseEdge {
+                    to: to.to_owned(),
+                    from: from.to_owned(),
+                    kind,
+                    transparency,
+                    source: SourceLocation::line(no),
+                }));
+            continue;
+        }
         if in_roles {
             if let Some((name, value)) = text.split_once('=') {
                 let name = name.trim();
@@ -1311,6 +1392,22 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             }
             in_roles = true;
             roles_indent = ind;
+            continue;
+        }
+        if text == "senses:" {
+            if dim != DimKw::Sem {
+                return Err(err(no, "`senses:` is only valid under `sem:`"));
+            }
+            in_senses = true;
+            senses_indent = ind;
+            continue;
+        }
+        if text == "edges:" {
+            if dim != DimKw::Sem {
+                return Err(err(no, "`edges:` is only valid under `sem:`"));
+            }
+            in_edges = true;
+            edges_indent = ind;
             continue;
         }
         if text == "realization:" {

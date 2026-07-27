@@ -17,11 +17,38 @@ pub struct SemanticSourceV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SemanticSenseV1 {
+    pub name: String,
+    pub gloss: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SemanticEdgeV1 {
+    pub to: String,
+    pub from: String,
+    pub kind: String,
+    pub transparency: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SemanticNodeV1 {
     pub source: SemanticSourceV1,
     pub types: Vec<String>,
     pub features: BTreeMap<String, String>,
     pub roles: BTreeMap<String, SemanticNodeV1>,
+    /// 自由純量語意欄位(`sem.*` Def,如 gloss)。**15a 前這些不出境**——
+    /// `from_sem_node` 不讀、`into_sem_node` 給空,是已修的缺口。
+    /// 空時不序列化 ⇒ 既有無欄位文件逐位元不變(v1 相容)。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fields: BTreeMap<String, String>,
+    /// 義項網絡(§10.3)。空時不序列化(v1 相容)。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub senses: Vec<SemanticSenseV1>,
+    /// 衍生邊(§10.3)。空時不序列化(v1 相容)。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edges: Vec<SemanticEdgeV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +98,29 @@ impl SemanticNodeV1 {
                 .iter()
                 .map(|(name, value)| (name.clone(), SemanticNodeV1::from_sem_node(value)))
                 .collect(),
+            fields: node
+                .fields
+                .iter()
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect(),
+            senses: node
+                .senses
+                .iter()
+                .map(|sense| SemanticSenseV1 {
+                    name: sense.name.clone(),
+                    gloss: sense.gloss.clone(),
+                })
+                .collect(),
+            edges: node
+                .edges
+                .iter()
+                .map(|edge| SemanticEdgeV1 {
+                    to: edge.to.clone(),
+                    from: edge.from.clone(),
+                    kind: edge.kind.keyword().to_owned(),
+                    transparency: edge.transparency.keyword().to_owned(),
+                })
+                .collect(),
         };
         value.canonicalize();
         value
@@ -85,11 +135,33 @@ impl SemanticNodeV1 {
                 package: self.source.package,
                 sign: self.source.sign,
             },
-            fields: Vec::new(),
+            fields: self.fields.into_iter().collect(),
             roles: self
                 .roles
                 .into_iter()
                 .map(|(name, value)| (name, value.into_sem_node()))
+                .collect(),
+            senses: self
+                .senses
+                .into_iter()
+                .map(|sense| crate::sem::SenseView {
+                    name: sense.name,
+                    gloss: sense.gloss,
+                })
+                .collect(),
+            edges: self
+                .edges
+                .into_iter()
+                .filter_map(|edge| {
+                    // 未知 kind/transparency 不默默近似:整條邊丟棄由呼叫端的
+                    // validation 抓(DTO 是純資料邊界,不 panic)。
+                    Some(crate::sem::DerivationEdge {
+                        to: edge.to,
+                        from: edge.from,
+                        kind: crate::DerivationKind::parse(&edge.kind)?,
+                        transparency: crate::SenseTransparency::parse(&edge.transparency)?,
+                    })
+                })
                 .collect(),
         }
     }

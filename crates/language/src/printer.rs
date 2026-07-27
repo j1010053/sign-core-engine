@@ -299,6 +299,13 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                             | SignItem::RoleExpression(_)
                     )
                 });
+            // §10.3:sem 的 senses / 衍生邊。
+            let has_senses =
+                dim == "sem" && items.iter().any(|item| matches!(item, SignItem::Sense(_)));
+            let has_sense_edges = dim == "sem"
+                && items
+                    .iter()
+                    .any(|item| matches!(item, SignItem::SenseEdge(_)));
             let has_realization = dim == "phon"
                 && items
                     .iter()
@@ -405,6 +412,33 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                             }
                         }
                         _ => {}
+                    }
+                }
+            }
+            if has_senses {
+                out.push_str("        senses:\n");
+                for item in items {
+                    if let SignItem::Sense(sense) = item {
+                        out.push_str(&format!("            {} = {}\n", sense.name, sense.gloss));
+                    }
+                }
+            }
+            if has_sense_edges {
+                out.push_str("        edges:\n");
+                for item in items {
+                    if let SignItem::SenseEdge(edge) = item {
+                        // `to from from-sense kind [opaque]`;transparent 為預設,省略。
+                        let transparency = match edge.transparency {
+                            crate::SenseTransparency::Transparent => String::new(),
+                            crate::SenseTransparency::Opaque => " opaque".to_owned(),
+                        };
+                        out.push_str(&format!(
+                            "            {} from {} {}{}\n",
+                            edge.to,
+                            edge.from,
+                            edge.kind.keyword(),
+                            transparency
+                        ));
                     }
                 }
             }

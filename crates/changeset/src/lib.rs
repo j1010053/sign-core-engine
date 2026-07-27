@@ -16,12 +16,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use conlang_language::{
     check_document, compile_document, sha256_hex, AddressSegment, BinaryConstraint, Block,
-    CaseBranch, CompileSystemError, CompiledSystem, Def, Dim, Expression, FeatureDecl,
-    FeatureValue, IdentityError, IdentityManifestV2, Language, LanguageDocument, LibraryId,
-    LibrarySpec, NodeAddress, NodeEntryV1, NodeId, NodeKind, NodeRef, PhonBlock, Realization,
-    RoleBinding, RoleDecl, Rule, Severity, SignApplication, SignArgumentValue, SignDef, SignItem,
-    Slot, SlotConstraint, SlotFeatureBinding, SlotMapOp, Stage, TraitDef, TypedCase,
-    ValidationReport,
+    CaseBranch, CompileSystemError, CompiledSystem, Def, DerivationKind, Dim, Expression,
+    FeatureDecl, FeatureValue, IdentityError, IdentityManifestV2, Language, LanguageDocument,
+    LibraryId, LibrarySpec, NodeAddress, NodeEntryV1, NodeId, NodeKind, NodeRef, PhonBlock,
+    Realization, RoleBinding, RoleDecl, Rule, SenseTransparency, Severity, SignApplication,
+    SignArgumentValue, SignDef, SignItem, Slot, SlotConstraint, SlotFeatureBinding, SlotMapOp,
+    Stage, TraitDef, TypedCase, ValidationReport,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +92,10 @@ pub enum NodeUpdate {
     RuleBranchBody(String),
     /// P46 S4: rule-level or block-element fixpoint iteration (`propagate`).
     Propagate(bool),
+    /// §10.3 義項/衍生邊(Atomic Rewrite drift / lexicalize_sense 的落點)。
+    SenseGloss(String),
+    SenseEdgeKind(DerivationKind),
+    SenseEdgeTransparency(SenseTransparency),
     SlotName(String),
     SlotConstraint(SlotConstraint),
     SlotOptional(bool),
@@ -1306,6 +1310,27 @@ fn update_payload(
             set_rule_branch(language, &node.address, value)?;
             Ok(None)
         }
+        (NodeKind::Sense, NodeUpdate::SenseGloss(value)) => {
+            match item_at_address_mut(language, &node.address)? {
+                SignItem::Sense(sense) => sense.gloss = value,
+                _ => return Err(field_mismatch(node, "sense")),
+            }
+            Ok(None)
+        }
+        (NodeKind::SenseEdge, NodeUpdate::SenseEdgeKind(value)) => {
+            match item_at_address_mut(language, &node.address)? {
+                SignItem::SenseEdge(edge) => edge.kind = value,
+                _ => return Err(field_mismatch(node, "sense edge")),
+            }
+            Ok(None)
+        }
+        (NodeKind::SenseEdge, NodeUpdate::SenseEdgeTransparency(value)) => {
+            match item_at_address_mut(language, &node.address)? {
+                SignItem::SenseEdge(edge) => edge.transparency = value,
+                _ => return Err(field_mismatch(node, "sense edge")),
+            }
+            Ok(None)
+        }
         (NodeKind::PhonStatement, NodeUpdate::RuleBranchBody(value)) => {
             *phon_statement_at_mut(language, &node.address)? = value;
             Ok(None)
@@ -1705,6 +1730,8 @@ fn item_kind(item: &SignItem) -> NodeKind {
         SignItem::SlotFeatureBinding(_) => NodeKind::SlotFeatureBinding,
         SignItem::RoleDecl(_) => NodeKind::RoleDeclaration,
         SignItem::RoleBinding(_) => NodeKind::RoleBinding,
+        SignItem::Sense(_) => NodeKind::Sense,
+        SignItem::SenseEdge(_) => NodeKind::SenseEdge,
         SignItem::Realization(_) => NodeKind::Realization,
         SignItem::SignExpression(expression) => {
             expression_node_kind(&expression.expression).unwrap_or(NodeKind::Case)
@@ -1896,6 +1923,8 @@ fn parse_kind(value: &str) -> Result<NodeKind, ReplayError> {
         "then" => Ok(NodeKind::RuleThenBranch),
         "else" => Ok(NodeKind::RuleElseBranch),
         "phon_statement" => Ok(NodeKind::PhonStatement),
+        "sense" => Ok(NodeKind::Sense),
+        "sense_edge" => Ok(NodeKind::SenseEdge),
         "phon_block" => Ok(NodeKind::PhonBlockNode),
         "realization_branch" => Ok(NodeKind::RealizationBranch),
         "application" => Ok(NodeKind::Application),
@@ -1919,6 +1948,8 @@ fn kind_keyword(kind: NodeKind) -> &'static str {
         NodeKind::RuleThenBranch => "then",
         NodeKind::RuleElseBranch => "else",
         NodeKind::PhonStatement => "phon_statement",
+        NodeKind::Sense => "sense",
+        NodeKind::SenseEdge => "sense_edge",
         NodeKind::PhonBlockNode => "phon_block",
         NodeKind::RealizationBranch => "realization_branch",
         NodeKind::Application => "application",
@@ -2520,6 +2551,22 @@ fn resolve_path_child(
                     Some(SignItem::RoleDecl(role)) if role.name == argument
                 )
         }),
+        // §10.3:`sense["log"]` 依義項名;`edge[n]` 依序數(邊無名字)。
+        "sense" => {
+            let name = keyed_name(argument).unwrap_or(argument);
+            children.iter().copied().find(|entry| {
+                entry.kind == NodeKind::Sense
+                    && matches!(
+                        item_at_address(document.language(), &entry.address),
+                        Some(SignItem::Sense(sense)) if sense.name == name
+                    )
+            })
+        }
+        "edge" => children
+            .iter()
+            .filter(|entry| entry.kind == NodeKind::SenseEdge)
+            .nth(numeric()?)
+            .copied(),
         other => {
             return Err(ReplayError::Selector(format!(
                 "unknown path selector {other:?}"
@@ -2573,6 +2620,21 @@ fn update_for(reference: &NodeRef, field: &str, value: &str) -> Result<NodeUpdat
         (NodeKind::Rule | NodeKind::FeatureRule | NodeKind::PhonBlockNode, "propagate") => {
             Ok(NodeUpdate::Propagate(parse_bool(value)?))
         }
+        (NodeKind::Sense, "gloss") => Ok(NodeUpdate::SenseGloss(value.to_owned())),
+        (NodeKind::SenseEdge, "kind") => DerivationKind::parse(value)
+            .map(NodeUpdate::SenseEdgeKind)
+            .ok_or_else(|| {
+                ReplayError::Selector(format!(
+                    "sense edge kind must be metaphor|metonymy|narrow|broaden, got {value:?}"
+                ))
+            }),
+        (NodeKind::SenseEdge, "transparency") => SenseTransparency::parse(value)
+            .map(NodeUpdate::SenseEdgeTransparency)
+            .ok_or_else(|| {
+                ReplayError::Selector(format!(
+                    "sense edge transparency must be transparent|opaque, got {value:?}"
+                ))
+            }),
         (NodeKind::Slot, "optional") => Ok(NodeUpdate::SlotOptional(parse_bool(value)?)),
         (NodeKind::Belongs, "target") => Ok(NodeUpdate::Belongs(value.to_owned())),
         (NodeKind::Rule | NodeKind::FeatureRule, "dim") => Ok(NodeUpdate::RuleDimension(
@@ -2933,6 +2995,11 @@ fn dump_update(change: &NodeUpdate) -> Option<(&'static str, String)> {
         )),
         NodeUpdate::TraitGlobal(value) => Some(("global", value.to_string())),
         NodeUpdate::Propagate(value) => Some(("propagate", value.to_string())),
+        NodeUpdate::SenseGloss(value) => Some(("gloss", value.clone())),
+        NodeUpdate::SenseEdgeKind(value) => Some(("kind", value.keyword().to_owned())),
+        NodeUpdate::SenseEdgeTransparency(value) => {
+            Some(("transparency", value.keyword().to_owned()))
+        }
         NodeUpdate::SlotOptional(value) => Some(("optional", value.to_string())),
         NodeUpdate::Belongs(value) => Some(("target", value.clone())),
         NodeUpdate::RuleDimension(dim) => Some(("dim", dim.keyword().to_owned())),
@@ -3446,6 +3513,9 @@ fn item_group(item: &SignItem) -> u16 {
         SignItem::RoleDecl(_) | SignItem::RoleBinding(_) | SignItem::RoleExpression(_) => {
             dim_base(Dim::Sem) + 3
         }
+        // 義項先於衍生邊(邊引用義項),兩者都在 sem 區段。
+        SignItem::Sense(_) => dim_base(Dim::Sem) + 1,
+        SignItem::SenseEdge(_) => dim_base(Dim::Sem) + 2,
         SignItem::Realization(_) => dim_base(Dim::Phon) + 3,
         SignItem::Def(def) => dim_base(def_dimension(&def.path).unwrap_or(Dim::Syn)) + 4,
         SignItem::Rule(rule) => dim_base(rule.dim) + 4,
@@ -4543,7 +4613,12 @@ fn rewrite_slot_consumers(language: &mut Language, scope: &SlotRenameScope, old:
 fn rewrite_local_slot_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
     for item in items {
         match item {
-            SignItem::Slot(_) | SignItem::FeatureDecl(_) | SignItem::FeatureValue(_) => {}
+            // 義項/衍生邊不持 slot 引用。
+            SignItem::Slot(_)
+            | SignItem::FeatureDecl(_)
+            | SignItem::FeatureValue(_)
+            | SignItem::Sense(_)
+            | SignItem::SenseEdge(_) => {}
             SignItem::SlotFeatureBinding(binding) => {
                 if binding.slot == old {
                     binding.slot = new.to_owned();

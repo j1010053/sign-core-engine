@@ -377,6 +377,9 @@ fn semantic_document_v1_canonicalizes_types_and_object_keys_at_every_boundary() 
                         types: vec!["Child".to_owned(), "Child".to_owned()],
                         features: BTreeMap::new(),
                         roles: BTreeMap::new(),
+                        fields: BTreeMap::new(),
+                        senses: Vec::new(),
+                        edges: Vec::new(),
                     },
                 ),
                 (
@@ -389,9 +392,15 @@ fn semantic_document_v1_canonicalizes_types_and_object_keys_at_every_boundary() 
                         types: vec!["Omega".to_owned(), "Beta".to_owned()],
                         features: BTreeMap::new(),
                         roles: BTreeMap::new(),
+                        fields: BTreeMap::new(),
+                        senses: Vec::new(),
+                        edges: Vec::new(),
                     },
                 ),
             ]),
+            fields: BTreeMap::new(),
+            senses: Vec::new(),
+            edges: Vec::new(),
         },
     };
 
@@ -700,7 +709,10 @@ sign s:
                 else:
                     /y/
 ";
-    assert!(Language::parse(typed).is_ok(), "typed realization must parse");
+    assert!(
+        Language::parse(typed).is_ok(),
+        "typed realization must parse"
+    );
 }
 
 /// `phon:` 不再接受 latent 的 `field = value` Def(無消費者);只收 `/…/` UR、
@@ -721,5 +733,8 @@ sign s:
         "expected phon field-def rejection, got {err:?}"
     );
     // 對照:UR + 規則仍可解析。
-    assert!(Language::parse("Symbol x\nSymbol y\n\nsign s:\n    phon:\n        /x/\n        x => y\n").is_ok());
+    assert!(Language::parse(
+        "Symbol x\nSymbol y\n\nsign s:\n    phon:\n        /x/\n        x => y\n"
+    )
+    .is_ok());
 }

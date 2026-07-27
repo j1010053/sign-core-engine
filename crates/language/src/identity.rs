@@ -73,6 +73,10 @@ pub enum NodeKind {
     SlotFeatureBinding,
     RoleDeclaration,
     RoleBinding,
+    /// 義項節點(sem 維一級節點,《修補05》§10.3「sem(senses + 衍生邊)」)。
+    Sense,
+    /// 義項間的衍生邊(同上)。
+    SenseEdge,
     Realization,
     FeatureRule,
     Definition,
@@ -127,6 +131,10 @@ pub enum EditableField {
     SlotMap,
     RoleConstraint,
     RoleSlot,
+    /// §10.3 義項/衍生邊的可編輯欄位(Atomic Rewrite drift / lexicalize_sense)。
+    SenseGloss,
+    SenseEdgeKind,
+    SenseEdgeTransparency,
     RealizationTemplate,
     RealizationGuard,
     CaseSelection,
@@ -682,6 +690,9 @@ fn editable_field(kind: NodeKind, name: &str) -> Option<EditableField> {
             Some(EditableField::BranchBody)
         }
         (NodeKind::PhonStatement, "body") => Some(EditableField::BranchBody),
+        (NodeKind::Sense, "gloss") => Some(EditableField::SenseGloss),
+        (NodeKind::SenseEdge, "kind") => Some(EditableField::SenseEdgeKind),
+        (NodeKind::SenseEdge, "transparency") => Some(EditableField::SenseEdgeTransparency),
         (NodeKind::Rule | NodeKind::FeatureRule | NodeKind::PhonBlockNode, "propagate") => {
             Some(EditableField::Propagate)
         }
@@ -752,6 +763,8 @@ fn item_kind(item: &SignItem) -> NodeKind {
         SignItem::SlotFeatureBinding(_) => NodeKind::SlotFeatureBinding,
         SignItem::RoleDecl(_) => NodeKind::RoleDeclaration,
         SignItem::RoleBinding(_) => NodeKind::RoleBinding,
+        SignItem::Sense(_) => NodeKind::Sense,
+        SignItem::SenseEdge(_) => NodeKind::SenseEdge,
         SignItem::Realization(_) => NodeKind::Realization,
         SignItem::SignExpression(expression) => expression_root_kind(&expression.expression),
         SignItem::FeatureExpression(expression) => expression_root_kind(&expression.expression),

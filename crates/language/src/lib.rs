@@ -309,6 +309,82 @@ pub struct RoleBinding {
     pub source: SourceLocation,
 }
 
+/// 義項(sense)——**sem 維的一級節點**(《修補05》§10.3「sign 內:… sem(senses +
+/// 衍生邊)」;docs/07 §5)。多義 = 多個 `Sense`,**各有身分**(可定址、可被四原語
+/// 編輯),取代先前用自創欄位名(`sense2 = …`)假裝義項的土法。
+/// Atomic Rewrite `derive_sense` / `drift` 的作用對象(P16)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sense {
+    pub name: String,
+    /// 義項的語意內容(純量;複雜語意模型日後以新欄位擴充,不破壞此 API)。
+    pub gloss: String,
+    pub source: SourceLocation,
+}
+
+/// 衍生邊的種類(P16 `derive_sense{kind: metaphor|metonymy|narrow|broaden}`)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum DerivationKind {
+    Metaphor,
+    Metonymy,
+    Narrow,
+    Broaden,
+}
+
+impl DerivationKind {
+    pub fn keyword(self) -> &'static str {
+        match self {
+            DerivationKind::Metaphor => "metaphor",
+            DerivationKind::Metonymy => "metonymy",
+            DerivationKind::Narrow => "narrow",
+            DerivationKind::Broaden => "broaden",
+        }
+    }
+    pub fn parse(value: &str) -> Option<DerivationKind> {
+        match value {
+            "metaphor" => Some(DerivationKind::Metaphor),
+            "metonymy" => Some(DerivationKind::Metonymy),
+            "narrow" => Some(DerivationKind::Narrow),
+            "broaden" => Some(DerivationKind::Broaden),
+            _ => None,
+        }
+    }
+}
+
+/// 衍生邊是否仍透明。`Opaque` = 已 `lexicalize_sense`(語源關係固化、不再透明)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+pub enum SenseTransparency {
+    #[default]
+    Transparent,
+    Opaque,
+}
+
+impl SenseTransparency {
+    pub fn keyword(self) -> &'static str {
+        match self {
+            SenseTransparency::Transparent => "transparent",
+            SenseTransparency::Opaque => "opaque",
+        }
+    }
+    pub fn parse(value: &str) -> Option<SenseTransparency> {
+        match value {
+            "transparent" => Some(SenseTransparency::Transparent),
+            "opaque" => Some(SenseTransparency::Opaque),
+            _ => None,
+        }
+    }
+}
+
+/// 義項間的**衍生邊**:`to` 由 `from` 經 `kind` 衍生而來。
+/// `transparency` 由 Atomic Rewrite `lexicalize_sense` 翻成 `Opaque`(P16)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SenseEdge {
+    pub to: String,
+    pub from: String,
+    pub kind: DerivationKind,
+    pub transparency: SenseTransparency,
+    pub source: SourceLocation,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Realization {
     /// Context-typed realization: a `PhonContext` `case:` selecting a full phon
@@ -591,6 +667,10 @@ pub enum SignItem {
     RoleDecl(RoleDecl),
     RoleBinding(RoleBinding),
     RoleExpression(RoleExpression),
+    /// `sem:` 下 `senses:` 的一個義項(§10.3)。
+    Sense(Sense),
+    /// `sem:` 下 `edges:` 的一條衍生邊(§10.3)。
+    SenseEdge(SenseEdge),
     Realization(Realization),
     SignExpression(SignExpression),
     Constraint(BinaryConstraint),

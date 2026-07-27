@@ -325,6 +325,21 @@ fn validate_defs_and_rules(
                               sign_metadata: bool,
                               slots: &[crate::Slot]| {
         let mut slot_feature_targets = BTreeSet::new();
+        // 同一個 sign/trait 內重複宣告同名義項 = 撰寫錯誤(繼承層的覆寫走 effective)。
+        let mut seen_senses: Vec<&str> = Vec::new();
+        for sense in items.iter().filter_map(|item| match item {
+            SignItem::Sense(sense) => Some(sense),
+            _ => None,
+        }) {
+            if seen_senses.contains(&sense.name.as_str()) {
+                report.push(Diagnostic::new(
+                    Severity::Error,
+                    "SENSE_DUPLICATE",
+                    format!("{owner:?} declares sense {:?} more than once", sense.name),
+                ));
+            }
+            seen_senses.push(&sense.name);
+        }
         for item in items {
             match item {
                 SignItem::Def(def) => {
@@ -1166,6 +1181,40 @@ fn validate_typed_schemas(
             }
         }
 
+        // §10.3 義項網絡:義項名在一個 sign 內唯一;衍生邊兩端都必須是已宣告的義項
+        // (不默默略過——否則 lexicalize_sense/derive_sense 會作用在幽靈節點上)。
+        // 注意:`effective` 已依名字合併義項(本地覆寫繼承是**功能**),故重複宣告
+        // 的偵測放在 `validate_defs_and_rules` 看**原始** items 之處。
+        let sense_names: Vec<&str> = effective
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                SignItem::Sense(sense) => Some(sense.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        for edge in effective.items.iter().filter_map(|item| match item {
+            SignItem::SenseEdge(edge) => Some(edge),
+            _ => None,
+        }) {
+            for (role, name) in [("to", &edge.to), ("from", &edge.from)] {
+                if !sense_names.contains(&name.as_str()) {
+                    report.push(Diagnostic::new(
+                        Severity::Error,
+                        "SENSE_EDGE_UNKNOWN",
+                        format!("{owner:?} sense edge {role} refers to undeclared sense {name:?}"),
+                    ));
+                }
+            }
+            if edge.to == edge.from {
+                report.push(Diagnostic::new(
+                    Severity::Error,
+                    "SENSE_EDGE_SELF",
+                    format!("{owner:?} sense edge derives {:?} from itself", edge.to),
+                ));
+            }
+        }
+
         for realization in effective.items.iter().filter_map(|item| match item {
             SignItem::Realization(realization) => Some(realization),
             _ => None,
@@ -1441,6 +1490,8 @@ fn validate_fp_expressions(
             SignItem::FeatureValue(value) => value.dim == dim,
             SignItem::FeatureExpression(value) => value.dim == dim,
             SignItem::FeatureRule(rule) | SignItem::Rule(rule) => rule.dim == dim,
+            // 義項與衍生邊只屬 sem 維(《修補05》§10.3)。
+            SignItem::Sense(_) | SignItem::SenseEdge(_) => dim == Dim::Sem,
             SignItem::Def(definition) => definition
                 .path
                 .strip_prefix(dim.keyword())

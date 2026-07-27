@@ -239,6 +239,8 @@ impl OntologyRegistry {
         let mut inherited_role_decls = Vec::new();
         let mut inherited_role_bindings = Vec::new();
         let mut inherited_role_expressions = Vec::new();
+        let mut inherited_senses = Vec::new();
+        let mut inherited_sense_edges = Vec::new();
         let mut inherited_realizations = Vec::new();
         let mut inherited_expressions = Vec::new();
         let mut inherited_constraints = Vec::new();
@@ -268,6 +270,8 @@ impl OntologyRegistry {
                         SignItem::RoleExpression(expression) => {
                             inherited_role_expressions.push(expression.clone())
                         }
+                        SignItem::Sense(sense) => inherited_senses.push(sense.clone()),
+                        SignItem::SenseEdge(edge) => inherited_sense_edges.push(edge.clone()),
                         SignItem::Realization(realization) => {
                             inherited_realizations.push(realization.clone())
                         }
@@ -322,6 +326,14 @@ impl OntologyRegistry {
         });
         let local_role_expressions = sign.items.iter().filter_map(|item| match item {
             SignItem::RoleExpression(expression) => Some(expression.clone()),
+            _ => None,
+        });
+        let local_senses = sign.items.iter().filter_map(|item| match item {
+            SignItem::Sense(sense) => Some(sense.clone()),
+            _ => None,
+        });
+        let local_sense_edges = sign.items.iter().filter_map(|item| match item {
+            SignItem::SenseEdge(edge) => Some(edge.clone()),
             _ => None,
         });
         let local_realizations = sign.items.iter().filter_map(|item| match item {
@@ -439,6 +451,18 @@ impl OntologyRegistry {
             .chain(local_realizations)
             .last();
 
+        // 義項依名字合併(本地覆寫繼承,保順序);衍生邊無名字,直接串接。
+        let mut senses = BTreeMap::new();
+        for (index, sense) in inherited_senses.into_iter().chain(local_senses).enumerate() {
+            senses.insert(sense.name.clone(), (index, sense));
+        }
+        let mut senses: Vec<_> = senses.into_values().collect();
+        senses.sort_by_key(|(index, _)| *index);
+        let sense_edges: Vec<_> = inherited_sense_edges
+            .into_iter()
+            .chain(local_sense_edges)
+            .collect();
+
         let mut rules: Vec<_> = inherited_rules.into_iter().chain(local_rules).collect();
         let rank = |stage: Stage| match stage {
             Stage::Stem => 0,
@@ -456,6 +480,8 @@ impl OntologyRegistry {
             .filter(|item| matches!(item, SignItem::Belongs(_)))
             .cloned()
             .collect();
+        items.extend(senses.into_iter().map(|(_, sense)| SignItem::Sense(sense)));
+        items.extend(sense_edges.into_iter().map(SignItem::SenseEdge));
         items.extend(values.into_iter().map(|(_, item)| item));
         items.extend(slots.into_iter().map(|(_, slot)| SignItem::Slot(slot)));
         items.extend(

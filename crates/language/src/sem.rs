@@ -21,6 +21,23 @@ pub struct SemanticSource {
     pub sign: String,
 }
 
+/// 義項的**唯讀投影視圖**(對映 AST `crate::Sense`,刻意不帶 `SourceLocation`——
+/// 投影是語意內容,不該因行號不同而不等)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SenseView {
+    pub name: String,
+    pub gloss: String,
+}
+
+/// 衍生邊的唯讀投影視圖(對映 AST `crate::SenseEdge`)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DerivationEdge {
+    pub to: String,
+    pub from: String,
+    pub kind: crate::DerivationKind,
+    pub transparency: crate::SenseTransparency,
+}
+
 /// 一個組合語意節點(meaning 極)。**唯讀視圖**;修改走 patch(12e)。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SemNode {
@@ -35,9 +52,12 @@ pub struct SemNode {
     /// role → 子語意節點(construction 的 `{slot}` 引用解析;**持節點非字串**)。
     /// 遞迴組合:filler 為 derived token 時其 `SemNode` 亦於此。
     pub roles: Vec<(String, SemNode)>,
+    /// **義項網絡節點**(docs/07 §5;《修補05》§10.3)。多義 = 多個義項,各有身分。
+    /// 15a 起由 `sem: senses:` 的一級節點填實(此前僅為預留註解)。
+    pub senses: Vec<SenseView>,
+    /// **衍生邊**(隱喻/換喻/窄化/寬化 + 固化標記),由 `sem: edges:` 填實。
+    pub edges: Vec<DerivationEdge>,
     // 未來擴充位(不破壞上列 API):
-    //   senses: Vec<Sense>            // 義項網絡節點(docs/07 §5)
-    //   edges:  Vec<DerivationEdge>   // 衍生邊 隱喻/換喻/窄化/寬化 + 固化標記
     //   frame:  Option<FrameId>       // 受控 frame 本體引用
 }
 
@@ -125,6 +145,31 @@ impl SemNode {
         }
         types.sort();
         types.dedup();
+        // 義項/衍生邊取自 effective items(隨 belongs 繼承,與其他內容一致)。
+        let senses = effective
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                SignItem::Sense(sense) => Some(SenseView {
+                    name: sense.name.clone(),
+                    gloss: sense.gloss.clone(),
+                }),
+                _ => None,
+            })
+            .collect();
+        let edges = effective
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                SignItem::SenseEdge(edge) => Some(DerivationEdge {
+                    to: edge.to.clone(),
+                    from: edge.from.clone(),
+                    kind: edge.kind,
+                    transparency: edge.transparency,
+                }),
+                _ => None,
+            })
+            .collect();
         SemNode {
             types,
             features,
@@ -134,6 +179,8 @@ impl SemNode {
             },
             fields,
             roles: Vec::new(),
+            senses,
+            edges,
         }
     }
 }
