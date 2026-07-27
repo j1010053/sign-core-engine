@@ -89,6 +89,8 @@ impl FromStr for LibraryId {
 pub enum LibraryExportKind {
     Trait,
     Sign,
+    /// 歷時 function 層(Recipe/Goal;P48–P50)。住套件 `code/*.chg`。
+    Function,
 }
 
 impl LibraryExportKind {
@@ -96,6 +98,7 @@ impl LibraryExportKind {
         match value {
             "trait" => Some(Self::Trait),
             "sign" => Some(Self::Sign),
+            "function" => Some(Self::Function),
             _ => None,
         }
     }
@@ -127,7 +130,10 @@ pub struct LibraryPackage {
     /// Compatibility rendering of `code_paths` for callers that previously
     /// consumed the single `code` manifest field.
     pub code_path: String,
+    /// Compatibility rendering of `data_paths` (comma-joined), mirroring `code_path`.
     pub data_path: String,
+    /// Ordered data files of this package (P50 ①).
+    pub data_paths: Vec<String>,
     pub exports: Vec<LibraryExport>,
     pub code: &'static str,
     pub data: &'static str,
@@ -304,7 +310,7 @@ struct Manifest {
     priority: Option<i32>,
     requires: Option<Vec<LibraryId>>,
     code_paths: Option<Vec<String>>,
-    data_path: Option<String>,
+    data_paths: Option<Vec<String>>,
 }
 
 fn valid_identifier(value: &str) -> bool {
@@ -489,13 +495,29 @@ fn parse_manifest(source: &str) -> Result<Manifest, LibraryLoadError> {
                     key,
                 )?;
             }
-            "data" => set_once(
-                &mut manifest.data_path,
-                value.replace('\\', "/"),
-                package_hint,
-                line_number,
-                key,
-            )?,
+            "data" => {
+                // P50 ①:data 與 code 同樣接受逗號分隔的多路徑(先驗快照、
+                // Weight DB、分佈表可並存);內容仍串接為單一字串,故既有的
+                // library lock digest 自動涵蓋全部檔案(可重現性不破)。
+                let paths = value
+                    .split(',')
+                    .map(|path| path.trim().replace('\\', "/"))
+                    .collect::<Vec<_>>();
+                if paths.is_empty() || paths.iter().any(String::is_empty) {
+                    return Err(config_error(
+                        package_hint,
+                        line_number,
+                        "data must contain one or more comma-separated paths",
+                    ));
+                }
+                set_once(
+                    &mut manifest.data_paths,
+                    paths,
+                    package_hint,
+                    line_number,
+                    key,
+                )?;
+            }
             _ => {
                 return Err(config_error(
                     package_hint,
@@ -661,7 +683,11 @@ fn load_embedded(source: &EmbeddedPackage) -> Result<LibraryPackage, LibraryLoad
         requires: manifest.requires.unwrap_or_default(),
         code_path: code_paths.join(","),
         code_paths,
-        data_path: required(manifest.data_path, "<unknown>", "data")?,
+        data_path: {
+            let paths = required(manifest.data_paths.clone(), "<unknown>", "data")?;
+            paths.join(",")
+        },
+        data_paths: required(manifest.data_paths, "<unknown>", "data")?,
         code: source.code,
         data: source.data,
     };
@@ -670,6 +696,14 @@ fn load_embedded(source: &EmbeddedPackage) -> Result<LibraryPackage, LibraryLoad
         let present = match export.kind {
             LibraryExportKind::Trait => language.trait_named(&export.alias).is_some(),
             LibraryExportKind::Sign => language.sign_named(&export.alias).is_some(),
+            // P50 ③ 未完成前,function export 無處可查——**顯式拒絕**,
+            // 不默默當成不存在(那會報成 MissingAlias,訊息會誤導)。
+            LibraryExportKind::Function => {
+                return Err(LibraryLoadError::UnsupportedContent {
+                    package: package.id.to_string(),
+                    message: "function exports need code/*.chg loading (P50 ③)".to_owned(),
+                })
+            }
         };
         if !present {
             return Err(LibraryLoadError::MissingAlias {
@@ -678,10 +712,17 @@ fn load_embedded(source: &EmbeddedPackage) -> Result<LibraryPackage, LibraryLoad
                 alias: export.alias.clone(),
             });
         }
-        if package.id.kind == LibraryKind::Std && export.kind != LibraryExportKind::Trait {
+        // std 套件可 export trait 與 function(P52:std::grammaticalization 的
+        // 路徑庫就是 std 的 function),但不 export sign。
+        if package.id.kind == LibraryKind::Std
+            && !matches!(
+                export.kind,
+                LibraryExportKind::Trait | LibraryExportKind::Function
+            )
+        {
             return Err(LibraryLoadError::UnsupportedContent {
                 package: package.id.to_string(),
-                message: "std packages may export traits only".to_owned(),
+                message: "std packages may export traits and functions only".to_owned(),
             });
         }
     }
@@ -917,10 +958,43 @@ mod tests {
             code_paths: vec!["code/test.lang".to_owned()],
             code_path: "code/test.lang".to_owned(),
             data_path: "data/test.tsv".to_owned(),
+            data_paths: vec!["data/test.tsv".to_owned()],
             exports: Vec::new(),
             code: "",
             data: "",
         }
+    }
+
+    /// P50 ①:`data` 與 `code` 同樣接受逗號分隔的多路徑(先驗快照 / Weight DB /
+    /// 分佈表可並存)。內容仍串接為單一字串,故既有 library lock digest 自動涵蓋。
+    #[test]
+    fn a_manifest_accepts_several_data_paths() {
+        let manifest = parse_manifest(
+            "kind = std\nname = t\nversion = 0.1.0\nrule_namespace = std:t\nenabled = true\npriority = 0\nrequires =\ncode = code/a.lang\ndata = data/paths.tsv, data/weights.tsv\n",
+        )
+        .expect("multi-data manifest parses");
+        assert_eq!(
+            manifest.data_paths.as_deref(),
+            Some(["data/paths.tsv".to_owned(), "data/weights.tsv".to_owned()].as_slice())
+        );
+    }
+
+    #[test]
+    fn an_empty_data_path_is_rejected() {
+        assert!(parse_manifest(
+            "kind = std\nname = t\nversion = 0.1.0\nrule_namespace = std:t\nenabled = true\npriority = 0\nrequires =\ncode = code/a.lang\ndata = data/a.tsv,\n",
+        )
+        .is_err());
+    }
+
+    /// P50 ②:`exports.tsv` 認得 `function` 這個 kind(歷時 function 層)。
+    #[test]
+    fn the_export_table_understands_functions() {
+        assert_eq!(
+            LibraryExportKind::parse("function"),
+            Some(LibraryExportKind::Function)
+        );
+        assert_eq!(LibraryExportKind::parse("recipe"), None, "非關鍵字(P48)");
     }
 
     #[test]
@@ -1045,6 +1119,7 @@ mod tests {
             code_paths: vec!["code/schema.lang".to_owned()],
             code_path: "code/schema.lang".to_owned(),
             data_path: "data/none.tsv".to_owned(),
+            data_paths: vec!["data/none.tsv".to_owned()],
             exports: Vec::new(),
             code: "trait Schema:\n    syn:\n        slots:\n            head [Noun]\n        map head rename nucleus\n",
             data: "",
