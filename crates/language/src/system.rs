@@ -351,6 +351,8 @@ fn validate_defs_and_rules(
                                 .is_ok_and(|value| value.is_finite() && value >= 0.0),
                             "lexicalized" => matches!(def.value.as_str(), "true" | "false"),
                             "origin" => crate::metadata::parse_origin(&def.value).is_some(),
+                            // P54:至少兩個 `sign(x)`,逗號分隔。
+                            "components" => crate::metadata::parse_components(&def.value).is_some(),
                             "provenance" => SignProvenance::parse(&def.value).is_some(),
                             "lifecycle" => SignLifecycle::parse(&def.value).is_some(),
                             "source_package" => LibraryId::from_str(&def.value).is_ok(),

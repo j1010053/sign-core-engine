@@ -1,6 +1,6 @@
-# 架構修補 10 — 歷時 function 層(Recipe/Goal)與其載入(P47–P53)
+# 架構修補 10 — 歷時 function 層(Recipe/Goal)與其載入(P47–P54)
 
-> **P 系列權威**:本檔定稿 **P47–P53**。承 P16(Atomic Rewrite 定案 12 項)、
+> **P 系列權威**:本檔定稿 **P47–P54**。承 P16(Atomic Rewrite 定案 12 項)、
 > P20–P28(《修補05》primitive 與檔案格式)、**P29–P34**(《修補06》插件/服務)、
 > I22(colon+縮排)、P46(《修補09》phon 命名 block)。
 > 定案時間 2026-07-27;步驟 15 三刀(15a/15b/15c)已落地為本檔的實作基礎。
@@ -184,6 +184,24 @@ pub fn expand(rewrite, document, services: &ServiceContext) -> Result<Vec<Primit
 
 ---
 
+### 7.1 `fuse` 的 component 引用【P54,已補】
+
+稽核步驟 15 時發現:`fuse` 只把 `left` 記進 `origin`,`right` 僅被驗證存在後丟棄,
+故 `fuse(a,b)` 與 `fuse(a,c)` **產出完全相同**——《修補05》§4.3 要求的
+「component 引用」形同未實作。當時判定補欄位屬架構層而**暫不擅自發明**,
+改以測試釘住缺口(補上時會主動失敗)。本次回寫補上:
+
+- `SignDef::components()` / `with_components(&[SignRef])`,存為頂層 metadata Def
+  `components = sign(a), sign(b)`(比照既有 `origin`/`provenance`/`lifecycle`)。
+- 驗證:**至少兩個**成分,少於兩個明確診斷(單一來源該用 `origin`)。
+- `fuse` 同時寫入 `origin`(左成分)與 `components`(兩成分)——兩者職責不同。
+
+> 展開 golden **不受影響**:golden 釘的是「用了哪個原語、作用在哪種節點」,
+> 加 metadata 不改變 `insert Sign into Language at End` 這個形狀。這正是當初
+> 刻意不把節點內容寫進 golden 的用意。
+
+---
+
 ## 8. P 系列決策(本文件新增)
 
 | # | 決策 |
@@ -195,6 +213,7 @@ pub fn expand(rewrite, document, services: &ServiceContext) -> Result<Vec<Primit
 | **P51** | **Recipe body 接力展開**(逐條展開並套用到暫存文件),**否決快照展開**;仍為純函數,golden 可做 |
 | **P52** | **路徑庫 = 1 個參數化 function(code) + 30–50 條路徑表(data)**,非 30–50 個 function;依 P29 code/data 判準;加新路徑 = 加 data 一行 |
 | **P53** | **`expand` 現在就加 `ServiceContext` 參數**(實作留空):外部服務(SemanticBackend)、暫停恢復(P33)、History record–replay(P34)的統一接點;避免日後一次改 12 個簽名 |
+| **P54** | **sign 增 `components` metadata**(至少兩個 `sign(x)`,逗號分隔):兌現《修補05》§4.3 對 `fuse` 的「component 引用」要求。與 `origin` **職責不同**——`origin` 是**單一**來源(衍生自誰,split/adopt 用),`components` 是**線性組合的各成分**(au = à + le)。缺它時 `fuse(a,b)` 與 `fuse(a,c)` 產出相同(第二成分只驗證存在就丟掉);驗證拒絕少於兩個成分(單一來源請用 `origin`) |
 
 ---
 

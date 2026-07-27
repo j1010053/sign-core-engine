@@ -391,52 +391,89 @@ fn fossilize_may_not_move_a_rule_upward() {
     assert!(format!("{err}").contains("downward"), "{err}");
 }
 
-// ── 已知模型缺口(誠實標記,不默默近似)────────────────────────────────────
+// ── P54:fuse 記錄兩個成分 ────────────────────────────────────────────────
 
-/// 《修補05》§4.3 要求 `fuse` 帶「component 引用」,但 `origin` 只收**單一**
-/// `SignRef`,模型沒有記錄多成分的欄位。此測試**釘住現況**:`right` 只被驗證
-/// 存在、不被記錄,故 `fuse(a,b)` 與 `fuse(a,c)` 產出相同。
+/// 《修補05》§4.3 要求 `fuse` 帶「component 引用」。`origin` 只收**單一**
+/// `SignRef`(衍生自誰),故 P54 另立 `components`(線性組合的各成分)。
 ///
-/// 這不是可以靜默的近似——補 components 欄位屬架構層(P 系列)。此測試存在的
-/// 目的就是讓缺口在補上時**主動失敗**,提醒更新。
+/// 沒有它,`fuse(a,b)` 與 `fuse(a,c)` 會產出**完全相同**的結果——第二個成分
+/// 只被驗證存在就丟掉了。本測試就是釘住這件事不會回頭。
 #[test]
-fn fuse_does_not_yet_record_its_second_component() {
-    let with_kobo = expand(
+fn fuse_records_both_components() {
+    let subtree_of = |left: &str, right: &str| {
+        let edits = expand(
+            &AtomicRewrite::Fuse {
+                left: left.to_owned(),
+                right: right.to_owned(),
+                name: "fused".to_owned(),
+                gloss: "F".to_owned(),
+            },
+            &base(),
+            &ServiceContext::offline(),
+        )
+        .expect("fuse expands");
+        match &edits[0] {
+            PrimitiveEdit::Insert { subtree, .. } => format!("{subtree:?}"),
+            other => panic!("expected an insert, got {other:?}"),
+        }
+    };
+
+    let both = subtree_of("book", "kobo");
+    assert!(both.contains("book") && both.contains("kobo"), "{both}");
+
+    // 換掉第二個成分,結果**必須不同**——這正是缺口存在時測不出來的那件事。
+    let swapped = subtree_of("book", "book");
+    assert_ne!(both, swapped, "第二個成分必須影響結果,否則等於沒被記錄");
+}
+
+/// 套用後,`components` 真的落到 `.lang` 上且能被讀回(不是只存在於展開序列)。
+#[test]
+fn the_fused_sign_carries_its_components_in_the_language() {
+    let mut document = base();
+    let spec = LibrarySpec::default();
+    for edit in expand(
         &AtomicRewrite::Fuse {
             left: "book".to_owned(),
             right: "kobo".to_owned(),
-            name: "fused".to_owned(),
-            gloss: "F".to_owned(),
+            name: "bokobo".to_owned(),
+            gloss: "FUSED".to_owned(),
         },
-        &base(),
+        &document,
         &ServiceContext::offline(),
     )
-    .unwrap();
-    // 換一個 right(同樣存在於 fixture),展開結果目前**完全相同**。
-    let with_book = expand(
-        &AtomicRewrite::Fuse {
-            left: "kobo".to_owned(),
-            right: "book".to_owned(),
-            name: "fused".to_owned(),
-            gloss: "F".to_owned(),
-        },
-        &base(),
-        &ServiceContext::offline(),
-    )
-    .unwrap();
-    let subtree = |edits: &[PrimitiveEdit]| match &edits[0] {
-        PrimitiveEdit::Insert { subtree, .. } => format!("{subtree:?}"),
-        other => panic!("expected an insert, got {other:?}"),
-    };
-    // 兩者的 origin 不同(left 有記),但**第二成分完全沒出現在任何一邊**。
-    assert!(subtree(&with_kobo).contains("book"), "left 有被記錄");
-    assert!(
-        !subtree(&with_kobo).contains("kobo"),
-        "已知缺口:right 未被記錄。若此斷言開始失敗,表示模型補上了 components——\
-         請更新本測試與 rewrite.rs 的註記"
+    .unwrap()
+    {
+        document = apply_edit(&document, edit, &spec)
+            .expect("fuse applies")
+            .document;
+    }
+    let language = conlang_language::Language::parse(&document.source()).expect("re-parses");
+    let fused = language
+        .signs
+        .iter()
+        .find(|sign| sign.name == "bokobo")
+        .expect("fused sign present");
+    let components = fused.components().expect("components recorded");
+    assert_eq!(
+        components.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+        ["book", "kobo"]
     );
+    // `origin` 與 `components` 是**不同**的東西:前者單一來源,後者各成分。
+    assert_eq!(fused.origin().map(|r| r.0), Some("book".to_owned()));
+}
+
+/// 近似負例:只有一個成分不是 fusion——`components` 至少要兩個,否則該用 `origin`。
+#[test]
+fn a_single_component_list_is_rejected() {
+    let source = "Symbol a\n\ntrait LocalNoun:\n\nsign x:\n    belongs LocalNoun\n    components = sign(a)\n    phon:\n        /a/\n";
+    let language = conlang_language::Language::parse(source).expect("parses");
+    let report = conlang_language::check_language(&language);
     assert!(
-        !subtree(&with_book).contains("book"),
-        "對稱地,right 未被記錄"
+        report
+            .diagnostics()
+            .iter()
+            .any(|d| d.severity == conlang_language::Severity::Error),
+        "單一成分的 components 必須被診斷:{:?}",
+        report.diagnostics()
     );
 }

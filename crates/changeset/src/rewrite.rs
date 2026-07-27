@@ -321,11 +321,9 @@ pub fn expand(
             // 兩個來源都必須存在(融合的成分)。
             node(document, &format!("sign({left:?})"))?;
             node(document, &format!("sign({right:?})"))?;
-            // **已知模型缺口**(《修補05》§4.3 要求 fuse 帶「component 引用」):
-            // `origin` 只收**單一** `SignRef`,模型沒有記錄多個成分的欄位,故
-            // `right` 目前只被驗證存在、不被記錄——`fuse(a,b)` 與 `fuse(a,c)`
-            // 產出相同。補一個 components 欄位屬架構層(P 系列),不在此擅自發明;
-            // 見 `atomic_rewrite_goldens.rs::fuse_does_not_yet_record_its_second_component`。
+            // P54:記錄**兩個成分**(《修補05》§4.3 的「component 引用」)。
+            // `origin` 是單一來源、`components` 是線性組合的各成分——au = à + le
+            // 兩者都必須留下,否則 `fuse(a,b)` 與 `fuse(a,c)` 會產出相同結果。
             let fused = SignDef {
                 id: conlang_language::SignId::synthetic(),
                 name: name.clone(),
@@ -336,7 +334,8 @@ pub fn expand(
                 })],
             }
             .with_provenance(SignProvenance::Derived)
-            .with_origin(SignRef(left.clone()));
+            .with_origin(SignRef(left.clone()))
+            .with_components(&[SignRef(left.clone()), SignRef(right.clone())]);
             Ok(vec![insert_sign(document, fused)?])
         }
 
