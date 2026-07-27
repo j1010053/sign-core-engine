@@ -75,12 +75,12 @@ fn indent_of(line: &str) -> usize {
 
 /// 解析一份定義文件。**只收 `function`**;遇到 `statement` 明確拒絕。
 pub fn parse_functions(source: &str) -> Result<FunctionPackage, ReplayError> {
+    // 與 `.chg`/`.lang`/`.qy` 共用 `/* … */` 區塊註解。
+    let source = conlang_language::parser::strip_comments(source);
     let lines: Vec<&str> = source.lines().collect();
     let mut index = 0usize;
     // 略過空行與註解。
-    while index < lines.len()
-        && (lines[index].trim().is_empty() || lines[index].trim_start().starts_with('#'))
-    {
+    while index < lines.len() && lines[index].trim().is_empty() {
         index += 1;
     }
     let header = lines
@@ -105,7 +105,7 @@ pub fn parse_functions(source: &str) -> Result<FunctionPackage, ReplayError> {
     while index < lines.len() {
         let raw = lines[index];
         let text = raw.trim();
-        if text.is_empty() || text.starts_with('#') {
+        if text.is_empty() {
             index += 1;
             continue;
         }

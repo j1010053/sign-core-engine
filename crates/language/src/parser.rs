@@ -1550,7 +1550,10 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
 /// 至檔尾)。**保留換行**以維持行號一致(錯誤定位不漂移);註解內容以空白取代,
 /// 使整行註解成空白行(被 parser 略過)、行尾/行內註解不影響縮排與 token。
 /// 註解於 canonical 不保留(IR dump 慣例)。
-fn strip_comments(src: &str) -> String {
+///
+/// **公開供 `.chg` 重用**:三種格式(`.qy`/`.lang`/`.chg`)共用同一套區塊註解
+/// (擁有者 2026-07-12 定案;`#` 在 `.qy` 已被詞界 D19 佔用,故不可當註解)。
+pub fn strip_comments(src: &str) -> String {
     let mut out = String::with_capacity(src.len());
     let mut chars = src.chars().peekable();
     let mut in_comment = false;

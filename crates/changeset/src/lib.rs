@@ -2303,10 +2303,14 @@ fn parse_operation(ordinal: u64, body: &[String]) -> Result<UnresolvedOperation,
 
 impl UnresolvedChangeSet {
     pub fn parse(source: &str) -> Result<UnresolvedChangeSet, ReplayError> {
+        // 三種格式共用 `/* … */` 區塊註解(擁有者 2026-07-12 定案;`#` 在 `.qy`
+        // 已被詞界 D19 佔用)。剝除保留換行,行號不漂移。
+        let source = conlang_language::parser::strip_comments(source);
+        let source = source.as_str();
         let lines = source.lines().collect::<Vec<_>>();
         let header = lines
             .iter()
-            .find(|line| !line.trim().is_empty() && !line.trim().starts_with('#'))
+            .find(|line| !line.trim().is_empty())
             .ok_or_else(|| ReplayError::Parse("empty ChangeSet".to_owned()))?
             .trim();
         let namespace = header
@@ -2322,7 +2326,8 @@ impl UnresolvedChangeSet {
         let mut index = 1;
         while index < lines.len() {
             let line = lines[index].trim();
-            if line.is_empty() || line.starts_with('#') {
+            // 注意:`#` 現在是**語句標記**不是註解(註解已統一為 `/* … */`)。
+            if line.is_empty() {
                 index += 1;
                 continue;
             }
@@ -2347,7 +2352,10 @@ impl UnresolvedChangeSet {
                     digest: strip_digest(digest),
                 });
             } else if let Some(value) = line
-                .strip_prefix("statement ")
+                // `#N:` 為 canonical;`statement N:` 為舊形,仍接受(dump 排新形,
+                // 非 canonical 正規化為不動點——與 `.lang` 的 `=`→`:` 同一作法)。
+                .strip_prefix('#')
+                .or_else(|| line.strip_prefix("statement "))
                 .and_then(|value| value.strip_suffix(':'))
             {
                 let ordinal = value.parse().map_err(|_| {
@@ -2357,7 +2365,12 @@ impl UnresolvedChangeSet {
                 index += 1;
                 while index < lines.len() {
                     let candidate = lines[index];
-                    if candidate.trim().starts_with("statement ") {
+                    // 下一句的標記結束本句 body——兩種寫法都要認,否則 `#1:` 會被
+                    // 吞進前一句的 insert block。
+                    let trimmed = candidate.trim();
+                    if trimmed.starts_with("statement ")
+                        || (trimmed.starts_with('#') && trimmed.ends_with(':'))
+                    {
                         index -= 1;
                         break;
                     }
@@ -3148,7 +3161,7 @@ impl ResolvedChangeSet {
             ));
         }
         for statement in &self.statements {
-            output.push_str(&format!("\n    statement {}:\n", statement.ordinal));
+            output.push_str(&format!("\n    #{}:\n", statement.ordinal));
             for edit in &statement.edits {
                 match edit {
                     PrimitiveEdit::Update { node, change } => {

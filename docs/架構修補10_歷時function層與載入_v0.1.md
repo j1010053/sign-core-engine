@@ -1,6 +1,6 @@
-# 架構修補 10 — 歷時 function 層(Recipe/Goal)與其載入(P47–P54)
+# 架構修補 10 — 歷時 function 層(Recipe/Goal)與其載入(P47–P55)
 
-> **P 系列權威**:本檔定稿 **P47–P54**。承 P16(Atomic Rewrite 定案 12 項)、
+> **P 系列權威**:本檔定稿 **P47–P55**。承 P16(Atomic Rewrite 定案 12 項)、
 > P20–P28(《修補05》primitive 與檔案格式)、**P29–P34**(《修補06》插件/服務)、
 > I22(colon+縮排)、P46(《修補09》phon 命名 block)。
 > 定案時間 2026-07-27;步驟 15 三刀(15a/15b/15c)已落地為本檔的實作基礎。
@@ -213,6 +213,7 @@ pub fn expand(rewrite, document, services: &ServiceContext) -> Result<Vec<Primit
 | **P51** | **Recipe body 接力展開**(逐條展開並套用到暫存文件),**否決快照展開**;仍為純函數,golden 可做 |
 | **P52** | **路徑庫 = 1 個參數化 function(code) + 30–50 條路徑表(data)**,非 30–50 個 function;依 P29 code/data 判準;加新路徑 = 加 data 一行 |
 | **P53** | **`expand` 現在就加 `ServiceContext` 參數**(實作留空):外部服務(SemanticBackend)、暫停恢復(P33)、History record–replay(P34)的統一接點;避免日後一次改 12 個簽名 |
+| **P55** | **`.chg` 表面語法收斂**:①**語句標記 `statement N:` → `#N:`**(`#` 讀作編號,去除每筆交易的冗詞);②**註解統一為 `/* … */`**——`.qy` 與 `.lang` 早已如此(擁有者 2026-07-12 定案,因 **`#` 在 `.qy` 被詞界 D19 佔用**),只有 `.chg` 用 `#` 當註解,三者不一致;改註解後 `#` 正好空出來當標記。序號**必須保留**(P34 History 側表以「語句序號+呼叫序」為鍵)。舊形 `statement N:` 仍接受、dump 一律排新形(非 canonical 正規化為不動點,同 P47 對 `.lang` 具名參數的作法)。動到步驟 14 已封板的表面語法,但**契約語意零改變**(交易邊界、三道 digest、primitive-only 全不動) |
 | **P54** | **sign 增 `components` metadata**(至少兩個 `sign(x)`,逗號分隔):兌現《修補05》§4.3 對 `fuse` 的「component 引用」要求。與 `origin` **職責不同**——`origin` 是**單一**來源(衍生自誰,split/adopt 用),`components` 是**線性組合的各成分**(au = à + le)。缺它時 `fuse(a,b)` 與 `fuse(a,c)` 產出相同(第二成分只驗證存在就丟掉);驗證拒絕少於兩個成分(單一來源請用 `origin`) |
 
 ---
