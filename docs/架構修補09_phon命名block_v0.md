@@ -68,10 +68,9 @@ lenition:                 # 命名 rule = block(name: 前綴;名可含連字號 
 - **parser**:phon 裸 `name:` 頭 + 縮排 body → `parse_phon_block`(遞迴;`Then:`/`Else:` inline
   或縮排;同層不得混)。**printer/codegen** 遞迴排放 `.qy` block。round-trip 穩定。
 - 測試 `codegen.rs::phon_structured_block_then_and_else_codegen_flat`;workspace 291 綠。
-- **界線**:**巢狀 Then/Else 由引擎限制**——tshiatūn 現行 parser 只收 **flat 單層** Then 或
-  Else(混/巢狀需 upstream「grouped-block parser」,其 `ast.rs` 已備 IR、待補)。`.lang` IR
-  可表達巢狀(forward-compatible),但 codegen 出的巢狀 `.qy` 目前會被引擎拒。**L1 部分解**
-  (單層 ✓,巢狀待 upstream)。
+- **界線(已於 slice 4 解除)**:當時**巢狀 Then/Else 由引擎限制**——tshiatūn 舊 parser 只收
+  **flat 單層** Then/Else,codegen 出的巢狀 `.qy` 被引擎拒。**L1 部分解**(單層 ✓)。
+  → **slice 4 補齊**(見下)。
 
 ### slice 3(已落地 2026-07-27)
 - **phon block 語句級定址 + 四原語(解 L2)**:phon block 內每一條語句(`Leaf` 一行)與
@@ -92,11 +91,23 @@ lenition:                 # 命名 rule = block(name: 前綴;名可含連字號 
 - **界線**:sub-block 的**從源插入**(整個新 `Then`/`Else` 子樹)延後——move 既存 sub-block
   已支援(detach→reattach,無需 `.qy` 解析);bootstrap 空 rule 成 block 亦延後。
 
+### slice 4(已落地 2026-07-27)= **L1 完整解**
+- **codegen 出大括號 `{ }` 巢狀 `.qy`**,接上引擎(tshiatūn `wuc-claudecode` / PR #1)的
+  grouped-block parser。巢狀 Then/Else **端到端貫通**:`.lang` 巢狀 `PhonBlock` →
+  `codegen::emit_phon_block` 對**複合(compound)元素**包 `{ }`(leaf 元素維持裸露)→ 引擎
+  brace parser 收下。**扁平單層維持無括號、與舊輸出逐字相同**(零 golden churn)。
+- 對映:`Then([Leaf, Else([…])])` → `a => b` + `Then: { … }`;首元素若為複合(S3 move 可致)
+  → 開頭 `{ … }` group(引擎 GroupOpen)。`Propagate` 目前透明遞迴(propagate 關鍵字待 S4)。
+- 實作:`codegen.rs::emit_phon_block` + `is_grouped_element`。測試
+  `language/tests/phon_grouped_codegen.rs`(4 案:巢狀→braces+引擎收/扁平無括號/round-trip/
+  首元素複合開 group;mutation-tested)。workspace 306 綠、clippy 0、golden 零 churn。
+- **界線**:`Propagate` 尚未排 `propagate` 修飾詞(語意暫失,待 S4)。
+
 ### 尚未落地(staged)
-- **S4 `propagate` 語法**(header/邊界)+ propagate 節點編輯。**解 L3**。
+- **S4 `propagate` 語法**(header/邊界)+ propagate 節點編輯 + **codegen 排 propagate 修飾詞**。**解 L3**。
 - **sub-block 從源插入 / bootstrap 空 block**(S3 界線)。
-- **巢狀 Then/Else 引擎側**:tshiatūn `wuc-claudecode` 已補 brace `{ }` grouped-block parser
-  (PR #1);`.lang` codegen 出 brace grouped `.qy` 的對接待辦。
+- **submodule 重釘**:slice 4 已把 gitlink 釘到引擎 `wuc-claudecode` 的 brace-parser commit
+  (PR #1 分支)以維持本分支自洽;PR #1 merge 到引擎 main 後,再重釘到 merge commit。
 
 ## 相容性
 - **P44**:block 屬 phon 維。相容。

@@ -105,6 +105,19 @@ pub(crate) fn emit_rule(out: &mut String, n: &mut u32, r: &Rule) -> Result<(), C
 
 /// 排放結構化 `PhonBlock`(P46 S2)→ `.qy`:leading block 直接印;後續 block 冠
 /// `Then:`/`Else:` 邊界並縮排。
+/// A `Then`/`Else` block whose element must become a **braced group** in `.qy`
+/// rather than a bare statement list. A `Leaf` element is a plain expression
+/// list (needs no braces); a nested `Then`/`Else` must be grouped so its inner
+/// boundaries don't read as flat-mixing at the parent level (P46 L1; engine
+/// grouped-block parser, tshiatūn wuc-claudecode / PR #1).
+fn is_grouped_element(block: &crate::PhonBlock) -> bool {
+    match block {
+        crate::PhonBlock::Leaf(_) => false,
+        crate::PhonBlock::Then(_) | crate::PhonBlock::Else(_) => true,
+        crate::PhonBlock::Propagate(inner) => is_grouped_element(inner),
+    }
+}
+
 fn emit_phon_block(out: &mut String, block: &crate::PhonBlock, indent: &str) {
     match block {
         crate::PhonBlock::Leaf(stmts) => {
@@ -120,13 +133,31 @@ fn emit_phon_block(out: &mut String, block: &crate::PhonBlock, indent: &str) {
             } else {
                 "Else"
             };
-            if let Some(first) = blocks.first() {
-                emit_phon_block(out, first, indent);
-            }
             let inner = format!("{indent}    ");
-            for sub in blocks.iter().skip(1) {
-                out.push_str(&format!("{indent}{keyword}:\n"));
-                emit_phon_block(out, sub, &inner);
+            for (index, sub) in blocks.iter().enumerate() {
+                let leading = index == 0;
+                match (leading, is_grouped_element(sub)) {
+                    // Leading bare leaf: statements straight at this indent.
+                    (true, false) => emit_phon_block(out, sub, indent),
+                    // Leading nested block: a `{ … }` group on its own lines.
+                    (true, true) => {
+                        out.push_str(&format!("{indent}{{\n"));
+                        emit_phon_block(out, sub, &inner);
+                        out.push_str(&format!("{indent}}}\n"));
+                    }
+                    // Boundary then a bare leaf (the flat single-level form —
+                    // byte-identical to the pre-brace output).
+                    (false, false) => {
+                        out.push_str(&format!("{indent}{keyword}:\n"));
+                        emit_phon_block(out, sub, &inner);
+                    }
+                    // Boundary then a nested block: `Keyword: { … }`.
+                    (false, true) => {
+                        out.push_str(&format!("{indent}{keyword}: {{\n"));
+                        emit_phon_block(out, sub, &inner);
+                        out.push_str(&format!("{indent}}}\n"));
+                    }
+                }
             }
         }
         crate::PhonBlock::Propagate(inner) => emit_phon_block(out, inner, indent),
