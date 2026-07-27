@@ -3476,6 +3476,8 @@ fn is_item_kind(kind: NodeKind) -> bool {
             | NodeKind::SlotFeatureBinding
             | NodeKind::RoleDeclaration
             | NodeKind::RoleBinding
+            | NodeKind::Sense
+            | NodeKind::SenseEdge
             | NodeKind::Realization
             | NodeKind::Case
             | NodeKind::Constraint

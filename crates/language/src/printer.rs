@@ -333,6 +333,8 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                 || has_rule
                 || has_feature
                 || has_roles
+                || has_senses
+                || has_sense_edges
                 || has_realization
                 || has_context_expression)
             {

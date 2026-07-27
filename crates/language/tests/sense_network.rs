@@ -103,10 +103,51 @@ fn senses_and_edges_round_trip_through_the_printer() {
         dumped.contains("log from core metonymy"),
         "edge printed:\n{dumped}"
     );
+    // **保存**(不只是不動點):re-parse 後義項/邊的數量必須一樣。只斷言
+    // `parse(dump).dump() == dump` 是不夠的——若 printer 整段丟掉,兩邊會
+    // 「一致地」都缺,測試照樣綠(這正是本檔一度漏掉的假綠燈)。
+    assert_eq!(
+        count_senses(&Language::parse(&dumped).unwrap(), "book"),
+        count_senses(&l, "book"),
+        "re-parsing the dump preserves senses and edges"
+    );
     assert_eq!(
         Language::parse(&dumped).unwrap().dump(),
         dumped,
         "round-trip is a fixed point"
+    );
+}
+
+fn count_senses(l: &Language, sign_name: &str) -> (usize, usize) {
+    let items = &sign(l, sign_name).items;
+    (
+        items
+            .iter()
+            .filter(|i| matches!(i, SignItem::Sense(_)))
+            .count(),
+        items
+            .iter()
+            .filter(|i| matches!(i, SignItem::SenseEdge(_)))
+            .count(),
+    )
+}
+
+/// 迴歸:`sem:` 區塊**只有**義項/衍生邊(沒有任何純量欄位)時,維度區塊的輸出閘
+/// 曾經整段跳過,導致 dump 掉光義項——而「不動點」測試仍是綠的。
+#[test]
+fn a_sem_block_containing_only_senses_still_prints() {
+    let src = "Symbol b\n\ntrait Noun:\n\nsign book:\n    belongs Noun\n    sem:\n        senses:\n            core = BOOK\n";
+    let l = parse(src);
+    assert_eq!(count_senses(&l, "book"), (1, 0));
+    let dumped = l.dump();
+    assert!(
+        dumped.contains("sem:") && dumped.contains("core = BOOK"),
+        "a senses-only sem block must still be emitted:\n{dumped}"
+    );
+    assert_eq!(
+        count_senses(&Language::parse(&dumped).unwrap(), "book"),
+        (1, 0),
+        "and survive a re-parse"
     );
 }
 
