@@ -173,10 +173,10 @@ sign root:
         realization:
             case:
                 else:
-                    /{Outer(value = Wrap(value = {$self})).phon.ret}/
+                    /{Outer(value: Wrap(value: {$self})).phon.ret}/
     case:
         else:
-            Outer(value = Wrap(value = {$self}))
+            Outer(value: Wrap(value: {$self}))
             belongs Marked
 "#;
 

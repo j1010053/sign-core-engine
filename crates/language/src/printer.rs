@@ -130,7 +130,7 @@ fn expression_source(expression: &Expression) -> String {
                     argument
                         .name
                         .as_ref()
-                        .map(|name| format!("{name} = {value}"))
+                        .map(|name| format!("{name}: {value}"))
                         .unwrap_or(value)
                 })
                 .collect::<Vec<_>>()

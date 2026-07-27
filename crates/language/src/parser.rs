@@ -132,6 +132,21 @@ fn parse_argument_value(source: &str, line: usize) -> Result<SignArgumentValue, 
         .map(SignArgumentValue::Application)
 }
 
+/// 在**巢狀深度 0** 找具名引數的分隔符(`:`,或舊寫法 `=`)。
+/// 巢狀 application/`{…}` 內的分隔符屬於內層,不能在這裡切。
+fn split_argument_name(argument: &str) -> Option<(&str, &str)> {
+    let mut depth = 0usize;
+    for (index, character) in argument.char_indices() {
+        match character {
+            '(' | '{' | '[' => depth += 1,
+            ')' | '}' | ']' => depth = depth.saturating_sub(1),
+            ':' | '=' if depth == 0 => return Some((&argument[..index], &argument[index + 1..])),
+            _ => {}
+        }
+    }
+    None
+}
+
 fn parse_sign_application(source: &str, line: usize) -> Result<SignApplication, ParseError> {
     let Some(open) = source.find('(') else {
         return Err(err(line, "expected a Sign application `name(...)`"));
@@ -145,14 +160,13 @@ fn parse_sign_application(source: &str, line: usize) -> Result<SignApplication, 
     }
     let mut parsed = Vec::new();
     for argument in split_arguments(arguments, line)? {
-        let (name, value) = match argument.split_once('=') {
-            Some((name, value)) => {
-                let name = name.trim();
-                if !ident_ok(name) {
-                    return Err(err(line, "named argument must name a slot"));
-                }
-                (Some(name.to_owned()), value)
-            }
+        // 具名引數 `slot: value`(步驟 15c:層②③④ 的呼叫與此處 sign 引用統一
+        // 用 `key: value`)。`=` 為舊寫法,仍接受以免既有檔案失效。
+        // **必須只在頂層切**:巢狀 application(`Outer(v: Wrap(v: {$self}))`)
+        // 內層的分隔符不屬於這一層。
+        let (name, value) = match split_argument_name(argument) {
+            Some((name, value)) if ident_ok(name.trim()) => (Some(name.trim().to_owned()), value),
+            Some(_) => return Err(err(line, "named argument must name a slot")),
             None => (None, argument),
         };
         parsed.push(SignArgument {

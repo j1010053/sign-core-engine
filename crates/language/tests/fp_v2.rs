@@ -620,7 +620,7 @@ sign seed:
         /S/
     case:
         $self == [Piece]:
-            Pairing(first = {$self})
+            Pairing(first: {$self})
 "#,
     )
     .unwrap();

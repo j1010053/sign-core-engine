@@ -30,7 +30,7 @@ sign AliasSource:
         /{original}/
     case:
         else:
-            RenameTarget(renamed = {original})
+            RenameTarget(renamed: {original})
 
 sign seed:
     phon:
@@ -115,7 +115,7 @@ sign Outer:
         /{head}{tail}{auto}/
     case:
         else:
-            Wrapper(value = {head}, helper = {auto})
+            Wrapper(value: {head}, helper: {auto})
 "#,
     )
     .unwrap();
@@ -328,7 +328,7 @@ sign Current:
         /{value}/
     case:
         $self == [CaseBearer]:
-            NeedsMarked(target = {$self})
+            NeedsMarked(target: {$self})
         else:
             $self
 "#,
