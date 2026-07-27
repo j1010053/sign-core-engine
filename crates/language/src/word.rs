@@ -148,6 +148,7 @@ fn leaf_text(a: &Artifacts, sign: &CompiledSign) -> Result<String, WordError> {
             id: r.rule_id.clone(),
             name: None,
             phon_block: None,
+            propagate: false,
             body: r.body.clone(),
             stage: r.stage,
             dim: r.dim,

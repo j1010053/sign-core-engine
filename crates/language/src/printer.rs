@@ -50,10 +50,19 @@ fn push_phon_block(out: &mut String, block: &crate::PhonBlock, indent: &str) {
             }
             let inner = format!("{indent}    ");
             for sub in blocks.iter().skip(1) {
-                out.push_str(&format!("{indent}{keyword}:\n"));
-                push_phon_block(out, sub, &inner);
+                // P46 S4: `Propagate` is a *modifier* on the element the boundary
+                // introduces, so it prints as `Then propagate:` and the wrapped
+                // block's own content follows (no extra nesting level).
+                let (modifier, body) = match sub {
+                    crate::PhonBlock::Propagate(inner) => (" propagate", inner.as_ref()),
+                    other => ("", other),
+                };
+                out.push_str(&format!("{indent}{keyword}{modifier}:\n"));
+                push_phon_block(out, body, &inner);
             }
         }
+        // A `Propagate` reached directly (element 0, or a rule root) has no
+        // surface form of its own — the boundary above carries the modifier.
         crate::PhonBlock::Propagate(inner) => push_phon_block(out, inner, indent),
     }
 }
@@ -61,7 +70,12 @@ fn push_phon_block(out: &mut String, block: &crate::PhonBlock, indent: &str) {
 fn push_rule(out: &mut String, indent: &str, r: &crate::Rule) {
     // P46 S2: a structured phon block prints as `name:` + recursive block.
     if let Some(block) = &r.phon_block {
-        out.push_str(&format!("{indent}{}:\n", r.name.as_deref().unwrap_or("")));
+        // P46 S4: rule-level `propagate` is a header modifier (`name propagate:`).
+        let modifier = if r.propagate { " propagate" } else { "" };
+        out.push_str(&format!(
+            "{indent}{}{modifier}:\n",
+            r.name.as_deref().unwrap_or("")
+        ));
         push_phon_block(out, block, &format!("{indent}    "));
         return;
     }

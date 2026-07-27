@@ -111,6 +111,9 @@ pub enum EditableField {
     RuleBody,
     RuleStage,
     RuleDimension,
+    /// P46 S4: rule-level (`name propagate:`) or block-element
+    /// (`Then propagate:`) fixpoint iteration.
+    Propagate,
     BranchBody,
     SlotName,
     SlotConstraint,
@@ -170,8 +173,6 @@ pub enum AddressSegment {
     PhonThen(usize),
     /// Index into a phon `PhonBlock::Else` element vec (P46 S3).
     PhonElse(usize),
-    /// Transparent descent through a phon `PhonBlock::Propagate` (P46 S3).
-    PhonPropagate,
     RealizationBranches(usize),
     CaseExpression,
     CaseBranches(usize),
@@ -681,6 +682,9 @@ fn editable_field(kind: NodeKind, name: &str) -> Option<EditableField> {
             Some(EditableField::BranchBody)
         }
         (NodeKind::PhonStatement, "body") => Some(EditableField::BranchBody),
+        (NodeKind::Rule | NodeKind::FeatureRule | NodeKind::PhonBlockNode, "propagate") => {
+            Some(EditableField::Propagate)
+        }
         (NodeKind::Slot, "name") => Some(EditableField::SlotName),
         (NodeKind::Slot, "constraint") => Some(EditableField::SlotConstraint),
         (NodeKind::Slot | NodeKind::RoleDeclaration, "optional") => Some(EditableField::Optional),
@@ -844,17 +848,11 @@ fn enumerate_phon_block(
             }
         }
         crate::PhonBlock::Propagate(inner) => {
-            // Transparent: no separate node for Propagate in S3; the wrapped
-            // block's children hang under a `PhonPropagate` address segment and
-            // keep the same parent (S4 will add propagate editing).
-            enumerate_phon_block(
-                inner,
-                &address.child(AddressSegment::PhonPropagate),
-                parent,
-                namespace,
-                next,
-                entries,
-            );
+            // P46 S4: `Propagate` is a *modifier* on the element it wraps, not an
+            // addressing level — it contributes no segment. Toggling it therefore
+            // never moves a child, so statement identities stay stable across an
+            // `update <node>.propagate = …` (P25/P26).
+            enumerate_phon_block(inner, address, parent, namespace, next, entries);
         }
     }
 }

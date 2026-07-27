@@ -80,17 +80,25 @@ pub enum NodeUpdate {
     TraitGlobal(bool),
     DslDeclaration(String),
     Prosody(Vec<String>),
-    Distribution { key: String, value: String },
+    Distribution {
+        key: String,
+        value: String,
+    },
     DefinitionPath(String),
     DefinitionValue(String),
     RuleBody(String),
     RuleStage(Stage),
     RuleDimension(Dim),
     RuleBranchBody(String),
+    /// P46 S4: rule-level or block-element fixpoint iteration (`propagate`).
+    Propagate(bool),
     SlotName(String),
     SlotConstraint(SlotConstraint),
     SlotOptional(bool),
-    TraitUse { name: String, block: Option<u32> },
+    TraitUse {
+        name: String,
+        block: Option<u32>,
+    },
     Belongs(String),
     FeatureDeclaration(FeatureDecl),
     FeatureValue(FeatureValue),
@@ -250,7 +258,6 @@ fn sequence_tag(address: &NodeAddress) -> u8 {
         Some(AddressSegment::PhonLeaf(_)) => 15,
         Some(AddressSegment::PhonThen(_)) => 16,
         Some(AddressSegment::PhonElse(_)) => 17,
-        Some(AddressSegment::PhonPropagate) => 18,
     }
 }
 
@@ -1303,6 +1310,32 @@ fn update_payload(
             *phon_statement_at_mut(language, &node.address)? = value;
             Ok(None)
         }
+        (NodeKind::Rule | NodeKind::FeatureRule, NodeUpdate::Propagate(value)) => {
+            let rule = rule_at_mut(language, &node.address)?;
+            if rule.phon_block.is_none() {
+                return Err(EditError::FieldMismatch(
+                    "`propagate` applies to a phon block rule".to_owned(),
+                ));
+            }
+            rule.propagate = value;
+            Ok(None)
+        }
+        (NodeKind::PhonBlockNode, NodeUpdate::Propagate(value)) => {
+            // Wrap/unwrap the element in place. `Propagate` contributes no address
+            // segment, so child identities are untouched by this toggle.
+            let slot = phon_element_raw_mut(language, &node.address)?;
+            let current = std::mem::replace(slot, PhonBlock::Leaf(Vec::new()));
+            let bare = match current {
+                PhonBlock::Propagate(inner) => *inner,
+                other => other,
+            };
+            *slot = if value {
+                PhonBlock::Propagate(Box::new(bare))
+            } else {
+                bare
+            };
+            Ok(None)
+        }
         (NodeKind::Slot, NodeUpdate::SlotName(value)) => {
             let old = slot_at_mut(language, &node.address)?.name.clone();
             let scope = slot_rename_scope(language, node, &old)?;
@@ -1652,7 +1685,6 @@ fn address_list_position(address: &NodeAddress) -> Result<(ListKey, usize), Edit
         AddressSegment::Prosody
         | AddressSegment::CaseExpression
         | AddressSegment::CaseResult
-        | AddressSegment::PhonPropagate
         | AddressSegment::ApplicationArguments(_) => {
             return Err(EditError::FieldMismatch(
                 "node is not an editable semantic sequence element".to_owned(),
@@ -2538,6 +2570,9 @@ fn update_for(reference: &NodeRef, field: &str, value: &str) -> Result<NodeUpdat
             ))),
         },
         (NodeKind::Trait, "global") => Ok(NodeUpdate::TraitGlobal(parse_bool(value)?)),
+        (NodeKind::Rule | NodeKind::FeatureRule | NodeKind::PhonBlockNode, "propagate") => {
+            Ok(NodeUpdate::Propagate(parse_bool(value)?))
+        }
         (NodeKind::Slot, "optional") => Ok(NodeUpdate::SlotOptional(parse_bool(value)?)),
         (NodeKind::Belongs, "target") => Ok(NodeUpdate::Belongs(value.to_owned())),
         (NodeKind::Rule | NodeKind::FeatureRule, "dim") => Ok(NodeUpdate::RuleDimension(
@@ -2897,6 +2932,7 @@ fn dump_update(change: &NodeUpdate) -> Option<(&'static str, String)> {
             .to_owned(),
         )),
         NodeUpdate::TraitGlobal(value) => Some(("global", value.to_string())),
+        NodeUpdate::Propagate(value) => Some(("propagate", value.to_string())),
         NodeUpdate::SlotOptional(value) => Some(("optional", value.to_string())),
         NodeUpdate::Belongs(value) => Some(("target", value.clone())),
         NodeUpdate::RuleDimension(dim) => Some(("dim", dim.keyword().to_owned())),
@@ -4175,10 +4211,7 @@ fn rule_at_mut<'a>(
 fn is_phon_segment(segment: &AddressSegment) -> bool {
     matches!(
         segment,
-        AddressSegment::PhonLeaf(_)
-            | AddressSegment::PhonThen(_)
-            | AddressSegment::PhonElse(_)
-            | AddressSegment::PhonPropagate
+        AddressSegment::PhonLeaf(_) | AddressSegment::PhonThen(_) | AddressSegment::PhonElse(_)
     )
 }
 
@@ -4195,7 +4228,13 @@ fn split_phon_address(address: &NodeAddress) -> (NodeAddress, Vec<AddressSegment
     }
 }
 
+/// P46 S4: `Propagate` is a modifier, not an addressing level — unwrap it
+/// transparently at every step so a propagate toggle never shifts an address.
 fn walk_phon_block<'a>(block: &'a PhonBlock, path: &[AddressSegment]) -> Option<&'a PhonBlock> {
+    let block = match block {
+        PhonBlock::Propagate(inner) => inner.as_ref(),
+        other => other,
+    };
     match path.split_first() {
         None => Some(block),
         Some((AddressSegment::PhonThen(index), rest)) => match block {
@@ -4206,10 +4245,6 @@ fn walk_phon_block<'a>(block: &'a PhonBlock, path: &[AddressSegment]) -> Option<
             PhonBlock::Else(elements) => walk_phon_block(elements.get(*index)?, rest),
             _ => None,
         },
-        Some((AddressSegment::PhonPropagate, rest)) => match block {
-            PhonBlock::Propagate(inner) => walk_phon_block(inner, rest),
-            _ => None,
-        },
         _ => None,
     }
 }
@@ -4218,6 +4253,10 @@ fn walk_phon_block_mut<'a>(
     block: &'a mut PhonBlock,
     path: &[AddressSegment],
 ) -> Option<&'a mut PhonBlock> {
+    let block = match block {
+        PhonBlock::Propagate(inner) => inner.as_mut(),
+        other => other,
+    };
     match path.split_first() {
         None => Some(block),
         Some((AddressSegment::PhonThen(index), rest)) => match block {
@@ -4228,11 +4267,37 @@ fn walk_phon_block_mut<'a>(
             PhonBlock::Else(elements) => walk_phon_block_mut(elements.get_mut(*index)?, rest),
             _ => None,
         },
-        Some((AddressSegment::PhonPropagate, rest)) => match block {
-            PhonBlock::Propagate(inner) => walk_phon_block_mut(inner, rest),
-            _ => None,
-        },
         _ => None,
+    }
+}
+
+/// The **raw** element slot at a `PhonThen`/`PhonElse` address — i.e. still
+/// wrapped in `Propagate` if it carries the modifier. Used by the propagate
+/// toggle, which must see and replace the wrapper itself.
+fn phon_element_raw_mut<'a>(
+    language: &'a mut Language,
+    address: &NodeAddress,
+) -> Result<&'a mut PhonBlock, EditError> {
+    let (last, head) = address
+        .0
+        .split_last()
+        .ok_or_else(|| EditError::FieldMismatch("expected phon element address".to_owned()))?;
+    let index = match last {
+        AddressSegment::PhonThen(index) | AddressSegment::PhonElse(index) => *index,
+        _ => {
+            return Err(EditError::FieldMismatch(
+                "expected phon element address".to_owned(),
+            ))
+        }
+    };
+    let container = NodeAddress(head.to_vec());
+    match phon_container_block_mut(language, &container)? {
+        PhonBlock::Then(elements) | PhonBlock::Else(elements) => elements
+            .get_mut(index)
+            .ok_or_else(|| EditError::FieldMismatch("stale phon element index".to_owned())),
+        _ => Err(EditError::FieldMismatch(
+            "phon element parent is not a Then/Else".to_owned(),
+        )),
     }
 }
 
@@ -4285,9 +4350,8 @@ fn push_phon_children(block: &PhonBlock, base: &NodeAddress, out: &mut Vec<NodeA
                 out.push(base.child(AddressSegment::PhonElse(index)));
             }
         }
-        PhonBlock::Propagate(inner) => {
-            push_phon_children(inner, &base.child(AddressSegment::PhonPropagate), out);
-        }
+        // Transparent modifier: children keep the enclosing element's address.
+        PhonBlock::Propagate(inner) => push_phon_children(inner, base, out),
     }
 }
 

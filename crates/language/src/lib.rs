@@ -521,6 +521,10 @@ pub struct Rule {
     /// `RuleBlock`)。`Some` 時 codegen/printer 以此為準,`body`/`else_chain`/`then_chain`
     /// 空置;`None` = 沿用扁平 body + 鏈(向後相容,syn/sem/prag 的 P43 Else 亦走此路)。
     pub phon_block: Option<PhonBlock>,
+    /// P46 S4(限 phon,對映引擎 header modifier `name propagate:`):整條 rule
+    /// **迭代到 fixpoint**。與 block **邊界** propagate(`Then propagate:` →
+    /// `PhonBlock::Propagate`)正交——後者只重複它修飾的那個 block element。
+    pub propagate: bool,
     /// 主分支原文(`a => ə / _#`),不含 `@stage` 與 else。
     pub body: String,
     pub stage: Stage,
@@ -795,6 +799,7 @@ impl Language {
             id: self.fresh_rule_id(),
             name: None,
             phon_block: None,
+            propagate: false,
             body: body.into(),
             stage,
             dim,

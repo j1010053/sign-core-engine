@@ -101,10 +101,38 @@ lenition:                 # 命名 rule = block(name: 前綴;名可含連字號 
 - 實作:`codegen.rs::emit_phon_block` + `is_grouped_element`。測試
   `language/tests/phon_grouped_codegen.rs`(4 案:巢狀→braces+引擎收/扁平無括號/round-trip/
   首元素複合開 group;mutation-tested)。workspace 306 綠、clippy 0、golden 零 churn。
-- **界線**:`Propagate` 尚未排 `propagate` 修飾詞(語意暫失,待 S4)。
+- **界線(已於 S4 解除)**:`Propagate` 尚未排 `propagate` 修飾詞(語意暫失)。
+
+### S4(已落地 2026-07-27)= **L3 解**
+引擎 `.qy` 的 propagate 有**兩處**修飾詞,S4 兩者皆補上 `.lang` 對應:
+
+| 位置 | `.qy`/`.lang` 語法 | 語意 | `.lang` 承載 |
+|---|---|---|---|
+| header | `name propagate:` | 整條 rule 迭代到 fixpoint | `Rule.propagate: bool` |
+| boundary | `Then propagate:` | 只重複**該邊界引入的那個 element** | `PhonBlock::Propagate` |
+
+- **修好三個既有缺陷(非單純補功能)**:此前 (1) `PhonBlock::Propagate` 經 printer/codegen
+  **靜默丟棄**(規則不再迭代 = 語意腐蝕);(2) `.lang` 寫 `Then propagate:` 會被當成**普通語句**
+  塞進 Leaf、巢狀被壓平;(3) 寫 `name propagate:` 會**摧毀 block 結構**(降成扁平 rule)。
+  三者皆為靜默錯誤,現皆已修並各有回歸測試。
+- **`Propagate` = 修飾詞,不是層級**(關鍵設計):它**不佔位址節段**——`AddressSegment::PhonPropagate`
+  (S3 引入)**移除**,`enumerate_phon_block`/`walk_phon_block`/`push_phon_children` 透明穿過。
+  理由:`sync_identity_descendants` 以 `(address, kind)` 重用 id,若 propagate 佔節段,
+  **切換 propagate 會讓底下每條語句換新 id**,「同一條語句」的身分斷裂(違 P25/P26)。
+  透明後 `then[1].leaf[k]` 定址不因 propagate 而變,切換 0 身分churn。
+  (安全性:S3 之前無任何路徑能產生 `Propagate`,故無既存 sidecar 含該節段,移除免遷移。)
+- **編輯**:`update <rule>.propagate = true|false`(header)與 `update <block-node>.propagate = …`
+  (boundary,就地 wrap/unwrap)。`EditableField::Propagate`、`NodeUpdate::Propagate(bool)`;
+  `.chg` dump/parse round-trip。負例:對扁平 else/then 鏈 rule 設 propagate → 明確拒絕。
+- **顯式拒絕**:block **首元素**帶 Propagate(僅 S3 move 可致)在 `.qy` 無處掛修飾詞 →
+  `CodegenError::LeadingPropagateUnsupported`,**不默默丟棄**。
+- 測試:`language/tests/phon_propagate.rs`(8 案)+ `changeset/tests/phon_propagate_edits.rs`
+  (7 案,含 **identity 穩定性** property)。**mutation-tested 5 種**(codegen/printer 丟 boundary
+  修飾詞、codegen 丟 header 修飾詞、首元素靜默丟棄、Propagate 重新佔節段)全數被抓。
+  workspace **321 綠**、clippy 0、引擎零觸動(166)、wasm 綠;golden 僅 `Rule` 新欄位
+  `propagate: false` 三行純新增(無語意變動)。
 
 ### 尚未落地(staged)
-- **S4 `propagate` 語法**(header/邊界)+ propagate 節點編輯 + **codegen 排 propagate 修飾詞**。**解 L3**。
 - **sub-block 從源插入 / bootstrap 空 block**(S3 界線)。
 - **submodule 重釘**:slice 4 已把 gitlink 釘到引擎 `wuc-claudecode` 的 brace-parser commit
   (PR #1 分支)以維持本分支自洽;PR #1 merge 到引擎 main 後,再重釘到 merge commit。

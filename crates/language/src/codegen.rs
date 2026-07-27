@@ -31,6 +31,14 @@ pub enum CodegenError {
         "generated phon rule-set rejected by dsl: {msg}\n--- generated source ---\n{generated}"
     )]
     Dsl { msg: String, generated: String },
+    /// P46 S4:`.qy` 的 propagate 只能掛在**邊界**(`Then propagate:`)或 **header**
+    /// (`name propagate:`);block 的**首元素**在邊界之前,無處可掛修飾詞。
+    /// 這種 IR(僅 S3 編輯可造成)**顯式拒絕**,不默默丟掉 propagate 語意。
+    #[error(
+        "phon rule {rule:?}: a leading block element cannot carry `propagate` \
+         (no boundary to attach it to); use a rule-level `propagate:` header instead"
+    )]
+    LeadingPropagateUnsupported { rule: String },
 }
 
 /// Compiled Grammar(P8):共時執行表示,Engine 只讀這個。
@@ -118,7 +126,21 @@ fn is_grouped_element(block: &crate::PhonBlock) -> bool {
     }
 }
 
-fn emit_phon_block(out: &mut String, block: &crate::PhonBlock, indent: &str) {
+/// Split a block element into its `propagate` modifier and the block the
+/// modifier applies to (P46 S4). `Propagate` is a *modifier*, not a level.
+fn split_propagate(block: &crate::PhonBlock) -> (bool, &crate::PhonBlock) {
+    match block {
+        crate::PhonBlock::Propagate(inner) => (true, inner.as_ref()),
+        other => (false, other),
+    }
+}
+
+fn emit_phon_block(
+    out: &mut String,
+    block: &crate::PhonBlock,
+    indent: &str,
+    rule_label: &str,
+) -> Result<(), CodegenError> {
     match block {
         crate::PhonBlock::Leaf(stmts) => {
             for statement in stmts {
@@ -135,33 +157,45 @@ fn emit_phon_block(out: &mut String, block: &crate::PhonBlock, indent: &str) {
             };
             let inner = format!("{indent}    ");
             for (index, sub) in blocks.iter().enumerate() {
-                let leading = index == 0;
-                match (leading, is_grouped_element(sub)) {
-                    // Leading bare leaf: statements straight at this indent.
-                    (true, false) => emit_phon_block(out, sub, indent),
-                    // Leading nested block: a `{ … }` group on its own lines.
-                    (true, true) => {
+                let (propagate, body) = split_propagate(sub);
+                if index == 0 {
+                    // The leading element precedes every boundary, so there is no
+                    // place to hang a modifier: reject rather than drop it.
+                    if propagate {
+                        return Err(CodegenError::LeadingPropagateUnsupported {
+                            rule: rule_label.to_owned(),
+                        });
+                    }
+                    if is_grouped_element(body) {
+                        // Leading nested block: a `{ … }` group on its own lines.
                         out.push_str(&format!("{indent}{{\n"));
-                        emit_phon_block(out, sub, &inner);
+                        emit_phon_block(out, body, &inner, rule_label)?;
                         out.push_str(&format!("{indent}}}\n"));
+                    } else {
+                        // Leading bare leaf: statements straight at this indent.
+                        emit_phon_block(out, body, indent, rule_label)?;
                     }
-                    // Boundary then a bare leaf (the flat single-level form —
-                    // byte-identical to the pre-brace output).
-                    (false, false) => {
-                        out.push_str(&format!("{indent}{keyword}:\n"));
-                        emit_phon_block(out, sub, &inner);
-                    }
-                    // Boundary then a nested block: `Keyword: { … }`.
-                    (false, true) => {
-                        out.push_str(&format!("{indent}{keyword}: {{\n"));
-                        emit_phon_block(out, sub, &inner);
-                        out.push_str(&format!("{indent}}}\n"));
-                    }
+                    continue;
+                }
+                let modifier = if propagate { " propagate" } else { "" };
+                if is_grouped_element(body) {
+                    // Boundary then a nested block: `Keyword[ propagate]: { … }`.
+                    out.push_str(&format!("{indent}{keyword}{modifier}: {{\n"));
+                    emit_phon_block(out, body, &inner, rule_label)?;
+                    out.push_str(&format!("{indent}}}\n"));
+                } else {
+                    // Boundary then a bare leaf (flat single-level form — without
+                    // `propagate` this is byte-identical to the pre-S4 output).
+                    out.push_str(&format!("{indent}{keyword}{modifier}:\n"));
+                    emit_phon_block(out, body, &inner, rule_label)?;
                 }
             }
         }
-        crate::PhonBlock::Propagate(inner) => emit_phon_block(out, inner, indent),
+        // A `Propagate` reached directly (a rule root) carries no boundary of its
+        // own; the rule-level `propagate:` header expresses it instead.
+        crate::PhonBlock::Propagate(inner) => emit_phon_block(out, inner, indent, rule_label)?,
     }
+    Ok(())
 }
 
 fn generated_line(out: &str) -> usize {
@@ -205,11 +239,13 @@ fn emit_rule_mapped(
         // P46 S2: structured Lexurgy block → `.qy` verbatim.
         let label = r.name.clone().unwrap_or_else(|| format!("r{n}"));
         *n += 1;
-        out.push_str(&format!("{label}:\n"));
+        // P46 S4: rule-level propagate → engine header modifier `name propagate:`.
+        let modifier = if r.propagate { " propagate" } else { "" };
+        out.push_str(&format!("{label}{modifier}:\n"));
         if r.stage != Stage::Word {
             out.push_str(&format!("    stage: {}\n", stage_str(r.stage)));
         }
-        emit_phon_block(out, block, "    ");
+        emit_phon_block(out, block, "    ", &label)?;
         return Ok(());
     }
     if r.body.starts_with("Scan ") {

@@ -689,8 +689,19 @@ fn lexurgy_name_prefix(text: &str) -> Option<(String, &str)> {
 }
 
 /// phon block 頭(P46 S2):`<name>:`(冒號後無內容);後接縮排 body 即結構化 block。
-fn phon_block_header(text: &str) -> Option<String> {
-    let name = text.strip_suffix(':')?.trim();
+/// phon block 頭:`name:` 或 **`name propagate:`**(P46 S4,對映引擎 header
+/// modifier)。回傳 (name, rule-level propagate)。
+fn phon_block_header(text: &str) -> Option<(String, bool)> {
+    let head = text.strip_suffix(':')?.trim();
+    // `name propagate` → 整條 rule 迭代到 fixpoint。
+    let (name, propagate) = match head
+        .strip_suffix("propagate")
+        .or_else(|| head.strip_suffix("Propagate"))
+    {
+        // 尾綴必須是**獨立的字**(前面有空白),否則 `xpropagate` 會被誤判。
+        Some(rest) if rest.ends_with(char::is_whitespace) => (rest.trim(), true),
+        _ => (head, false),
+    };
     if name.is_empty()
         || !name
             .chars()
@@ -703,17 +714,37 @@ fn phon_block_header(text: &str) -> Option<String> {
     {
         return None;
     }
-    Some(name.to_owned())
+    Some((name.to_owned(), propagate))
 }
 
-/// `Then:`/`Else:` 邊界:回傳 (is_then, inline 語句)。
-fn phon_block_boundary(text: &str) -> Option<(bool, Option<String>)> {
+/// `Then:`/`Else:` 邊界,可帶 **`propagate`** 修飾(P46 S4,對映引擎 boundary
+/// modifier → `PhonBlock::Propagate`)。回傳 (is_then, propagate, inline 語句)。
+fn phon_block_boundary(text: &str) -> Option<(bool, bool, Option<String>)> {
     for (kw, is_then) in [("Then", true), ("then", true), ("Else", false), ("else", false)] {
-        if let Some(rest) = text.strip_prefix(kw) {
-            if let Some(after) = rest.strip_prefix(':') {
-                let inline = after.trim();
-                return Some((is_then, (!inline.is_empty()).then(|| inline.to_owned())));
+        let Some(rest) = text.strip_prefix(kw) else {
+            continue;
+        };
+        // `Then:` / `Then propagate:` —— propagate 前必須有空白。
+        let (rest, propagate) = match rest.strip_prefix(char::is_whitespace) {
+            Some(after) => {
+                let after = after.trim_start();
+                match after
+                    .strip_prefix("propagate")
+                    .or_else(|| after.strip_prefix("Propagate"))
+                {
+                    Some(tail) => (tail, true),
+                    None => (rest, false),
+                }
             }
+            None => (rest, false),
+        };
+        if let Some(after) = rest.trim_start().strip_prefix(':') {
+            let inline = after.trim();
+            return Some((
+                is_then,
+                propagate,
+                (!inline.is_empty()).then(|| inline.to_owned()),
+            ));
         }
     }
     None
@@ -734,7 +765,7 @@ fn parse_phon_block(lines: &[Line]) -> Result<PhonBlock, ParseError> {
             continue;
         }
         let text = ln.text.trim();
-        if let Some((then, inline)) = phon_block_boundary(text) {
+        if let Some((then, propagate, inline)) = phon_block_boundary(text) {
             if is_then.is_some_and(|k| k != then) {
                 return Err(err(ln.no, "cannot mix `Then:` and `Else:` at one block level"));
             }
@@ -751,7 +782,12 @@ fn parse_phon_block(lines: &[Line]) -> Result<PhonBlock, ParseError> {
                 i = j - 1;
                 sub
             };
-            subs.push(sub);
+            // P46 S4:`Then propagate:` 只修飾**它引入的那個 element**。
+            subs.push(if propagate {
+                PhonBlock::Propagate(Box::new(sub))
+            } else {
+                sub
+            });
         } else if is_then.is_some() {
             return Err(err(
                 ln.no,
@@ -1373,7 +1409,7 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
         {
             // phon: bare `name:` header + indented body = structured Lexurgy block
             // (P46 S2).
-            let name = phon_block_header(text).expect("checked above");
+            let (name, propagate) = phon_block_header(text).expect("checked above");
             let start = index;
             while index < body.len() && (body[index].text.is_empty() || body[index].indent > ind) {
                 index += 1;
@@ -1381,6 +1417,7 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             let block = parse_phon_block(&body[start..index])?;
             let mut r = lang.rule_dim(String::new(), Stage::Word, Dim::Phon);
             r.name = Some(name);
+            r.propagate = propagate;
             r.phon_block = Some(block);
             r.source = SourceLocation::line(no);
             blocks.last_mut().unwrap().items.push(SignItem::Rule(r));
