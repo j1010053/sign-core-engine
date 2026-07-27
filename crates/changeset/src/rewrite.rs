@@ -321,6 +321,11 @@ pub fn expand(
             // 兩個來源都必須存在(融合的成分)。
             node(document, &format!("sign({left:?})"))?;
             node(document, &format!("sign({right:?})"))?;
+            // **已知模型缺口**(《修補05》§4.3 要求 fuse 帶「component 引用」):
+            // `origin` 只收**單一** `SignRef`,模型沒有記錄多個成分的欄位,故
+            // `right` 目前只被驗證存在、不被記錄——`fuse(a,b)` 與 `fuse(a,c)`
+            // 產出相同。補一個 components 欄位屬架構層(P 系列),不在此擅自發明;
+            // 見 `atomic_rewrite_goldens.rs::fuse_does_not_yet_record_its_second_component`。
             let fused = SignDef {
                 id: conlang_language::SignId::synthetic(),
                 name: name.clone(),
@@ -428,6 +433,12 @@ fn entrenchment_edit(
 }
 
 /// `split`:新 sign 帶走指名義項(+ 兩端都在搬移集合內的衍生邊),來源刪掉它們。
+///
+/// **與《修補05》§4.3 草案的刻意分歧**(語意等價):該表寫
+/// `insert + move + update(refs)`;此處是「insert(完整新 sign,含義項與 origin)
+/// 後接 delete(來源義項)」。理由是「一次完整 Insert」鐵律——避免展開序列引用
+/// 尚未存在的節點。淨效果相同(義項搬到新 sign、來源失去它、origin 指回),
+/// 且仍封閉於四原語(§4.3 的用意是證明封閉性,非規定確切序列)。
 fn expand_split(
     document: &LanguageDocument,
     sign: &str,
@@ -601,16 +612,32 @@ fn expand_move_rule(
     }])
 }
 
-/// 規則目前住在哪一級(由 selector 前綴判定)。
+/// 規則目前住在哪一級。**必須查 Language**——`global trait X` 與 `trait X` 的
+/// selector 都是 `trait("X")`,只看前綴會把 P14 的三級階梯
+/// (Global↔Trait↔Sign)塌成兩級,導致 global→trait 的 fossilize 被誤拒。
 fn home_of(document: &LanguageDocument, rule: &str) -> Result<RuleHome, RewriteError> {
-    let _ = document;
     if rule.starts_with("sign(") {
-        Ok(RuleHome::Sign(String::new()))
-    } else if rule.starts_with("trait(") {
-        Ok(RuleHome::Trait(String::new()))
-    } else {
-        Err(RewriteError::Target(format!(
-            "cannot tell which home {rule:?} lives in"
-        )))
+        return Ok(RuleHome::Sign(String::new()));
     }
+    if let Some(rest) = rule.strip_prefix("trait(") {
+        let name = rest
+            .split(')')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .trim_matches('"');
+        let is_global = document
+            .language()
+            .traits
+            .iter()
+            .any(|trait_def| trait_def.name == name && trait_def.global);
+        return Ok(if is_global {
+            RuleHome::Global(name.to_owned())
+        } else {
+            RuleHome::Trait(name.to_owned())
+        });
+    }
+    Err(RewriteError::Target(format!(
+        "cannot tell which home {rule:?} lives in"
+    )))
 }

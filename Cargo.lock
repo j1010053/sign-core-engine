@@ -52,6 +52,7 @@ name = "conlang-changeset"
 version = "0.1.0"
 dependencies = [
  "conlang-language",
+ "insta",
  "thiserror",
 ]
 
