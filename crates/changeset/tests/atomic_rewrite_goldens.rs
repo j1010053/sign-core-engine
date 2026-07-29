@@ -7,7 +7,7 @@
 //! 是 insert+delete,若哪天悄悄變成 update 就會在此顯形)。
 
 use conlang_changeset::rewrite::{
-    expand, AdoptSource, AtomicRewrite, ReanalysisTarget, RuleHome, ServiceContext,
+    expand, AdoptSource, AtomicRewrite, DonorScope, ReanalysisTarget, RuleHome, ServiceContext,
 };
 use conlang_changeset::{apply_edit, PrimitiveEdit};
 use conlang_language::{
@@ -93,9 +93,22 @@ fn shape(edits: &[PrimitiveEdit]) -> String {
 }
 
 fn golden(name: &str, rewrite: &AtomicRewrite) {
-    let edits = expand(rewrite, &base(), &ServiceContext::offline())
+    golden_with(name, rewrite, &DonorScope::new());
+}
+
+fn golden_with(name: &str, rewrite: &AtomicRewrite, donors: &DonorScope<'_>) {
+    let edits = expand(rewrite, &base(), &ServiceContext::offline(), donors)
         .unwrap_or_else(|error| panic!("{name} must expand: {error}"));
     insta::assert_snapshot!(name, shape(&edits));
+}
+
+/// 一份外部語言,供 `adopt` 指名取材。
+fn donor_language() -> LanguageDocument {
+    LanguageDocument::import_new_root(
+        "sign kaffe:\n    belongs LocalNoun\n    sem:\n        senses:\n            core = COFFEE\n",
+        "fr",
+    )
+    .expect("donor parses")
 }
 
 fn new_sign(name: &str, gloss: &str) -> SignDef {
@@ -264,12 +277,19 @@ fn golden_merge_and_fuse() {
 
 #[test]
 fn golden_adopt() {
-    golden(
+    // v0.3:`adopt` 由「呼叫端遞現成的 SignDef」改為**指名**——donor 別名 + sign 名字,
+    // 選取在展開時發生(P62 §7)。golden 因此變動:內容改由 donor 提供。
+    let donor = donor_language();
+    let mut donors = DonorScope::new();
+    donors.insert("fr", &donor);
+    golden_with(
         "adopt",
         &AtomicRewrite::Adopt {
-            sign: new_sign("kaffe", "COFFEE"),
+            donor: "fr".to_owned(),
+            sign: "kaffe".to_owned(),
             source: AdoptSource::Loan,
         },
+        &donors,
     );
 }
 
@@ -286,6 +306,7 @@ fn with_rule_in(home: RuleHome) -> LanguageDocument {
         },
         &document,
         &ServiceContext::offline(),
+        &DonorScope::new(),
     )
     .expect("sound_change expands")
     {
@@ -297,8 +318,13 @@ fn with_rule_in(home: RuleHome) -> LanguageDocument {
 }
 
 fn move_rule(document: &LanguageDocument, rewrite: &AtomicRewrite) -> String {
-    let edits = expand(rewrite, document, &ServiceContext::offline())
-        .unwrap_or_else(|error| panic!("must expand: {error}"));
+    let edits = expand(
+        rewrite,
+        document,
+        &ServiceContext::offline(),
+        &DonorScope::new(),
+    )
+    .unwrap_or_else(|error| panic!("must expand: {error}"));
     // §4.3:居所搬移用的是 **move**,不是 delete+insert。
     assert!(
         matches!(edits.as_slice(), [PrimitiveEdit::Move { .. }]),
@@ -386,6 +412,7 @@ fn fossilize_may_not_move_a_rule_upward() {
         },
         &document,
         &ServiceContext::offline(),
+        &DonorScope::new(),
     )
     .expect_err("fossilize must not move upward");
     assert!(format!("{err}").contains("downward"), "{err}");
@@ -410,6 +437,7 @@ fn fuse_records_both_components() {
             },
             &base(),
             &ServiceContext::offline(),
+            &DonorScope::new(),
         )
         .expect("fuse expands");
         match &edits[0] {
@@ -440,6 +468,7 @@ fn the_fused_sign_carries_its_components_in_the_language() {
         },
         &document,
         &ServiceContext::offline(),
+        &DonorScope::new(),
     )
     .unwrap()
     {

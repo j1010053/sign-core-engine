@@ -15,6 +15,8 @@
 use crate::{
     parse_selector, resolve_selector, Anchor, DetachedNode, NodeUpdate, PrimitiveEdit, ReplayError,
 };
+use std::collections::BTreeMap;
+
 use conlang_language::{
     Def, DerivationKind, LanguageDocument, NodeKind, NodeRef, Sense, SenseEdge, SenseTransparency,
     SignDef, SignItem, SignProvenance, SignRef, SourceLocation,
@@ -155,9 +157,19 @@ pub enum AtomicRewrite {
     },
 
     // ── 接觸 ──
-    /// 借入:把 donor 的 sign 複製進來(呼叫端先從 donor Language 取出 `SignDef`,
-    /// 展開才能維持 `(rewrite, Language)` 的純函數簽名)。
-    Adopt { sign: SignDef, source: AdoptSource },
+    /// 借入:把 donor 的某個 sign 複製進來。
+    ///
+    /// **v0.3 前是 `sign: SignDef`**——呼叫端得先自己去 donor 那邊把整個 sign 取出來
+    /// 遞進來,「怎麼挑」整個掉在引擎外面(不被記錄、不被測試、不能 replay)。現在改為
+    /// **指名**:`donor` 是 prelude 宣告的別名,`sign` 是它裡面的名字,選取在展開時發生。
+    ///
+    /// 借來的 sign **拿到新 id**(展開成一個 `Insert` 原語)——§6.8:借詞是「造了一個
+    /// 新詞」,不是 donor 那個詞跑過來繼續演化。
+    Adopt {
+        donor: String,
+        sign: String,
+        source: AdoptSource,
+    },
 
     // ── 居所(P14 Life Cycle 軸)──
     /// 規則往下層搬(global → trait → sign)。
@@ -213,6 +225,39 @@ pub enum RewriteError {
     /// 這一項的某個參數組合尚未支援——**顯式拒絕,不默默近似**。
     #[error("REWRITE_UNSUPPORTED: {0}")]
     Unsupported(String),
+    /// 條目引用了 prelude 沒宣告的 donor 別名(P63 §7.3 的第一道硬錯)。
+    #[error("REWRITE_UNDECLARED_DONOR: {0} is not declared in the prelude")]
+    UndeclaredDonor(String),
+    /// donor 裡沒有這個 sign。**硬錯而非略過**——指名借入卻借不到,是作者的錯誤,
+    /// 不是可以無聲跳過的情形。
+    #[error("REWRITE_DONOR_SIGN_NOT_FOUND: {donor} has no sign {sign:?}")]
+    DonorSignNotFound { donor: String, sign: String },
+}
+
+/// 展開時**讀得到哪些別的語言**(P62/P63)。
+///
+/// 鍵是**檔案內的別名**——`.chg` 的條目按別名引用(`fr.sign("eau")`),而別名到
+/// node-id 的對應住在 prelude 的 `donor` 行。範圍在建構時就決定
+/// (parents ∪ 宣告),故這裡取不到的東西就是範圍外的。
+#[derive(Debug, Default)]
+pub struct DonorScope<'a> {
+    by_alias: BTreeMap<&'a str, &'a LanguageDocument>,
+}
+
+impl<'a> DonorScope<'a> {
+    pub fn new() -> DonorScope<'a> {
+        DonorScope {
+            by_alias: BTreeMap::new(),
+        }
+    }
+
+    pub fn insert(&mut self, alias: &'a str, document: &'a LanguageDocument) {
+        self.by_alias.insert(alias, document);
+    }
+
+    pub fn get(&self, alias: &str) -> Option<&'a LanguageDocument> {
+        self.by_alias.get(alias).copied()
+    }
 }
 
 /// 展開一個 Atomic Rewrite 為四原語序列。**不執行**。
@@ -220,6 +265,7 @@ pub fn expand(
     rewrite: &AtomicRewrite,
     document: &LanguageDocument,
     services: &ServiceContext,
+    donors: &DonorScope<'_>,
 ) -> Result<Vec<PrimitiveEdit>, RewriteError> {
     let _ = services; // P53:接點已開,SemanticBackend 等接上時在此消費。
     match rewrite {
@@ -295,9 +341,27 @@ pub fn expand(
         AtomicRewrite::Lexicalize { sign } | AtomicRewrite::Create { sign } => {
             Ok(vec![insert_sign(document, sign.clone())?])
         }
-        AtomicRewrite::Adopt { sign, source } => {
-            let adopted = sign.with_provenance(source.provenance());
-            Ok(vec![insert_sign(document, adopted)?])
+        AtomicRewrite::Adopt {
+            donor,
+            sign,
+            source,
+        } => {
+            let language = donors
+                .get(donor)
+                .ok_or_else(|| RewriteError::UndeclaredDonor(donor.clone()))?;
+            let borrowed = language
+                .language()
+                .signs
+                .iter()
+                .find(|candidate| &candidate.name == sign)
+                .ok_or_else(|| RewriteError::DonorSignNotFound {
+                    donor: donor.clone(),
+                    sign: sign.clone(),
+                })?;
+            Ok(vec![insert_sign(
+                document,
+                borrowed.clone().with_provenance(source.provenance()),
+            )?])
         }
 
         AtomicRewrite::Delete { selector } => Ok(vec![PrimitiveEdit::Delete {

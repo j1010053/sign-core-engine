@@ -20,6 +20,7 @@ pub mod function;
 pub mod merge;
 pub mod rewrite;
 
+use crate::rewrite::DonorScope;
 use conlang_language::{
     check_document, compile_document, sha256_hex, AddressSegment, BinaryConstraint, Block,
     CaseBranch, CompileSystemError, CompiledSystem, Def, DerivationKind, Dim, Expression,
@@ -2561,6 +2562,15 @@ impl UnresolvedChangeSet {
             &self.base_identities,
             &self.libraries,
         )?;
+        // 別名 → 內容。宣告(別名 → node-id)在 prelude,內容(node-id → 文件)由參數
+        // 注入;這裡把兩張表接起來,展開層就只認別名。
+        let mut scope = DonorScope::new();
+        for donor in &self.donors {
+            let document = donors
+                .get(&donor.node)
+                .expect("donor content is verified above");
+            scope.insert(donor.alias.as_str(), document);
+        }
         let mut working = base.fork(self.namespace.clone())?;
         let mut resolved = Vec::new();
         for statement in &self.statements {
@@ -2569,14 +2579,15 @@ impl UnresolvedChangeSet {
                 // 語句歸屬**只有這裡知道**——`resolve_operation` 底下約 20 處建構
                 // `Selector` 的地方都拿不到 ordinal。故在此單點補上句號,而不是把
                 // ordinal 灌進每個建構點(《修補11》§3.3)。
-                let operation_edits =
-                    resolve_operation(operation, &working).map_err(|error| match error {
+                let operation_edits = resolve_operation(operation, &working, &scope).map_err(
+                    |error| match error {
                         ReplayError::Selector(message) => ReplayError::StatementSelector {
                             ordinal: statement.ordinal,
                             message,
                         },
                         other => other,
-                    })?;
+                    },
+                )?;
                 edits.extend(operation_edits);
             }
             let (candidate, _) =
@@ -3122,6 +3133,7 @@ fn render_case_branch_block(branch: &CaseBranch) -> String {
 fn resolve_operation(
     operation: &UnresolvedOperation,
     document: &LanguageDocument,
+    donors: &DonorScope<'_>,
 ) -> Result<Vec<PrimitiveEdit>, ReplayError> {
     match operation {
         UnresolvedOperation::Update {
@@ -3208,6 +3220,7 @@ fn resolve_operation(
                 block: block.as_deref(),
             },
             document,
+            donors,
         ),
         UnresolvedOperation::Clone { source, name } => {
             let reference = resolve_selector(source, document)?;

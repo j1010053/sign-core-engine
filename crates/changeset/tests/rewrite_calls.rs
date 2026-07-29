@@ -6,7 +6,8 @@
 //! **`ResolvedChangeSet` 維持 primitive-only**(步驟 14 契約)。
 
 use conlang_changeset::{
-    change_set_prelude, ChangeInterpreter, ReplayError, ResolvedChangeSet, UnresolvedChangeSet,
+    change_set_prelude, ChangeInterpreter, DonorSpec, ReplayError, ResolvedChangeSet,
+    UnresolvedChangeSet,
 };
 use conlang_language::{Language, LanguageDocument, LibrarySpec};
 
@@ -117,17 +118,102 @@ fn a_call_can_expand_to_several_primitives() {
 
 #[test]
 fn a_call_with_a_block_carries_a_whole_sign() {
+    // 驗的是**尾接 block 的機制**。原本用 `adopt` 示範,但 v0.3 起 `adopt` 改為指名
+    // (內容來自 donor,不再由呼叫端寫在 block 裡),故改用仍收 block 的 `create`。
     let lang = apply(
         concat!(
-            "\n    statement 0:\n        adopt(source: loan):\n",
+            "\n    statement 0:\n        create():\n",
             "            sign kaffe:\n",
             "                belongs LocalNoun\n",
             "                sem:\n                    senses:\n                        core = COFFEE\n",
         ),
-        "evo:adopt",
+        "evo:create",
     );
     assert!(lang.contains("sign kaffe:"), "{lang}");
-    assert!(lang.contains("provenance = loan"), "{lang}");
+}
+
+// ── donor 指名借入(P62 §7;提案 A)────────────────────────────────────────
+
+fn donor_language() -> LanguageDocument {
+    LanguageDocument::import_new_root(
+        "sign kaffe:\n    belongs LocalNoun\n    sem:\n        senses:\n            core = COFFEE\n",
+        "fr",
+    )
+    .expect("donor parses")
+}
+
+const DONOR_NODE: &str = "3f2a9b7c5d1e8046a2b3c4d5e6f70819a2b3c4d5e6f708192a3b4c5d6e7f8091";
+
+/// 帶 donor 的 `.chg`:prelude 宣告別名 → node-id,內容由 `DonorSpec` 注入。
+fn apply_with_donor(body: &str, ns: &str) -> Result<String, ReplayError> {
+    let base = base();
+    let spec = LibrarySpec::default();
+    let mut source = change_set_prelude(&base, &spec, ns).unwrap();
+    source.push_str(&format!("    donor fr {DONOR_NODE}\n"));
+    source.push_str(body);
+    let mut donors = DonorSpec::new();
+    donors.insert(DONOR_NODE, donor_language());
+    let resolved = UnresolvedChangeSet::parse(&source)
+        .unwrap()
+        .resolve_with(&base, &spec, &donors)?;
+    Ok(ChangeInterpreter::new(base, spec, ns)
+        .unwrap()
+        .run(&resolved)
+        .expect("replay")
+        .document
+        .source()
+        .to_owned())
+}
+
+#[test]
+fn adopt_names_a_sign_in_a_declared_donor() {
+    // **提案 A**:`adopt(<別名>.sign("x"), source: …)`。「怎麼挑」從此在引擎裡
+    // ——先前是呼叫端把整個 sign 寫在 block 裡遞進來(P62 §7.1 的自白)。
+    let lang = apply_with_donor(
+        &statement("adopt(fr.sign(\"kaffe\"), source: loan)"),
+        "evo:adopt",
+    )
+    .expect("borrows");
+    assert!(lang.contains("sign kaffe:"), "{lang}");
+    assert!(
+        lang.contains("provenance = loan"),
+        "借來的詞要標記來源:{lang}"
+    );
+    assert!(lang.contains("COFFEE"), "內容要真的從 donor 帶過來:{lang}");
+}
+
+#[test]
+fn adopting_from_an_undeclared_donor_is_rejected() {
+    // §7.3 的第一道硬錯:body 引用了 prelude 沒宣告的別名。
+    let err = apply_with_donor(
+        &statement("adopt(wo.sign(\"kaffe\"), source: loan)"),
+        "evo:adopt",
+    )
+    .expect_err("wo 沒宣告");
+    assert!(format!("{err}").contains("UNDECLARED_DONOR"), "{err}");
+}
+
+#[test]
+fn adopting_a_sign_the_donor_does_not_have_is_rejected() {
+    // **指名借入的價值就在這裡**:借不到會**當場報錯**,不會靜默少借一個。
+    // (條件式篩選就沒有這個性質——選不到只是選出比較少,不報錯。)
+    let err = apply_with_donor(
+        &statement("adopt(fr.sign(\"ndox\"), source: loan)"),
+        "evo:adopt",
+    )
+    .expect_err("fr 裡沒有 ndox");
+    assert!(format!("{err}").contains("DONOR_SIGN_NOT_FOUND"), "{err}");
+}
+
+#[test]
+fn adopt_without_a_donor_prefix_says_so() {
+    // 舊寫法(裸 selector)要給明確訊息,不是含糊的「解析失敗」。
+    let err = apply_with_donor(
+        &statement("adopt(sign(\"kaffe\"), source: loan)"),
+        "evo:adopt",
+    )
+    .expect_err("缺 donor 前綴");
+    assert!(format!("{err}").contains("donor alias"), "{err}");
 }
 
 #[test]

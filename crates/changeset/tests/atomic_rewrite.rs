@@ -5,7 +5,7 @@
 //! 故每一項都再把序列餵給 `apply_edit` 實跑,斷言結果 `.lang`。
 
 use conlang_changeset::rewrite::{
-    expand, AdoptSource, AtomicRewrite, ReanalysisTarget, RuleHome, ServiceContext,
+    expand, AdoptSource, AtomicRewrite, DonorScope, ReanalysisTarget, RuleHome, ServiceContext,
 };
 use conlang_changeset::{apply_edit, PrimitiveEdit};
 use conlang_language::{
@@ -68,11 +68,22 @@ fn expand_off(
     rewrite: &AtomicRewrite,
     document: &LanguageDocument,
 ) -> Result<Vec<PrimitiveEdit>, conlang_changeset::rewrite::RewriteError> {
-    expand(rewrite, document, &ServiceContext::offline())
+    expand(
+        rewrite,
+        document,
+        &ServiceContext::offline(),
+        &DonorScope::new(),
+    )
 }
 
 fn expand_only(rewrite: &AtomicRewrite) -> Vec<PrimitiveEdit> {
-    expand(rewrite, &base(), &ServiceContext::offline()).expect("expand")
+    expand(
+        rewrite,
+        &base(),
+        &ServiceContext::offline(),
+        &DonorScope::new(),
+    )
+    .expect("expand")
 }
 
 /// 某個 sign 目前宣告的義項名(逐 sign 檢查,避免被別的 sign 的同名義項騙過)。
@@ -281,7 +292,13 @@ fn split_moves_named_senses_into_a_new_sign_with_origin() {
         "the source must no longer declare the moved sense:\n{lang}"
     );
     // book 的 split 會拆散 `log from core` 這條邊 → 顯式拒絕(見下)。
-    assert!(expand(&rewrite, &base(), &ServiceContext::offline()).is_err());
+    assert!(expand(
+        &rewrite,
+        &base(),
+        &ServiceContext::offline(),
+        &DonorScope::new()
+    )
+    .is_err());
 }
 
 #[test]
@@ -346,10 +363,34 @@ fn fuse_builds_a_new_sign_from_two_components() {
 
 #[test]
 fn adopt_marks_the_borrowed_sign_as_a_loan() {
-    let lang = run(&AtomicRewrite::Adopt {
-        sign: new_sign("kaffe", "COFFEE"),
-        source: AdoptSource::Loan,
-    });
+    // v0.3:指名借入。**「怎麼挑」現在在引擎裡**——先前是呼叫端把整個 sign 挑好遞進來,
+    // 那段決定不被記錄、不被測試、也不能 replay(P62 §7.1)。
+    let donor = LanguageDocument::import_new_root(
+        "sign kaffe:\n    belongs LocalNoun\n    sem:\n        senses:\n            core = COFFEE\n",
+        "fr",
+    )
+    .expect("donor parses");
+    let mut donors = DonorScope::new();
+    donors.insert("fr", &donor);
+    let mut document = base();
+    let spec = LibrarySpec::default();
+    for edit in expand(
+        &AtomicRewrite::Adopt {
+            donor: "fr".to_owned(),
+            sign: "kaffe".to_owned(),
+            source: AdoptSource::Loan,
+        },
+        &document,
+        &ServiceContext::offline(),
+        &donors,
+    )
+    .expect("expand")
+    {
+        document = apply_edit(&document, edit, &spec)
+            .expect("applies")
+            .document;
+    }
+    let lang = document.source().to_owned();
     assert!(lang.contains("sign kaffe:"), "{lang}");
     assert!(
         lang.contains("provenance = loan"),
@@ -467,7 +508,13 @@ fn an_unknown_target_is_rejected_by_every_rewrite_that_addresses_one() {
         },
     ] {
         assert!(
-            expand(&rewrite, &base(), &ServiceContext::offline()).is_err(),
+            expand(
+                &rewrite,
+                &base(),
+                &ServiceContext::offline(),
+                &DonorScope::new()
+            )
+            .is_err(),
             "expected rejection for {rewrite:?}"
         );
     }

@@ -8,7 +8,7 @@
 //! `ResolvedChangeSet` 維持 primitive-only(步驟 14 已封板的契約)。
 
 use crate::rewrite::{
-    expand, AdoptSource, AtomicRewrite, ReanalysisTarget, RuleHome, ServiceContext,
+    expand, AdoptSource, AtomicRewrite, DonorScope, ReanalysisTarget, RuleHome, ServiceContext,
 };
 use crate::{PrimitiveEdit, ReplayError};
 use conlang_language::{DerivationKind, Language, LanguageDocument, SignDef};
@@ -68,6 +68,32 @@ impl Call<'_> {
         })
     }
 
+    /// `adopt` 的目標:**`<donor 別名>.sign("<名字>")`**。
+    ///
+    /// 別名與 selector 之間以第一個 `.` 分隔。左半必須是**裸識別字**——若它含
+    /// `(` 或 `"`,代表作者寫的是普通 selector(舊寫法),明確告知需要 donor 前綴,
+    /// 而不是含糊地報「解析失敗」。
+    fn require_donor_sign(&self) -> Result<(String, String), ReplayError> {
+        let target = self.require_positional()?;
+        // 沒有 `.`,或左半看起來就是 selector(含 `(` / `"`)⇒ 作者用的是舊寫法。
+        // 這是最可能的誤用,故給**指名的訊息**而非泛用的「解析失敗」。
+        let missing_alias = || {
+            ReplayError::Parse(format!(
+                "adopt(…) needs a donor alias before the selector, like fr.sign(\"x\"); got {target:?}"
+            ))
+        };
+        let (alias, selector) = target.split_once('.').ok_or_else(missing_alias)?;
+        if alias.is_empty() || alias.contains('(') || alias.contains('"') {
+            return Err(missing_alias());
+        }
+        let name = sign_name(selector).ok_or_else(|| {
+            ReplayError::Parse(format!(
+                "adopt(…) expects <donor>.sign(\"x\"), got {target:?}"
+            ))
+        })?;
+        Ok((alias.to_owned(), name))
+    }
+
     /// `.lang` block 解析成恰好一個 sign。
     fn require_sign_block(&self) -> Result<SignDef, ReplayError> {
         let block = self.block.ok_or_else(|| {
@@ -125,6 +151,7 @@ fn rule_home(value: &str, call: &str) -> Result<RuleHome, ReplayError> {
 pub(crate) fn lower(
     call: &Call<'_>,
     document: &LanguageDocument,
+    donors: &DonorScope<'_>,
 ) -> Result<Vec<PrimitiveEdit>, ReplayError> {
     let rewrite = match call.name {
         // ── form ──
@@ -218,19 +245,23 @@ pub(crate) fn lower(
         },
 
         // ── 接觸 ──
-        "adopt" => AtomicRewrite::Adopt {
-            sign: call.require_sign_block()?,
-            source: match call.require("source")? {
-                "loan" => AdoptSource::Loan,
-                "dialect" => AdoptSource::Dialect,
-                "ancestor" => AdoptSource::Ancestor,
-                other => {
-                    return Err(ReplayError::Parse(format!(
-                        "adopt(…) source: must be loan|dialect|ancestor, got {other:?}"
-                    )))
-                }
-            },
-        },
+        "adopt" => {
+            let (donor, sign) = call.require_donor_sign()?;
+            AtomicRewrite::Adopt {
+                donor,
+                sign,
+                source: match call.require("source")? {
+                    "loan" => AdoptSource::Loan,
+                    "dialect" => AdoptSource::Dialect,
+                    "ancestor" => AdoptSource::Ancestor,
+                    other => {
+                        return Err(ReplayError::Parse(format!(
+                            "adopt(…) source: must be loan|dialect|ancestor, got {other:?}"
+                        )))
+                    }
+                },
+            }
+        }
 
         // ── 居所 ──
         "fossilize" => AtomicRewrite::Fossilize {
@@ -252,6 +283,6 @@ pub(crate) fn lower(
     };
     // P53:`.chg` 降階目前一律離線(無 live 服務);replay 走 History 時由
     // 呼叫端改傳 `ServiceContext::from_history`。
-    expand(&rewrite, document, &ServiceContext::offline())
+    expand(&rewrite, document, &ServiceContext::offline(), donors)
         .map_err(|error| ReplayError::Parse(error.to_string()))
 }
