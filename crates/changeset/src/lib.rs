@@ -1914,6 +1914,45 @@ pub struct UnresolvedChangeSet {
     pub statements: Vec<UnresolvedStatement>,
 }
 
+/// donor 的**內容**來源(P62/P63 §8.2)。
+///
+/// 檔案裡的 `donor <別名> <node-id>` 只是**指標 + 摘要**,不含內容;`adopt` 要複製一個
+/// sign,需要那份文件本身。這與 prelude 既有的 `library` 鎖是**同一個模式**——
+/// 鎖也只宣告身分與摘要,內容由 `LibrarySpec` 參數注入。故 donor 照辦,
+/// **不碰 `ServiceContext`**(那是 P34 的 History 側表,語意上與 donor 相反:
+/// donor 內容定址、讀兩次必同、不需記錄;外部服務不可重現、必須記 History)。
+///
+/// **範圍靠「不放進去」達成**(P63 §8.3):建構者(演化圖)只放本節點的 parents 與
+/// 本 `.chg` 宣告的 donor。範圍外的節點在**型別上**就取不到,不需要另一道檢查。
+///
+/// 鍵是 **node-id 而非別名**:別名只在單一檔案內有意義,身分是 node-id。
+#[derive(Debug, Clone, Default)]
+pub struct DonorSpec {
+    documents: BTreeMap<String, LanguageDocument>,
+}
+
+impl DonorSpec {
+    pub fn new() -> DonorSpec {
+        DonorSpec::default()
+    }
+
+    pub fn insert(&mut self, node: impl Into<String>, document: LanguageDocument) {
+        self.documents.insert(node.into(), document);
+    }
+
+    pub fn get(&self, node: &str) -> Option<&LanguageDocument> {
+        self.documents.get(node)
+    }
+
+    pub fn len(&self) -> usize {
+        self.documents.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.documents.is_empty()
+    }
+}
+
 /// prelude 的 `donor <別名> <node-id>` 宣告(P62 §7.3)。
 ///
 /// ## 為什麼要有別名
@@ -1984,6 +2023,10 @@ pub enum ReplayError {
     BaseIdentitiesMismatch,
     #[error("CHANGESET_LIBRARY_LOCK_MISMATCH: {0}")]
     LibraryLockMismatch(String),
+    /// 宣告的 donor 在注入的 `DonorSpec` 裡找不到——與 `LibraryLockMismatch` 同類:
+    /// **檔案宣告的外部依賴,與實際提供的內容對不上**。
+    #[error("CHANGESET_UNKNOWN_DONOR: {alias} -> {node}")]
+    UnknownDonor { alias: String, node: String },
     #[error("CHANGESET_NAMESPACE_MISMATCH: {0}")]
     NamespaceMismatch(String),
     #[error("CHANGESET_SELECTOR: {0}")]
@@ -2480,11 +2523,37 @@ impl UnresolvedChangeSet {
         })
     }
 
+    /// 不提供任何 donor 內容的解析(絕大多數呼叫端)。宣告了 donor 的 `.chg` 走這條路
+    /// 會在驗證時明確失敗,而非默默把宣告當空氣。
     pub fn resolve(
         &self,
         base: &LanguageDocument,
         libraries: &LibrarySpec,
     ) -> Result<ResolvedChangeSet, ReplayError> {
+        self.resolve_with(base, libraries, &DonorSpec::default())
+    }
+
+    /// 帶 donor 內容的解析(P63 §8.2)。
+    ///
+    /// **另開一個入口而非給 `resolve` 加參數**:`resolve` 全庫有數十個呼叫點,加參數
+    /// 等於為了一個少數路徑改動全部。這與 rebase 不動 `lib.rs` 驗證路徑是同一個原則
+    /// ——既有契約字面不動,新能力另闢一條。
+    pub fn resolve_with(
+        &self,
+        base: &LanguageDocument,
+        libraries: &LibrarySpec,
+        donors: &DonorSpec,
+    ) -> Result<ResolvedChangeSet, ReplayError> {
+        // 宣告的 donor 必須拿得到內容。比照 library 鎖:檔案宣告 vs 實際提供,
+        // 對不上就硬錯——不得默默略過,那會讓引用條目在後面才以難懂的方式失敗。
+        for donor in &self.donors {
+            if donors.get(&donor.node).is_none() {
+                return Err(ReplayError::UnknownDonor {
+                    alias: donor.alias.clone(),
+                    node: donor.node.clone(),
+                });
+            }
+        }
         verify_base_and_locks(
             base,
             libraries,

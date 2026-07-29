@@ -38,6 +38,7 @@ use crate::merge::{materialize, plan_merge, MergeError, MergePlan};
 use crate::{
     identity_manifest_digest, ChangeInterpreter, LanguageDocument, ReplayError, UnresolvedChangeSet,
 };
+use crate::{DonorRef, DonorSpec};
 use conlang_language::{sha256_hex, LibrarySpec};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -180,6 +181,9 @@ pub enum EvolutionError {
     /// rebase 找不到可重寫的 base digest 行——邊上的 `.chg` 不合格式。
     #[error("EVOLUTION_PRELUDE_WITHOUT_DIGESTS: the edge changeset has no base digest lines")]
     PreludeWithoutDigests,
+    /// 宣告的 donor 不在圖裡 —— docs/06 §2:引用的節點必須「已 materialize」。
+    #[error("EVOLUTION_UNKNOWN_DONOR: {alias} -> {node} is not a node in this graph")]
+    UnknownDonor { alias: String, node: String },
     /// 有多個互不為祖先的共同祖先候選 —— **不自行挑一個**(§12.6)。
     #[error("EVOLUTION_AMBIGUOUS_MERGE_BASE: {0:?} are all lowest common ancestors")]
     AmbiguousMergeBase(Vec<NodeId>),
@@ -327,7 +331,7 @@ impl EvolutionGraph {
             .clone()
             .ok_or(EvolutionError::TrunkWithoutChangeset)?;
         let base = self.merged_base(&parent_ids(&parents))?;
-        let snapshot = self.replay(&base, &changeset)?;
+        let snapshot = self.replay(&base, &changeset, &parent_ids(&parents))?;
         let id = node_id(&snapshot, &parents, nativization);
         self.nodes.entry(id.clone()).or_insert(Node {
             parents,
@@ -365,7 +369,7 @@ impl EvolutionGraph {
         // **必須與 `commit` 走同一條路**:多親節點的 base 是合併結果而非
         // `parents[0]` 的 snapshot,拿錯 base 重放會讓合法節點驗不過。
         let base = self.merged_base(&parent_ids(&node.parents))?;
-        let replayed = self.replay(&base, changeset)?;
+        let replayed = self.replay(&base, changeset, &parent_ids(&node.parents))?;
         if replayed.source() != node.snapshot.source() {
             return Err(EvolutionError::SnapshotMismatch(id.clone()));
         }
@@ -527,12 +531,48 @@ impl EvolutionGraph {
         &self,
         base: &LanguageDocument,
         changeset: &str,
+        parents: &[NodeId],
     ) -> Result<LanguageDocument, EvolutionError> {
         let parsed = UnresolvedChangeSet::parse(changeset)?;
         let namespace = parsed.namespace.clone();
-        let resolved = parsed.resolve(base, &self.libraries)?;
+        let donors = self.donor_spec(parents, &parsed.donors)?;
+        let resolved = parsed.resolve_with(base, &self.libraries, &donors)?;
         let interpreter = ChangeInterpreter::new(base.clone(), self.libraries.clone(), namespace)?;
         Ok(interpreter.run(&resolved)?.document)
+    }
+
+    /// 這份 changeset **讀得到哪些語言**(P63 §8.3)。
+    ///
+    /// = 本節點的 `parents` ∪ 本 `.chg` 的 `donor` 宣告。**範圍不是靠檢查達成,
+    /// 是靠「不放進去」**——範圍外的節點根本不在這張表裡,型別上就取不到。
+    ///
+    /// 宣告了圖上不存在的節點即硬錯:docs/06 §2 的無環約束要求
+    /// 「ContactInjection 只能引用**時間上已 materialize** 的節點狀態」,
+    /// 而 P56 之下「已 materialize」就是「在圖裡」。
+    ///
+    /// **無環同樣是結構保證**:donor 的 id 必須在寫 changeset 時就已存在,而節點 id
+    /// 是內容雜湊——引用一個尚不存在的後代需要雜湊包含自己,不可能。故不需檢查。
+    fn donor_spec(
+        &self,
+        parents: &[NodeId],
+        declared: &[DonorRef],
+    ) -> Result<DonorSpec, EvolutionError> {
+        let mut spec = DonorSpec::new();
+        for id in parents {
+            spec.insert(id.as_str(), self.snapshot(id)?.clone());
+        }
+        for donor in declared {
+            let id = self
+                .nodes
+                .keys()
+                .find(|candidate| candidate.as_str() == donor.node)
+                .ok_or_else(|| EvolutionError::UnknownDonor {
+                    alias: donor.alias.clone(),
+                    node: donor.node.clone(),
+                })?;
+            spec.insert(donor.node.clone(), self.snapshot(id)?.clone());
+        }
+        Ok(spec)
     }
 }
 
@@ -574,10 +614,12 @@ impl RebaseOutcome {
                     error,
                 }
             }
-            // 環境:套件版本/載入。**刻意不當成衝突**——不該要求人去改 changeset。
-            ReplayError::LibraryLockMismatch(_) | ReplayError::Library(_) => {
-                RebaseOutcome::Environment(error)
-            }
+            // 環境:套件版本/載入/donor 內容未提供。**刻意不當成衝突**——
+            // 不該要求人去改 changeset;`UnknownDonor` 與 `LibraryLockMismatch` 同類,
+            // 都是「檔案宣告的外部依賴,與實際提供的對不上」。
+            ReplayError::LibraryLockMismatch(_)
+            | ReplayError::Library(_)
+            | ReplayError::UnknownDonor { .. } => RebaseOutcome::Environment(error),
             // 輸入本身壞掉。`BaseSourceMismatch`/`BaseIdentitiesMismatch` 落在這裡
             // 代表 prelude 重寫沒生效——那是本模組的 bug,不是使用者的衝突,
             // 歸為 Broken 讓它顯眼而不是被誤報成衝突。
@@ -730,6 +772,49 @@ mod tests {
 
         let err = graph.verify(&wrong).expect_err("fsck 必須擋下錯置的 id");
         assert!(matches!(err, EvolutionError::CorruptId { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn the_donor_scope_holds_the_parents_and_the_declarations() {
+        // **parents 在範圍內這件事,現階段沒有別的觀測點**——引用條目要到 ⑥c 才出現,
+        // 故從整合測試看不出 `donor_spec` 有沒有把 parents 放進去。直接在模組內驗表的
+        // 內容,否則那段就是改成什麼樣都不會紅的死碼。
+        let (graph, id) = fixture();
+        let root = graph.roots().next().expect("root").clone();
+        let scope = graph
+            .donor_spec(
+                std::slice::from_ref(&root),
+                &[DonorRef {
+                    alias: "self".to_owned(),
+                    node: id.as_str().to_owned(),
+                }],
+            )
+            .expect("兩者都在圖裡");
+        assert!(scope.get(root.as_str()).is_some(), "parent 必須在範圍內");
+        assert!(
+            scope.get(id.as_str()).is_some(),
+            "宣告的 donor 必須在範圍內"
+        );
+        assert_eq!(scope.len(), 2, "範圍只有這兩類,不多不少");
+    }
+
+    #[test]
+    fn a_declaration_outside_the_graph_is_rejected_by_the_scope_builder() {
+        let (graph, _) = fixture();
+        let root = graph.roots().next().expect("root").clone();
+        let err = graph
+            .donor_spec(
+                &[root],
+                &[DonorRef {
+                    alias: "ghost".to_owned(),
+                    node: "0".repeat(64),
+                }],
+            )
+            .expect_err("圖裡沒有");
+        assert!(
+            matches!(err, EvolutionError::UnknownDonor { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]

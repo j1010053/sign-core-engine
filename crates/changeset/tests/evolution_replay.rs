@@ -12,7 +12,9 @@
 //! **型別**保證——`snapshot()` 取 `&self` 而非 `&mut self`,不可能邊讀邊算邊快取。
 //! 誠實標記:本檔不為此寫測試。
 
-use conlang_changeset::evolution::{Edge, EvolutionGraph, Nativization, NodeId, RebaseOutcome};
+use conlang_changeset::evolution::{
+    Edge, EvolutionError, EvolutionGraph, Nativization, NodeId, RebaseOutcome,
+};
 use conlang_changeset::{change_set_prelude, UnresolvedChangeSet};
 use conlang_language::{Language, LanguageDocument, LibrarySpec};
 
@@ -1208,4 +1210,118 @@ fn a_merge_plan_uses_the_fork_point_as_its_base() {
     let plan = graph.merge_plan(&[left, right]).expect("計畫算得出來");
     assert!(plan.is_clean(), "各改各的,不該衝突:{:?}", plan.conflicts);
     assert_eq!(plan.signs.len(), 2, "x 與 y 都要在計畫裡");
+}
+
+// ── donor 範圍(P62/P63 §8.3)───────────────────────────────────────────────
+
+/// 在 prelude 尾端插一行 `donor`,再接語句。
+fn with_donor(base: &LanguageDocument, namespace: &str, donor: &str, body: &str) -> String {
+    let mut source = change_set_prelude(base, &LibrarySpec::default(), namespace).unwrap();
+    source.push_str(&format!("    donor other {donor}\n"));
+    source.push_str(body);
+    source
+}
+
+#[test]
+fn a_declared_donor_must_be_a_node_in_the_graph() {
+    // docs/06 §2 的無環約束:「ContactInjection 只能引用**時間上已 materialize**
+    // 的節點狀態」。P56 之下「已 materialize」就是「在圖裡」。
+    let mut graph = graph();
+    let root_id = only_root(&graph);
+    let root_doc = graph.snapshot(&root_id).unwrap().clone();
+    let ghost = "0".repeat(64);
+    let err = graph
+        .commit(
+            vec![Edge::trunk(
+                root_id,
+                with_donor(
+                    &root_doc,
+                    "evo:n1",
+                    &ghost,
+                    "\n    #0:\n        update sign(\"x\").def[syn.category].value = verb\n",
+                ),
+            )],
+            Nativization::None,
+            None,
+        )
+        .expect_err("圖裡沒有這個節點");
+    // **斷言變體而非字串**:`ReplayError::UnknownDonor`(內容沒提供)的訊息也含
+    // `UNKNOWN_DONOR`,只比字串分不出「圖層擋下」與「解析層擋下」——那會讓
+    // 「圖層根本沒檢查」的改壞法測不出來(問過了:比字串時它全綠)。
+    assert!(
+        matches!(err, EvolutionError::UnknownDonor { .. }),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn a_donor_that_exists_in_the_graph_is_accepted() {
+    // 判別性:與上一個測試只差**節點存不存在**,故「根本沒在檢查」會被上一個抓到,
+    // 「檢查得太嚴、連合法的也擋」會被這個抓到。
+    let mut graph = graph();
+    let root_id = only_root(&graph);
+    let root_doc = graph.snapshot(&root_id).unwrap().clone();
+    let (n1, _) = chain(&mut graph);
+
+    let node = graph
+        .commit(
+            vec![Edge::trunk(
+                root_id,
+                with_donor(
+                    &root_doc,
+                    "evo:borrow",
+                    n1.as_str(),
+                    "\n    #0:\n        update sign(\"x\").def[syn.category].value = verb\n",
+                ),
+            )],
+            Nativization::None,
+            None,
+        )
+        .expect("宣告了圖上真實存在的節點");
+    assert_eq!(
+        category_of(graph.snapshot(&node).unwrap()).as_deref(),
+        Some("verb")
+    );
+    graph.verify_all().expect("fsck 也要走同一條 donor 路徑");
+}
+
+#[test]
+fn a_donor_declaration_is_part_of_the_node_identity() {
+    // 宣告改變 `.chg` 原文 ⇒ 改變邊的內容 ⇒ **不同節點**(P58「身分含出身」)。
+    // 這正是「讀取來源進雜湊」的具體樣子:換了 donor 就是另一段歷史。
+    let mut graph = graph();
+    let root_id = only_root(&graph);
+    let root_doc = graph.snapshot(&root_id).unwrap().clone();
+    let (n1, n2) = chain(&mut graph);
+    let body = "\n    #0:\n        update sign(\"x\").def[syn.category].value = verb\n";
+
+    let borrowing_from_n1 = graph
+        .commit(
+            vec![Edge::trunk(
+                root_id.clone(),
+                with_donor(&root_doc, "evo:b", n1.as_str(), body),
+            )],
+            Nativization::None,
+            None,
+        )
+        .unwrap();
+    let borrowing_from_n2 = graph
+        .commit(
+            vec![Edge::trunk(
+                root_id,
+                with_donor(&root_doc, "evo:b", n2.as_str(), body),
+            )],
+            Nativization::None,
+            None,
+        )
+        .unwrap();
+    assert_ne!(
+        borrowing_from_n1, borrowing_from_n2,
+        "只有 donor 不同,仍必須是兩個節點"
+    );
+    assert_eq!(
+        graph.snapshot(&borrowing_from_n1).unwrap().source(),
+        graph.snapshot(&borrowing_from_n2).unwrap().source(),
+        "前提:兩者的語言狀態逐字相同,故區別只可能來自 donor 宣告"
+    );
 }

@@ -14,7 +14,9 @@
 //! P58 之下 `NodeId` **就是**內容雜湊,故 `donor <alias> <node-id>` 的 node-id 本身
 //! 已經是 digest——donor 內容一變就是另一個 `NodeId`,引用自然失效。
 
-use conlang_changeset::{change_set_prelude, DonorRef, ReplayError, UnresolvedChangeSet};
+use conlang_changeset::{
+    change_set_prelude, DonorRef, DonorSpec, ReplayError, UnresolvedChangeSet,
+};
 use conlang_language::{LanguageDocument, LibrarySpec};
 
 const ROOT: &str = "sign x:\n    syn:\n        category = noun\n";
@@ -37,6 +39,17 @@ fn changeset(extra: &[&str], body: &str) -> String {
 
 fn parse(extra: &[&str], body: &str) -> Result<UnresolvedChangeSet, ReplayError> {
     UnresolvedChangeSet::parse(&changeset(extra, body))
+}
+
+/// 提供 `NODE` 的內容。宣告只是**指標**;內容照 `library` 的先例由參數注入(P63 §8.2)。
+fn donor_spec() -> DonorSpec {
+    let mut spec = DonorSpec::new();
+    spec.insert(
+        NODE,
+        LanguageDocument::import_new_root("sign eau:\n    syn:\n        category = noun\n", "fr")
+            .unwrap(),
+    );
+    spec
 }
 
 #[test]
@@ -74,7 +87,9 @@ fn donors_survive_resolve_and_dump() {
         "\n    #0:\n        update sign(\"x\").def[syn.category].value = verb\n",
     );
     let parsed = UnresolvedChangeSet::parse(&source).expect("parses");
-    let resolved = parsed.resolve(&base(), &spec).expect("resolves");
+    let resolved = parsed
+        .resolve_with(&base(), &spec, &donor_spec())
+        .expect("resolves");
     assert_eq!(resolved.donors, parsed.donors, "resolve 不得丟掉宣告");
 
     let dumped = resolved.dump();
@@ -134,11 +149,40 @@ fn a_declared_donor_does_not_disturb_the_statements() {
     let body = "\n    #0:\n        update sign(\"x\").def[syn.category].value = verb\n";
     let with = UnresolvedChangeSet::parse(&changeset(&[&format!("donor fr {NODE}")], body))
         .unwrap()
-        .resolve(&base(), &spec)
+        .resolve_with(&base(), &spec, &donor_spec())
         .unwrap();
     let without = UnresolvedChangeSet::parse(&changeset(&[], body))
         .unwrap()
         .resolve(&base(), &spec)
         .unwrap();
     assert_eq!(with.statements, without.statements);
+}
+
+#[test]
+fn a_declared_donor_without_content_is_rejected() {
+    // **宣告 ≠ 有內容**。檔案裡的 `donor` 行只是指標;內容由 `DonorSpec` 注入。
+    // 對不上就硬錯 —— 與 library 鎖同類,**不得默默把宣告當空氣**,那會讓引用條目
+    // 在更後面以難懂的方式失敗。
+    let spec = LibrarySpec::default();
+    let err = UnresolvedChangeSet::parse(&changeset(&[&format!("donor fr {NODE}")], ""))
+        .unwrap()
+        .resolve(&base(), &spec) // ← 沒帶 DonorSpec
+        .expect_err("宣告了卻沒提供內容");
+    assert!(matches!(err, ReplayError::UnknownDonor { .. }), "{err:?}");
+}
+
+#[test]
+fn providing_a_different_node_does_not_satisfy_the_declaration() {
+    // 鍵是 **node-id**,不是別名——換一個 id 就不算提供了。
+    let spec = LibrarySpec::default();
+    let mut wrong = DonorSpec::new();
+    wrong.insert(
+        NODE.replace("3", "9"),
+        LanguageDocument::import_new_root("sign ndox:\n", "wo").unwrap(),
+    );
+    let err = UnresolvedChangeSet::parse(&changeset(&[&format!("donor fr {NODE}")], ""))
+        .unwrap()
+        .resolve_with(&base(), &spec, &wrong)
+        .expect_err("提供的是別的節點");
+    assert!(matches!(err, ReplayError::UnknownDonor { .. }), "{err:?}");
 }
