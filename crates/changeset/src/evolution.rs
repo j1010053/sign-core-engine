@@ -34,6 +34,7 @@
 //! - **重複提交是冪等的**:內容全同 ⇒ 同一個 id ⇒ 同一個物件(git 語意)。
 //!   故前一版的 `Duplicate` 錯誤消失。
 
+use crate::merge::{plan_merge, MergeError, MergePlan};
 use crate::{
     identity_manifest_digest, ChangeInterpreter, LanguageDocument, ReplayError, UnresolvedChangeSet,
 };
@@ -179,6 +180,11 @@ pub enum EvolutionError {
     /// rebase 找不到可重寫的 base digest 行——邊上的 `.chg` 不合格式。
     #[error("EVOLUTION_PRELUDE_WITHOUT_DIGESTS: the edge changeset has no base digest lines")]
     PreludeWithoutDigests,
+    /// 有多個互不為祖先的共同祖先候選 —— **不自行挑一個**(§12.6)。
+    #[error("EVOLUTION_AMBIGUOUS_MERGE_BASE: {0:?} are all lowest common ancestors")]
+    AmbiguousMergeBase(Vec<NodeId>),
+    #[error(transparent)]
+    Merge(#[from] MergeError),
     #[error(transparent)]
     Replay(#[from] ReplayError),
 }
@@ -362,6 +368,76 @@ impl EvolutionGraph {
             return Err(EvolutionError::SnapshotMismatch(id.clone()));
         }
         Ok(())
+    }
+
+    /// 一個節點的全部祖先(**含自己**)。
+    fn ancestors(&self, start: &NodeId) -> BTreeSet<NodeId> {
+        let mut seen = BTreeSet::new();
+        let mut frontier = vec![start.clone()];
+        while let Some(current) = frontier.pop() {
+            if !seen.insert(current.clone()) {
+                continue;
+            }
+            if let Some(node) = self.nodes.get(&current) {
+                for edge in &node.parents {
+                    frontier.push(edge.from.clone());
+                }
+            }
+        }
+        seen
+    }
+
+    /// **最近共同祖先**——§6.3 三方合併的基準。
+    ///
+    /// | 回傳 | 意義 |
+    /// |---|---|
+    /// | `Ok(Some(id))` | 唯一的最近共同祖先 |
+    /// | `Ok(None)` | **無共同祖先** ⇒ 空基準,規則退化為聯集(只有多 root 才可能) |
+    /// | `Err(AmbiguousMergeBase)` | 多個互不為祖先的候選 |
+    ///
+    /// 多候選時**不自行挑一個**(§12.6):git 用遞迴合併處理,我們的 MVP 是報錯要求
+    /// 人指定——挑錯基準會讓整份合併結果悄悄偏掉,比停下來糟得多。
+    pub fn merge_base(&self, parents: &[NodeId]) -> Result<Option<NodeId>, EvolutionError> {
+        for parent in parents {
+            if !self.nodes.contains_key(parent) {
+                return Err(EvolutionError::UnknownNode(parent.clone()));
+            }
+        }
+        let mut sets = parents.iter().map(|id| self.ancestors(id));
+        let Some(mut common) = sets.next() else {
+            return Ok(None);
+        };
+        for set in sets {
+            common.retain(|id| set.contains(id));
+        }
+        // 「最近」= 沒有別的共同祖先是它的後代。等價於:它不是任何其他共同祖先的祖先。
+        let lowest: Vec<NodeId> = common
+            .iter()
+            .filter(|candidate| {
+                !common
+                    .iter()
+                    .any(|other| other != *candidate && self.ancestors(other).contains(candidate))
+            })
+            .cloned()
+            .collect();
+        match lowest.len() {
+            0 => Ok(None),
+            1 => Ok(Some(lowest.into_iter().next().expect("len == 1"))),
+            _ => Err(EvolutionError::AmbiguousMergeBase(lowest)),
+        }
+    }
+
+    /// 算出多親合併的計畫(P61 §6)。`conflicts` 非空時**不得建節點**(§6.4)。
+    ///
+    /// 只算不做:物化成 `LanguageDocument` 需要 `language` 側新的建構 API,屬 ⑤b。
+    pub fn merge_plan(&self, parents: &[NodeId]) -> Result<MergePlan, EvolutionError> {
+        let base = self.merge_base(parents)?;
+        let base_snapshot = base.as_ref().map(|id| self.snapshot(id)).transpose()?;
+        let sides = parents
+            .iter()
+            .map(|id| self.snapshot(id))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(plan_merge(base_snapshot, &sides)?)
     }
 
     /// 對全圖跑 fsck。

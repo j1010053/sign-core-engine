@@ -956,3 +956,156 @@ fn the_same_source_under_a_different_namespace_is_rejected() {
         .expect_err("同原文不同 namespace 必須擋下");
     assert!(format!("{err}").contains("ROOT_IDENTITY_CONFLICT"), "{err}");
 }
+
+// ── 合併基準:最近共同祖先(P61 §6.3)───────────────────────────────────────
+
+#[test]
+fn the_merge_base_of_two_branches_is_their_fork_point() {
+    let mut graph = graph();
+    let root_id = only_root(&graph);
+    let root_doc = graph.snapshot(&root_id).unwrap().clone();
+    let fork = graph
+        .commit(
+            vec![Edge::trunk(
+                root_id,
+                set_category(&root_doc, "evo:fork", "verb"),
+            )],
+            Nativization::None,
+            None,
+        )
+        .unwrap();
+    let fork_doc = graph.snapshot(&fork).unwrap().clone();
+    let left = graph
+        .commit(
+            vec![Edge::trunk(
+                fork.clone(),
+                set_category(&fork_doc, "evo:l", "adj"),
+            )],
+            Nativization::None,
+            None,
+        )
+        .unwrap();
+    let right = graph
+        .commit(
+            vec![Edge::trunk(
+                fork.clone(),
+                set_category(&fork_doc, "evo:r", "aux"),
+            )],
+            Nativization::None,
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(
+        graph.merge_base(&[left, right]).unwrap(),
+        Some(fork),
+        "分叉點才是基準,不是 root"
+    );
+}
+
+#[test]
+fn branches_of_unrelated_roots_have_an_empty_merge_base() {
+    // 空基準:P61 三態規則因此退化成聯集。多 root 之前這個回傳值不可能出現。
+    let mut graph = EvolutionGraph::new(LibrarySpec::default());
+    let a_root = graph.add_root(root()).unwrap();
+    let b_root = graph.add_root(second_root()).unwrap();
+    assert_eq!(graph.merge_base(&[a_root, b_root]).unwrap(), None);
+}
+
+#[test]
+fn a_node_is_its_own_merge_base_with_a_descendant() {
+    let mut graph = graph();
+    let (n1, n2) = chain(&mut graph);
+    assert_eq!(
+        graph.merge_base(&[n1.clone(), n2]).unwrap(),
+        Some(n1),
+        "祖先與後代的最近共同祖先就是祖先自己"
+    );
+}
+
+#[test]
+fn several_lowest_common_ancestors_are_reported_not_guessed() {
+    // 兩個 root 各自被兩個融合節點共用 ⇒ 共同祖先有兩個且互不為祖先。
+    // 挑錯基準會讓整份合併悄悄偏掉,故 §12.6 定為報錯要求人指定,**不自行猜**。
+    let mut graph = EvolutionGraph::new(LibrarySpec::default());
+    let a_root = graph.add_root(root()).unwrap();
+    let b_root = graph.add_root(second_root()).unwrap();
+    let a_doc = graph.snapshot(&a_root).unwrap().clone();
+
+    let merge_one = graph
+        .commit(
+            vec![
+                Edge::trunk(a_root.clone(), set_category(&a_doc, "evo:m1", "verb")),
+                Edge::reference(b_root.clone()),
+            ],
+            Nativization::None,
+            None,
+        )
+        .unwrap();
+    let merge_two = graph
+        .commit(
+            vec![
+                Edge::trunk(a_root, set_category(&a_doc, "evo:m2", "adj")),
+                Edge::reference(b_root),
+            ],
+            Nativization::None,
+            None,
+        )
+        .unwrap();
+
+    let err = graph
+        .merge_base(&[merge_one, merge_two])
+        .expect_err("兩個候選必須報錯");
+    assert!(format!("{err}").contains("AMBIGUOUS_MERGE_BASE"), "{err}");
+}
+
+#[test]
+fn a_merge_plan_uses_the_fork_point_as_its_base() {
+    // 端到端:圖 → LCA → 三態計畫。左支改 x、右支改 y ⇒ 各自單邊改動 ⇒ 乾淨。
+    let mut graph = graph();
+    let root_id = only_root(&graph);
+    let root_doc = graph.snapshot(&root_id).unwrap().clone();
+    let fork = graph
+        .commit(
+            vec![Edge::trunk(
+                root_id,
+                set_category(&root_doc, "evo:fork", "verb"),
+            )],
+            Nativization::None,
+            None,
+        )
+        .unwrap();
+    let fork_doc = graph.snapshot(&fork).unwrap().clone();
+    let left = graph
+        .commit(
+            vec![Edge::trunk(
+                fork.clone(),
+                changeset_for(
+                    &fork_doc,
+                    "evo:l",
+                    "\n    #0:\n        update sign(\"x\").def[syn.category].value = adj\n",
+                ),
+            )],
+            Nativization::None,
+            None,
+        )
+        .unwrap();
+    let right = graph
+        .commit(
+            vec![Edge::trunk(
+                fork,
+                changeset_for(
+                    &fork_doc,
+                    "evo:r",
+                    "\n    #0:\n        update sign(\"y\").def[syn.category].value = aux\n",
+                ),
+            )],
+            Nativization::None,
+            None,
+        )
+        .unwrap();
+
+    let plan = graph.merge_plan(&[left, right]).expect("計畫算得出來");
+    assert!(plan.is_clean(), "各改各的,不該衝突:{:?}", plan.conflicts);
+    assert_eq!(plan.signs.len(), 2, "x 與 y 都要在計畫裡");
+}
