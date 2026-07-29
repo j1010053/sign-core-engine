@@ -1915,6 +1915,21 @@ pub struct UnresolvedChangeSet {
     pub statements: Vec<UnresolvedStatement>,
 }
 
+/// 一筆借入的**引用結構**(docs/06 §3.2)。
+///
+/// 規格明定「`source` **不是獨立欄位**……由引用結構派生」(§3.1),故借來的 sign 上
+/// 只記 `provenance = loan`(是不是借的),**「從哪借」不存成欄位**——它由這裡派生。
+///
+/// 提供這個**窄入口**而非公開整棵未解析 AST:派生來源只需要「哪個 sign 來自哪個
+/// donor」,把 `UnresolvedOperation`/`Selector` 全部公開會讓大量內部形狀變成對外契約。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Adoption {
+    /// 已解析過 prelude 宣告的 donor(別名 + node-id)。
+    pub donor: DonorRef,
+    /// donor 裡的 sign 名字。
+    pub sign: String,
+}
+
 /// donor 的**內容**來源(P62/P63 §8.2)。
 ///
 /// 檔案裡的 `donor <別名> <node-id>` 只是**指標 + 摘要**,不含內容;`adopt` 要複製一個
@@ -2522,6 +2537,53 @@ impl UnresolvedChangeSet {
             donors,
             statements,
         })
+    }
+
+    /// **這份 changeset 借入了哪些 sign、各自來自哪個 donor**(docs/06 §3.2 的來源派生)。
+    ///
+    /// 只看**作者原文**——`resolve` 之後 `adopt` 已降階成 Insert,引用結構就沒了。
+    /// P56 存在邊上的、rebase 也刻意保留的正是原文,故派生永遠做得到。
+    ///
+    /// **界線**:連結是「借入當下的名字」。若該 sign 之後在本語言裡被改名,這裡回的
+    /// 仍是 donor 那邊的原名——那是對的(它記的是**借用事件**,不是現況)。
+    pub fn adoptions(&self) -> Result<Vec<Adoption>, ReplayError> {
+        let mut adoptions = Vec::new();
+        for statement in &self.statements {
+            for operation in &statement.operations {
+                let UnresolvedOperation::Call {
+                    name,
+                    positional,
+                    named,
+                    block,
+                } = operation
+                else {
+                    continue;
+                };
+                if name != "adopt" {
+                    continue;
+                }
+                // 與降階**共用**同一段目標解析(`call::adopt_targets`)——兩份實作會走鐘,
+                // 而走鐘的後果是「跑出來的來源」與「查出來的來源」不一致。
+                let (alias, signs) = call::adopt_targets(&call::Call {
+                    name,
+                    positional: positional.as_deref(),
+                    named,
+                    block: block.as_deref(),
+                })?;
+                let donor = self
+                    .donors
+                    .iter()
+                    .find(|donor| donor.alias == alias)
+                    .ok_or_else(|| ReplayError::Parse(format!("undeclared donor {alias:?}")))?;
+                for sign in signs {
+                    adoptions.push(Adoption {
+                        donor: donor.clone(),
+                        sign,
+                    });
+                }
+            }
+        }
+        Ok(adoptions)
     }
 
     /// 不提供任何 donor 內容的解析(絕大多數呼叫端)。宣告了 donor 的 `.chg` 走這條路

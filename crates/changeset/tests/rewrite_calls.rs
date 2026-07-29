@@ -433,3 +433,117 @@ fn a_lang_fragment_in_the_adopt_list_is_rejected() {
     .expect_err("誤寫成 .lang");
     assert!(format!("{err}").contains("one sign name per line"), "{err}");
 }
+
+// ── 來源派生的驗證(docs/06 §3.1/§3.2)──────────────────────────────────────
+
+#[test]
+fn the_source_of_each_loan_is_derivable_from_the_reference_structure() {
+    // 規格說「**`source` 不是獨立欄位**……由引用結構派生」。這裡**實際做一次派生**
+    // ——不是靠推理:從 `.chg` 原文推回「kaffe 來自哪個節點」。
+    let base = base();
+    let spec = LibrarySpec::default();
+    let mut source = change_set_prelude(&base, &spec, "evo:adopt").unwrap();
+    source.push_str(&format!("    donor fr {DONOR_NODE}\n"));
+    source.push_str(concat!(
+        "\n    statement 0:\n        adopt(from: fr, source: loan):\n",
+        "            kaffe\n            vin\n",
+    ));
+    let parsed = UnresolvedChangeSet::parse(&source).unwrap();
+
+    let adoptions = parsed.adoptions().expect("派生得出來");
+    assert_eq!(adoptions.len(), 2, "兩個借入事件都要在");
+    assert_eq!(adoptions[0].sign, "kaffe");
+    assert_eq!(
+        adoptions[0].donor.node, DONOR_NODE,
+        "推回的是**來源節點**,不只是「這是借的」"
+    );
+    assert_eq!(adoptions[1].sign, "vin");
+    assert_eq!(adoptions[1].donor.node, DONOR_NODE);
+}
+
+#[test]
+fn the_named_form_derives_the_same_way() {
+    let base = base();
+    let spec = LibrarySpec::default();
+    let mut source = change_set_prelude(&base, &spec, "evo:adopt").unwrap();
+    source.push_str(&format!("    donor fr {DONOR_NODE}\n"));
+    source.push_str(&statement("adopt(fr.sign(\"kaffe\"), source: loan)"));
+    let adoptions = UnresolvedChangeSet::parse(&source)
+        .unwrap()
+        .adoptions()
+        .expect("派生");
+    assert_eq!(adoptions.len(), 1);
+    assert_eq!(adoptions[0].sign, "kaffe");
+    assert_eq!(adoptions[0].donor.node, DONOR_NODE);
+}
+
+#[test]
+fn a_changeset_that_borrows_nothing_derives_nothing() {
+    // 判別性:沒有 adopt 的 changeset 不該憑空生出借用事件。
+    let base = base();
+    let spec = LibrarySpec::default();
+    let mut source = change_set_prelude(&base, &spec, "evo:plain").unwrap();
+    source.push_str(&statement("entrench(sign(\"book\"), delta: 0.1)"));
+    assert!(UnresolvedChangeSet::parse(&source)
+        .unwrap()
+        .adoptions()
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn the_derivation_needs_the_authored_text_not_the_resolved_form() {
+    // **界線**:`resolve` 之後 `adopt` 已降階成 Insert,引用結構就沒了。
+    // P56 存在邊上、rebase 也刻意保留的正是**原文**,故派生永遠做得到 ——
+    // 但若有人拿 `dump()` 的結果去派生,會得到空的。這裡把那條界線釘住。
+    let base = base();
+    let spec = LibrarySpec::default();
+    let mut source = change_set_prelude(&base, &spec, "evo:adopt").unwrap();
+    source.push_str(&format!("    donor fr {DONOR_NODE}\n"));
+    source.push_str(&statement("adopt(fr.sign(\"kaffe\"), source: loan)"));
+    let mut donors = DonorSpec::new();
+    donors.insert(DONOR_NODE, donor_language());
+
+    let authored = UnresolvedChangeSet::parse(&source).unwrap();
+    assert_eq!(authored.adoptions().unwrap().len(), 1, "原文派生得出來");
+
+    let dumped = authored
+        .resolve_with(&base, &spec, &donors)
+        .expect("resolves")
+        .dump();
+    let reparsed = UnresolvedChangeSet::parse(&dumped).unwrap();
+    assert!(
+        reparsed.adoptions().unwrap().is_empty(),
+        "降階後引用結構已消失 —— 派生只能用作者原文"
+    );
+    assert_eq!(
+        reparsed.donors, authored.donors,
+        "但 donor 宣告仍在:節點層級的『讀了哪些語言』不會遺失"
+    );
+}
+
+#[test]
+fn each_loan_is_traced_to_its_own_donor() {
+    // **判別性**:兩個 donor 各借一個詞。只有一個 donor 的測試證明不了別名有被解析
+    // ——「永遠取第一個 donor」那種改壞法在單 donor 下完全看不出來。
+    let other = DONOR_NODE.replace("3", "9");
+    let base = base();
+    let spec = LibrarySpec::default();
+    let mut source = change_set_prelude(&base, &spec, "evo:adopt").unwrap();
+    source.push_str(&format!("    donor fr {DONOR_NODE}\n"));
+    source.push_str(&format!("    donor wo {other}\n"));
+    source.push_str(concat!(
+        "\n    statement 0:\n        adopt(fr.sign(\"kaffe\"), source: loan)\n",
+        "        adopt(wo.sign(\"ndox\"), source: loan)\n",
+    ));
+
+    let adoptions = UnresolvedChangeSet::parse(&source)
+        .unwrap()
+        .adoptions()
+        .expect("派生");
+    assert_eq!(adoptions.len(), 2);
+    assert_eq!(adoptions[0].sign, "kaffe");
+    assert_eq!(adoptions[0].donor.node, DONOR_NODE, "kaffe 來自 fr");
+    assert_eq!(adoptions[1].sign, "ndox");
+    assert_eq!(adoptions[1].donor.node, other, "ndox 來自 wo,不是 fr");
+}

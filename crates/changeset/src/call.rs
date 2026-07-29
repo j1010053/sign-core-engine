@@ -160,24 +160,7 @@ fn lower_adopt(
     donors: &DonorScope<'_>,
 ) -> Result<Vec<PrimitiveEdit>, ReplayError> {
     let source = adopt_source(call.require("source")?)?;
-    let (donor, signs) =
-        match (call.positional, call.named("from")) {
-            // 兩種形式**不得混用**:同時給了會讓「以哪個為準」變成任意的。
-            (Some(_), Some(_)) => return Err(ReplayError::Parse(
-                "adopt(…): use either <donor>.sign(\"x\") or from: <donor> with a list, not both"
-                    .to_owned(),
-            )),
-            (Some(_), None) => {
-                let (donor, sign) = call.require_donor_sign()?;
-                (donor, vec![sign])
-            }
-            (None, Some(alias)) => (alias.to_owned(), adopt_list(call)?),
-            (None, None) => {
-                return Err(ReplayError::Parse(
-                    "adopt(…) requires <donor>.sign(\"x\") or from: <donor>".to_owned(),
-                ))
-            }
-        };
+    let (donor, signs) = adopt_targets(call)?;
     let mut edits = Vec::new();
     for sign in signs {
         edits.extend(
@@ -195,6 +178,28 @@ fn lower_adopt(
         );
     }
     Ok(edits)
+}
+
+/// **一次 `adopt` 呼叫指向哪個 donor 的哪些 sign。**
+///
+/// 由 `lower_adopt`(降階)與 `UnresolvedChangeSet::adoptions`(來源派生)**共用**
+/// ——兩份實作會走鐘,而走鐘的後果是「跑出來的來源」與「查出來的來源」不一致。
+pub(crate) fn adopt_targets(call: &Call<'_>) -> Result<(String, Vec<String>), ReplayError> {
+    match (call.positional, call.named("from")) {
+        // 兩種形式**不得混用**:同時給了會讓「以哪個為準」變成任意的。
+        (Some(_), Some(_)) => Err(ReplayError::Parse(
+            "adopt(…): use either <donor>.sign(\"x\") or from: <donor> with a list, not both"
+                .to_owned(),
+        )),
+        (Some(_), None) => {
+            let (donor, sign) = call.require_donor_sign()?;
+            Ok((donor, vec![sign]))
+        }
+        (None, Some(alias)) => Ok((alias.to_owned(), adopt_list(call)?)),
+        (None, None) => Err(ReplayError::Parse(
+            "adopt(…) requires <donor>.sign(\"x\") or from: <donor>".to_owned(),
+        )),
+    }
 }
 
 /// 清單形的 block:**每行一個 sign 名字**。
