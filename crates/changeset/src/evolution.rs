@@ -38,7 +38,7 @@ use crate::{
     identity_manifest_digest, ChangeInterpreter, LanguageDocument, ReplayError, UnresolvedChangeSet,
 };
 use conlang_language::{sha256_hex, LibrarySpec};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// 節點識別 = **內容雜湊**(P58)。
 ///
@@ -151,9 +151,19 @@ impl Node {
 pub enum EvolutionError {
     #[error("EVOLUTION_UNKNOWN_NODE: {0}")]
     UnknownNode(NodeId),
-    /// root 由 `EvolutionGraph::new` 建立;其餘節點必須有 parent。
+    /// root 由 `add_root` 建立;其餘節點必須有 parent。
     #[error("EVOLUTION_NO_PARENT: a committed node needs at least one parent")]
     NoParent,
+    /// 兩個 root 共用 identity namespace ⇒ 它們的穩定 id 會撞,合併會靜默併掉
+    /// 無關的 sign(見 `add_root`)。
+    #[error("EVOLUTION_DUPLICATE_ROOT_NAMESPACE: {0} is already used by another root")]
+    DuplicateRootNamespace(String),
+    /// 同一份 `.lang`、不同 identity namespace ⇒ 內容雜湊相同但身分不同。
+    /// 見 `add_root` 的說明。
+    #[error(
+        "EVOLUTION_ROOT_IDENTITY_CONFLICT: same source already rooted at {kept}, not {incoming}"
+    )]
+    RootIdentityConflict { kept: String, incoming: String },
     /// 主幹邊必須帶 changeset——否則 snapshot 無從產生(P56 因果契約)。
     #[error("EVOLUTION_TRUNK_WITHOUT_CHANGESET: parents[0] must carry a changeset")]
     TrunkWithoutChangeset,
@@ -177,34 +187,87 @@ pub enum EvolutionError {
 ///
 /// 沒有 `cache`/`replay_count`/`invalidate`——snapshot 已是結果,快取層無事可做;
 /// 也沒有 `check_acyclic`——內容定址使成環在型別上不可能(見模組說明)。
+/// **多 root**(《修補11》§12.5):圖可以有數個彼此無血緣的起點語言。
+///
+/// 單 root 之下任兩個節點往上追必定相遇,故 P61 的「**無共同祖先 → 空基準**」路徑
+/// 永遠走不到——而那正是真克里奧爾(法語 + 西非語言)的形狀。不是「做得出來但沒用」,
+/// 是**造不出輸入去測它**,寫了也是改成什麼樣測試都不會紅的死碼。
 #[derive(Debug)]
 pub struct EvolutionGraph {
     libraries: LibrarySpec,
     nodes: BTreeMap<NodeId, Node>,
-    root: NodeId,
+    roots: BTreeSet<NodeId>,
+    /// 已用掉的 root namespace。見 `add_root` 的說明。
+    root_namespaces: BTreeSet<String>,
 }
 
 impl EvolutionGraph {
-    /// root 是圖的起點語言:唯一沒有入邊的節點,其 snapshot 直接就是給定的文件。
-    pub fn new(root: LanguageDocument, libraries: LibrarySpec) -> EvolutionGraph {
-        let id = node_id(&root, &[], Nativization::None);
-        let node = Node {
-            parents: Vec::new(),
-            snapshot: root,
-            nativization: Nativization::None,
-            label: None,
-        };
-        let mut nodes = BTreeMap::new();
-        nodes.insert(id.clone(), node);
+    /// 建一張**空**圖。起點語言用 `add_root` 加(可以有多個)。
+    pub fn new(libraries: LibrarySpec) -> EvolutionGraph {
         EvolutionGraph {
             libraries,
-            nodes,
-            root: id,
+            nodes: BTreeMap::new(),
+            roots: BTreeSet::new(),
+            root_namespaces: BTreeSet::new(),
         }
     }
 
-    pub fn root(&self) -> &NodeId {
-        &self.root
+    /// 加一個起點語言:沒有入邊的節點,snapshot 直接就是給定的文件。
+    ///
+    /// ## 為什麼要擋重複的 root namespace
+    ///
+    /// namespace 決定該文件裡每個節點的穩定 id(`<namespace>:<n>`),而**合併是以穩定
+    /// id 對齊的**(承 docs/06 §6.1,與 diff 同一套)。兩個 root 若共用 namespace,
+    /// 法語的 `evo:root:5`(水)與沃洛夫語的 `evo:root:5`(樹)會被合併器**當成同一個
+    /// 詞的兩個演化階段而靜默併掉**——不報錯、沒有任何跡象。故在最早的時點硬擋。
+    ///
+    /// **誠實界線**:這只保證兩個 root **自身**的 id 不撞。後代 fork 的 namespace
+    /// 由 `.chg` 的 `changeset <ns>:` 自由指定,跨家族仍可能撞。完整的防線是合併當下
+    /// 的檢查——**兩側都有、但共同基底沒有的 id 即為碰撞**(空基底時任何共有 id 都是
+    /// 碰撞)。該檢查屬 P61,本刀不做。
+    ///
+    /// 內容定址下重加同一份 root 是冪等的(同內容 = 同節點),故先查 id 再查 namespace。
+    ///
+    /// ⚠️ **`NodeId` 雜湊的是 `snapshot.source()`,而 namespace 不在 `.lang` 文字裡**
+    /// (身分是 sidecar)。故「同一份 `.lang`、不同 namespace」的兩個 root **id 相同**。
+    /// 若讓它走冪等路徑,呼叫端指定的 namespace 會被**默默忽略**,之後對著它寫的
+    /// changeset 才會因 `base_identities` 不符而失敗——錯誤離成因很遠。故在冪等路徑上
+    /// 額外比對 identity manifest,不一致就當場硬錯。
+    pub fn add_root(&mut self, document: LanguageDocument) -> Result<NodeId, EvolutionError> {
+        let id = node_id(&document, &[], Nativization::None);
+        if let Some(existing) = self.nodes.get(&id) {
+            let (kept, incoming) = (
+                identity_manifest_digest(existing.snapshot())?,
+                identity_manifest_digest(&document)?,
+            );
+            if kept != incoming {
+                return Err(EvolutionError::RootIdentityConflict {
+                    kept: existing.snapshot().identities().root_namespace.clone(),
+                    incoming: document.identities().root_namespace.clone(),
+                });
+            }
+            return Ok(id);
+        }
+        let namespace = document.identities().root_namespace.clone();
+        if !self.root_namespaces.insert(namespace.clone()) {
+            return Err(EvolutionError::DuplicateRootNamespace(namespace));
+        }
+        self.nodes.insert(
+            id.clone(),
+            Node {
+                parents: Vec::new(),
+                snapshot: document,
+                nativization: Nativization::None,
+                label: None,
+            },
+        );
+        self.roots.insert(id.clone());
+        Ok(id)
+    }
+
+    /// 全部的起點語言(彼此無血緣)。
+    pub fn roots(&self) -> impl Iterator<Item = &NodeId> {
+        self.roots.iter()
     }
 
     pub fn node(&self, id: &NodeId) -> Option<&Node> {
@@ -220,8 +283,6 @@ impl EvolutionGraph {
     }
 
     pub fn is_empty(&self) -> bool {
-        // root 永遠在,故恆為 false;留著讓 clippy 的 `len_without_is_empty` 滿意,
-        // 且日後若允許空圖語意不必改介面。
         self.nodes.is_empty()
     }
 
@@ -510,8 +571,8 @@ mod tests {
 
     fn fixture() -> (EvolutionGraph, NodeId) {
         let root = LanguageDocument::import_new_root(ROOT, "evo:root").expect("root parses");
-        let mut graph = EvolutionGraph::new(root, LibrarySpec::default());
-        let root_id = graph.root().clone();
+        let mut graph = EvolutionGraph::new(LibrarySpec::default());
+        let root_id = graph.add_root(root).expect("root added");
         let base = graph.snapshot(&root_id).unwrap().clone();
         let mut changeset =
             change_set_prelude(&base, &LibrarySpec::default(), "evo:n1").expect("prelude");

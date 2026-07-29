@@ -40,7 +40,17 @@ fn root() -> LanguageDocument {
 }
 
 fn graph() -> EvolutionGraph {
-    EvolutionGraph::new(root(), LibrarySpec::default())
+    let mut graph = EvolutionGraph::new(LibrarySpec::default());
+    graph.add_root(root()).expect("root added");
+    graph
+}
+
+/// 單 root 圖的 root。多 root 的案例自己呼叫 `add_root` 並持有回傳的 id。
+fn only_root(graph: &EvolutionGraph) -> NodeId {
+    let mut roots = graph.roots();
+    let first = roots.next().expect("圖裡有 root").clone();
+    assert!(roots.next().is_none(), "本輔助函式只用於單 root 的圖");
+    first
 }
 
 /// 針對 `base` 寫一份 `.chg`(prelude 的三道 digest 必須對得上 base——邊存**原文**、
@@ -72,7 +82,7 @@ fn category_of(document: &LanguageDocument) -> Option<String> {
 
 /// root → n1(verb)→ n2(aux)。回傳兩個 id。
 fn chain(graph: &mut EvolutionGraph) -> (NodeId, NodeId) {
-    let root_id = graph.root().clone();
+    let root_id = only_root(graph);
     let root_doc = graph.snapshot(&root_id).unwrap().clone();
     let n1 = graph
         .commit(
@@ -123,7 +133,7 @@ fn fsck_holds_for_every_node() {
 #[test]
 fn the_root_has_no_parents_and_is_untouched() {
     let mut graph = graph();
-    let root_id = graph.root().clone();
+    let root_id = only_root(&graph);
     let before = graph.snapshot(&root_id).unwrap().source().to_owned();
     chain(&mut graph);
     assert!(graph.node(&root_id).unwrap().parents().is_empty());
@@ -147,7 +157,7 @@ fn the_trunk_edge_stores_the_changeset_verbatim() {
 fn committing_identical_content_is_idempotent() {
     // 內容定址 ⇒ 同內容是同一個物件(git 語意);前一版的 `Duplicate` 錯誤因此消失。
     let mut graph = graph();
-    let root_id = graph.root().clone();
+    let root_id = only_root(&graph);
     let root_doc = graph.snapshot(&root_id).unwrap().clone();
     let changeset = set_category(&root_doc, "evo:n1", "verb");
     let first = graph
@@ -172,7 +182,7 @@ fn committing_identical_content_is_idempotent() {
 #[test]
 fn a_different_changeset_yields_a_different_node() {
     let mut graph = graph();
-    let root_id = graph.root().clone();
+    let root_id = only_root(&graph);
     let root_doc = graph.snapshot(&root_id).unwrap().clone();
     let a = graph
         .commit(
@@ -207,7 +217,7 @@ fn two_routes_to_the_same_state_are_two_nodes() {
     // 若 changeset 不入雜湊,兩者會摺疊成同一個節點,**其中一份 changeset 被靜默丟棄**
     // ——違反 docs/06「存事實(ChangeSet)」。故必須是兩個節點。
     let mut graph = graph();
-    let root_id = graph.root().clone();
+    let root_id = only_root(&graph);
     let root_doc = graph.snapshot(&root_id).unwrap().clone();
 
     let direct = set_category(&root_doc, "evo:n1", "verb");
@@ -242,7 +252,7 @@ fn two_routes_to_the_same_state_are_two_nodes() {
 #[test]
 fn nativization_is_part_of_identity() {
     let mut graph = graph();
-    let root_id = graph.root().clone();
+    let root_id = only_root(&graph);
     let root_doc = graph.snapshot(&root_id).unwrap().clone();
     let changeset = set_category(&root_doc, "evo:n1", "verb");
     let plain = graph
@@ -266,7 +276,7 @@ fn nativization_is_part_of_identity() {
 fn the_label_is_not_part_of_identity() {
     // P58/P45:人類可讀名字是另一層,不是身分。
     let mut graph = graph();
-    let root_id = graph.root().clone();
+    let root_id = only_root(&graph);
     let root_doc = graph.snapshot(&root_id).unwrap().clone();
     let changeset = set_category(&root_doc, "evo:n1", "verb");
     let bare = graph
@@ -290,7 +300,11 @@ fn the_label_is_not_part_of_identity() {
 fn a_node_id_is_deterministic_across_graphs() {
     // P26:同輸入同輸出,無隨機/時間戳來源。
     let (mut first, mut second) = (graph(), graph());
-    assert_eq!(first.root(), second.root(), "同一份 root 必得同一個 id");
+    assert_eq!(
+        only_root(&first),
+        only_root(&second),
+        "同一份 root 必得同一個 id"
+    );
     let (_, a) = chain(&mut first);
     let (_, b) = chain(&mut second);
     assert_eq!(a, b);
@@ -305,7 +319,7 @@ fn editing_a_changeset_forks_a_parallel_chain_and_leaves_the_old_one_valid() {
     // `set_changeset` 會就地改掉 n1,讓 n2 因 digest 不符而永久失效(§0 的缺陷)。
     let mut graph = graph();
     let (n1, n2) = chain(&mut graph);
-    let root_id = graph.root().clone();
+    let root_id = only_root(&graph);
     let root_doc = graph.snapshot(&root_id).unwrap().clone();
 
     let n1_prime = graph
@@ -344,11 +358,11 @@ fn an_unknown_parent_is_rejected() {
     // 這同時是**無環的機制**:parent 必須已存在才引用得到,而節點 id 由 parents 的 id
     // 算出,故成環需要一個雜湊包含自己——不可能。前一版的 `check_acyclic` 因此移除。
     let mut graph = graph();
-    let root_doc = graph.snapshot(&graph.root().clone()).unwrap().clone();
+    let root_doc = graph.snapshot(&only_root(&graph)).unwrap().clone();
     let real = graph
         .commit(
             vec![Edge::trunk(
-                graph.root().clone(),
+                only_root(&graph),
                 set_category(&root_doc, "evo:n1", "verb"),
             )],
             Nativization::None,
@@ -357,13 +371,15 @@ fn an_unknown_parent_is_rejected() {
         .unwrap();
     // 拿一個「看起來像 id 但不在圖裡」的值:用真 id 的節點刪掉後不可能重現,
     // 故改用另一張圖算出的、本圖沒有的 id。
-    let other = EvolutionGraph::new(
-        LanguageDocument::import_new_root(&ROOT.replace("Symbol k", "Symbol z"), "evo:other")
-            .unwrap(),
-        LibrarySpec::default(),
-    );
-    let ghost = other.root().clone();
-    assert_ne!(&ghost, &real);
+    let mut other = EvolutionGraph::new(LibrarySpec::default());
+    other
+        .add_root(
+            LanguageDocument::import_new_root(&ROOT.replace("Symbol k", "Symbol z"), "evo:other")
+                .unwrap(),
+        )
+        .unwrap();
+    let ghost = only_root(&other);
+    assert_ne!(ghost, real);
     let err = graph
         .commit(
             vec![Edge::trunk(ghost, "changeset evo:g:\n".to_owned())],
@@ -389,7 +405,7 @@ fn a_trunk_edge_without_a_changeset_is_rejected() {
     let mut graph = graph();
     let err = graph
         .commit(
-            vec![Edge::reference(graph.root().clone())],
+            vec![Edge::reference(only_root(&graph))],
             Nativization::None,
             None,
         )
@@ -410,7 +426,7 @@ fn a_reference_edge_carrying_a_changeset_is_rejected() {
         .commit(
             vec![
                 Edge::trunk(n1.clone(), set_category(&n1_doc, "evo:c", "particle")),
-                Edge::trunk(graph.root().clone(), set_category(&n1_doc, "evo:d", "adj")),
+                Edge::trunk(only_root(&graph), set_category(&n1_doc, "evo:d", "adj")),
             ],
             Nativization::None,
             None,
@@ -457,7 +473,7 @@ fn a_broken_changeset_leaves_no_node_behind() {
     let err = graph
         .commit(
             vec![Edge::trunk(
-                graph.root().clone(),
+                only_root(&graph),
                 "changeset evo:bad:\n".to_owned(),
             )],
             Nativization::None,
@@ -473,7 +489,7 @@ fn a_changeset_written_against_another_base_is_rejected() {
     // digest 的職責之一(P59):防掉包。對 root 寫的 changeset 套不到 n1 上。
     let mut graph = graph();
     let (n1, _) = chain(&mut graph);
-    let root_doc = graph.snapshot(&graph.root().clone()).unwrap().clone();
+    let root_doc = graph.snapshot(&only_root(&graph)).unwrap().clone();
     let err = graph
         .commit(
             vec![Edge::trunk(n1, set_category(&root_doc, "evo:x", "adj"))],
@@ -487,12 +503,14 @@ fn a_changeset_written_against_another_base_is_rejected() {
 #[test]
 fn reading_an_unknown_node_is_rejected() {
     let graph = graph();
-    let other = EvolutionGraph::new(
-        LanguageDocument::import_new_root(&ROOT.replace("Symbol k", "Symbol z"), "evo:other")
-            .unwrap(),
-        LibrarySpec::default(),
-    );
-    assert!(graph.snapshot(other.root()).is_err());
+    let mut other = EvolutionGraph::new(LibrarySpec::default());
+    other
+        .add_root(
+            LanguageDocument::import_new_root(&ROOT.replace("Symbol k", "Symbol z"), "evo:other")
+                .unwrap(),
+        )
+        .unwrap();
+    assert!(graph.snapshot(&only_root(&other)).is_err());
 }
 
 // ── rebase(P57《修補11》§2.3/§3.2)──────────────────────────────────────────
@@ -503,7 +521,7 @@ fn reading_an_unknown_node_is_rejected() {
 fn a_clean_rebase_carries_the_edit_onto_the_new_ancestor() {
     let mut graph = graph();
     let (_, n2) = chain(&mut graph);
-    let root_id = graph.root().clone();
+    let root_id = only_root(&graph);
     let root_doc = graph.snapshot(&root_id).unwrap().clone();
 
     // n1' = 從 root 走另一條路(particle 而非 verb)。
@@ -540,7 +558,7 @@ fn a_rebase_leaves_the_original_chain_untouched() {
     // 不可變:rebase 產生**並存**的新鏈,不是搬動舊的。
     let mut graph = graph();
     let (n1, n2) = chain(&mut graph);
-    let root_id = graph.root().clone();
+    let root_id = only_root(&graph);
     let root_doc = graph.snapshot(&root_id).unwrap().clone();
     let n1_prime = graph
         .commit(
@@ -574,7 +592,7 @@ fn a_conflicting_rebase_names_the_failing_statement() {
     // 寫死成 0 或根本沒傳,這個測試會紅——單句 changeset 測不出來(ordinal 恆為 0,
     // 對錯不分)。這是 P57「`Statement { ordinal }` 免費指出哪一句」的實證。
     let mut graph = graph();
-    let root_id = graph.root().clone();
+    let root_id = only_root(&graph);
     let root_doc = graph.snapshot(&root_id).unwrap().clone();
     let n1 = graph
         .commit(
@@ -636,7 +654,7 @@ fn a_missing_target_conflict_names_its_statement() {
     //
     // **判別性**:失敗的是第 1 句而非第 0 句,故「句號寫死成 0」會被抓到。
     let mut graph = graph();
-    let root_id = graph.root().clone();
+    let root_id = only_root(&graph);
     let root_doc = graph.snapshot(&root_id).unwrap().clone();
     let n1 = graph
         .commit(
@@ -693,7 +711,7 @@ fn a_missing_target_conflict_names_its_statement() {
 #[test]
 fn a_conflicting_rebase_creates_no_node() {
     let mut graph = graph();
-    let root_id = graph.root().clone();
+    let root_id = only_root(&graph);
     let root_doc = graph.snapshot(&root_id).unwrap().clone();
     let n1 = graph
         .commit(
@@ -747,7 +765,7 @@ fn the_rebased_edge_is_verbatim_apart_from_the_base_digests() {
     // (`rewrite`/`clone`)會被抹平成原語,使用者的書寫意圖就丟了。
     let mut graph = graph();
     let (_, n2) = chain(&mut graph);
-    let root_id = graph.root().clone();
+    let root_id = only_root(&graph);
     let root_doc = graph.snapshot(&root_id).unwrap().clone();
     let n1_prime = graph
         .commit(
@@ -799,11 +817,142 @@ fn rebasing_an_unknown_node_is_an_error_not_an_outcome() {
     // 圖層面的錯不是 rebase 的三分結果之一,不該被吞成「衝突」。
     let mut graph = graph();
     let (_, n2) = chain(&mut graph);
-    let other = EvolutionGraph::new(
-        LanguageDocument::import_new_root(&ROOT.replace("Symbol k", "Symbol z"), "evo:other")
-            .unwrap(),
-        LibrarySpec::default(),
+    let mut other = EvolutionGraph::new(LibrarySpec::default());
+    other
+        .add_root(
+            LanguageDocument::import_new_root(&ROOT.replace("Symbol k", "Symbol z"), "evo:other")
+                .unwrap(),
+        )
+        .unwrap();
+    assert!(graph.rebase(&n2, &only_root(&other)).is_err());
+    assert!(graph.rebase(&only_root(&other), &n2).is_err());
+}
+
+// ── 多 root(《修補11》§12.5;P61 的前置)──────────────────────────────────
+
+/// 第二個起點語言:與第一個**無血緣**。這是 P61「無共同祖先 → 空基準」路徑的
+/// 唯一輸入來源;單 root 之下造不出來。
+fn second_root() -> LanguageDocument {
+    LanguageDocument::import_new_root(
+        "Symbol p\n\nsign wolof:\n    syn:\n        category = noun\n",
+        "evo:wolof",
+    )
+    .expect("second root parses")
+}
+
+#[test]
+fn a_fresh_graph_has_no_roots() {
+    let graph = EvolutionGraph::new(LibrarySpec::default());
+    assert!(graph.is_empty());
+    assert_eq!(graph.roots().count(), 0);
+}
+
+#[test]
+fn two_unrelated_roots_coexist() {
+    let mut graph = EvolutionGraph::new(LibrarySpec::default());
+    let first = graph.add_root(root()).unwrap();
+    let second = graph.add_root(second_root()).unwrap();
+    assert_ne!(first, second);
+    assert_eq!(graph.roots().count(), 2);
+    assert!(graph.node(&first).unwrap().parents().is_empty());
+    assert!(graph.node(&second).unwrap().parents().is_empty());
+    graph.verify_all().unwrap();
+}
+
+#[test]
+fn descendants_of_unrelated_roots_share_no_ancestor() {
+    // **這是多 root 存在的理由**:兩支的祖先集合不相交,故 P61 的最近共同祖先
+    // 不存在 → 基準為空。單 root 之下這個斷言恆假。
+    let mut graph = EvolutionGraph::new(LibrarySpec::default());
+    let a_root = graph.add_root(root()).unwrap();
+    let b_root = graph.add_root(second_root()).unwrap();
+
+    let a_doc = graph.snapshot(&a_root).unwrap().clone();
+    let a = graph
+        .commit(
+            vec![Edge::trunk(a_root, set_category(&a_doc, "evo:a1", "verb"))],
+            Nativization::None,
+            None,
+        )
+        .unwrap();
+    let b_doc = graph.snapshot(&b_root).unwrap().clone();
+    let b = graph
+        .commit(
+            vec![Edge::trunk(
+                b_root,
+                changeset_for(
+                    &b_doc,
+                    "evo:b1",
+                    "\n    #0:\n        update sign(\"wolof\").def[syn.category].value = verb\n",
+                ),
+            )],
+            Nativization::None,
+            None,
+        )
+        .unwrap();
+
+    let ancestors = |graph: &EvolutionGraph, start: &NodeId| {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut frontier = vec![start.clone()];
+        while let Some(current) = frontier.pop() {
+            if !seen.insert(current.clone()) {
+                continue;
+            }
+            for edge in graph.node(&current).unwrap().parents() {
+                frontier.push(edge.from.clone());
+            }
+        }
+        seen
+    };
+    let (left, right) = (ancestors(&graph, &a), ancestors(&graph, &b));
+    assert!(
+        left.is_disjoint(&right),
+        "兩支必須毫無交集,否則空基準路徑仍不可達"
     );
-    assert!(graph.rebase(&n2, other.root()).is_err());
-    assert!(graph.rebase(other.root(), &n2).is_err());
+    graph.verify_all().unwrap();
+}
+
+#[test]
+fn a_second_root_reusing_a_namespace_is_rejected() {
+    // **靜默毀損的守門員**。namespace 決定穩定 id,而合併以穩定 id 對齊
+    // (docs/06 §6.1)。若兩個 root 共用 namespace,一邊的 `evo:root:5` 與另一邊的
+    // `evo:root:5` 會被合併器當成同一個 sign 的兩個階段而**默默併掉**——
+    // 不報錯、沒有跡象。故在加 root 的當下就擋。
+    let mut graph = EvolutionGraph::new(LibrarySpec::default());
+    graph.add_root(root()).unwrap();
+    let clash = LanguageDocument::import_new_root(
+        "Symbol p\n\nsign wolof:\n    syn:\n        category = noun\n",
+        "evo:root", // ← 與第一個 root 相同
+    )
+    .unwrap();
+    let err = graph.add_root(clash).expect_err("namespace 撞了");
+    assert!(
+        format!("{err}").contains("DUPLICATE_ROOT_NAMESPACE"),
+        "{err}"
+    );
+    assert_eq!(graph.roots().count(), 1, "失敗不得留下半個 root");
+}
+
+#[test]
+fn re_adding_the_same_root_is_idempotent() {
+    let mut graph = EvolutionGraph::new(LibrarySpec::default());
+    let first = graph.add_root(root()).unwrap();
+    let again = graph.add_root(root()).expect("同一份 root 可重加");
+    assert_eq!(first, again);
+    assert_eq!(graph.roots().count(), 1);
+}
+
+#[test]
+fn the_same_source_under_a_different_namespace_is_rejected() {
+    // `NodeId` 只雜湊 `.lang` 原文,而 namespace 不在原文裡 → 兩者 id 相同。
+    // 若放行,呼叫端指定的 namespace 會被**默默忽略**(冪等路徑回舊節點),
+    // 之後才在 `base_identities` 不符時爆掉,錯誤離成因很遠。
+    let mut graph = EvolutionGraph::new(LibrarySpec::default());
+    graph.add_root(root()).unwrap();
+    let same_text_other_namespace =
+        LanguageDocument::import_new_root(ROOT, "evo:elsewhere").unwrap();
+    let err = graph
+        .add_root(same_text_other_namespace)
+        .expect_err("同原文不同 namespace 必須擋下");
+    assert!(format!("{err}").contains("ROOT_IDENTITY_CONFLICT"), "{err}");
 }
