@@ -147,12 +147,116 @@ fn rule_home(value: &str, call: &str) -> Result<RuleHome, ReplayError> {
     )))
 }
 
+/// `adopt` 的兩種形式:
+///
+/// - **A 逐詞指名**:`adopt(fr.sign("eau"), source: loan)`
+/// - **B 清單**(語法糖):`adopt(from: fr, source: loan):` + 每行一個名字
+///
+/// B **語意上就是 A 的批次寫法**——降階後兩者無從分辨(都是 N 個 Insert),
+/// 故不新增本體、不需要新的 `AtomicRewrite` 變體。
+fn lower_adopt(
+    call: &Call<'_>,
+    document: &LanguageDocument,
+    donors: &DonorScope<'_>,
+) -> Result<Vec<PrimitiveEdit>, ReplayError> {
+    let source = adopt_source(call.require("source")?)?;
+    let (donor, signs) =
+        match (call.positional, call.named("from")) {
+            // 兩種形式**不得混用**:同時給了會讓「以哪個為準」變成任意的。
+            (Some(_), Some(_)) => return Err(ReplayError::Parse(
+                "adopt(…): use either <donor>.sign(\"x\") or from: <donor> with a list, not both"
+                    .to_owned(),
+            )),
+            (Some(_), None) => {
+                let (donor, sign) = call.require_donor_sign()?;
+                (donor, vec![sign])
+            }
+            (None, Some(alias)) => (alias.to_owned(), adopt_list(call)?),
+            (None, None) => {
+                return Err(ReplayError::Parse(
+                    "adopt(…) requires <donor>.sign(\"x\") or from: <donor>".to_owned(),
+                ))
+            }
+        };
+    let mut edits = Vec::new();
+    for sign in signs {
+        edits.extend(
+            expand(
+                &AtomicRewrite::Adopt {
+                    donor: donor.clone(),
+                    sign,
+                    source,
+                },
+                document,
+                &ServiceContext::offline(),
+                donors,
+            )
+            .map_err(|error| ReplayError::Parse(error.to_string()))?,
+        );
+    }
+    Ok(edits)
+}
+
+/// 清單形的 block:**每行一個 sign 名字**。
+///
+/// 重複名字硬錯——會借入兩份同名 sign(之後名字唯一性也會擋,但在這裡說離成因近得多)。
+///
+/// **誠實標記**:空清單的檢查**從表面走不到**——空白 block 在更早的語句解析就被
+/// 視為「沒有 block」而擋下。留著是對日後 parser 變動的防線,但目前無法以突變測試觀測。
+fn adopt_list(call: &Call<'_>) -> Result<Vec<String>, ReplayError> {
+    let block = call.block.ok_or_else(|| {
+        ReplayError::Parse("adopt(…) with from: requires an indented list of sign names".to_owned())
+    })?;
+    let mut names: Vec<String> = Vec::new();
+    for line in block.lines() {
+        let name = line.trim();
+        if name.is_empty() {
+            continue;
+        }
+        // 含空白 ⇒ 多半是誤把 `.lang` 片段(`sign eau:`)寫進來了。
+        if name.split_whitespace().count() != 1 {
+            return Err(ReplayError::Parse(format!(
+                "adopt(…) list takes one sign name per line, got {name:?}"
+            )));
+        }
+        if names.iter().any(|existing| existing == name) {
+            return Err(ReplayError::Parse(format!(
+                "adopt(…) list repeats {name:?}"
+            )));
+        }
+        names.push(name.to_owned());
+    }
+    if names.is_empty() {
+        return Err(ReplayError::Parse(
+            "adopt(…) list must name at least one sign".to_owned(),
+        ));
+    }
+    Ok(names)
+}
+
+fn adopt_source(value: &str) -> Result<AdoptSource, ReplayError> {
+    match value {
+        "loan" => Ok(AdoptSource::Loan),
+        "dialect" => Ok(AdoptSource::Dialect),
+        "ancestor" => Ok(AdoptSource::Ancestor),
+        other => Err(ReplayError::Parse(format!(
+            "adopt(…) source: must be loan|dialect|ancestor, got {other:?}"
+        ))),
+    }
+}
+
 /// 把一次呼叫降階為四原語。未知名字 → 明確錯誤(封閉內建集)。
 pub(crate) fn lower(
     call: &Call<'_>,
     document: &LanguageDocument,
     donors: &DonorScope<'_>,
 ) -> Result<Vec<PrimitiveEdit>, ReplayError> {
+    // `adopt` 有兩種形式(單詞指名 / 清單),會展開成**多個**原語,故不走單一 rewrite 的
+    // 路徑。清單形是**語法糖**——與 `clone` 同構:只活在未解析層,`resolve` 就降成
+    // N 個 Insert,`ResolvedChangeSet` 維持 primitive-only(步驟 14 契約)。
+    if call.name == "adopt" {
+        return lower_adopt(call, document, donors);
+    }
     let rewrite = match call.name {
         // ── form ──
         "sound_change" => AtomicRewrite::SoundChange {

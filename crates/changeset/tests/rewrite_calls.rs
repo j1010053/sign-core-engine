@@ -136,7 +136,10 @@ fn a_call_with_a_block_carries_a_whole_sign() {
 
 fn donor_language() -> LanguageDocument {
     LanguageDocument::import_new_root(
-        "sign kaffe:\n    belongs LocalNoun\n    sem:\n        senses:\n            core = COFFEE\n",
+        concat!(
+            "sign kaffe:\n    belongs LocalNoun\n    sem:\n        senses:\n            core = COFFEE\n\n",
+            "sign vin:\n    belongs LocalNoun\n    sem:\n        senses:\n            core = WINE\n",
+        ),
         "fr",
     )
     .expect("donor parses")
@@ -153,9 +156,8 @@ fn apply_with_donor(body: &str, ns: &str) -> Result<String, ReplayError> {
     source.push_str(body);
     let mut donors = DonorSpec::new();
     donors.insert(DONOR_NODE, donor_language());
-    let resolved = UnresolvedChangeSet::parse(&source)
-        .unwrap()
-        .resolve_with(&base, &spec, &donors)?;
+    // 解析層的錯誤也要傳出去 —— 用 `unwrap` 會讓它變成 panic 而非可斷言的 `Err`。
+    let resolved = UnresolvedChangeSet::parse(&source)?.resolve_with(&base, &spec, &donors)?;
     Ok(ChangeInterpreter::new(base, spec, ns)
         .unwrap()
         .run(&resolved)
@@ -324,4 +326,110 @@ fn a_primitive_statement_is_still_a_primitive_statement() {
         "evo:prim",
     );
     assert!(lang.contains("log = JOURNAL"), "{lang}");
+}
+
+// ── 提案 B:清單形(語法糖)────────────────────────────────────────────────
+
+#[test]
+fn adopt_takes_a_list_of_sign_names() {
+    // **與 `clone` 同構的語法糖**:只活在未解析層,`resolve` 就降成 N 個 Insert,
+    // `ResolvedChangeSet` 維持 primitive-only(步驟 14 契約)。
+    let lang = apply_with_donor(
+        concat!(
+            "\n    statement 0:\n        adopt(from: fr, source: loan):\n",
+            "            kaffe\n",
+            "            vin\n",
+        ),
+        "evo:adopt",
+    )
+    .expect("borrows both");
+    assert!(lang.contains("sign kaffe:"), "{lang}");
+    assert!(lang.contains("sign vin:"), "{lang}");
+    assert_eq!(
+        lang.matches("provenance = loan").count(),
+        2,
+        "兩個都要標記來源:{lang}"
+    );
+}
+
+#[test]
+fn the_list_form_lowers_to_plain_primitives() {
+    // 語法糖的檢驗:降階後**看不出**用的是 A 還是 B —— 兩者都是 N 個 Insert。
+    let base = base();
+    let spec = LibrarySpec::default();
+    let mut donors = DonorSpec::new();
+    donors.insert(DONOR_NODE, donor_language());
+
+    let resolve_one = |body: &str| {
+        let mut source = change_set_prelude(&base, &spec, "evo:adopt").unwrap();
+        source.push_str(&format!("    donor fr {DONOR_NODE}\n"));
+        source.push_str(body);
+        UnresolvedChangeSet::parse(&source)
+            .unwrap()
+            .resolve_with(&base, &spec, &donors)
+            .expect("resolves")
+    };
+    let listed = resolve_one(concat!(
+        "\n    statement 0:\n        adopt(from: fr, source: loan):\n",
+        "            kaffe\n            vin\n",
+    ));
+    let named = resolve_one(concat!(
+        "\n    statement 0:\n        adopt(fr.sign(\"kaffe\"), source: loan)\n",
+        "        adopt(fr.sign(\"vin\"), source: loan)\n",
+    ));
+    assert_eq!(listed.statements, named.statements, "B 就是 A 的批次寫法");
+}
+
+#[test]
+fn mixing_the_two_adopt_forms_is_rejected() {
+    // 同時給了位置參數與 `from:`,「以哪個為準」會變成任意的 —— 而那是靜默的。
+    let err = apply_with_donor(
+        concat!(
+            "\n    statement 0:\n        adopt(fr.sign(\"kaffe\"), from: fr, source: loan):\n",
+            "            vin\n",
+        ),
+        "evo:adopt",
+    )
+    .expect_err("兩種形式混用");
+    assert!(format!("{err}").contains("not both"), "{err}");
+}
+
+#[test]
+fn a_blank_adopt_list_is_rejected() {
+    // 空白清單被**更早的 parser** 擋下(它視為「沒有 block」),故 `adopt_list` 裡的
+    // 空清單檢查從表面走不到——誠實標記,不假裝那條分支有被測到。
+    let err = apply_with_donor(
+        "\n    statement 0:\n        adopt(from: fr, source: loan):\n            \n",
+        "evo:adopt",
+    )
+    .expect_err("空清單");
+    assert!(format!("{err}").contains("block"), "{err}");
+}
+
+#[test]
+fn a_repeated_name_in_the_adopt_list_is_rejected() {
+    // 借入兩份同名 sign。之後名字唯一性也會擋,但在這裡說離成因近得多。
+    let err = apply_with_donor(
+        concat!(
+            "\n    statement 0:\n        adopt(from: fr, source: loan):\n",
+            "            kaffe\n            kaffe\n",
+        ),
+        "evo:adopt",
+    )
+    .expect_err("重複");
+    assert!(format!("{err}").contains("repeats"), "{err}");
+}
+
+#[test]
+fn a_lang_fragment_in_the_adopt_list_is_rejected() {
+    // 清單是**每行一個名字**,不是 `.lang` 片段。誤寫要給明確訊息。
+    let err = apply_with_donor(
+        concat!(
+            "\n    statement 0:\n        adopt(from: fr, source: loan):\n",
+            "            sign kaffe:\n",
+        ),
+        "evo:adopt",
+    )
+    .expect_err("誤寫成 .lang");
+    assert!(format!("{err}").contains("one sign name per line"), "{err}");
 }
