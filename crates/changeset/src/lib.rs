@@ -15,6 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 mod call;
+pub mod evolution;
 pub mod function;
 pub mod rewrite;
 
