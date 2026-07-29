@@ -16,8 +16,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod call;
 pub mod evolution;
-pub mod merge;
 pub mod function;
+pub mod merge;
 pub mod rewrite;
 
 use conlang_language::{
@@ -1909,7 +1909,32 @@ pub struct UnresolvedChangeSet {
     pub base_source: String,
     pub base_identities: String,
     pub libraries: Vec<LibraryLock>,
+    /// **本 changeset 讀得到哪些別的語言**(P62 `ContactInjection` 的宣告面)。
+    pub donors: Vec<DonorRef>,
     pub statements: Vec<UnresolvedStatement>,
+}
+
+/// prelude 的 `donor <別名> <node-id>` 宣告(P62 §7.3)。
+///
+/// ## 為什麼要有別名
+///
+/// §7.3 定「body 的條目**按名引用**已宣告的 donor」,而 P58 之下 node-id 是 64 字元的
+/// 內容雜湊——直接寫進每一個條目沒法用。形狀比照既有的
+/// `library <package>@<version> sha256:<digest>`:**名字 + 摘要**,同一個先例。
+///
+/// ## 為什麼 `node` 是 `String` 而不是 `evolution::NodeId`
+///
+/// `.chg` 這一層不該依賴演化圖——它只是解析出一個 token,由圖在需要時去解析。
+/// (`NodeId` 的欄位也是私有的,只能由內容雜湊產生,正是為了「身分不能自取」。)
+///
+/// **不需要另外的 digest 欄位**:P58 之下 `NodeId` 就是內容雜湊,故 `node` 本身
+/// 已經是 digest——donor 的內容變了就是另一個 `NodeId`,引用自然失效。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DonorRef {
+    /// 檔案內的短名,供 body 引用。
+    pub alias: String,
+    /// 演化圖的節點識別(P58:內容雜湊)。
+    pub node: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1925,6 +1950,9 @@ pub struct ResolvedChangeSet {
     pub base_source: String,
     pub base_identities: String,
     pub libraries: Vec<LibraryLock>,
+    /// 承 `UnresolvedChangeSet`:donor 是 prelude 的**外部依賴宣告**(與 library lock
+    /// 同類),不是操作,故不影響步驟 14「`ResolvedChangeSet` 只含四原語」的封板契約。
+    pub donors: Vec<DonorRef>,
     pub statements: Vec<ResolvedStatement>,
 }
 
@@ -2335,6 +2363,7 @@ impl UnresolvedChangeSet {
         let mut base_source = None;
         let mut base_identities = None;
         let mut libraries = Vec::new();
+        let mut donors: Vec<DonorRef> = Vec::new();
         let mut statements = Vec::new();
         let mut index = 1;
         while index < lines.len() {
@@ -2363,6 +2392,25 @@ impl UnresolvedChangeSet {
                         .map_err(|error| ReplayError::Parse(format!("{error}")))?,
                     version: version.to_owned(),
                     digest: strip_digest(digest),
+                });
+            } else if let Some(value) = line.strip_prefix("donor ") {
+                let (alias, node) = value.split_once(' ').ok_or_else(|| {
+                    ReplayError::Parse(format!("expected `donor <alias> <node-id>` {line:?}"))
+                })?;
+                let (alias, node) = (alias.trim(), node.trim());
+                if alias.is_empty() || node.is_empty() || node.contains(' ') {
+                    return Err(ReplayError::Parse(format!("malformed donor {line:?}")));
+                }
+                // 別名在檔案內必須唯一——同名兩次會讓 body 的引用**指向哪一個是任意的**,
+                // 而那是靜默的:結果照樣算得出來,只是取錯了語言。
+                if donors.iter().any(|donor| donor.alias == alias) {
+                    return Err(ReplayError::Parse(format!(
+                        "duplicate donor alias {alias:?}"
+                    )));
+                }
+                donors.push(DonorRef {
+                    alias: alias.to_owned(),
+                    node: node.to_owned(),
                 });
             } else if let Some(value) = line
                 // `#N:` 為 canonical;`statement N:` 為舊形,仍接受(dump 排新形,
@@ -2427,6 +2475,7 @@ impl UnresolvedChangeSet {
             base_identities: base_identities
                 .ok_or_else(|| ReplayError::Parse("missing base_identities".to_owned()))?,
             libraries,
+            donors,
             statements,
         })
     }
@@ -2475,6 +2524,7 @@ impl UnresolvedChangeSet {
             base_source: self.base_source.clone(),
             base_identities: self.base_identities.clone(),
             libraries: self.libraries.clone(),
+            donors: self.donors.clone(),
             statements: resolved,
         })
     }
@@ -3183,6 +3233,9 @@ impl ResolvedChangeSet {
                 "    library {}@{} sha256:{}\n",
                 lock.package, lock.version, lock.digest
             ));
+        }
+        for donor in &self.donors {
+            output.push_str(&format!("    donor {} {}\n", donor.alias, donor.node));
         }
         for statement in &self.statements {
             output.push_str(&format!("\n    #{}:\n", statement.ordinal));
