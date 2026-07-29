@@ -7,7 +7,9 @@
 //! 2. **衝突不被默默吞掉**——內容分歧、刪改衝突、id 碰撞、命名碰撞各有其類。
 //! 3. **空基準**(無共同祖先)退化成聯集,且與有基準走**同一段程式**。
 
-use conlang_changeset::merge::{plan_merge, MergeBlock, MergeConflict, MergeError};
+use conlang_changeset::merge::{
+    plan_merge, MergeBlock, MergeCollection, MergeConflict, MergeError, MergeKey,
+};
 use conlang_changeset::{change_set_prelude, ChangeInterpreter, UnresolvedChangeSet};
 use conlang_language::{LanguageDocument, LibrarySpec, NodeId};
 
@@ -74,7 +76,10 @@ fn resolved_category(
     sides: &[&LanguageDocument],
     id: &NodeId,
 ) -> Option<String> {
-    let pick = plan.signs.iter().find(|pick| &pick.id == id)?;
+    let pick = plan
+        .signs
+        .iter()
+        .find(|pick| pick.key == MergeKey::Node(id.clone()))?;
     match pick.from {
         Some(index) => category_of(sides[index], id),
         None => category_of(base, id),
@@ -115,7 +120,11 @@ fn a_sign_untouched_by_everyone_keeps_the_base_value() {
     let y = id_of(&base, "y");
 
     let plan = plan_merge(Some(&base), &[&a, &b]).expect("plan");
-    let pick = plan.signs.iter().find(|p| p.id == y).expect("y 在計畫裡");
+    let pick = plan
+        .signs
+        .iter()
+        .find(|p| p.key == MergeKey::Node(y.clone()))
+        .expect("y 在計畫裡");
     assert_eq!(pick.from, None, "沒人動過 → 沿用基準,不必歸給任何一方");
 }
 
@@ -144,14 +153,18 @@ fn both_sides_changing_differently_conflicts() {
     let plan = plan_merge(Some(&base), &[&a, &b]).expect("plan");
     assert!(
         plan.conflicts.contains(&MergeConflict::Content {
-            id: x.clone(),
+            collection: MergeCollection::Signs,
+            key: MergeKey::Node(x.clone()),
             sides: vec![0, 1],
         }),
         "{:?}",
         plan.conflicts
     );
     assert!(
-        !plan.signs.iter().any(|pick| pick.id == x),
+        !plan
+            .signs
+            .iter()
+            .any(|pick| pick.key == MergeKey::Node(x.clone())),
         "衝突的 sign 不得偷偷進計畫"
     );
 }
@@ -174,7 +187,7 @@ fn an_addition_on_one_side_is_taken() {
     assert!(
         plan.signs
             .iter()
-            .any(|pick| pick.id == z && pick.from == Some(0)),
+            .any(|pick| pick.key == MergeKey::Node(z.clone()) && pick.from == Some(0)),
         "新增的 z 必須從 A 取"
     );
 }
@@ -189,7 +202,10 @@ fn a_deletion_on_one_side_is_taken() {
     let plan = plan_merge(Some(&base), &[&a, &b]).expect("plan");
     assert!(plan.is_clean(), "{:?}", plan.conflicts);
     assert!(
-        !plan.signs.iter().any(|pick| pick.id == y),
+        !plan
+            .signs
+            .iter()
+            .any(|pick| pick.key == MergeKey::Node(y.clone())),
         "A 刪了、B 沒動 → 採用刪除"
     );
 }
@@ -205,7 +221,8 @@ fn delete_versus_modify_conflicts() {
     let plan = plan_merge(Some(&base), &[&a, &b]).expect("plan");
     assert!(
         plan.conflicts.contains(&MergeConflict::DeleteModify {
-            id: y,
+            collection: MergeCollection::Signs,
+            key: MergeKey::Node(y),
             deleted_by: vec![0],
             modified_by: vec![1],
         }),
@@ -368,4 +385,148 @@ fn the_plan_is_deterministic() {
     let first = plan_merge(Some(&base), &[&a, &b]).unwrap();
     let second = plan_merge(Some(&base), &[&a, &b]).unwrap();
     assert_eq!(first, second);
+}
+
+// ── 逐項合併也套用在 traits 與 distribution(§6.2 修訂)────────────────────
+
+const WITH_TRAITS: &str = "trait LocalNoun:\n\ntrait LocalVerb:\n\n\
+                           sign x:\n    syn:\n        category = noun\n";
+
+fn traited_root() -> LanguageDocument {
+    LanguageDocument::import_new_root(WITH_TRAITS, "evo:root").expect("root parses")
+}
+
+fn trait_key(document: &LanguageDocument, name: &str) -> MergeKey {
+    MergeKey::Node(document.ref_for_trait(name).expect("trait exists").id)
+}
+
+#[test]
+fn two_branches_adding_different_traits_merge_cleanly() {
+    // **這就是「甲」要修的事**。整塊比對之下,兩支都動過文法 ⇒ traits 清單都跟祖先
+    // 不同 ⇒ 整塊衝突。逐項比對之下,兩支加的是**不同的 trait**,互不相干。
+    //
+    // 而「兩支都碰過文法」在演化裡幾乎是必然,所以整塊比對等於每次合併都要人工。
+    let base = traited_root();
+    let a = apply(
+        &base,
+        "evo:a",
+        "\n    #0:\n        insert into language at end:\n            trait LocalAnimate:\n",
+    );
+    let b = apply(
+        &base,
+        "evo:b",
+        "\n    #0:\n        insert into language at end:\n            trait LocalTelic:\n",
+    );
+
+    let plan = plan_merge(Some(&base), &[&a, &b]).expect("plan");
+    assert!(
+        plan.is_clean(),
+        "各加各的 trait,不該衝突:{:?}",
+        plan.conflicts
+    );
+    assert!(
+        plan.traits
+            .iter()
+            .any(|p| p.key == trait_key(&a, "LocalAnimate")),
+        "A 新增的 trait 要在計畫裡"
+    );
+    assert!(
+        plan.traits
+            .iter()
+            .any(|p| p.key == trait_key(&b, "LocalTelic")),
+        "B 新增的 trait 要在計畫裡"
+    );
+    // 沒人動過的 trait 沿用基準。
+    assert!(plan
+        .traits
+        .iter()
+        .any(|p| p.key == trait_key(&base, "LocalNoun") && p.from.is_none()));
+}
+
+#[test]
+fn a_trait_deleted_by_one_side_is_taken() {
+    let base = traited_root();
+    let a = apply(
+        &base,
+        "evo:a",
+        "\n    #0:\n        delete trait(\"LocalVerb\")\n",
+    );
+    let b = apply(
+        &base,
+        "evo:b",
+        "\n    #0:\n        insert into language at end:\n            trait LocalTelic:\n",
+    );
+    let verb = trait_key(&base, "LocalVerb");
+
+    let plan = plan_merge(Some(&base), &[&a, &b]).expect("plan");
+    assert!(plan.is_clean(), "{:?}", plan.conflicts);
+    assert!(
+        !plan.traits.iter().any(|p| p.key == verb),
+        "A 刪了、B 沒動 → 採用刪除"
+    );
+}
+
+#[test]
+fn traits_sharing_a_name_across_unrelated_roots_collide() {
+    // 「兩邊的 Noun 是同一個範疇嗎」——id 已經回答了:不同 id ⇒ 兩個不同的範疇
+    // 剛好撞名 ⇒ 命名碰撞,與 sign 的處理一模一樣,不是語言學判斷。
+    let left = LanguageDocument::import_new_root("trait LocalNoun:\n", "evo:l").unwrap();
+    let right = LanguageDocument::import_new_root("trait LocalNoun:\n", "evo:r").unwrap();
+    assert_ne!(
+        trait_key(&left, "LocalNoun"),
+        trait_key(&right, "LocalNoun")
+    );
+
+    let plan = plan_merge(None, &[&left, &right]).expect("plan");
+    assert!(
+        plan.conflicts.iter().any(|conflict| matches!(
+            conflict,
+            MergeConflict::NameCollision {
+                collection: MergeCollection::Traits,
+                name,
+                ..
+            } if name == "LocalNoun"
+        )),
+        "{:?}",
+        plan.conflicts
+    );
+}
+
+#[test]
+fn a_conflict_is_labelled_with_the_collection_it_came_from() {
+    // 衝突要說得出是**哪個區段**——否則 trait 衝突與 sign 衝突在回報上分不開。
+    //
+    // **判別性**:這裡刻意用 trait 層的 `IdCollision`。若只驗 sign 的衝突,
+    // 「區段標籤寫死成 Signs」這種改壞法**測不出來**(問過了:它會全綠)。
+    let left = LanguageDocument::import_new_root("trait LocalAlpha:\n", "evo:same").unwrap();
+    let right = LanguageDocument::import_new_root("trait LocalBeta:\n", "evo:same").unwrap();
+    assert_eq!(
+        trait_key(&left, "LocalAlpha"),
+        trait_key(&right, "LocalBeta"),
+        "前提:同 namespace 下兩個 trait 的 id 確實撞了"
+    );
+
+    let plan = plan_merge(None, &[&left, &right]).expect("plan");
+    assert!(
+        plan.conflicts.iter().any(|c| matches!(
+            c,
+            MergeConflict::IdCollision {
+                collection: MergeCollection::Traits,
+                ..
+            }
+        )),
+        "必須標成 Traits:{:?}",
+        plan.conflicts
+    );
+    assert!(
+        !plan.conflicts.iter().any(|c| matches!(
+            c,
+            MergeConflict::IdCollision {
+                collection: MergeCollection::Signs,
+                ..
+            }
+        )),
+        "不得誤標成 Signs:{:?}",
+        plan.conflicts
+    );
 }
