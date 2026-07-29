@@ -440,15 +440,17 @@ fn a_reference_edge_carrying_a_changeset_is_rejected() {
 
 #[test]
 fn a_multi_parent_node_records_its_reference_edges() {
-    // 多親可宣告且 fsck 成立;但**求值仍只沿主幹**——全 parent 機械合併是 P61,
-    // 尚未實作。此測試釘住「現況是什麼」,避免把未實作誤讀為已實作。
     let mut graph = graph();
     let (n1, n2) = chain(&mut graph);
-    let n2_doc = graph.snapshot(&n2).unwrap().clone();
+    // **base 是合併結果,不是 parents[0] 的 snapshot**(§6.4)——changeset 的 digest
+    // 綁的是它,故必須先算出來才寫得出這份 `.chg`。
+    let base = graph
+        .merged_base(&[n2.clone(), n1.clone()])
+        .expect("合併 base");
     let creole = graph
         .commit(
             vec![
-                Edge::trunk(n2, set_category(&n2_doc, "evo:c", "particle")),
+                Edge::trunk(n2, set_category(&base, "evo:c", "particle")),
                 Edge::reference(n1),
             ],
             Nativization::Creole { generation: 1 },
@@ -458,12 +460,105 @@ fn a_multi_parent_node_records_its_reference_edges() {
     let node = graph.node(&creole).unwrap();
     assert_eq!(node.parents().len(), 2);
     assert!(node.parents()[1].changeset.is_none());
-    assert_eq!(
-        category_of(node.snapshot()).as_deref(),
-        Some("particle"),
-        "P61 未落地:引用邊不影響求值"
-    );
+    assert_eq!(category_of(node.snapshot()).as_deref(), Some("particle"));
     graph.verify_all().unwrap();
+}
+
+#[test]
+fn a_multi_parent_node_inherits_from_every_parent() {
+    // **⑤c 的核心**。v0.1 只用 `parents[0]`,故引用邊完全不影響求值(語意空轉)。
+    // 現在 base 是全 parent 的機械合併:左支改 x、右支改 y,融合節點**兩者都要有**。
+    // 只斷言「節點建得起來」證明不了這件事——`parents[0]` 佔位一樣建得起來。
+    let mut graph = graph();
+    let root_id = only_root(&graph);
+    let root_doc = graph.snapshot(&root_id).unwrap().clone();
+    let left = graph
+        .commit(
+            vec![Edge::trunk(
+                root_id.clone(),
+                changeset_for(
+                    &root_doc,
+                    "evo:l",
+                    "\n    #0:\n        update sign(\"x\").def[syn.category].value = adj\n",
+                ),
+            )],
+            Nativization::None,
+            None,
+        )
+        .unwrap();
+    let right = graph
+        .commit(
+            vec![Edge::trunk(
+                root_id,
+                changeset_for(
+                    &root_doc,
+                    "evo:r",
+                    "\n    #0:\n        update sign(\"y\").def[syn.category].value = aux\n",
+                ),
+            )],
+            Nativization::None,
+            None,
+        )
+        .unwrap();
+
+    let base = graph
+        .merged_base(&[left.clone(), right.clone()])
+        .expect("合併 base");
+    let source = base.source();
+    assert!(source.contains("category = adj"), "左支的改動要在:{source}");
+    assert!(
+        source.contains("category = aux"),
+        "右支的改動也要在:{source}"
+    );
+
+    let fused = graph
+        .commit(
+            vec![
+                Edge::trunk(left, changeset_for(&base, "evo:f", "")),
+                Edge::reference(right),
+            ],
+            Nativization::Creole { generation: 1 },
+            None,
+        )
+        .expect("融合節點");
+    let fused_source = graph.snapshot(&fused).unwrap().source();
+    assert!(fused_source.contains("category = adj"), "{fused_source}");
+    assert!(fused_source.contains("category = aux"), "{fused_source}");
+    graph.verify_all().expect("fsck 也必須用合併 base 重放");
+}
+
+#[test]
+fn a_conflicting_merge_blocks_the_commit() {
+    // §6.4:有衝突就建不出節點,不存在「先建起來之後再解」的中間狀態。
+    let mut graph = graph();
+    let root_id = only_root(&graph);
+    let root_doc = graph.snapshot(&root_id).unwrap().clone();
+    let left = graph
+        .commit(
+            vec![Edge::trunk(
+                root_id.clone(),
+                set_category(&root_doc, "evo:l", "adj"),
+            )],
+            Nativization::None,
+            None,
+        )
+        .unwrap();
+    let right = graph
+        .commit(
+            vec![Edge::trunk(
+                root_id,
+                set_category(&root_doc, "evo:r", "aux"),
+            )],
+            Nativization::None,
+            None,
+        )
+        .unwrap();
+
+    // 兩支把**同一個** sign 改成不同的值 → 內容衝突。
+    let err = graph
+        .merged_base(&[left, right])
+        .expect_err("有衝突就算不出 base");
+    assert!(format!("{err}").contains("UNRESOLVED_CONFLICTS"), "{err}");
 }
 
 #[test]
@@ -834,7 +929,9 @@ fn rebasing_an_unknown_node_is_an_error_not_an_outcome() {
 /// 唯一輸入來源;單 root 之下造不出來。
 fn second_root() -> LanguageDocument {
     LanguageDocument::import_new_root(
-        "Symbol p\n\nsign wolof:\n    syn:\n        category = noun\n",
+        // 音韻宣告刻意與 `root()` 一致:`dsl_decls` 無對齊鍵,只能整塊比,
+        // 不一致就必然衝突(§6.2)——那會讓「無關 root 的融合」連節點都建不出來。
+        "Symbol a\nSymbol b\nSymbol k\n\nsign wolof:\n    syn:\n        category = noun\n",
         "evo:wolof",
     )
     .expect("second root parses")
@@ -1030,12 +1127,15 @@ fn several_lowest_common_ancestors_are_reported_not_guessed() {
     let mut graph = EvolutionGraph::new(LibrarySpec::default());
     let a_root = graph.add_root(root()).unwrap();
     let b_root = graph.add_root(second_root()).unwrap();
-    let a_doc = graph.snapshot(&a_root).unwrap().clone();
+    // 兩個融合節點的 base 都是「a_root + b_root 的合併」,故 changeset 寫在它上面。
+    let fused = graph
+        .merged_base(&[a_root.clone(), b_root.clone()])
+        .expect("兩個 root 的合併是乾淨的");
 
     let merge_one = graph
         .commit(
             vec![
-                Edge::trunk(a_root.clone(), set_category(&a_doc, "evo:m1", "verb")),
+                Edge::trunk(a_root.clone(), set_category(&fused, "evo:m1", "verb")),
                 Edge::reference(b_root.clone()),
             ],
             Nativization::None,
@@ -1045,7 +1145,7 @@ fn several_lowest_common_ancestors_are_reported_not_guessed() {
     let merge_two = graph
         .commit(
             vec![
-                Edge::trunk(a_root, set_category(&a_doc, "evo:m2", "adj")),
+                Edge::trunk(a_root, set_category(&fused, "evo:m2", "adj")),
                 Edge::reference(b_root),
             ],
             Nativization::None,

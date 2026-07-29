@@ -34,7 +34,7 @@
 //! - **重複提交是冪等的**:內容全同 ⇒ 同一個 id ⇒ 同一個物件(git 語意)。
 //!   故前一版的 `Duplicate` 錯誤消失。
 
-use crate::merge::{plan_merge, MergeError, MergePlan};
+use crate::merge::{materialize, plan_merge, MergeError, MergePlan};
 use crate::{
     identity_manifest_digest, ChangeInterpreter, LanguageDocument, ReplayError, UnresolvedChangeSet,
 };
@@ -326,7 +326,7 @@ impl EvolutionGraph {
             .changeset
             .clone()
             .ok_or(EvolutionError::TrunkWithoutChangeset)?;
-        let base = self.snapshot(&trunk.from)?.clone();
+        let base = self.merged_base(&parent_ids(&parents))?;
         let snapshot = self.replay(&base, &changeset)?;
         let id = node_id(&snapshot, &parents, nativization);
         self.nodes.entry(id.clone()).or_insert(Node {
@@ -362,7 +362,9 @@ impl EvolutionGraph {
             .changeset
             .as_deref()
             .ok_or(EvolutionError::TrunkWithoutChangeset)?;
-        let base = self.snapshot(&trunk.from)?.clone();
+        // **必須與 `commit` 走同一條路**:多親節點的 base 是合併結果而非
+        // `parents[0]` 的 snapshot,拿錯 base 重放會讓合法節點驗不過。
+        let base = self.merged_base(&parent_ids(&node.parents))?;
         let replayed = self.replay(&base, changeset)?;
         if replayed.source() != node.snapshot.source() {
             return Err(EvolutionError::SnapshotMismatch(id.clone()));
@@ -428,16 +430,44 @@ impl EvolutionGraph {
     }
 
     /// 算出多親合併的計畫(P61 §6)。`conflicts` 非空時**不得建節點**(§6.4)。
-    ///
-    /// 只算不做:物化成 `LanguageDocument` 需要 `language` 側新的建構 API,屬 ⑤b。
     pub fn merge_plan(&self, parents: &[NodeId]) -> Result<MergePlan, EvolutionError> {
         let base = self.merge_base(parents)?;
         let base_snapshot = base.as_ref().map(|id| self.snapshot(id)).transpose()?;
-        let sides = parents
-            .iter()
-            .map(|id| self.snapshot(id))
-            .collect::<Result<Vec<_>, _>>()?;
+        let sides = self.snapshots(parents)?;
         Ok(plan_merge(base_snapshot, &sides)?)
+    }
+
+    /// **一個節點的 changeset 該疊在什麼之上**(P61 §6.4)。
+    ///
+    /// - 單親:就是該 parent 的 snapshot(含借詞——借詞是單親的,§6.8);
+    /// - 多親:**全 parent 機械合併的結果**,取代 v0.1 的 `parents[0]` 佔位。
+    ///
+    /// 呼叫端寫 `.chg` 時必須以此為 base(prelude 的 digest 綁的是它)。本函式是純的、
+    /// 決定性的,故 `commit` 內部重算一次會得到逐位元相同的結果。
+    ///
+    /// 合併 base 的命名空間 = **各 parent 的命名空間以 `-` 連接**(§6.7)。由 parent
+    /// 導出而非由 changeset 指定:它描述的是這個 base **本身是什麼**,與 changeset
+    /// 叫什麼無關。(沿用 `.chg` 命名空間的作法已否決——`fork` 拒絕重複的配號器
+    /// 命名空間,會在跑 changeset 時當場撞上。)
+    pub fn merged_base(&self, parents: &[NodeId]) -> Result<LanguageDocument, EvolutionError> {
+        if parents.len() < 2 {
+            let only = parents.first().ok_or(EvolutionError::NoParent)?;
+            return Ok(self.snapshot(only)?.clone());
+        }
+        let base = self.merge_base(parents)?;
+        let base_snapshot = base.as_ref().map(|id| self.snapshot(id)).transpose()?;
+        let sides = self.snapshots(parents)?;
+        let plan = plan_merge(base_snapshot, &sides)?;
+        let namespace = sides
+            .iter()
+            .map(|document| document.identities().active_namespace.as_str())
+            .collect::<Vec<_>>()
+            .join("-");
+        Ok(materialize(&plan, base_snapshot, &sides, &namespace)?)
+    }
+
+    fn snapshots(&self, ids: &[NodeId]) -> Result<Vec<&LanguageDocument>, EvolutionError> {
+        ids.iter().map(|id| self.snapshot(id)).collect()
     }
 
     /// 對全圖跑 fsck。
@@ -594,6 +624,10 @@ fn rebase_prelude(changeset: &str, base: &LanguageDocument) -> Result<String, Ev
         return Err(EvolutionError::PreludeWithoutDigests);
     }
     Ok(output)
+}
+
+fn parent_ids(parents: &[Edge]) -> Vec<NodeId> {
+    parents.iter().map(|edge| edge.from.clone()).collect()
 }
 
 /// **P58 內容定址**:`sha256(snapshot ‖ parents ‖ nativization)`。
