@@ -114,9 +114,10 @@ fn clone_of_an_unknown_sign_is_rejected() {
     source.push_str("\n    statement 0:\n        clone sign(\"wolf\") as lupus\n");
 
     let unresolved = UnresolvedChangeSet::parse(&source).unwrap();
+    // selector 層的失敗也要說得出**是哪一句**(《修補11》§3.3)——rebase 靠它定位衝突。
     assert!(matches!(
         unresolved.resolve(&base, &spec),
-        Err(ReplayError::Selector(_))
+        Err(ReplayError::StatementSelector { ordinal: 0, .. })
     ));
     assert!(base.ref_for_sign("wolf").is_none());
 }

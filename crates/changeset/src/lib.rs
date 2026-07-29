@@ -1959,6 +1959,17 @@ pub enum ReplayError {
     NamespaceMismatch(String),
     #[error("CHANGESET_SELECTOR: {0}")]
     Selector(String),
+    /// 語句**內**的 selector 解析失敗:與 `Statement` 對稱地帶上句號。
+    ///
+    /// 獨立變體而非把 ordinal 加進 `Selector(String)`:後者有約 20 處建構點,
+    /// 且那些地方都不知道自己屬於哪一句;句號只有 `UnresolvedChangeSet::resolve`
+    /// 的語句迴圈知道,故在該處單點包裝(《修補11》§3.3)。
+    ///
+    /// **為什麼需要它**:rebase 最常見的衝突就是「目標在新 base 上不存在」,而依
+    /// 名字定址找不到目標時錯誤發生在 selector 層、不在 `Statement` 層——沒有這個
+    /// 變體,最重要的那類衝突反而說不出是哪一句。
+    #[error("CHANGESET_STATEMENT_{ordinal}_SELECTOR: {message}")]
+    StatementSelector { ordinal: u64, message: String },
     #[error("CHANGESET_STATEMENT_{ordinal}: {source}")]
     Statement {
         ordinal: u64,
@@ -2436,7 +2447,18 @@ impl UnresolvedChangeSet {
         for statement in &self.statements {
             let mut edits = Vec::new();
             for operation in &statement.operations {
-                edits.extend(resolve_operation(operation, &working)?);
+                // 語句歸屬**只有這裡知道**——`resolve_operation` 底下約 20 處建構
+                // `Selector` 的地方都拿不到 ordinal。故在此單點補上句號,而不是把
+                // ordinal 灌進每個建構點(《修補11》§3.3)。
+                let operation_edits =
+                    resolve_operation(operation, &working).map_err(|error| match error {
+                        ReplayError::Selector(message) => ReplayError::StatementSelector {
+                            ordinal: statement.ordinal,
+                            message,
+                        },
+                        other => other,
+                    })?;
+                edits.extend(operation_edits);
             }
             let (candidate, _) =
                 apply_statement_structural(&working, statement.ordinal, &edits, libraries)?;

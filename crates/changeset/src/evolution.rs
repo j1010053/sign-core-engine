@@ -1,30 +1,56 @@
-//! 步驟 16 ①② —— **演化圖節點 + memoize replay**(docs/06 §1、§5)。
+//! 步驟 16 ④ —— **演化圖節點模型**(《修補11》P56/P58/P59;docs/06 §1–§5)。
 //!
-//! 演化圖 = 有向圖,拓撲**預設為樹(單親)**,允許多親(融合)。節點**只在四種情形
-//! 結晶**(分叉/接觸/融合/使用者釘選),其餘語言狀態不持久化——
-//! **狀態永遠是 ChangeSet 的函數**(docs/06 §5,單一資訊源)。
+//! ## 節點 = 結果,邊 = 過程(P56)
 //!
-//! ## 為什麼要 memoize
+//! 前一版把 changeset 存在節點上、狀態靠 replay 現算,並以 `cache` + `stale` 傳播
+//! 加速。該模型有結構性缺陷(《修補11》§0):`.chg` 的 digest 釘死 base,所以「改了
+//! 祖先」與「後代仍可求值」**互斥**——stale 傳播標記完後代,後代必然因 digest 不符
+//! 而失敗。兩個機制互相打架,不是實作 bug。
 //!
-//! 即時 replay 下,看第 N 代語言得從 root 一路重跑所有祖先的 changeset;而演化會讓
-//! 文件變大,**跑最多次的深節點也正好每筆最貴**。實測 @1000 signs 約 26 ms/編輯,
-//! 一棵中等的樹就是分鐘級。docs/06 §5 早已把 memoize 列為【M+】並指明
-//! 「與 lazy reparse 同構,實作思路復用」——本模組即照 `ChangeSession` 的
-//! `dirty` + `Option<cached>` + 計數器樣板實作。
+//! 現模型:
 //!
-//! ## 節點的 changeset 存**原文**不存解析結果
+//! - **`Node` 持 snapshot**(物化狀態),**`Edge` 持 changeset**(`.chg` 原文);
+//! - **兩者皆不可變**。改 changeset 不是就地改邊,而是**生成新邊 + 新節點**;
+//! - 因果不變:snapshot **永遠**由 `apply(parent.snapshot, edge.changeset)` 產生,
+//!   **不可手動編寫**。故 docs/06 §5「不存副本(單一資訊源)」的**精神保留**——
+//!   誰決定內容仍是 changeset,改的只是「果要不要留下來」。
 //!
-//! `.chg` 的 prelude 釘著 `base_source`/`base_identities` 三道 digest,而 base 是
-//! **parent 的求值結果**——所以必須在 replay 當下、拿到 parent 文件後才能 resolve。
-//! 存原文也讓「改一個節點的 changeset」成為單純的字串替換。
+//! 不可變性使「副本與真相不同步」**不可能發生**(兩者都不會在腳下改變),且不變式
+//! `apply(trunk.from.snapshot, trunk.changeset) == snapshot` **隨時可查**
+//! (`verify`,git `fsck` 的對應物)。故物化不是失去單一資訊源,是把果快取成一等資料。
+//!
+//! **紅利**:讀節點狀態是 **O(1)**(`snapshot()`),不必 replay 祖先鏈;replay 只在
+//! **建立**節點時發生一次。先前量到的「replay 一棵樹會放大成本」對讀取直接消失,
+//! 連帶 `cache`/`replay_count`/`invalidate` 三個機制一起不需要了。
+//!
+//! ## 內容定址(P58)
+//!
+//! `NodeId = sha256(snapshot ‖ parents ‖ nativization)`,同構 git commit hash,
+//! 滿足 P26(決定性、禁隨機/時間戳)。兩個推論:
+//!
+//! - **無環是結構保證,不是檢查**:節點 id 由其 parents 的 id 算出,故「成環」需要
+//!   一個雜湊包含自己——不可能。前一版的 `check_acyclic` 因此整個移除,
+//!   而非改寫(docs/06 §2 的無環約束由型別而非執行期斷言達成)。
+//! - **重複提交是冪等的**:內容全同 ⇒ 同一個 id ⇒ 同一個物件(git 語意)。
+//!   故前一版的 `Duplicate` 錯誤消失。
 
-use crate::{ChangeInterpreter, LanguageDocument, ReplayError, UnresolvedChangeSet};
-use conlang_language::LibrarySpec;
-use std::collections::{BTreeMap, BTreeSet};
+use crate::{
+    identity_manifest_digest, ChangeInterpreter, LanguageDocument, ReplayError, UnresolvedChangeSet,
+};
+use conlang_language::{sha256_hex, LibrarySpec};
+use std::collections::BTreeMap;
 
-/// 節點識別(使用者可讀且穩定;非 P26 的序列 id——那是 Language 內部節點用的)。
+/// 節點識別 = **內容雜湊**(P58)。
+///
+/// 欄位私有:id **只能由內容算出**,不能自取——這正是「身分含出身」與無環保證的來源。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct NodeId(pub String);
+pub struct NodeId(String);
+
+impl NodeId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 impl std::fmt::Display for NodeId {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -32,61 +58,156 @@ impl std::fmt::Display for NodeId {
     }
 }
 
-/// 演化圖的一個節點(docs/06 §1)。
+/// pidgin/creole 判定(docs/06 §4)。**社會語言學的分界(有無母語者),不由入邊決定**,
+/// 故是節點的獨立屬性。一般造語手動填【M】;multi-agent 的湧現偵測屬【M+】。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Nativization {
+    #[default]
+    None,
+    /// 接觸簡化系統,無母語者。
+    Pidgin,
+    /// pidgin 被某代當母語習得,獲完整語法。
+    Creole { generation: u32 },
+}
+
+impl Nativization {
+    /// 進入 NodeId 雜湊的正規形(P58 決定性)。
+    fn canonical(self) -> String {
+        match self {
+            Nativization::None => "none".to_owned(),
+            Nativization::Pidgin => "pidgin".to_owned(),
+            Nativization::Creole { generation } => format!("creole:{generation}"),
+        }
+    }
+}
+
+/// 演化樹的**邊**(P56):不可變,承載「過程」。
+///
+/// `changeset` **只有主幹邊(`parents[0]`)帶**;其餘 parent 是**引用邊**
+/// (docs/06 §5「其餘 parent 僅供條目引用取材」),必須為 `None`。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LanguageNode {
-    /// 預設長度 1;**多親是融合(克里奧爾),非特例結構**。空 = 直接掛在 root。
-    pub parents: Vec<NodeId>,
-    /// 相對 parent(們)的 `.chg` **原文**(見模組說明)。
-    pub changeset: String,
-    /// 使用者釘選/命名(結晶四情形之一)。
-    pub pin: Option<String>,
+pub struct Edge {
+    pub from: NodeId,
+    pub changeset: Option<String>,
+}
+
+impl Edge {
+    /// 主幹邊:帶 `.chg` 原文。
+    pub fn trunk(from: NodeId, changeset: impl Into<String>) -> Edge {
+        Edge {
+            from,
+            changeset: Some(changeset.into()),
+        }
+    }
+
+    /// 引用邊:融合時的非主幹 parent。
+    pub fn reference(from: NodeId) -> Edge {
+        Edge {
+            from,
+            changeset: None,
+        }
+    }
+}
+
+/// 演化圖的一個節點(P56):**不可變**。
+///
+/// 欄位私有:`snapshot` 尤其不可被外部寫入——它永遠是 replay 的結果,手動編寫會
+/// 破壞 §2.2 的因果契約。
+#[derive(Debug, Clone)]
+pub struct Node {
+    parents: Vec<Edge>,
+    snapshot: LanguageDocument,
+    nativization: Nativization,
+    label: Option<String>,
+}
+
+impl Node {
+    /// 入邊;主幹在 `[0]`。root 為空。
+    pub fn parents(&self) -> &[Edge] {
+        &self.parents
+    }
+
+    /// 物化的語言狀態。
+    pub fn snapshot(&self) -> &LanguageDocument {
+        &self.snapshot
+    }
+
+    pub fn nativization(&self) -> Nativization {
+        self.nativization
+    }
+
+    /// 人類可讀名字。**不是身分**(P58/P45):不進雜湊。
+    pub fn label(&self) -> Option<&str> {
+        self.label.as_deref()
+    }
+
+    /// 主幹邊(root 沒有)。
+    pub fn trunk(&self) -> Option<&Edge> {
+        self.parents.first()
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum EvolutionError {
     #[error("EVOLUTION_UNKNOWN_NODE: {0}")]
     UnknownNode(NodeId),
-    /// 引用圖必須無環(docs/06 §2 v0.1.1 無環約束)。
-    #[error("EVOLUTION_CYCLE: {0} takes part in a parent cycle")]
-    Cycle(NodeId),
-    #[error("EVOLUTION_DUPLICATE: {0} already exists")]
-    Duplicate(NodeId),
+    /// root 由 `EvolutionGraph::new` 建立;其餘節點必須有 parent。
+    #[error("EVOLUTION_NO_PARENT: a committed node needs at least one parent")]
+    NoParent,
+    /// 主幹邊必須帶 changeset——否則 snapshot 無從產生(P56 因果契約)。
+    #[error("EVOLUTION_TRUNK_WITHOUT_CHANGESET: parents[0] must carry a changeset")]
+    TrunkWithoutChangeset,
+    /// 引用邊不得帶 changeset(P56:只有主幹邊帶)。
+    #[error("EVOLUTION_REFERENCE_EDGE_WITH_CHANGESET: only parents[0] may carry a changeset")]
+    ReferenceEdgeWithChangeset,
+    /// fsck:節點 id 不等於其內容雜湊(P58)。
+    #[error("EVOLUTION_CORRUPT_ID: {stored} stores content hashing to {computed}")]
+    CorruptId { stored: NodeId, computed: NodeId },
+    /// fsck:snapshot ≠ replay(parent.snapshot, edge.changeset)(P56 §2.2 不變式)。
+    #[error("EVOLUTION_SNAPSHOT_MISMATCH: {0} snapshot is not the replay of its trunk edge")]
+    SnapshotMismatch(NodeId),
+    /// rebase 找不到可重寫的 base digest 行——邊上的 `.chg` 不合格式。
+    #[error("EVOLUTION_PRELUDE_WITHOUT_DIGESTS: the edge changeset has no base digest lines")]
+    PreludeWithoutDigests,
     #[error(transparent)]
     Replay(#[from] ReplayError),
 }
 
-/// 演化圖 + **memoize 的 replay**。
+/// 演化圖(P56):節點物化、邊承載 changeset,**全部不可變**。
 ///
-/// 快取語意(docs/06 §5【M+】):快取節點求值結果;**parent 變動時沿依賴邊標 stale**。
-/// `replay_count` 用來佐證快取真的生效(比照 `ChangeSession::compile_count`)——
-/// 沒有它,「有沒有快取」在測試裡看不出來。
+/// 沒有 `cache`/`replay_count`/`invalidate`——snapshot 已是結果,快取層無事可做;
+/// 也沒有 `check_acyclic`——內容定址使成環在型別上不可能(見模組說明)。
 #[derive(Debug)]
 pub struct EvolutionGraph {
-    root: LanguageDocument,
     libraries: LibrarySpec,
-    nodes: BTreeMap<NodeId, LanguageNode>,
-    cache: BTreeMap<NodeId, LanguageDocument>,
-    replay_count: u64,
+    nodes: BTreeMap<NodeId, Node>,
+    root: NodeId,
 }
 
 impl EvolutionGraph {
-    /// root 是圖的起點語言;它自己沒有 changeset。
+    /// root 是圖的起點語言:唯一沒有入邊的節點,其 snapshot 直接就是給定的文件。
     pub fn new(root: LanguageDocument, libraries: LibrarySpec) -> EvolutionGraph {
+        let id = node_id(&root, &[], Nativization::None);
+        let node = Node {
+            parents: Vec::new(),
+            snapshot: root,
+            nativization: Nativization::None,
+            label: None,
+        };
+        let mut nodes = BTreeMap::new();
+        nodes.insert(id.clone(), node);
         EvolutionGraph {
-            root,
             libraries,
-            nodes: BTreeMap::new(),
-            cache: BTreeMap::new(),
-            replay_count: 0,
+            nodes,
+            root: id,
         }
     }
 
-    pub fn root(&self) -> &LanguageDocument {
+    pub fn root(&self) -> &NodeId {
         &self.root
     }
 
-    pub fn node(&self, id: &NodeId) -> Option<&LanguageNode> {
+    pub fn node(&self, id: &NodeId) -> Option<&Node> {
         self.nodes.get(id)
     }
 
@@ -94,127 +215,148 @@ impl EvolutionGraph {
         self.nodes.keys()
     }
 
-    /// **實際跑過幾次 replay**(不含快取命中)。測試用來證明 memoize 生效。
-    pub fn replay_count(&self) -> u64 {
-        self.replay_count
+    pub fn len(&self) -> usize {
+        self.nodes.len()
     }
 
-    pub fn is_cached(&self, id: &NodeId) -> bool {
-        self.cache.contains_key(id)
+    pub fn is_empty(&self) -> bool {
+        // root 永遠在,故恆為 false;留著讓 clippy 的 `len_without_is_empty` 滿意,
+        // 且日後若允許空圖語意不必改介面。
+        self.nodes.is_empty()
     }
 
-    /// 加一個節點。parent 必須已存在,且不得成環。
-    pub fn insert(&mut self, id: NodeId, node: LanguageNode) -> Result<(), EvolutionError> {
-        if self.nodes.contains_key(&id) {
-            return Err(EvolutionError::Duplicate(id));
-        }
-        for parent in &node.parents {
-            if !self.nodes.contains_key(parent) {
-                return Err(EvolutionError::UnknownNode(parent.clone()));
+    /// 讀一個節點的語言狀態:**O(1)**(P56 紅利)——snapshot 已物化,不 replay。
+    pub fn snapshot(&self, id: &NodeId) -> Result<&LanguageDocument, EvolutionError> {
+        self.nodes
+            .get(id)
+            .map(Node::snapshot)
+            .ok_or_else(|| EvolutionError::UnknownNode(id.clone()))
+    }
+
+    /// 建一個節點:套用主幹邊的 changeset 於其來源節點的 snapshot,物化結果。
+    ///
+    /// **replay 只在這裡發生一次**。內容定址使重複提交冪等(同內容 = 同節點)。
+    ///
+    /// 多親時 base 目前仍取 `parents[0]`(docs/06 §5 v0.1.1 的 MVP 語意);
+    /// **全 parent 機械合併是 P61**,尚未實作——故引用邊現階段只登記來源,
+    /// 不影響求值。此為**已知且已記錄的缺口**,不是預設行為。
+    pub fn commit(
+        &mut self,
+        parents: Vec<Edge>,
+        nativization: Nativization,
+        label: Option<String>,
+    ) -> Result<NodeId, EvolutionError> {
+        let (trunk, references) = parents.split_first().ok_or(EvolutionError::NoParent)?;
+        for edge in &parents {
+            if !self.nodes.contains_key(&edge.from) {
+                return Err(EvolutionError::UnknownNode(edge.from.clone()));
             }
         }
-        self.nodes.insert(id.clone(), node);
-        // 新節點本身不可能製造環(parent 都是既有節點),但仍做一次總檢查,
-        // 讓不變式由**一處**保證,而不是靠推理。
-        self.check_acyclic()?;
-        Ok(())
+        if references.iter().any(|edge| edge.changeset.is_some()) {
+            return Err(EvolutionError::ReferenceEdgeWithChangeset);
+        }
+        let changeset = trunk
+            .changeset
+            .clone()
+            .ok_or(EvolutionError::TrunkWithoutChangeset)?;
+        let base = self.snapshot(&trunk.from)?.clone();
+        let snapshot = self.replay(&base, &changeset)?;
+        let id = node_id(&snapshot, &parents, nativization);
+        self.nodes.entry(id.clone()).or_insert(Node {
+            parents,
+            snapshot,
+            nativization,
+            label,
+        });
+        Ok(id)
     }
 
-    /// 改一個節點的 changeset。**該節點與其所有後代**的快取失效(祖先不受影響)。
-    pub fn set_changeset(
-        &mut self,
-        id: &NodeId,
-        changeset: impl Into<String>,
-    ) -> Result<(), EvolutionError> {
+    /// **fsck**(P56 §2.2):驗證一個節點的兩條不變式——
+    /// ① id 等於其內容雜湊(P58);② snapshot 等於主幹邊的 replay 結果。
+    ///
+    /// 這是「物化不等於失去單一資訊源」的可驗證性依據。
+    pub fn verify(&self, id: &NodeId) -> Result<(), EvolutionError> {
         let node = self
             .nodes
-            .get_mut(id)
+            .get(id)
             .ok_or_else(|| EvolutionError::UnknownNode(id.clone()))?;
-        node.changeset = changeset.into();
-        self.invalidate(id);
+        let computed = node_id(&node.snapshot, &node.parents, node.nativization);
+        if &computed != id {
+            return Err(EvolutionError::CorruptId {
+                stored: id.clone(),
+                computed,
+            });
+        }
+        let Some(trunk) = node.trunk() else {
+            // root 沒有入邊,不變式 ② 不適用。
+            return Ok(());
+        };
+        let changeset = trunk
+            .changeset
+            .as_deref()
+            .ok_or(EvolutionError::TrunkWithoutChangeset)?;
+        let base = self.snapshot(&trunk.from)?.clone();
+        let replayed = self.replay(&base, changeset)?;
+        if replayed.source() != node.snapshot.source() {
+            return Err(EvolutionError::SnapshotMismatch(id.clone()));
+        }
         Ok(())
     }
 
-    /// 標記 `id` 與其**所有後代**為 stale(docs/06 §5「沿依賴邊標 stale」)。
-    /// 依賴圖是局部的(§3.4「只引用直接入邊」),故 stale 傳播不失控。
-    fn invalidate(&mut self, id: &NodeId) {
-        let mut stale = BTreeSet::new();
-        let mut frontier = vec![id.clone()];
-        while let Some(current) = frontier.pop() {
-            if !stale.insert(current.clone()) {
-                continue;
-            }
-            for (candidate, node) in &self.nodes {
-                if node.parents.contains(&current) && !stale.contains(candidate) {
-                    frontier.push(candidate.clone());
-                }
-            }
+    /// 對全圖跑 fsck。
+    pub fn verify_all(&self) -> Result<(), EvolutionError> {
+        for id in self.nodes.keys() {
+            self.verify(id)?;
         }
-        self.cache.retain(|key, _| !stale.contains(key));
+        Ok(())
     }
 
-    /// 求一個節點的語言狀態。**memoize**:命中快取就不重跑。
+    /// **rebase**(P57):把 `node` 的主幹 changeset 改套到 `onto` 的 snapshot 上。
     ///
-    /// 多親的 MVP 語意(docs/06 §5 v0.1.1):以 **`parents[0]` 為 replay 主幹**,
-    /// 其餘 parent 僅供 ChangeSet 條目引用取材;完整融合 replay 屬【M+】。
-    pub fn resolve(&mut self, id: &NodeId) -> Result<LanguageDocument, EvolutionError> {
-        // 快取命中不需要特別的 early return:`ancestor_chain` 遇到已快取的節點就
-        // 停止上溯,迴圈又對已快取者 `continue`,故命中時一次 replay 都不會跑。
-        // (曾有一個 early return,但它在行為上完全冗餘、也無法被 `replay_count`
-        // 觀測到——刪掉比留一個測不到的分支好。)
-        if !self.nodes.contains_key(id) {
-            return Err(EvolutionError::UnknownNode(id.clone()));
+    /// 這是《修補11》§2.3 流程的第三步——改了祖先之後,後代要不要跟過去。
+    /// 舊節點**完全不動**(不可變),成功時產生的是**並存的**新節點。
+    ///
+    /// ## 為什麼不需要「放寬 digest 驗證」
+    ///
+    /// §3.1 描述 rebase 為「放寬 digest 重新 resolve」。實作上更直接:**重寫 prelude
+    /// 的兩行 base digest** 使其對上新 base——這同時達成放寬**且**產生正確的新邊。
+    /// 若只放寬而不重寫,新節點的邊會帶著舊 digest,`verify`(fsck)當場就會失敗。
+    /// 故重寫是**必需**的,並且涵蓋了放寬;`lib.rs` 的驗證路徑一行都不用改
+    /// (P59:步驟 14 的契約語意一字不動)。
+    ///
+    /// library lock **刻意不重寫**——版本變動是另一類事件(§3.2「環境變動」),
+    /// 應該浮出來讓人看見,不是被 rebase 默默吞掉。
+    pub fn rebase(
+        &mut self,
+        node: &NodeId,
+        onto: &NodeId,
+    ) -> Result<RebaseOutcome, EvolutionError> {
+        let source = self
+            .nodes
+            .get(node)
+            .ok_or_else(|| EvolutionError::UnknownNode(node.clone()))?;
+        let (nativization, label) = (source.nativization, source.label.clone());
+        let changeset = source
+            .trunk()
+            .and_then(|edge| edge.changeset.clone())
+            .ok_or(EvolutionError::TrunkWithoutChangeset)?;
+        let base = self.snapshot(onto)?.clone();
+        let rebased = rebase_prelude(&changeset, &base)?;
+
+        match self.commit(
+            vec![Edge::trunk(onto.clone(), rebased)],
+            nativization,
+            label,
+        ) {
+            Ok(id) => Ok(RebaseOutcome::Clean(id)),
+            // 分類**只依變體**(P57 鐵律):訊息字串是給人看的,改字不該改行為。
+            Err(EvolutionError::Replay(error)) => Ok(RebaseOutcome::classify(error)),
+            // 圖層面的錯(未知節點等)不是 rebase 結果,照常往上拋。
+            Err(other) => Err(other),
         }
-        // 先把**祖先鏈**由淺到深排出來,再逐一求值——用迴圈而非遞迴,避免深樹爆棧。
-        let chain = self.ancestor_chain(id)?;
-        for current in chain {
-            if self.cache.contains_key(&current) {
-                continue;
-            }
-            let node = self.nodes.get(&current).expect("chain holds known nodes");
-            let base = match node.parents.first() {
-                Some(parent) => self
-                    .cache
-                    .get(parent)
-                    .cloned()
-                    .expect("ancestors are resolved before their children"),
-                None => self.root.clone(),
-            };
-            let document = self.replay_one(&base, &node.changeset.clone())?;
-            self.replay_count += 1;
-            self.cache.insert(current, document);
-        }
-        Ok(self.cache.get(id).expect("just resolved").clone())
     }
 
-    /// 由 root 到 `id` 的主幹鏈(不含已快取者以外的分支),淺 → 深。
-    fn ancestor_chain(&self, id: &NodeId) -> Result<Vec<NodeId>, EvolutionError> {
-        let mut chain = Vec::new();
-        let mut current = Some(id.clone());
-        let mut seen = BTreeSet::new();
-        while let Some(node_id) = current {
-            if !seen.insert(node_id.clone()) {
-                return Err(EvolutionError::Cycle(node_id));
-            }
-            let node = self
-                .nodes
-                .get(&node_id)
-                .ok_or_else(|| EvolutionError::UnknownNode(node_id.clone()))?;
-            chain.push(node_id.clone());
-            // 已快取的祖先就是求值的起點,不必再往上走。
-            // **這是走訪成本的優化,不是正確性機制**——迴圈本來就會 `continue`
-            // 掉已快取者,拿掉這個 break 結果一樣、replay 次數也一樣,只是深鏈
-            // 每次都要白走 O(depth)。故 mutation testing 觀測不到它(誠實標記)。
-            if self.cache.contains_key(&node_id) {
-                break;
-            }
-            current = node.parents.first().cloned();
-        }
-        chain.reverse();
-        Ok(chain)
-    }
-
-    fn replay_one(
+    fn replay(
         &self,
         base: &LanguageDocument,
         changeset: &str,
@@ -225,37 +367,252 @@ impl EvolutionGraph {
         let interpreter = ChangeInterpreter::new(base.clone(), self.libraries.clone(), namespace)?;
         Ok(interpreter.run(&resolved)?.document)
     }
+}
 
-    /// 無環約束(docs/06 §2 v0.1.1)。
-    fn check_acyclic(&self) -> Result<(), EvolutionError> {
-        let mut state: BTreeMap<&NodeId, u8> = BTreeMap::new();
-        for id in self.nodes.keys() {
-            if let Err(cycle) = self.walk(id, &mut state) {
-                return Err(EvolutionError::Cycle(cycle));
-            }
-        }
-        Ok(())
-    }
+/// rebase 的三分結果(《修補11》§3.2)。
+#[derive(Debug)]
+pub enum RebaseOutcome {
+    /// 乾淨:changeset 原封不動套上了新 base,產生新節點。
+    Clean(NodeId),
+    /// **衝突**:該筆編輯在新 base 上套不上去。`statement` 指出**哪一句**
+    /// ——由 `ReplayError::Statement { ordinal }` 免費提供,不必逐句試探。
+    Conflict {
+        statement: Option<u64>,
+        error: ReplayError,
+    },
+    /// **環境變動**(套件版本),不是節點衝突。
+    Environment(ReplayError),
+    /// changeset 本身壞了(輸入錯誤),不是衝突。
+    Broken(ReplayError),
+}
 
-    fn walk<'a>(
-        &'a self,
-        id: &'a NodeId,
-        state: &mut BTreeMap<&'a NodeId, u8>,
-    ) -> Result<(), NodeId> {
-        match state.get(id) {
-            Some(1) => return Err(id.clone()),
-            Some(2) => return Ok(()),
-            _ => {}
-        }
-        state.insert(id, 1);
-        if let Some(node) = self.nodes.get(id) {
-            for parent in &node.parents {
-                if let Some((key, _)) = self.nodes.get_key_value(parent) {
-                    self.walk(key, state)?;
+impl RebaseOutcome {
+    /// 依**錯誤變體**分類(P57)。公開是為了讓分類表本身可測——經由 `rebase` 只走得到
+    /// 一部分分支(`commit` 已驗過 changeset 可解析,故 `Parse`/`Schema` 到不了),
+    /// 沒有這個入口,`Broken`/`Environment` 兩支就是測不到的死碼。
+    pub fn classify(error: ReplayError) -> RebaseOutcome {
+        match &error {
+            // 語句層失敗:目標不存在、錨點失效、驗證不過、型別/欄位對不上……
+            // `StatementSelector` 是「依名字定址找不到目標」——rebase 最常見的衝突。
+            ReplayError::Statement { ordinal, .. }
+            | ReplayError::StatementSelector { ordinal, .. } => RebaseOutcome::Conflict {
+                statement: Some(*ordinal),
+                error,
+            },
+            // 定址解不開 / 穩定 id 對不上 / 結果編不出系統:都是新 base 造成的衝突,
+            // 只是沒有句號可指。
+            ReplayError::Selector(_) | ReplayError::Identity(_) | ReplayError::Compile(_) => {
+                RebaseOutcome::Conflict {
+                    statement: None,
+                    error,
                 }
             }
+            // 環境:套件版本/載入。**刻意不當成衝突**——不該要求人去改 changeset。
+            ReplayError::LibraryLockMismatch(_) | ReplayError::Library(_) => {
+                RebaseOutcome::Environment(error)
+            }
+            // 輸入本身壞掉。`BaseSourceMismatch`/`BaseIdentitiesMismatch` 落在這裡
+            // 代表 prelude 重寫沒生效——那是本模組的 bug,不是使用者的衝突,
+            // 歸為 Broken 讓它顯眼而不是被誤報成衝突。
+            ReplayError::Parse(_)
+            | ReplayError::Schema(_)
+            | ReplayError::NamespaceMismatch(_)
+            | ReplayError::BaseSourceMismatch
+            | ReplayError::BaseIdentitiesMismatch => RebaseOutcome::Broken(error),
         }
-        state.insert(id, 2);
-        Ok(())
+    }
+
+    pub fn is_clean(&self) -> bool {
+        matches!(self, RebaseOutcome::Clean(_))
+    }
+}
+
+/// 把 `.chg` 原文的兩行 base digest 改成對上 `base`,其餘**逐字保留**。
+///
+/// 不用「解析後重新 dump」是為了**保住原文**:dump 排出的是降階後的原語
+/// (步驟 14 的 primitive-only 契約),`rewrite`/`clone` 這類授權糖會被抹平,
+/// 使用者的書寫意圖就丟了。逐行替換只動兩行,其餘(含註解、library lock)不變。
+fn rebase_prelude(changeset: &str, base: &LanguageDocument) -> Result<String, EvolutionError> {
+    let source_digest = base.identities().source_sha256.clone();
+    let identity_digest = identity_manifest_digest(base)?;
+    let mut output = String::with_capacity(changeset.len());
+    let (mut saw_source, mut saw_identities) = (false, false);
+    for line in changeset.lines() {
+        let trimmed = line.trim_start();
+        let indent = &line[..line.len() - trimmed.len()];
+        if trimmed.starts_with("base_source") {
+            output.push_str(&format!("{indent}base_source = sha256:{source_digest}\n"));
+            saw_source = true;
+        } else if trimmed.starts_with("base_identities") {
+            output.push_str(&format!(
+                "{indent}base_identities = sha256:{identity_digest}\n"
+            ));
+            saw_identities = true;
+        } else {
+            output.push_str(line);
+            output.push('\n');
+        }
+    }
+    if !saw_source || !saw_identities {
+        return Err(EvolutionError::PreludeWithoutDigests);
+    }
+    Ok(output)
+}
+
+/// **P58 內容定址**:`sha256(snapshot ‖ parents ‖ nativization)`。
+///
+/// 每個組件先各自雜湊成定長 hex 再串接,故編碼是單射的(不會有「不同輸入拼出同一
+/// 字串」的歧義),且無隨機/時間戳來源(P26)。
+///
+/// **`label` 不入雜湊**——P58「人類可讀名字是另一層,不是身分」(承 P45)。
+///
+/// **邊的 changeset 入雜湊**:P58 原文寫 `‖ parents` 而 `parents: Vec<Edge>`,
+/// 字面上含 changeset;且其理由是「身分含出身,內容相同但**來歷**不同是不同節點」,
+/// 而「怎麼走到這個狀態」正是來歷。若只雜湊 `from`,兩條不同 changeset 走到相同
+/// 狀態的邊會摺疊成一個節點,**其中一份 changeset 會被靜默丟棄**——違反
+/// docs/06「存事實(ChangeSet)」。故採含 changeset 的讀法。
+fn node_id(snapshot: &LanguageDocument, parents: &[Edge], nativization: Nativization) -> NodeId {
+    let mut buffer = String::from("conlang-node-v1\n");
+    buffer.push_str(&format!(
+        "snapshot {}\n",
+        sha256_hex(snapshot.source().as_bytes())
+    ));
+    for edge in parents {
+        buffer.push_str(&format!(
+            "parent {} {} {}\n",
+            edge.from.as_str(),
+            u8::from(edge.changeset.is_some()),
+            sha256_hex(edge.changeset.as_deref().unwrap_or("").as_bytes())
+        ));
+    }
+    buffer.push_str(&format!("nativization {}\n", nativization.canonical()));
+    NodeId(sha256_hex(buffer.as_bytes()))
+}
+
+/// 讓 rebase(P57,下一刀)與外部工具能取得節點 snapshot 的 identity digest。
+/// 現在只有 `verify` 的姊妹用途;獨立出來避免日後在兩處重算。
+pub fn snapshot_identity_digest(document: &LanguageDocument) -> Result<String, ReplayError> {
+    identity_manifest_digest(document)
+}
+
+#[cfg(test)]
+mod tests {
+    //! fsck 的**失敗**分支只能在模組內測——`Node` 的欄位是私有的,外部無從偽造一個
+    //! 壞節點。這正是想要的:偽造能力留在測試裡,不外洩成 API。
+    //!
+    //! 沒有這兩個測試,`verify` 的兩個比較都可以改成 `true` 而測試全綠(整合測試只
+    //! 走得到成功路徑)——那是典型的假綠燈。
+
+    use super::*;
+    use crate::change_set_prelude;
+
+    const ROOT: &str = "sign x:\n    syn:\n        category = noun\n";
+
+    fn fixture() -> (EvolutionGraph, NodeId) {
+        let root = LanguageDocument::import_new_root(ROOT, "evo:root").expect("root parses");
+        let mut graph = EvolutionGraph::new(root, LibrarySpec::default());
+        let root_id = graph.root().clone();
+        let base = graph.snapshot(&root_id).unwrap().clone();
+        let mut changeset =
+            change_set_prelude(&base, &LibrarySpec::default(), "evo:n1").expect("prelude");
+        changeset
+            .push_str("\n    #0:\n        update sign(\"x\").def[syn.category].value = verb\n");
+        let id = graph
+            .commit(
+                vec![Edge::trunk(root_id, changeset)],
+                Nativization::None,
+                None,
+            )
+            .expect("n1 commits");
+        (graph, id)
+    }
+
+    #[test]
+    fn fsck_catches_a_hand_edited_snapshot() {
+        // 威脅模型:有人手改 snapshot **並重算 id**,於是 id 檢查通過。只有
+        // 「snapshot == replay(parent, changeset)」這條不變式擋得住(P56 §2.2)。
+        let (mut graph, id) = fixture();
+        let mut node = graph.nodes.remove(&id).expect("node exists");
+        node.snapshot = LanguageDocument::import_new_root(
+            "sign x:\n    syn:\n        category = adj\n",
+            "evo:forged",
+        )
+        .expect("forged parses");
+        let forged_id = node_id(&node.snapshot, &node.parents, node.nativization);
+        graph.nodes.insert(forged_id.clone(), node);
+
+        let err = graph
+            .verify(&forged_id)
+            .expect_err("fsck 必須擋下手改的 snapshot");
+        assert!(
+            matches!(err, EvolutionError::SnapshotMismatch(_)),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn fsck_catches_a_node_stored_under_the_wrong_id() {
+        let (mut graph, id) = fixture();
+        let node = graph.nodes.remove(&id).expect("node exists");
+        let wrong = NodeId("0".repeat(64));
+        graph.nodes.insert(wrong.clone(), node);
+
+        let err = graph.verify(&wrong).expect_err("fsck 必須擋下錯置的 id");
+        assert!(matches!(err, EvolutionError::CorruptId { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn a_healthy_graph_passes_fsck() {
+        let (graph, _) = fixture();
+        graph.verify_all().expect("乾淨的圖必須通過");
+    }
+
+    /// 分類表的**死角分支**:經由 `rebase` 走不到(`commit` 已驗過 changeset 可解析,
+    /// 故 `Parse`/`Schema` 到不了;library spec 在圖內固定,故 lock 也不會不符)。
+    /// 沒有這個直接入口,`Environment`/`Broken` 兩支就是永遠測不到的死碼——
+    /// 它們可以被改成任何東西而測試全綠。
+    #[test]
+    fn the_classifier_is_driven_by_variants_not_messages() {
+        assert!(matches!(
+            RebaseOutcome::classify(ReplayError::LibraryLockMismatch("v2".to_owned())),
+            RebaseOutcome::Environment(_)
+        ));
+        assert!(matches!(
+            RebaseOutcome::classify(ReplayError::Library("missing package".to_owned())),
+            RebaseOutcome::Environment(_)
+        ));
+        assert!(matches!(
+            RebaseOutcome::classify(ReplayError::Parse("bad".to_owned())),
+            RebaseOutcome::Broken(_)
+        ));
+        assert!(matches!(
+            RebaseOutcome::classify(ReplayError::Schema("v9".to_owned())),
+            RebaseOutcome::Broken(_)
+        ));
+        // 入口信號落到這裡代表 prelude 重寫沒生效 = 本模組的 bug,
+        // **不得**被誤報成使用者的衝突。
+        assert!(matches!(
+            RebaseOutcome::classify(ReplayError::BaseSourceMismatch),
+            RebaseOutcome::Broken(_)
+        ));
+        assert!(matches!(
+            RebaseOutcome::classify(ReplayError::Selector("unknown sign".to_owned())),
+            RebaseOutcome::Conflict {
+                statement: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rebasing_a_changeset_without_digest_lines_is_rejected() {
+        // 不合格式的邊要明確擋下,不能默默產生一份缺 digest 的 `.chg`。
+        let root = LanguageDocument::import_new_root(ROOT, "evo:root").expect("root parses");
+        let err = rebase_prelude("changeset evo:n:\n    schema = v1\n", &root)
+            .expect_err("沒有 digest 行");
+        assert!(
+            matches!(err, EvolutionError::PreludeWithoutDigests),
+            "{err:?}"
+        );
     }
 }

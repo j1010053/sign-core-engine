@@ -71,7 +71,10 @@ fn unknown_rule_label_is_rejected() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap_err();
-    assert!(matches!(err, ReplayError::Selector(_)), "got {err}");
+    assert!(
+        matches!(err, ReplayError::StatementSelector { ordinal: 0, .. }),
+        "got {err}"
+    );
 }
 
 const CASE_SOURCE: &str = r#"Symbol w
