@@ -46,7 +46,10 @@
 //! 合併與 diff 因此**共用同一套對齊**,不是兩套;且能正確處理「一邊改了名」
 //! ——用名字對齊會把它誤判成一生一滅。
 
-use conlang_language::{IdentityNamespace, LanguageDocument, NodeId, SignDef, TraitDef};
+use conlang_language::{
+    AddressSegment, IdentityAllocatorV2, IdentityError, IdentityNamespace, Language,
+    LanguageDocument, NodeAddress, NodeEntryV1, NodeId, SignDef, TraitDef,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// 逐項合併的三個區段。衝突必須說得出是**哪個區段**,否則 trait 衝突與 sign 衝突
@@ -129,6 +132,21 @@ pub enum MergeError {
     /// 至少要兩個 parent 才叫合併。
     #[error("MERGE_TOO_FEW_PARENTS: merging needs at least two parents")]
     TooFewParents,
+    /// 有衝突就建不出節點(§6.4):不存在「先建起來之後再解」的中間狀態。
+    #[error("MERGE_UNRESOLVED_CONFLICTS: {0} conflict(s) must be resolved first")]
+    UnresolvedConflicts(usize),
+    /// 合併結果的命名空間與某個 parent 相同 ⇒ 新配發的 id 會撞上繼承來的 id。
+    #[error("MERGE_NAMESPACE_IN_USE: {0} is already used by a parent")]
+    NamespaceInUse(String),
+    /// 計畫指向不存在的 parent,或該項在來源裡找不到。
+    #[error("MERGE_SOURCE_MISSING: {0}")]
+    SourceMissing(String),
+    /// 合併後的文件出現預期外的頂層位址(語言模型長出新東西而合併沒跟上)。
+    /// **硬錯而非沿用新 id**——沿用等於默默丟掉繼承的身分。
+    #[error("MERGE_UNEXPECTED_ADDRESS: {0:?}")]
+    UnexpectedAddress(NodeAddress),
+    #[error(transparent)]
+    Identity(#[from] IdentityError),
 }
 
 /// 合併計畫。`conflicts` 非空時**不得建節點**(§6.4:有衝突就建不出來,
@@ -245,6 +263,298 @@ pub fn plan_merge(
         blocks,
         conflicts,
     })
+}
+
+/// **物化**:把乾淨的合併計畫變成一份真正的 `LanguageDocument`(⑤b)。
+///
+/// ## 為什麼要繞一圈「先 import 再換 id」
+///
+/// 難處全在 **identity manifest**(身分清單):它記的位址是**位置式**的
+/// (`Signs(3)`、`Signs(3)/Items(0)`…)。合併後 sign 會按名字重排,於是**每一個的
+/// 「第幾個」都變了**,整份清單要重算——但**編號必須原封不動**(編號變了就等於換了
+/// 一個 sign)。而且一個 sign 不是一筆,是**一整棵子樹**,每層位址都要跟著挪。
+///
+/// 與其自己重算位址(得複製 `language` 內部的節點列舉規則,兩份規則必然走鐘),
+/// 這裡走一條更短的路:
+///
+/// 1. 先把挑好的內容組成 `Language`,`dump()` 後 `import_new_root` ——
+///    **正確的形狀免費拿到**,只是 id 全是新配的;
+/// 2. 再把每個節點的新 id **換回它繼承來的 id**(依位址對應回來源文件);
+/// 3. `from_edit_parts` 驗證整份清單與 `.lang` 內容**逐位址相符**,不符當場爆。
+///
+/// 故位址算錯不可能靜默通過。**唯一不在該驗證範圍內的是配號器**,見下。
+///
+/// ## 配號器必須取各方最大值
+///
+/// 每個命名空間記著「下一個號碼發到幾」。只拿其中一方的 → 日後新增節點會**發出
+/// 已經用過的號碼**,兩個不同節點共用一個 id,**不報錯**。故取聯集後的最大值。
+///
+/// `namespace` 必須是**沒被任何 parent 用過**的新命名空間,否則新配的 id 會撞上
+/// 繼承來的 id。
+pub fn materialize(
+    plan: &MergePlan,
+    base: Option<&LanguageDocument>,
+    sides: &[&LanguageDocument],
+    namespace: &str,
+) -> Result<LanguageDocument, MergeError> {
+    if !plan.is_clean() {
+        return Err(MergeError::UnresolvedConflicts(plan.conflicts.len()));
+    }
+    // 比對的是**配號器**的命名空間,不是 `root_namespace`——後代文件的
+    // `root_namespace` 仍是祖先的,而 id 實際上住在各次 fork 自己的命名空間裡。
+    // 只看 `root_namespace` 會漏掉那些,讓新配的 id 撞上繼承來的 id。
+    for document in base.iter().copied().chain(sides.iter().copied()) {
+        if document
+            .identities()
+            .allocators
+            .iter()
+            .any(|allocator| allocator.namespace == namespace)
+        {
+            return Err(MergeError::NamespaceInUse(namespace.to_owned()));
+        }
+    }
+
+    // ① 依計畫挑出內容,組成 Language。
+    let mut language = Language::new();
+    for (block, from) in &plan.blocks {
+        let source = source_of(base, sides, *from)?;
+        match block {
+            MergeBlock::DslDecls => language.dsl_decls = source.language().dsl_decls.clone(),
+            MergeBlock::Prosody => language.prosody = source.language().prosody.clone(),
+        }
+    }
+    let mut origins = Origins::default();
+    for pick in &plan.distribution {
+        let MergeKey::Name(key) = &pick.key else {
+            return Err(MergeError::SourceMissing(format!("{:?}", pick.key)));
+        };
+        let source = source_of(base, sides, pick.from)?;
+        let value = source
+            .language()
+            .distribution
+            .iter()
+            .find(|(candidate, _)| candidate == key)
+            .ok_or_else(|| MergeError::SourceMissing(format!("distribution {key:?}")))?;
+        origins.distribution.insert(key.clone(), pick.from);
+        language.distribution.push(value.clone());
+    }
+    for pick in &plan.traits {
+        let source = source_of(base, sides, pick.from)?;
+        let item = traits_by_id(source)?
+            .remove(node_key(&pick.key)?)
+            .ok_or_else(|| MergeError::SourceMissing(format!("trait {:?}", pick.key)))?;
+        origins.traits.insert(item.name.clone(), pick.from);
+        language.traits.push(item.clone());
+    }
+    for pick in &plan.signs {
+        let source = source_of(base, sides, pick.from)?;
+        let sign = signs_by_id(source)?
+            .remove(node_key(&pick.key)?)
+            .ok_or_else(|| MergeError::SourceMissing(format!("sign {:?}", pick.key)))?;
+        origins.signs.insert(sign.name.clone(), pick.from);
+        language.signs.push(sign.clone());
+    }
+
+    // ② 形狀免費拿:dump → import。id 全新,下一步再換回繼承的。
+    let fresh = LanguageDocument::import_new_root(&language.dump(), namespace)?;
+    let (fresh_language, mut manifest) = fresh.into_edit_parts();
+
+    // ③ 新 id → 繼承 id。先建對照表,再一次套用到 `id` 與 `parent`,
+    //    否則改到一半的清單會出現指向舊 id 的 parent。
+    let by_address: Vec<BTreeMap<&NodeAddress, &NodeEntryV1>> = base
+        .iter()
+        .copied()
+        .chain(sides.iter().copied())
+        .map(|document| {
+            document
+                .identities()
+                .nodes
+                .iter()
+                .map(|entry| (&entry.address, entry))
+                .collect()
+        })
+        .collect();
+    let mut remap: BTreeMap<NodeId, NodeId> = BTreeMap::new();
+    for entry in &manifest.nodes {
+        if let Some(inherited) = inherited_id(
+            &entry.address,
+            plan,
+            &origins,
+            &fresh_language,
+            base,
+            sides,
+            &by_address,
+        )? {
+            remap.insert(entry.id.clone(), inherited);
+        }
+    }
+    for entry in &mut manifest.nodes {
+        if let Some(replacement) = remap.get(&entry.id) {
+            entry.id = replacement.clone();
+        }
+        if let Some(parent) = entry.parent.as_ref().and_then(|id| remap.get(id)).cloned() {
+            entry.parent = Some(parent);
+        }
+    }
+
+    // ④ 配號器取各方最大值(不在 from_edit_parts 的驗證範圍內,漏了會靜默撞號)。
+    let mut allocators: BTreeMap<String, u64> = BTreeMap::new();
+    for source in base
+        .iter()
+        .copied()
+        .chain(sides.iter().copied())
+        .map(LanguageDocument::identities)
+        .chain(std::iter::once(&manifest as &_))
+    {
+        for allocator in &source.allocators {
+            let slot = allocators.entry(allocator.namespace.clone()).or_default();
+            *slot = (*slot).max(allocator.next_ordinal);
+        }
+    }
+    manifest.allocators = allocators
+        .into_iter()
+        .map(|(namespace, next_ordinal)| IdentityAllocatorV2 {
+            namespace,
+            next_ordinal,
+        })
+        .collect();
+
+    Ok(LanguageDocument::from_edit_parts(fresh_language, manifest)?)
+}
+
+/// 某個合併後的位址,其身分該從哪裡繼承。`None` = 保留新配的 id(只有 Language 根)。
+/// 合併後的每個項目**來自哪個 parent**,以名字/鍵為索引。
+///
+/// 不能用位置索引:`MergePlan` 的項目依**鍵**排序,而 canonical printer(P21/I15-d)
+/// 把具名容器依**名字**排序——兩者順序不同,用位置去查會系統性地對錯人。
+#[derive(Default)]
+struct Origins {
+    signs: BTreeMap<String, Option<usize>>,
+    traits: BTreeMap<String, Option<usize>>,
+    distribution: BTreeMap<String, Option<usize>>,
+}
+
+fn inherited_id(
+    address: &NodeAddress,
+    plan: &MergePlan,
+    origins: &Origins,
+    merged: &Language,
+    base: Option<&LanguageDocument>,
+    sides: &[&LanguageDocument],
+    by_address: &[BTreeMap<&NodeAddress, &NodeEntryV1>],
+) -> Result<Option<NodeId>, MergeError> {
+    let Some(head) = address.0.first() else {
+        return Ok(None); // Language 根:新文件的根,命名空間必須是新的那個。
+    };
+    // 頂層段 → (來自哪個 parent, 在該 parent 裡的頂層段)
+    let (from, source_head) = match head {
+        AddressSegment::Signs(index) => {
+            let name = &merged
+                .signs
+                .get(*index)
+                .ok_or_else(|| MergeError::UnexpectedAddress(address.clone()))?
+                .name;
+            let from = *origins
+                .signs
+                .get(name)
+                .ok_or_else(|| MergeError::SourceMissing(format!("sign {name:?}")))?;
+            let source = source_of(base, sides, from)?;
+            let position = source
+                .language()
+                .signs
+                .iter()
+                .position(|sign| &sign.name == name)
+                .ok_or_else(|| MergeError::SourceMissing(format!("sign {name:?}")))?;
+            (from, AddressSegment::Signs(position))
+        }
+        AddressSegment::Traits(index) => {
+            let name = &merged
+                .traits
+                .get(*index)
+                .ok_or_else(|| MergeError::UnexpectedAddress(address.clone()))?
+                .name;
+            let from = *origins
+                .traits
+                .get(name)
+                .ok_or_else(|| MergeError::SourceMissing(format!("trait {name:?}")))?;
+            let source = source_of(base, sides, from)?;
+            let position = source
+                .language()
+                .traits
+                .iter()
+                .position(|item| &item.name == name)
+                .ok_or_else(|| MergeError::SourceMissing(format!("trait {name:?}")))?;
+            (from, AddressSegment::Traits(position))
+        }
+        AddressSegment::Distribution(index) => {
+            let key = &merged
+                .distribution
+                .get(*index)
+                .ok_or_else(|| MergeError::UnexpectedAddress(address.clone()))?
+                .0;
+            let from = *origins
+                .distribution
+                .get(key)
+                .ok_or_else(|| MergeError::SourceMissing(format!("distribution {key:?}")))?;
+            let source = source_of(base, sides, from)?;
+            let position = source
+                .language()
+                .distribution
+                .iter()
+                .position(|(candidate, _)| candidate == key)
+                .ok_or_else(|| MergeError::SourceMissing(format!("distribution {key:?}")))?;
+            (from, AddressSegment::Distribution(position))
+        }
+        // 整塊搬過來的,內容逐字相同 ⇒ 位址一一對應,不必換算。
+        AddressSegment::DslDeclarations(_) => {
+            (block_source(plan, MergeBlock::DslDecls)?, head.clone())
+        }
+        AddressSegment::Prosody => (block_source(plan, MergeBlock::Prosody)?, head.clone()),
+        _ => return Err(MergeError::UnexpectedAddress(address.clone())),
+    };
+    let mut source_address = vec![source_head];
+    source_address.extend(address.0.iter().skip(1).cloned());
+    let source_address = NodeAddress(source_address);
+    // `by_address` 的排列是 base(若有)在前、其餘依 sides 順序。
+    let slot = match from {
+        None => 0,
+        Some(index) => usize::from(base.is_some()) + index,
+    };
+    Ok(by_address
+        .get(slot)
+        .and_then(|map| map.get(&source_address))
+        .map(|entry| entry.id.clone()))
+}
+
+fn block_source(plan: &MergePlan, block: MergeBlock) -> Result<Option<usize>, MergeError> {
+    plan.blocks
+        .iter()
+        .find(|(candidate, _)| *candidate == block)
+        .map(|(_, from)| *from)
+        .ok_or_else(|| MergeError::SourceMissing(format!("block {block:?}")))
+}
+
+fn source_of<'a>(
+    base: Option<&'a LanguageDocument>,
+    sides: &[&'a LanguageDocument],
+    from: Option<usize>,
+) -> Result<&'a LanguageDocument, MergeError> {
+    match from {
+        None => base.ok_or_else(|| MergeError::SourceMissing("base".to_owned())),
+        Some(index) => sides
+            .get(index)
+            .copied()
+            .ok_or_else(|| MergeError::SourceMissing(format!("parent #{index}"))),
+    }
+}
+
+fn node_key(key: &MergeKey) -> Result<&NodeId, MergeError> {
+    match key {
+        MergeKey::Node(id) => Ok(id),
+        MergeKey::Name(name) => Err(MergeError::SourceMissing(format!(
+            "expected node id, got {name:?}"
+        ))),
+    }
 }
 
 /// 一次逐項合併的**原始結果**(還沒貼上區段標籤)。

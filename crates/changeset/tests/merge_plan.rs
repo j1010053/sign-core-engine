@@ -530,3 +530,222 @@ fn a_conflict_is_labelled_with_the_collection_it_came_from() {
         plan.conflicts
     );
 }
+
+// ── 物化(⑤b)──────────────────────────────────────────────────────────────
+
+use conlang_changeset::merge::materialize;
+use conlang_language::AddressSegment;
+
+/// 某個 sign 子樹底下的全部穩定 id(含 sign 自己)。
+fn subtree_ids(document: &LanguageDocument, sign: &str) -> Vec<NodeId> {
+    let index = document
+        .language()
+        .signs
+        .iter()
+        .position(|item| item.name == sign)
+        .expect("sign exists");
+    let head = AddressSegment::Signs(index);
+    document
+        .identities()
+        .nodes
+        .iter()
+        .filter(|entry| entry.address.0.first() == Some(&head))
+        .map(|entry| entry.id.clone())
+        .collect()
+}
+
+fn name_of(document: &LanguageDocument, id: &NodeId) -> Option<String> {
+    document
+        .language()
+        .signs
+        .iter()
+        .find(|sign| &sign.id.0 == id)
+        .map(|sign| sign.name.clone())
+}
+
+#[test]
+fn a_clean_plan_materialises_into_a_document() {
+    let base = root();
+    let a = set_category(&base, "evo:a", "x", "verb");
+    let b = set_category(&base, "evo:b", "y", "adj");
+    let plan = plan_merge(Some(&base), &[&a, &b]).unwrap();
+
+    let merged = materialize(&plan, Some(&base), &[&a, &b], "evo:merged").expect("物化");
+    let x = id_of(&base, "x");
+    let y = id_of(&base, "y");
+    assert_eq!(
+        category_of(&merged, &x).as_deref(),
+        Some("verb"),
+        "A 的改動要在"
+    );
+    assert_eq!(
+        category_of(&merged, &y).as_deref(),
+        Some("adj"),
+        "B 的改動也要在"
+    );
+}
+
+#[test]
+fn merged_signs_keep_the_ids_they_inherited() {
+    // **物化的核心**。合併後 sign 會按名字重排,位址整份位移;若身分清單跟著重配 id,
+    // 每個詞都會變成「一個新詞」,演化史就斷了。這裡逐一比對子樹的全部 id。
+    let base = root();
+    let a = set_category(&base, "evo:a", "x", "verb");
+    let b = set_category(&base, "evo:b", "y", "adj");
+    let plan = plan_merge(Some(&base), &[&a, &b]).unwrap();
+    let merged = materialize(&plan, Some(&base), &[&a, &b], "evo:merged").expect("物化");
+
+    for (source, sign) in [(&a, "x"), (&b, "y")] {
+        let inherited = subtree_ids(source, sign);
+        let kept = subtree_ids(&merged, sign);
+        assert_eq!(
+            inherited, kept,
+            "{sign} 整棵子樹的 id 必須原封不動(含底下的項目)"
+        );
+        assert!(!inherited.is_empty(), "前提:子樹不是空的");
+    }
+    // 連 `SignDef.id` 與 manifest 也要一致。
+    assert_eq!(
+        merged.ref_for_sign("x").expect("x 在").id,
+        id_of(&base, "x")
+    );
+}
+
+#[test]
+fn an_unrelated_merge_carries_both_lexicons_with_their_ids() {
+    // 空基準 + 兩個不同命名空間:這是真克里奧爾的形狀。
+    let french = LanguageDocument::import_new_root(
+        "sign eau:\n    syn:\n        category = noun\n",
+        "evo:fr",
+    )
+    .unwrap();
+    let wolof = LanguageDocument::import_new_root(
+        "sign ndox:\n    syn:\n        category = noun\n",
+        "evo:wo",
+    )
+    .unwrap();
+    let plan = plan_merge(None, &[&french, &wolof]).unwrap();
+
+    let merged = materialize(&plan, None, &[&french, &wolof], "evo:creole").expect("物化");
+    assert_eq!(merged.language().signs.len(), 2);
+    assert_eq!(
+        name_of(&merged, &id_of(&french, "eau")).as_deref(),
+        Some("eau"),
+        "法語支的 id 要跟著詞過來"
+    );
+    assert_eq!(
+        name_of(&merged, &id_of(&wolof, "ndox")).as_deref(),
+        Some("ndox")
+    );
+}
+
+#[test]
+fn the_merged_document_keeps_every_parents_allocator() {
+    // **靜默毀損的守門**。配號器記著「下一個號碼發到幾」。只拿其中一方的 → 日後新增
+    // 節點會發出已經用過的號碼,兩個不同節點共用一個 id,而且**不報錯**
+    // (`from_edit_parts` 的形狀驗證看不到配號器)。
+    let base = root();
+    let a = apply(
+        &base,
+        "evo:a",
+        "\n    #0:\n        clone sign(\"x\") as z\n",
+    );
+    let b = apply(
+        &base,
+        "evo:b",
+        "\n    #0:\n        clone sign(\"y\") as w\n",
+    );
+    let plan = plan_merge(Some(&base), &[&a, &b]).unwrap();
+    let merged = materialize(&plan, Some(&base), &[&a, &b], "evo:merged").expect("物化");
+
+    for parent in [&base, &a, &b] {
+        for allocator in &parent.identities().allocators {
+            let kept = merged
+                .identities()
+                .allocators
+                .iter()
+                .find(|candidate| candidate.namespace == allocator.namespace)
+                .unwrap_or_else(|| panic!("{} 的配號器不見了", allocator.namespace));
+            assert!(
+                kept.next_ordinal >= allocator.next_ordinal,
+                "{} 的號碼倒退了:{} < {}",
+                allocator.namespace,
+                kept.next_ordinal,
+                allocator.next_ordinal
+            );
+        }
+    }
+}
+
+#[test]
+fn a_conflicting_plan_cannot_be_materialised() {
+    // §6.4:有衝突就建不出來,不存在「先建起來之後再解」的中間狀態。
+    let base = root();
+    let a = set_category(&base, "evo:a", "x", "verb");
+    let b = set_category(&base, "evo:b", "x", "adj");
+    let plan = plan_merge(Some(&base), &[&a, &b]).unwrap();
+    assert!(!plan.is_clean(), "前提:這份計畫有衝突");
+    assert!(matches!(
+        materialize(&plan, Some(&base), &[&a, &b], "evo:merged"),
+        Err(MergeError::UnresolvedConflicts(_))
+    ));
+}
+
+#[test]
+fn reusing_a_parents_namespace_is_rejected() {
+    // 新配的 id 會撞上繼承來的 id —— 又是一個不報錯就毀損的路徑。
+    let base = root();
+    let a = set_category(&base, "evo:a", "x", "verb");
+    let b = set_category(&base, "evo:b", "y", "adj");
+    let plan = plan_merge(Some(&base), &[&a, &b]).unwrap();
+    assert!(matches!(
+        materialize(&plan, Some(&base), &[&a, &b], "evo:a"),
+        Err(MergeError::NamespaceInUse(_))
+    ));
+}
+
+#[test]
+fn materialisation_is_deterministic() {
+    let base = root();
+    let a = set_category(&base, "evo:a", "x", "verb");
+    let b = set_category(&base, "evo:b", "y", "adj");
+    let plan = plan_merge(Some(&base), &[&a, &b]).unwrap();
+    let first = materialize(&plan, Some(&base), &[&a, &b], "evo:merged").unwrap();
+    let second = materialize(&plan, Some(&base), &[&a, &b], "evo:merged").unwrap();
+    assert_eq!(first.source(), second.source());
+    assert_eq!(
+        first.manifest_json().unwrap(),
+        second.manifest_json().unwrap()
+    );
+}
+
+#[test]
+fn merged_traits_keep_their_ids_too() {
+    let base = traited_root();
+    let a = apply(
+        &base,
+        "evo:a",
+        "\n    #0:\n        insert into language at end:\n            trait LocalAnimate:\n",
+    );
+    let b = apply(
+        &base,
+        "evo:b",
+        "\n    #0:\n        insert into language at end:\n            trait LocalTelic:\n",
+    );
+    let plan = plan_merge(Some(&base), &[&a, &b]).unwrap();
+    let merged = materialize(&plan, Some(&base), &[&a, &b], "evo:merged").expect("物化");
+
+    assert_eq!(
+        merged.ref_for_trait("LocalAnimate").expect("在").id,
+        a.ref_for_trait("LocalAnimate").expect("在").id
+    );
+    assert_eq!(
+        merged.ref_for_trait("LocalTelic").expect("在").id,
+        b.ref_for_trait("LocalTelic").expect("在").id
+    );
+    assert_eq!(
+        merged.ref_for_trait("LocalNoun").expect("在").id,
+        base.ref_for_trait("LocalNoun").expect("在").id,
+        "沒人動過的 trait 也要保住 id"
+    );
+}
