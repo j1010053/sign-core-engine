@@ -69,6 +69,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "conlang-persistence"
+version = "0.1.0"
+dependencies = [
+ "conlang-changeset",
+ "conlang-language",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "console"
 version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

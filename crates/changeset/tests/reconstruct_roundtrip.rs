@@ -18,20 +18,30 @@
 //! 新增一種改動只要加一行輸入,不用記得加斷言。
 
 use conlang_changeset::reconstruct::reconstruct;
-use conlang_changeset::{apply_edit, change_set_prelude, ChangeInterpreter, UnresolvedChangeSet};
-use conlang_language::{LanguageDocument, LibrarySpec};
+use conlang_changeset::{
+    apply_edit, change_set_prelude, Anchor, ChangeInterpreter, DetachedNode, NodeUpdate,
+    PrimitiveEdit, UnresolvedChangeSet,
+};
+use conlang_language::{Expression, LanguageDocument, LibrarySpec, NodeKind, NodeRef};
 
 const ROOT: &str = "Symbol a\nSymbol b\nSymbol k\n\n\
                     trait LocalNoun:\n\n\
                     global trait Core:\n\
                     \x20   phon:\n\
-                    \x20       b => k\n\n\
+                    \x20       b => k\n\
+                    \x20       layered:\n\
+                    \x20           a => b\n\
+                    \x20           Then propagate:\n\
+                    \x20               b => k\n\n\
                     sign book:\n\
                     \x20   belongs LocalNoun\n\
                     \x20   entrenchment = 0.5\n\
                     \x20   phon:\n\
                     \x20       /b a b/\n\
                     \x20   syn:\n\
+                    \x20       feature:\n\
+                    \x20           mark = enum(off, on)\n\
+                    \x20           mark => on\n\
                     \x20       category = noun\n\
                     \x20   sem:\n\
                     \x20       senses:\n\
@@ -93,6 +103,35 @@ fn statement(body: &str) -> String {
     format!("\n    #0:\n        {body}\n")
 }
 
+fn children(document: &LanguageDocument, parent: &NodeRef, kind: NodeKind) -> Vec<NodeRef> {
+    let mut nodes = document
+        .identities()
+        .nodes
+        .iter()
+        .filter(|entry| entry.parent.as_ref() == Some(&parent.id) && entry.kind == kind)
+        .collect::<Vec<_>>();
+    nodes.sort_by(|left, right| left.address.cmp(&right.address));
+    nodes
+        .into_iter()
+        .map(|entry| NodeRef::new(entry.id.clone(), entry.kind))
+        .collect()
+}
+
+fn reconstruct_and_replay(
+    before: &LanguageDocument,
+    after: &LanguageDocument,
+) -> Vec<PrimitiveEdit> {
+    let edits = reconstruct(before, after).expect("reconstruct");
+    let mut replayed = before.clone();
+    for edit in &edits {
+        replayed = apply_edit(&replayed, edit.clone(), &LibrarySpec::default())
+            .expect("replay reconstructed edit")
+            .document;
+    }
+    assert_eq!(replayed.source(), after.source());
+    edits
+}
+
 // ── 更新(各 NodeUpdate 變體)────────────────────────────────────────────────
 
 #[test]
@@ -100,6 +139,14 @@ fn a_definition_value_round_trips() {
     round_trip(
         "def value",
         &statement("update sign(\"book\").def[syn.category].value = verb"),
+    );
+}
+
+#[test]
+fn a_feature_rule_update_round_trips() {
+    round_trip(
+        "feature rule",
+        &statement("update sign(\"book\").rule[0].body = mark => off"),
     );
 }
 
@@ -138,6 +185,360 @@ fn a_trait_rename_round_trips() {
         "trait rename",
         &statement("update trait(\"LocalNoun\").name = LocalThing"),
     );
+}
+
+#[test]
+fn a_phon_statement_update_round_trips_as_one_typed_update() {
+    let before = base();
+    let after = apply_changeset(
+        &before,
+        "evo:n1",
+        &statement(
+            "update trait(\"Core\").block[0].rule[\"layered\"].then[1].leaf[0].body = b => a",
+        ),
+    );
+    let edits = reconstruct(&before, &after).expect("reconstruct phon statement");
+    assert!(
+        matches!(
+            edits.as_slice(),
+            [PrimitiveEdit::Update {
+                node,
+                change: NodeUpdate::RuleBranchBody(body),
+            }] if node.expected == NodeKind::PhonStatement && body == "b => a"
+        ),
+        "expected one typed phon-statement update: {edits:#?}"
+    );
+    round_trip(
+        "phon statement",
+        &statement(
+            "update trait(\"Core\").block[0].rule[\"layered\"].then[1].leaf[0].body = b => a",
+        ),
+    );
+}
+
+#[test]
+fn a_phon_block_propagate_toggle_round_trips_as_one_typed_update() {
+    let before = base();
+    let after = apply_changeset(
+        &before,
+        "evo:n1",
+        &statement("update trait(\"Core\").block[0].rule[\"layered\"].then[1].propagate = false"),
+    );
+    let edits = reconstruct(&before, &after).expect("reconstruct block propagate");
+    assert!(
+        matches!(
+            edits.as_slice(),
+            [PrimitiveEdit::Update {
+                node,
+                change: NodeUpdate::Propagate(false),
+            }] if node.expected == NodeKind::PhonBlockNode
+        ),
+        "expected one typed phon-block update: {edits:#?}"
+    );
+    round_trip(
+        "phon block propagate",
+        &statement("update trait(\"Core\").block[0].rule[\"layered\"].then[1].propagate = false"),
+    );
+}
+
+#[test]
+fn a_flat_to_structured_phon_root_reconstructs_as_an_explicit_update() {
+    let body = r#"
+    #0:
+        update trait("Core").block[0].rule[0].phon_block:
+            b => k
+            Then:
+                k => a
+"#;
+    let before = LanguageDocument::import_new_root(
+        "Symbol a\nSymbol b\nSymbol k\n\nglobal trait Core:\n    phon:\n        shift: b => k\n",
+        "evo:phon-flat",
+    )
+    .unwrap();
+    let after = apply_changeset(&before, "evo:phon-root-update", body);
+    let edits = reconstruct(&before, &after).expect("reconstruct phon root");
+    assert!(edits.iter().any(|edit| matches!(
+        edit,
+        PrimitiveEdit::Update {
+            change: NodeUpdate::PhonBlockRoot(_),
+            ..
+        }
+    )));
+    reconstruct_and_replay(&before, &after);
+}
+
+const EXPRESSION_ROOT: &str = r#"
+trait Marked:
+trait Other:
+
+sign alt:
+    syn:
+        slots:
+            value [*]
+    phon:
+        /a{value}/
+
+sign wrap:
+    syn:
+        slots:
+            value [*]
+    phon:
+        /w{value}/
+
+sign root:
+    phon:
+        /r/
+    case:
+        else:
+            wrap(value: wrap(value: {$self}))
+            belongs Marked
+"#;
+
+#[test]
+fn a_nested_application_update_is_not_duplicated_on_its_parent() {
+    let before =
+        LanguageDocument::import_new_root(EXPRESSION_ROOT, "evo:expression-nested").unwrap();
+    let root = before.ref_for_sign("root").unwrap();
+    let case = children(&before, &root, NodeKind::Case)[0].clone();
+    let branch = children(&before, &case, NodeKind::CaseBranch)[0].clone();
+    let outer = children(&before, &branch, NodeKind::Application)[0].clone();
+    let inner = children(&before, &outer, NodeKind::Application)[0].clone();
+    let mut replacement = before
+        .language()
+        .sign_named("root")
+        .unwrap()
+        .items
+        .iter()
+        .find_map(|item| match item {
+            conlang_language::SignItem::SignExpression(expression) => {
+                let Expression::Case(case) = &expression.expression else {
+                    return None;
+                };
+                let Expression::SignApplication(outer) = &case.branches[0].result else {
+                    return None;
+                };
+                let conlang_language::SignArgumentValue::Application(inner) =
+                    &outer.arguments[0].value
+                else {
+                    return None;
+                };
+                Some((**inner).clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    replacement.callee = "alt".to_owned();
+    let after = apply_edit(
+        &before,
+        PrimitiveEdit::Update {
+            node: inner.clone(),
+            change: NodeUpdate::SignApplication(replacement),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap()
+    .document;
+    let edits = reconstruct_and_replay(&before, &after);
+    assert!(matches!(
+        edits.as_slice(),
+        [PrimitiveEdit::Update {
+            node,
+            change: NodeUpdate::SignApplication(_),
+        }] if node == &inner
+    ));
+}
+
+#[test]
+fn case_header_and_branch_changes_are_typed_and_replayable() {
+    let before = LanguageDocument::import_new_root(
+        r#"
+sign root:
+    syn:
+        feature:
+            trigger = enum(on, off)
+            trigger = on
+            result = enum(base, selected)
+            result = base
+    phon:
+        /r/
+    case:
+        $self.syn.trigger == on:
+            syn:
+                feature:
+                    result = selected
+"#,
+        "evo:expression-case",
+    )
+    .unwrap();
+    let root = before.ref_for_sign("root").unwrap();
+    let case = children(&before, &root, NodeKind::Case)[0].clone();
+    let selected = apply_edit(
+        &before,
+        PrimitiveEdit::Update {
+            node: case.clone(),
+            change: NodeUpdate::CaseSelection(conlang_language::CaseSelection::Accumulate),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap()
+    .document;
+    let case_edits = reconstruct_and_replay(&before, &selected);
+    assert!(matches!(
+        case_edits.as_slice(),
+        [PrimitiveEdit::Update {
+            node,
+            change: NodeUpdate::CaseHeader { .. },
+        }] if node == &case
+    ));
+
+    let branch_before = LanguageDocument::import_new_root(
+        "trait A:\ntrait B:\n\nsign root:\n    phon:\n        /r/\n    case:\n        else:\n            $self\n            belongs A\n",
+        "evo:expression-branch",
+    )
+    .unwrap();
+    let branch_root = branch_before.ref_for_sign("root").unwrap();
+    let branch_case = children(&branch_before, &branch_root, NodeKind::Case)[0].clone();
+    let branch = children(&branch_before, &branch_case, NodeKind::CaseBranch)[0].clone();
+    let mut changed_branch = branch_before
+        .language()
+        .sign_named("root")
+        .unwrap()
+        .items
+        .iter()
+        .find_map(|item| match item {
+            conlang_language::SignItem::SignExpression(expression) => {
+                let Expression::Case(case) = &expression.expression else {
+                    return None;
+                };
+                Some(case.branches[0].clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    changed_branch.belongs = vec!["B".to_owned()];
+    let guarded = apply_edit(
+        &branch_before,
+        PrimitiveEdit::Update {
+            node: branch.clone(),
+            change: NodeUpdate::CaseBranch(changed_branch),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap()
+    .document;
+    let branch_edits = reconstruct_and_replay(&branch_before, &guarded);
+    assert!(matches!(
+        branch_edits.as_slice(),
+        [PrimitiveEdit::Update {
+            node,
+            change: NodeUpdate::CaseBranch(_),
+        }] if node == &branch
+    ));
+}
+
+#[test]
+fn same_parent_case_branch_rotation_uses_one_lcs_move() {
+    let source = r#"
+trait A:
+trait B:
+
+sign root:
+    phon:
+        /r/
+    case:
+        $self == [A]:
+            $self
+        $self == [B]:
+            $self
+        else:
+            $self
+"#;
+    let before = LanguageDocument::import_new_root(source, "evo:reorder-case").unwrap();
+    let root = before.ref_for_sign("root").unwrap();
+    let case = children(&before, &root, NodeKind::Case)[0].clone();
+    let branches = children(&before, &case, NodeKind::CaseBranch);
+    let after = apply_edit(
+        &before,
+        PrimitiveEdit::Move {
+            node: branches[0].clone(),
+            new_parent: case,
+            anchor: Anchor::After(branches[1].clone()),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap()
+    .document;
+    let edits = reconstruct_and_replay(&before, &after);
+    assert_eq!(
+        edits
+            .iter()
+            .filter(|edit| matches!(edit, PrimitiveEdit::Move { .. }))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn reorder_with_insert_and_delete_keeps_final_item_order() {
+    let before = LanguageDocument::import_new_root(
+        concat!(
+            "trait A:\ntrait B:\ntrait C:\ntrait D:\n\n",
+            "sign root:\n",
+            "    belongs A\n",
+            "    belongs B\n",
+            "    belongs C\n",
+            "    phon:\n",
+            "        /r/\n",
+        ),
+        "evo:reorder-mixed",
+    )
+    .unwrap();
+    let root = before.ref_for_sign("root").unwrap();
+    let definitions = children(&before, &root, NodeKind::Belongs);
+    let moved = apply_edit(
+        &before,
+        PrimitiveEdit::Move {
+            node: definitions[2].clone(),
+            new_parent: root.clone(),
+            anchor: Anchor::Before(definitions[0].clone()),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap()
+    .document;
+    let inserted = apply_edit(
+        &moved,
+        PrimitiveEdit::Insert {
+            parent: root,
+            anchor: Anchor::Before(definitions[1].clone()),
+            subtree: DetachedNode::Item(conlang_language::SignItem::Belongs("D".to_owned())),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap()
+    .document;
+    let after = apply_edit(
+        &inserted,
+        PrimitiveEdit::Delete {
+            node: definitions[0].clone(),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap()
+    .document;
+    let edits = reconstruct_and_replay(&before, &after);
+    let kinds = edits
+        .iter()
+        .map(|edit| match edit {
+            PrimitiveEdit::Update { .. } => "update",
+            PrimitiveEdit::Move { .. } => "move",
+            PrimitiveEdit::Insert { .. } => "insert",
+            PrimitiveEdit::Delete { .. } => "delete",
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(kinds.last(), Some(&"delete"));
+    assert!(kinds.contains(&"insert"));
+    assert!(kinds.contains(&"move"));
 }
 
 // ── 生與滅 ────────────────────────────────────────────────────────────────

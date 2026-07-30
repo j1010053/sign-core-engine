@@ -19,6 +19,7 @@ pub mod diff;
 pub mod evolution;
 pub mod function;
 pub mod merge;
+pub mod reconcile;
 pub mod reconstruct;
 pub mod rewrite;
 
@@ -95,6 +96,7 @@ pub enum NodeUpdate {
     },
     DefinitionPath(String),
     DefinitionValue(String),
+    RuleName(Option<String>),
     RuleBody(String),
     RuleStage(Stage),
     RuleDimension(Dim),
@@ -120,8 +122,24 @@ pub enum NodeUpdate {
     RoleDeclaration(RoleDecl),
     RoleBinding(RoleBinding),
     CaseSelection(conlang_language::CaseSelection),
+    /// The addressable, non-child fields of a typed case. Branches retain
+    /// their own stable identities and are reconciled independently.
+    CaseHeader {
+        selection: conlang_language::CaseSelection,
+        expected: conlang_language::ExpressionType,
+        scrutinee: Option<String>,
+        name: Option<String>,
+    },
     CaseBranch(CaseBranch),
     SignApplication(SignApplication),
+    /// Root expression wrapper/owner metadata (`FeatureExpression`,
+    /// `RoleExpression`, `Projection`, interpolation vs application). This is
+    /// deliberately restricted to an expression-bearing SignItem root.
+    ExpressionItem(SignItem),
+    Realization(Realization),
+    /// Explicit flat → structured phon authoring/update. A structural root
+    /// replacement is never inferred from a child insert.
+    PhonBlockRoot(PhonBlock),
     Constraint(BinaryConstraint),
 }
 
@@ -1304,6 +1322,10 @@ fn update_payload(
             rule_at_mut(language, &node.address)?.body = value;
             Ok(None)
         }
+        (NodeKind::Rule | NodeKind::FeatureRule, NodeUpdate::RuleName(value)) => {
+            rule_at_mut(language, &node.address)?.name = value;
+            Ok(None)
+        }
         (NodeKind::Rule | NodeKind::FeatureRule, NodeUpdate::RuleStage(value)) => {
             rule_at_mut(language, &node.address)?.stage = value;
             Ok(None)
@@ -1423,6 +1445,22 @@ fn update_payload(
             case_at_mut(language, &node.address)?.selection = value;
             Ok(None)
         }
+        (
+            NodeKind::Case,
+            NodeUpdate::CaseHeader {
+                selection,
+                expected,
+                scrutinee,
+                name,
+            },
+        ) => {
+            let case = case_at_mut(language, &node.address)?;
+            case.selection = selection;
+            case.expected = expected;
+            case.scrutinee = scrutinee;
+            case.name = name;
+            Ok(None)
+        }
         (NodeKind::CaseBranch, NodeUpdate::CaseBranch(value)) => {
             *case_branch_at_mut(language, &node.address)? = value;
             Ok(Some("case.references".to_owned()))
@@ -1430,6 +1468,47 @@ fn update_payload(
         (NodeKind::Application, NodeUpdate::SignApplication(value)) => {
             *application_at_mut(language, &node.address)? = value;
             Ok(Some("application.callee".to_owned()))
+        }
+        (NodeKind::Case | NodeKind::Application, NodeUpdate::ExpressionItem(value)) => {
+            let target = item_at_address_mut(language, &node.address)?;
+            if !matches!(
+                &*target,
+                SignItem::SignExpression(_)
+                    | SignItem::FeatureExpression(_)
+                    | SignItem::RoleExpression(_)
+            ) || !matches!(
+                &value,
+                SignItem::SignExpression(_)
+                    | SignItem::FeatureExpression(_)
+                    | SignItem::RoleExpression(_)
+            ) || item_kind(&value) != node.kind
+            {
+                return Err(field_mismatch(node, "expression item"));
+            }
+            *target = value;
+            Ok(Some("case.references".to_owned()))
+        }
+        (NodeKind::Realization, NodeUpdate::Realization(value)) => {
+            *item_at_address_mut(language, &node.address)? = SignItem::Realization(value);
+            Ok(Some("case.references".to_owned()))
+        }
+        (NodeKind::Rule | NodeKind::FeatureRule, NodeUpdate::PhonBlockRoot(value)) => {
+            let rule = rule_at_mut(language, &node.address)?;
+            if rule.dim != Dim::Phon {
+                return Err(EditError::FieldMismatch(
+                    "structured phon blocks apply only to phon rules".to_owned(),
+                ));
+            }
+            if rule.name.is_none() {
+                return Err(EditError::FieldMismatch(
+                    "a structured phon block requires a named rule".to_owned(),
+                ));
+            }
+            rule.phon_block = Some(value);
+            rule.body.clear();
+            rule.else_chain.clear();
+            rule.then_chain.clear();
+            Ok(None)
         }
         (NodeKind::Constraint, NodeUpdate::Constraint(value)) => {
             *item_at_address_mut(language, &node.address)? = SignItem::Constraint(value);
@@ -1789,6 +1868,11 @@ enum UnresolvedOperation {
         selector: Selector,
         field: String,
         value: String,
+    },
+    UpdateBlock {
+        selector: Selector,
+        field: String,
+        block: String,
     },
     Delete(Selector),
     Move {
@@ -2286,16 +2370,33 @@ fn parse_operation(ordinal: u64, body: &[String]) -> Result<UnresolvedOperation,
         .ok_or_else(|| ReplayError::Parse(format!("statement {ordinal} is empty")))?
         .trim();
     let operation = if let Some(rest) = first.strip_prefix("update ") {
-        let (left, value) = rest
-            .split_once(" = ")
-            .ok_or_else(|| ReplayError::Parse(format!("invalid update in statement {ordinal}")))?;
-        let (selector, field) = split_update_field(left).ok_or_else(|| {
-            ReplayError::Parse(format!("update has no field in statement {ordinal}"))
-        })?;
-        UnresolvedOperation::Update {
-            selector: parse_selector(selector)?,
-            field: field.to_owned(),
-            value: unquote_change_value(value),
+        if let Some(left) = rest.strip_suffix(':') {
+            let (selector, field) = split_update_field(left).ok_or_else(|| {
+                ReplayError::Parse(format!("update has no field in statement {ordinal}"))
+            })?;
+            let block = body.iter().skip(1).cloned().collect::<Vec<_>>().join("\n");
+            if block.trim().is_empty() {
+                return Err(ReplayError::Parse(format!(
+                    "update statement {ordinal} has no .lang block"
+                )));
+            }
+            UnresolvedOperation::UpdateBlock {
+                selector: parse_selector(selector)?,
+                field: field.to_owned(),
+                block,
+            }
+        } else {
+            let (left, value) = rest.split_once(" = ").ok_or_else(|| {
+                ReplayError::Parse(format!("invalid update in statement {ordinal}"))
+            })?;
+            let (selector, field) = split_update_field(left).ok_or_else(|| {
+                ReplayError::Parse(format!("update has no field in statement {ordinal}"))
+            })?;
+            UnresolvedOperation::Update {
+                selector: parse_selector(selector)?,
+                field: field.to_owned(),
+                value: unquote_change_value(value),
+            }
         }
     } else if let Some(rest) = first.strip_prefix("delete ") {
         UnresolvedOperation::Delete(parse_selector(rest)?)
@@ -3031,6 +3132,9 @@ fn stage_keyword(stage: Stage) -> &'static str {
 /// Wrapper name for synthesising a one-item `.lang` fragment so the whole
 /// `.lang` parser/printer (and its dimension validation) is reused verbatim.
 const FRAGMENT_SIGN: &str = "chg_fragment";
+const FRAGMENT_PHON_TRAIT: &str = "ChgPhonFragment";
+const FRAGMENT_PHON_RULE: &str = "chg_phon_fragment";
+const PHON_ELEMENT_SENTINEL: &str = "__chg_identity__ => __chg_identity__";
 
 /// Parse an `insert into … :` block (a verbatim `.lang` fragment) into one or
 /// more detached payloads: a whole `trait`/`sign`, or the sign-body items of a
@@ -3092,6 +3196,160 @@ fn parse_insert_block(block: &str) -> Result<Vec<DetachedNode>, ReplayError> {
         ));
     }
     Ok(items.iter().cloned().map(DetachedNode::Item).collect())
+}
+
+fn parse_phon_root_block(block: &str) -> Result<PhonBlock, ReplayError> {
+    let head = block
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(str::trim)
+        .unwrap_or("");
+    if head.starts_with("Then")
+        || head.starts_with("Else")
+        || head.eq_ignore_ascii_case("propagate:")
+    {
+        return Err(ReplayError::Parse(
+            "a phon root block needs a leading statement; leading Then/Else/Propagate has no legal .lang surface"
+                .to_owned(),
+        ));
+    }
+    let indented = block
+        .lines()
+        .map(|line| {
+            if line.trim().is_empty() {
+                String::new()
+            } else {
+                format!("        {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        "global trait {FRAGMENT_PHON_TRAIT}:\n    phon:\n        {FRAGMENT_PHON_RULE}:\n{indented}\n"
+    );
+    let language = Language::parse(&source)
+        .map_err(|error| ReplayError::Parse(format!("phon .lang fragment: {error}")))?;
+    language
+        .traits
+        .first()
+        .and_then(|trait_def| trait_def.blocks.first())
+        .and_then(|block| block.items.first())
+        .and_then(|item| match item {
+            SignItem::Rule(rule) => rule.phon_block.clone(),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            ReplayError::Parse("phon fragment did not produce a structured block".to_owned())
+        })
+}
+
+fn parse_phon_insert_block(
+    block: &str,
+    document: &LanguageDocument,
+    parent: &NodeEntryV1,
+) -> Result<Vec<DetachedNode>, ReplayError> {
+    if let Some(rest) = block.trim().strip_prefix("leaf ") {
+        return Ok(vec![DetachedNode::PhonStatement(rest.trim().to_owned())]);
+    }
+    let container = phon_container_block(document.language(), &parent.address).map_err(|_| {
+        ReplayError::Selector(
+            "phon insert needs an existing structured block; use an explicit `.phon_block:` update to bootstrap a flat rule"
+                .to_owned(),
+        )
+    })?;
+    let head = block
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(str::trim)
+        .unwrap_or("");
+    let wrapped;
+    let fragment = if head.starts_with("Then") || head.starts_with("Else") {
+        wrapped = format!("    {PHON_ELEMENT_SENTINEL}\n{block}");
+        wrapped.as_str()
+    } else {
+        block
+    };
+    let parsed = parse_phon_root_block(fragment)?;
+
+    let sentinel_element = |elements: &[PhonBlock]| {
+        let first_is_sentinel = matches!(
+            elements.first(),
+            Some(PhonBlock::Leaf(statements))
+                if statements.as_slice() == [PHON_ELEMENT_SENTINEL]
+        );
+        (first_is_sentinel && elements.len() == 2).then(|| elements[1].clone())
+    };
+    if let PhonBlock::Then(elements) | PhonBlock::Else(elements) = &parsed {
+        if let Some(element) = sentinel_element(elements) {
+            return Ok(vec![DetachedNode::PhonBlockNode(element)]);
+        }
+    }
+
+    match split_phon_propagate(container).1 {
+        PhonBlock::Leaf(_) => match parsed {
+            PhonBlock::Leaf(statements) => Ok(statements
+                .into_iter()
+                .map(DetachedNode::PhonStatement)
+                .collect()),
+            _ => Err(ReplayError::Parse(
+                "a Leaf phon container accepts statement lines, not a sub-block".to_owned(),
+            )),
+        },
+        PhonBlock::Then(_) | PhonBlock::Else(_) => Ok(vec![DetachedNode::PhonBlockNode(parsed)]),
+        PhonBlock::Propagate(_) => unreachable!("split_phon_propagate removes the wrapper"),
+    }
+}
+
+fn split_phon_propagate(block: &PhonBlock) -> (bool, &PhonBlock) {
+    match block {
+        PhonBlock::Propagate(inner) => (true, inner),
+        other => (false, other),
+    }
+}
+
+fn render_phon_root_block(block: &PhonBlock) -> Option<String> {
+    if matches!(block, PhonBlock::Propagate(_)) {
+        return None;
+    }
+    let mut fragment = Language::new();
+    fragment.traits.push(TraitDef {
+        name: FRAGMENT_PHON_TRAIT.to_owned(),
+        global: true,
+        blocks: vec![Block {
+            items: vec![SignItem::Rule(Rule {
+                id: conlang_language::RuleId::local(0),
+                name: Some(FRAGMENT_PHON_RULE.to_owned()),
+                phon_block: Some(block.clone()),
+                propagate: false,
+                body: String::new(),
+                stage: Stage::Word,
+                dim: Dim::Phon,
+                else_chain: Vec::new(),
+                then_chain: Vec::new(),
+                source: conlang_language::SourceLocation::unknown(),
+                branch_sources: Vec::new(),
+            })],
+        }],
+    });
+    Some(
+        fragment
+            .dump()
+            .lines()
+            .skip(3)
+            .map(|line| line.strip_prefix("            ").unwrap_or(line))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+fn render_phon_element_block(block: &PhonBlock) -> Option<String> {
+    match block {
+        PhonBlock::Propagate(inner) => render_phon_root_block(&PhonBlock::Then(vec![
+            PhonBlock::Leaf(vec![PHON_ELEMENT_SENTINEL.to_owned()]),
+            PhonBlock::Propagate(inner.clone()),
+        ])),
+        other => render_phon_root_block(other),
+    }
 }
 
 /// Render a single sign-body item back to its `.lang` block form (inverse of
@@ -3215,6 +3473,24 @@ fn resolve_operation(
                 node,
             }])
         }
+        UnresolvedOperation::UpdateBlock {
+            selector,
+            field,
+            block,
+        } => {
+            let node = resolve_selector(selector, document)?;
+            if !matches!(node.expected, NodeKind::Rule | NodeKind::FeatureRule)
+                || field != "phon_block"
+            {
+                return Err(ReplayError::Selector(format!(
+                    "block update `{field}` is supported only on a phon rule's `phon_block`"
+                )));
+            }
+            Ok(vec![PrimitiveEdit::Update {
+                node,
+                change: NodeUpdate::PhonBlockRoot(parse_phon_root_block(block)?),
+            }])
+        }
         UnresolvedOperation::Delete(selector) => Ok(vec![PrimitiveEdit::Delete {
             node: resolve_selector(selector, document)?,
         }]),
@@ -3263,6 +3539,22 @@ fn resolve_operation(
                     ReplayError::Selector("target is not a resolvable case".to_owned())
                 })?;
                 parse_case_branch_block(block, case)?
+            } else if matches!(
+                parent.expected,
+                NodeKind::Rule | NodeKind::FeatureRule | NodeKind::PhonBlockNode
+            ) {
+                let entry = ensure_target(document, &parent)
+                    .map_err(|error| ReplayError::Selector(error.to_string()))?;
+                let head = block
+                    .lines()
+                    .find(|line| !line.trim().is_empty())
+                    .map(str::trim)
+                    .unwrap_or("");
+                if head.starts_with("else ") || head.starts_with("then ") {
+                    parse_insert_block(block)?
+                } else {
+                    parse_phon_insert_block(block, document, entry)?
+                }
             } else {
                 parse_insert_block(block)?
             };
@@ -3392,7 +3684,19 @@ impl ResolvedChangeSet {
             for edit in &statement.edits {
                 match edit {
                     PrimitiveEdit::Update { node, change } => {
-                        if let Some((field, value)) = dump_update(change) {
+                        if let NodeUpdate::PhonBlockRoot(block) = change {
+                            if let Some(fragment) = render_phon_root_block(block) {
+                                output.push_str(&format!(
+                                    "        update {}.phon_block:\n",
+                                    dump_node(node)
+                                ));
+                                for line in fragment.lines() {
+                                    output.push_str("            ");
+                                    output.push_str(line);
+                                    output.push('\n');
+                                }
+                            }
+                        } else if let Some((field, value)) = dump_update(change) {
                             output.push_str(&format!(
                                 "        update {}.{} = {}\n",
                                 dump_node(node),
@@ -3503,6 +3807,24 @@ impl ResolvedChangeSet {
                             keyword,
                             body
                         ));
+                    }
+                    PrimitiveEdit::Insert {
+                        parent,
+                        anchor,
+                        subtree: DetachedNode::PhonBlockNode(block),
+                    } => {
+                        if let Some(fragment) = render_phon_element_block(block) {
+                            output.push_str(&format!(
+                                "        insert into {} at {}:\n",
+                                dump_node(parent),
+                                dump_anchor(anchor)
+                            ));
+                            for line in fragment.lines() {
+                                output.push_str("            ");
+                                output.push_str(line);
+                                output.push('\n');
+                            }
+                        }
                     }
                     PrimitiveEdit::Insert { .. } => {}
                 }

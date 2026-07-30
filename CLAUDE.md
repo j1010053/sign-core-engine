@@ -48,8 +48,9 @@
 | `架構修補05_Primitive與檔案格式_v0.1.md` | **P20–P28 權威**:DSL 獨立性、IR dump/canonical printer、條件語法(else/Path/tier-adjacency)、四原語、Ref 模型、.lang/.chg 檔案格式 |
 | `架構修補06_插件服務與DSL_API_v0.1.md` | **P29–P37 權威**:插件系統(資料層/程式碼層分離)、外部服務生命週期(ServiceRef→resolve→執行→驗證→History)、音變 DSL 最小對外 API(承 P5/P22 鐵律)。完整插件仍是設計層；embedded std 已先實作 package code/data/config 子集。 |
 | `架構修補10_歷時function層與載入_v0.1.md` | **P47–P55 權威**:層①=語句/層②③④=函數呼叫 `name(args)`(層級由名字解析,非關鍵字);Recipe/Goal 是 `code/` 檔案分工,body 語意由既有 case/when 承載;定義住套件 `code/*.chg`(`function Name(參數 [約束]):`);**載入沿用 P29 auto-discovery,否決顯式 import**(可重現性靠既有 library lock);Recipe **接力**展開;路徑庫 = 參數化 function(code)+ 路徑表(data);`expand` 先開好 `ServiceContext` 接點;**P54** sign 增 `components` metadata(兌現 §4.3 對 fuse 的 component 引用;與單一來源的 `origin` 職責不同);**P55** `.chg` 語句標記 `#N:` + 註解統一 `/* … */`(三格式一致;`#` 在 `.qy` 為詞界 D19) |
-| `架構修補11_演化樹節點模型_v0.1.md` | **P56–P64 權威**:記錄「digest 契約 vs stale 傳播」結構衝突;**節點存 snapshot、邊存 changeset,兩者不可變**(P56;覆寫 docs/06 §5「不存副本」實作面但保留因果精神,不變式可 fsck;紅利=讀節點 O(1));**rebase 判定依型別化錯誤變體**(P57;先放寬 digest 再分類,`Statement{ordinal}` 免費給出哪一句衝突);**節點內容定址**(P58,同構 git commit hash);**digest 重新定位**為跨系統防掉包 + rebase 入口(P59);**snapshot 持久化採共享物件庫**(P60,sign=blob/清單=tree/節點=commit)。**v0.3 補演化樹「橫向」**:**多親 = 全 parent 機械合併**(P61;取代語意空轉的 `parents[0]` 佔位,即 docs/06 §5【M+】;**只合併 `signs`**,其餘四區塊人工指定;**3-way**、空基準退化為聯集、**以穩定 id 對齊**(同 docs/06 §6.1 diff);兩邊異值=衝突則節點建不出來;命名碰撞用前綴改名規則;合併後查懸空引用);**落地 `ContactInjection`**(P62;docs/06 §3.2 早已指定從未實作的**跨語言集合選擇器**,`adopt`/接觸/融合三機制共用;**不得加接觸邊**(§2 只有一種邊);宣告 = prelude `donor <node-id>` 行,P58 下 NodeId 即 digest;**來源由引用派生不加欄位**);**`ServiceContext` 放寬為「document 以外的唯讀來源」且範圍限 parents ∪ donor 宣告**(P63;否則 P58 內容定址失效;**P56 必須先於 P62**);**節點 folder 儲存 + 雜湊邊界**(P64;給 docs/07 §5c 旁註層存放位置;**雜湊內不可變、annotation/config 在雜湊外**;判準=會改變語言狀態的一律寫在邊上,`ContactInjection` 不得放 config) |
-| `架構修補09_phon命名block_v0.md` | **P46 權威**:phon 規則命名/塊對齊 Lexurgy `.qy`(`name:` 前綴 + `Then:`/`Else:` 塊);取徑 A。slice 1 已落地(`name:` 前綴 inline + codegen 標籤);S2–S4(巢狀 block IR/語句定址/propagate)staged |
+| `架構修補11_演化樹節點模型_v0.1.md` | **P56–P64 權威**:節點存 immutable snapshot、邊存 changeset(P56)；rebase 依型別化錯誤(P57)；**node-v2** 內容定址納入 source digest、identity-manifest digest、完整 parent edge(from + changeset digest)與 nativization(P58/P59)；全 parent 3-way merge 已涵蓋 `signs`/`traits`/`distribution` 逐項及 `prosody`/`dsl_decls` 整塊(P61)；donor 由 `DonorSpec` 注入、`ServiceContext` 不變，`adopt` 來源由引用派生(P62/P63)；P60/P64 由獨立 `conlang-persistence` host crate 實作共享物件庫、node folder、annotation/config 雜湊外層，語意 crates 不碰 `std::fs`。 |
+| `架構修補09_phon命名block_v0.md` | **P46 權威**:phon 規則命名/塊對齊 Lexurgy `.qy`(`name:` 前綴 + `Then:`/`Else:` 塊);取徑 A。S1–S5 已落地：具名規則、巢狀 `PhonBlock`、語句/子 block 四原語、`propagate`、`{ }` grouped-block codegen→Tshiatūn parser，以及 `.chg` source insert／顯式 `.phon_block:` bootstrap。leading-propagate 仍明確拒絕。 |
+| `26_Step16收官_文件契約與驗收矩陣_v1.0.md` | **Step 16 現行實作契約**：彙整分層 diff、EvolutionGraph、P60–P64、identity reconciliation、完整 typed reconstruct、同父重排與跨引擎 grouped phon。 |
 | `架構修補08_具名可定址節點_v0.1.md` | **P45 權威**:Rule/TypedCase/CaseBranch 可選 `@name` 標籤 + keyed 定址(`rule["x"]`/`case["x"]`/`branch["x"]`);承 P24/P25/P26,標籤不取代穩定 id。取徑 B(不動 sign 扁平結構) |
 | `架構修補07_共時四維系統_v0.1.md` | **P38–P44 權威**:phon/syn/sem/prag 四維獨立(OntologyRegistry)、Defs+typed projection/patch、`belongs`(取代 provides)、valence=slots、construction-as-Sign+slot mapping、Lexurgy 式 Else 三分、四維同步規則;路線圖插入步驟 12a–12e(M1++,M2 前) |
 | `14_共時lang語法與資料貼合度_v0.1.md` | **共時 surface 實作對照**:巢狀 Path、`.lang` SlotMap、typed sign metadata，以及 Language 與 Evidence/Attestation 的 type/token 邊界。 |
@@ -199,10 +200,11 @@ verbatim)、`==` 切 Block(P27)、`Name[n]` 引用、`=`/`=>` 二分、`@stage`(
 
 **引擎分離(2026-07-17,I7 v2)**:core/dsl/cli/examples/corpus 移至獨立 repo
 **`../tshiatun`**(Tshiatūn/切韻;GPL-3.0-or-later;規則檔 `.qy`;bin `tshiatun`;
-14 套件綠、Lexurgy 黃金 8/8、wasm 綠)——P20「獨立可分軟體」的實體化,待 push GitHub。
-本 repo(工作台)自此只含設計文件 + `crates/language`;**主引擎以 git submodule 掛於 `tshiatun/`**
-(language 的 dep path = `../../tshiatun/crates/dsl`)。目前 .gitmodules URL 為本地絕對路徑,
-**push GitHub 後須改為遠端 URL 並 `git submodule sync`**。引擎目錄已更名 ASCII `tshiatun`。
+14 套件綠、Lexurgy 黃金 8/8、wasm 綠)——P20「獨立可分軟體」的實體化。
+本 repo(工作台)含設計文件 + `crates/language`／`changeset`／`persistence`；
+**音變主引擎以 git submodule 掛於 `tshiatun/`**（language 的 dep path =
+`../../tshiatun/crates/dsl`）。`.gitmodules` 使用 GitHub 遠端 URL；引擎目錄為 ASCII
+`tshiatun`。
 引擎相關測試/開發改在 tshiatun repo 進行。
 
 **已完成(鳥瞰步驟 10,I16)**:`language::compile`——①Source→②Expanded
@@ -349,6 +351,19 @@ lazy compile 與 statement 交易定稿為 Step 14 completion。相容性測試�
 決定性、`.chg` dump round-trip、**三道 digest**(base source／identity-manifest／library
 lock)replay 前拒絕、交易回滾/部分保留、lazy compile cache(`step14_interpreter.rs`)。
 契約見 docs/22;`cargo test --workspace` 全綠為證(本機無 pwsh,`.ps1` 閘門未實跑)。
+
+**步驟 15 已封板（2026-07-30）**：義項／衍生邊成為 sem 一級節點；12 項
+Atomic Rewrite 皆展開為四原語；層②③④統一 `name(args)` 呼叫；function 定義、
+auto-discovery、data 路徑與 `ServiceContext` 接點依 P47–P55 落地。Step 17 才會把
+Recipe／Goal 變成實際 runtime 層，本步不提前宣稱。
+
+**步驟 16 已收官（2026-07-30）**：分層 diff、immutable EvolutionGraph／node-v2、
+typed rebase、全 parent 3-way merge、donor／`adopt`、狀態→四原語 reconstruct 已接通。
+收官補齊 identity reconciliation（exact `open` 仍 digest-strict）、同父 LCS Move、
+persisted expression／realization typed reconstruct 與 phon source insert／顯式
+`.phon_block:` bootstrap。P60／P64 亦由獨立 host persistence crate 收官：共享
+content-addressed objects、node folder、hash-external annotation/config；細部拒絕邊界與
+驗證矩陣見 docs/26。下一個歷時層是 Step 17。
 
 **v1 路徑已硬移除(2026-07-24)**:v2 為唯一模型。移除 `LanguageSchema` V1/V2 分野
 (FP `case`/`when`/`constraints` 永遠可用,無需標頭;舊 `schema conlang.lang/v2` 行被

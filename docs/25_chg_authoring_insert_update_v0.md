@@ -1,7 +1,9 @@
-# `.chg` 授權語法 v0：insert / update over 四原語（Step 15 前置設計）
+# `.chg` 授權語法 v0：insert / update over 四原語（已落地）
 
-> **設計稿，未實作。** 本文定義 `.chg` 上 `insert`／`update` 的**授權表層**，作為 Step 15
-> 的前置設計。權威操作仍只有 **Insert／Delete／Update／Move** 四原語（P23）；本語法一律
+> **2026-07-30 狀態：核心授權面已實作。** 本文定義 `.chg` 上
+> `insert`／`update` 的**授權表層**；phon block 的 source insert／顯式 bootstrap
+> convenience 亦已補齊，其餘 §6.5 邊界維持。
+> 權威操作仍只有 **Insert／Delete／Update／Move** 四原語（P23）；本語法一律
 > **降階**成四原語，resolve／dump 後的 ChangeSet **只含四原語**。Step 14 契約（docs/22）不變。
 >
 > **鐵律**：`insert`／`update` 的 **target 只能是 `.lang` 關鍵字**。`.chg` 不自創任何節點型別或
@@ -241,6 +243,32 @@ constraints:                             # sign 級（語意屬 syn）
 - `else` 鏈＝Lexurgy 第一匹配 fallback；`then` 鏈＝循序（下一支讀更新後狀態）；**同一 rule 上互斥**。
 - 四者皆 ordered，位置語意由 §3.3–3.5 的符號式 determiner 表達。
 
+### 5.5 structured phon 的顯式 bootstrap 與 source insert
+
+Flat rule 不因 `insert` 偷偷改變資料形狀；先用 block-valued update 明確建立 root：
+
+```chg
+update trait("Core").block[0].rule["shift"].phon_block:
+    a => b
+    Then:
+        b => c
+```
+
+之後 rule／leaf／Then／Else container 都可接受真實 `.lang` phon statement 或完整 sub-block：
+
+```chg
+insert into trait("Core").block[0].rule["shift"].then[1] at end:
+    c => a
+
+insert into trait("Core").block[0].rule["shift"] at end:
+    Then propagate:
+        c => b
+```
+
+上述表層分別降為 `Update{PhonBlockRoot}` 與 `Insert{PhonStatement|PhonBlockNode}`；
+`dump→parse→resolve` 固定點由 `phon_authoring.rs` 驗證。leading boundary root 與
+structured → flat 仍無合法便利語法，會明確拒絕。
+
 ---
 
 ## 6. 降階與前置
@@ -301,6 +329,10 @@ workspace 278 綠、clippy 0）：
   `Insert{CaseBranch}`（wrapper 以 target case 的 keyword/scrutinee 重建語境解析；多 branch fan
   out）；dump 經 SignContext wrapper 還原、round-trip 穩定。**限 SignContext `case:`/`when:`**。
   `case[n]`/`case["x"]`／`branch[m]`/`branch["x"]` 定址已補（§3.1）。
+- **structured phon authoring convenience**：`update <phon-rule>.phon_block:` 顯式
+  flat→structured；既存 structured rule／leaf／Then／Else 可從 source fragment 插入
+  statement 或完整 Then／Else／propagate sub-block。flat rule 的直接 insert 明確拒絕，
+  不做 silent bootstrap；resolved dump 往返穩定且 codegen 交 Tshiatūn 實收。
 
 尚未落地（皆有明確原因，非遺漏）：
 

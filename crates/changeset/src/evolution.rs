@@ -25,7 +25,8 @@
 //!
 //! ## 內容定址(P58)
 //!
-//! `NodeId = sha256(snapshot ‖ parents ‖ nativization)`,同構 git commit hash,
+//! `NodeId = sha256(node-v2 ‖ snapshot.source digest ‖ identity-manifest digest
+//! ‖ parent edge(from + changeset digest) ‖ nativization)`,同構 git commit hash,
 //! 滿足 P26(決定性、禁隨機/時間戳)。兩個推論:
 //!
 //! - **無環是結構保證,不是檢查**:節點 id 由其 parents 的 id 算出,故「成環」需要
@@ -51,6 +52,23 @@ pub struct NodeId(String);
 impl NodeId {
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Parse the canonical persisted form of a content-addressed node id.
+    ///
+    /// Construction remains closed to arbitrary human labels: only the exact
+    /// 64-character lowercase SHA-256 form accepted by the persistence layer
+    /// can cross this boundary.
+    pub fn parse(value: impl Into<String>) -> Result<NodeId, EvolutionError> {
+        let value = value.into();
+        if value.len() != 64
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(EvolutionError::InvalidNodeId(value));
+        }
+        Ok(NodeId(value))
     }
 }
 
@@ -149,8 +167,31 @@ impl Node {
     }
 }
 
+/// Pure host-boundary representation used to restore a persisted graph.
+///
+/// It deliberately contains no filesystem paths or serialization details.
+/// A host persistence crate materializes the snapshot and edges, then hands
+/// them to [`EvolutionGraph::restore`], which rechecks node-v2 and replay
+/// invariants before making the graph observable.
+#[derive(Debug, Clone)]
+pub struct PersistedNode {
+    pub id: NodeId,
+    pub parents: Vec<Edge>,
+    pub snapshot: LanguageDocument,
+    pub nativization: Nativization,
+    pub label: Option<String>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum EvolutionError {
+    #[error("EVOLUTION_INVALID_NODE_ID: {0:?} is not a lowercase SHA-256 digest")]
+    InvalidNodeId(String),
+    #[error("EVOLUTION_DUPLICATE_PERSISTED_NODE: {0}")]
+    DuplicatePersistedNode(NodeId),
+    #[error("EVOLUTION_PERSISTED_PARENT_MISSING: {node} refers to missing parent {parent}")]
+    PersistedParentMissing { node: NodeId, parent: NodeId },
+    #[error("EVOLUTION_PERSISTED_GRAPH_CYCLE: persisted parent edges are not acyclic")]
+    PersistedGraphCycle,
     #[error("EVOLUTION_UNKNOWN_NODE: {0}")]
     UnknownNode(NodeId),
     /// root 由 `add_root` 建立;其餘節點必須有 parent。
@@ -160,10 +201,10 @@ pub enum EvolutionError {
     /// 無關的 sign(見 `add_root`)。
     #[error("EVOLUTION_DUPLICATE_ROOT_NAMESPACE: {0} is already used by another root")]
     DuplicateRootNamespace(String),
-    /// 同一份 `.lang`、不同 identity namespace ⇒ 內容雜湊相同但身分不同。
-    /// 見 `add_root` 的說明。
+    /// `node-v2` 已把 identity manifest 納入內容雜湊；若同一 NodeId 仍對應不同
+    /// identity digest，只可能是雜湊碰撞或儲存損壞，必須硬擋。
     #[error(
-        "EVOLUTION_ROOT_IDENTITY_CONFLICT: same source already rooted at {kept}, not {incoming}"
+        "EVOLUTION_ROOT_IDENTITY_CONFLICT: content hash collision between identity namespaces {kept} and {incoming}"
     )]
     RootIdentityConflict { kept: String, incoming: String },
     /// 主幹邊必須帶 changeset——否則 snapshot 無從產生(P56 因果契約)。
@@ -227,6 +268,99 @@ impl EvolutionGraph {
         }
     }
 
+    /// Restore materialized nodes supplied by a host persistence layer.
+    ///
+    /// Validation is intentionally two-stage:
+    ///
+    /// 1. every stored id must equal node-v2(snapshot, edges, nativization),
+    ///    every parent must exist, and the parent relation must be acyclic;
+    /// 2. after materialization, [`verify_all`](Self::verify_all) replays every
+    ///    trunk edge and compares both canonical source and identity sidecar.
+    ///
+    /// Thus object-store corruption cannot become a trusted in-memory graph,
+    /// while the evolution crate itself remains free of filesystem I/O.
+    pub fn restore(
+        libraries: LibrarySpec,
+        persisted: Vec<PersistedNode>,
+    ) -> Result<EvolutionGraph, EvolutionError> {
+        let mut pending = BTreeMap::new();
+        for record in persisted {
+            let id = record.id.clone();
+            if pending.insert(id.clone(), record).is_some() {
+                return Err(EvolutionError::DuplicatePersistedNode(id));
+            }
+        }
+
+        for (id, record) in &pending {
+            let computed = node_id(&record.snapshot, &record.parents, record.nativization)?;
+            if &computed != id {
+                return Err(EvolutionError::CorruptId {
+                    stored: id.clone(),
+                    computed,
+                });
+            }
+            if record.parents.is_empty() {
+                continue;
+            }
+            if record.parents[0].changeset.is_none() {
+                return Err(EvolutionError::TrunkWithoutChangeset);
+            }
+            if record
+                .parents
+                .iter()
+                .skip(1)
+                .any(|edge| edge.changeset.is_some())
+            {
+                return Err(EvolutionError::ReferenceEdgeWithChangeset);
+            }
+            for edge in &record.parents {
+                if !pending.contains_key(&edge.from) {
+                    return Err(EvolutionError::PersistedParentMissing {
+                        node: id.clone(),
+                        parent: edge.from.clone(),
+                    });
+                }
+            }
+        }
+
+        let mut graph = EvolutionGraph::new(libraries);
+        while !pending.is_empty() {
+            let ready = pending
+                .iter()
+                .find(|(_, record)| {
+                    record
+                        .parents
+                        .iter()
+                        .all(|edge| graph.nodes.contains_key(&edge.from))
+                })
+                .map(|(id, _)| id.clone());
+            let Some(id) = ready else {
+                return Err(EvolutionError::PersistedGraphCycle);
+            };
+            let record = pending
+                .remove(&id)
+                .expect("ready id was selected from pending");
+            if record.parents.is_empty() {
+                let namespace = record.snapshot.identities().root_namespace.clone();
+                if !graph.root_namespaces.insert(namespace.clone()) {
+                    return Err(EvolutionError::DuplicateRootNamespace(namespace));
+                }
+                graph.roots.insert(id.clone());
+            }
+            graph.nodes.insert(
+                id,
+                Node {
+                    parents: record.parents,
+                    snapshot: record.snapshot,
+                    nativization: record.nativization,
+                    label: record.label,
+                },
+            );
+        }
+        graph.verify_all()?;
+        Ok(graph)
+    }
+
     /// 加一個起點語言:沒有入邊的節點,snapshot 直接就是給定的文件。
     ///
     /// ## 為什麼要擋重複的 root namespace
@@ -236,10 +370,9 @@ impl EvolutionGraph {
     /// 法語的 `evo:root:5`(水)與沃洛夫語的 `evo:root:5`(樹)會被合併器**當成同一個
     /// 詞的兩個演化階段而靜默併掉**——不報錯、沒有任何跡象。故在最早的時點硬擋。
     ///
-    /// **誠實界線**:這只保證兩個 root **自身**的 id 不撞。後代 fork 的 namespace
-    /// 由 `.chg` 的 `changeset <ns>:` 自由指定,跨家族仍可能撞。完整的防線是合併當下
-    /// 的檢查——**兩側都有、但共同基底沒有的 id 即為碰撞**(空基底時任何共有 id 都是
-    /// 碰撞)。該檢查屬 P61,本刀不做。
+    /// **完整防線**:這裡先擋 root namespace 重複；後代 fork 的 namespace 由 `.chg`
+    /// 自由指定，跨家族的穩定 id 碰撞則由 P61 合併分析檢查——**兩側都有、但共同
+    /// 基底沒有的 id 即為碰撞**(空基底時任何共有 id 都是碰撞)。
     ///
     /// 內容定址下重加同一份 root 是冪等的(同原文、同 identity = 同節點),故先查 id
     /// 再查 namespace。同一份 `.lang` 若使用不同 namespace,identity manifest digest
@@ -306,13 +439,25 @@ impl EvolutionGraph {
             .ok_or_else(|| EvolutionError::UnknownNode(id.clone()))
     }
 
+    /// Change the human-facing label stored outside the node-v2 hash boundary.
+    ///
+    /// Snapshot, edges and nativization remain untouched, so the node id does
+    /// not change. Persistence stores this value in P64 `config`.
+    pub fn set_label(&mut self, id: &NodeId, label: Option<String>) -> Result<(), EvolutionError> {
+        let node = self
+            .nodes
+            .get_mut(id)
+            .ok_or_else(|| EvolutionError::UnknownNode(id.clone()))?;
+        node.label = label;
+        Ok(())
+    }
+
     /// 建一個節點:套用主幹邊的 changeset 於其來源節點的 snapshot,物化結果。
     ///
     /// **replay 只在這裡發生一次**。內容定址使重複提交冪等(同內容 = 同節點)。
     ///
-    /// 多親時 base 目前仍取 `parents[0]`(docs/06 §5 v0.1.1 的 MVP 語意);
-    /// **全 parent 機械合併是 P61**,尚未實作——故引用邊現階段只登記來源,
-    /// 不影響求值。此為**已知且已記錄的缺口**,不是預設行為。
+    /// 多親時先以 P61 對全部 parent 做穩定 id 的 3-way 機械合併，再把主幹邊的
+    /// changeset 套到合併 base；reference edges 因此會實際影響求值。
     pub fn commit(
         &mut self,
         parents: Vec<Edge>,
@@ -677,7 +822,8 @@ fn parent_ids(parents: &[Edge]) -> Vec<NodeId> {
     parents.iter().map(|edge| edge.from.clone()).collect()
 }
 
-/// **P58 內容定址**:`sha256(snapshot ‖ parents ‖ nativization)`。
+/// **P58 / node-v2 內容定址**:`sha256(snapshot source digest ‖ identity-manifest
+/// digest ‖ parent edge(from + changeset digest) ‖ nativization)`。
 ///
 /// 每個組件先各自雜湊成定長 hex 再串接,故編碼是單射的(不會有「不同輸入拼出同一
 /// 字串」的歧義),且無隨機/時間戳來源(P26)。

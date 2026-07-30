@@ -389,7 +389,7 @@ Clippy lint 與 WASM build 綁定到實際可用的 linker／target，基礎設�
 | 四 Primitive | immutable、fallible `Insert`／`Delete`／`Update`／`Move` 只改 caller `Language` | 已完成：`conlang-changeset` |
 | `check_language` | 無副作用、獨立於 codegen 的 AST/source invariant diagnostics | 已完成並由 compile path 復用 |
 | Language diff/trace | stable-ID 對齊的 before/after、anchor、validation result | 已完成：`LanguageDiff`／`PrimitiveRecord` |
-| ChangeSet | ChangeSet-owned allocator、statement transaction、replay、lazy recompile | Step 14 preview；未納入本次封板或舊檔相容性承諾 |
+| ChangeSet | ChangeSet-owned allocator、statement transaction、replay、lazy recompile | **Step 14 已於 2026-07-24 封板**；本檔當次 M1+ 封板仍不含歷時層 |
 
 ### Step 13a：先建立 source interface
 
@@ -405,13 +405,11 @@ Clippy lint 與 WASM build 綁定到實際可用的 linker／target，基礎設�
 每種 primitive 都要證明 `Language -> Language'`；同時斷言未被 target 的 node ID
 不變、source dump 可再 parse、`check_language` 成功，以及修改後可重新 compile。
 
-### Step 14：ChangeSet interpreter（preview，尚未封板）
+### Step 14：ChangeSet interpreter（後續已封板）
 
-本步預定加入 ChangeSet-owned allocator、statement transaction、commit 後
-`check_document`、dirty/lazy compile、serialized ChangeSet 與 deterministic replay。
-現有實作是 preview；完成出口仍須證明 caller Language 經 ChangeSet 變為 `Language'`，
-重新 compile 後可觀察相應共時差異，且相容性矩陣全綠。舊檔不要求直接 replay：
-V1 `.lang` reader 只保留到明示遷移，ChangeSet 應釘住遷移後的 V2 source／identity digest。
+ChangeSet-owned allocator、statement transaction、commit 後 `check_document`、
+dirty/lazy compile、serialized ChangeSet 與 deterministic replay 均已完成；契約見
+docs/22。v2 現為唯一 sidecar schema，舊 v1 檔不直接 replay。
 
 ### Step 15 以後：上層歷時功能
 
@@ -442,6 +440,6 @@ source interface 之上。sense/derivation-edge、完整 component graph、entre
   RHS 使用 frozen probe，duplicate target 在 commit 前原子拒絕；
 - [x] std/natural/plugin package source 沒有被 caller 的歷時 edit 直接覆寫。
 
-Step 13 source-edit 與上述兩個共時 context 缺口均已完成；Step 14 的 statement
-transaction、ChangeSet replay 與 lazy compile 仍是 docs/22 preview。此清單不代表
-Step 14、語法化、語意漂移、語言接觸或完整英語形態學已完成。
+Step 13 source-edit 與上述兩個共時 context 缺口均已完成；Step 14 已封板，Step 15／16
+亦已於 2026-07-30 收官（見 docs/26）。此清單本身仍只封板 M1+ 共時範圍，不代表
+Step 17 Recipe／Goal、完整語法化動力學或完整英語形態學已完成。

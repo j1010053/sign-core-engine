@@ -2,9 +2,10 @@
 
 > **開發者(含 Claude Code)請先讀 `CLAUDE.md`**:專案指引、設計不變式、決策制度、當前任務都在那裡。
 
-conlang(人造語言)工作台的**共時側(架構 2.0)**。本 repo 含**設計文件**與
-`crates/language`——語言知識檔(Language IR)、編譯管線、Compiled Grammar 產出、
-以及 construction-grammar 四維共時系統。
+conlang(人造語言)工作台的**共時／歷時核心(架構 2.0)**。本 repo 含**設計文件**、
+`crates/language`（Language IR、編譯管線、construction-grammar 四維共時系統）、
+`crates/changeset`（四原語、EvolutionGraph、reconstruct）與 `crates/persistence`
+（P60/P64 host filesystem boundary）。
 
 自體段(autosegmental)**音變引擎**已抽離為獨立產品 **Tshiatūn(切韻)**,以 git
 submodule 掛於 `tshiatun/`(GPL-3.0-or-later,規則檔 `.qy`,bin `tshiatun`)。
@@ -20,7 +21,7 @@ submodule 掛於 `tshiatun/`(GPL-3.0-or-later,規則檔 `.qy`,bin `tshiatun`)。
 
 **雙軌迴歸**(P20 §1.4):同一組音變經路徑 A/B 表層**逐字相同**——8.1–8.6 全綠。
 
-## 目前進度：M1／M1++ 共時閉環；M1+ 擴充仍有明確邊界
+## 目前進度：Step 16 已收官；Step 17 為下一個歷時層
 
 `crates/language`(步驟 8–12e)。以 `.lang` 檔承載語言知識,經 ①–⑤ compile pipeline
 產出 Compiled Grammar/Sign；M1++ 公共入口 `compile_system(Language)` 再串起 ontology、
@@ -51,7 +52,8 @@ M1+ 的 `syn: slot_features:` 現同時支援 stored sign 與 derived-token fill
 讀 frozen probe，完整驗證後才原子注入 occurrence constraints；stored sign 從 effective
 base、derived token 從 deep baseline 重跑 Syn→Sem→Prag，再重選 realization，且不改寫
 來源 sign/token。stable source identity／typed resolver 與 V2 expression node 身分由
-Step 13 提供；ChangeSet replay 仍是 Step 14。完整稽核與邊界見 docs/19–20、docs/23。
+Step 13 提供；Primitive-only ChangeSet replay 已於 Step 14 封板。完整稽核與邊界見
+docs/19–20、docs/23。
 
 V2 typed `case` 以封閉 context type 檢查 branch。Sign body 可回傳完整 Sign application，
 也可回傳匿名 `SignContext` fragment：fragment 可沿用 trait expansion 並合併回目前 Sign，
@@ -73,6 +75,18 @@ lazy compile 與 statement 交易定稿。相容性測試涵蓋 replay 跨執行
 round-trip、三道 digest(base source／identity-manifest／library lock)replay 前拒絕、
 交易回滾/部分保留、lazy compile cache。`cargo test --workspace` 全綠為證(本機無
 PowerShell,`.ps1` 閘門未實跑)。契約見 docs/22。
+
+**Step 15／16 已收官（2026-07-30）**：12 項 Atomic Rewrite 全部降階為四原語；
+歷時 function 載入與呼叫、分層 diff、不可變 EvolutionGraph、node-v2 內容定址、
+rebase、全 parent 3-way merge、donor／`adopt` 與狀態→四原語重建均已接通。
+收官補齊項亦已落地：手改 `.lang` 可走顯式 identity reconciliation（exact `open`
+仍嚴格驗 digest）、同父有序序列以決定性 LCS 重建 Move、persisted expression／
+realization 節點具明確 typed reconstruct capability，structured phon 可用 `.phon_block:`
+顯式 bootstrap 並從 `.chg` 插入 leaf／Then／Else／propagate sub-block。P60／P64
+亦由 `crates/persistence` 收官：canonical sign／trait／non-sign fragment、changeset 與
+identity sidecar 進共享內容定址物件庫，節點落在 `nodes/<id>/`，annotation／config
+留在 node-v2 雜湊外。下一個歷時層為 Step 17；刻意不支援的細界線見 docs/26。
+收官矩陣見 [docs/26_Step16收官_文件契約與驗收矩陣_v1.0.md](docs/26_Step16收官_文件契約與驗收矩陣_v1.0.md)。
 
 **v1 路徑已硬移除（2026-07-24）**：v2 為唯一模型。移除 `LanguageSchema` V1/V2 分野
 (FP `case`/`when`/`constraints` 為預設,無需標頭;舊 `schema conlang.lang/v2` 行被接受
@@ -132,6 +146,6 @@ powershell -ExecutionPolicy Bypass -File scripts/verify-m1pp.ps1
 
 ## 文件
 
-規範文件依閱讀順序放 `docs/`:`01`–`13` + 架構修補 `01`–`07`(彙整=P1–P19 權威、
-修補05=P20–P28、修補06=P29–P37、修補07=P38–P44 權威)。決策索引見 `CLAUDE.md` §0–§1;
-`docs/archive/` 為歷史檔勿引用。
+規範文件依閱讀順序放 `docs/`。P1–P19 以架構修補彙整 01–04 為準，P20–P64
+依架構修補 05–11；Step 13–16 的實作封板契約分別見 docs/20、docs/22、docs/26。
+完整決策索引見 `CLAUDE.md` §0–§1；`docs/archive/` 為歷史檔勿引用。

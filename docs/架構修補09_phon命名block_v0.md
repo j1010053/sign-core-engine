@@ -88,8 +88,8 @@ lenition:                 # 命名 rule = block(name: 前綴;名可含連字號 
   補齊。leaf 插入 `.chg` 語法 `leaf <stmt>`;statement update 複用 `body` 欄位(`RuleBranchBody`)。
 - 測試 `changeset/tests/phon_block_edits.rs`(11 案:定址/四原語/巢狀 depth-2/round-trip+決定性/
   越界與 wrong-kind 負例;mutation-tested)。workspace 302 綠、clippy 0、引擎零觸動、wasm 綠。
-- **界線**:sub-block 的**從源插入**(整個新 `Then`/`Else` 子樹)延後——move 既存 sub-block
-  已支援(detach→reattach,無需 `.qy` 解析);bootstrap 空 rule 成 block 亦延後。
+- **歷史界線（已由 slice 5 解除）**:當時 sub-block 的**從源插入**與 flat rule bootstrap
+  尚未接 surface；move 既存 sub-block 已可用。現況見 slice 5。
 
 ### slice 4(已落地 2026-07-27)= **L1 完整解**
 - **codegen 出大括號 `{ }` 巢狀 `.qy`**,接上引擎(tshiatūn `wuc-claudecode` / PR #1)的
@@ -97,7 +97,8 @@ lenition:                 # 命名 rule = block(name: 前綴;名可含連字號 
   `codegen::emit_phon_block` 對**複合(compound)元素**包 `{ }`(leaf 元素維持裸露)→ 引擎
   brace parser 收下。**扁平單層維持無括號、與舊輸出逐字相同**(零 golden churn)。
 - 對映:`Then([Leaf, Else([…])])` → `a => b` + `Then: { … }`;首元素若為複合(S3 move 可致)
-  → 開頭 `{ … }` group(引擎 GroupOpen)。`Propagate` 目前透明遞迴(propagate 關鍵字待 S4)。
+  → 開頭 `{ … }` group(引擎 GroupOpen)。slice 4 當時 `Propagate` 先透明遞迴，
+  後續已由 S4 補齊修飾詞與編輯語意。
 - 實作:`codegen.rs::emit_phon_block` + `is_grouped_element`。測試
   `language/tests/phon_grouped_codegen.rs`(4 案:巢狀→braces+引擎收/扁平無括號/round-trip/
   首元素複合開 group;mutation-tested)。workspace 306 綠、clippy 0、golden 零 churn。
@@ -132,10 +133,24 @@ lenition:                 # 命名 rule = block(name: 前綴;名可含連字號 
   workspace **321 綠**、clippy 0、引擎零觸動(166)、wasm 綠;golden 僅 `Rule` 新欄位
   `propagate: false` 三行純新增(無語意變動)。
 
+### slice 5（已落地 2026-07-30）= authoring convenience
+
+- `.chg` 新增 block-valued `update <phon-rule>.phon_block:`，內容以既有 `.lang`
+  structured phon parser 解讀，顯式完成 flat→structured；不讓普通 insert 偷改 root shape。
+- structured rule／Leaf／Then／Else container 可從 source fragment 插入真實 statement
+  或完整 Then／Else／`Then propagate:` sub-block；resolved dump 經合法 synthetic
+  `.lang` fragment 還原，`dump→parse→resolve` 為固定點。
+- codegen 驗收不是只看 AST：authoring 結果交 `compile_full`，生成 `.qy` 再由 Tshiatūn
+  grouped-block parser 接收。
+- `changeset/tests/phon_authoring.rs` 3 案：顯式 bootstrap＋leaf/sub-block insert、
+  flat insert 不 silent bootstrap、leading boundary root 明確拒絕。
+
 ### 尚未落地(staged)
-- **sub-block 從源插入 / bootstrap 空 block**(S3 界線)。
-- **submodule 重釘**:slice 4 已把 gitlink 釘到引擎 `wuc-claudecode` 的 brace-parser commit
-  (PR #1 分支)以維持本分支自洽;PR #1 merge 到引擎 main 後,再重釘到 merge commit。
+- leading `Then`／`Else`／`Propagate` root 在 `.qy` 無合法掛點，維持顯式拒絕；
+  structured→flat 亦不提供會丟失 block 意圖的 authoring 糖。
+- ~~**submodule gitlink metadata**~~：brace-parser PR 已合併；2026-07-30 已確認
+  PR head 與 merge commit tree 完全相同，並將 gitlink 重釘至 Tshiatūn main merge
+  commit `12e1c89`。此項已結案。
 
 ## 相容性
 - **P44**:block 屬 phon 維。相容。
