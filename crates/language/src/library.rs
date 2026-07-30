@@ -89,6 +89,8 @@ impl FromStr for LibraryId {
 pub enum LibraryExportKind {
     Trait,
     Sign,
+    /// 歷時 function 層(Recipe/Goal;P48–P50)。住套件 `code/*.chg`。
+    Function,
 }
 
 impl LibraryExportKind {
@@ -96,6 +98,7 @@ impl LibraryExportKind {
         match value {
             "trait" => Some(Self::Trait),
             "sign" => Some(Self::Sign),
+            "function" => Some(Self::Function),
             _ => None,
         }
     }
@@ -127,9 +130,17 @@ pub struct LibraryPackage {
     /// Compatibility rendering of `code_paths` for callers that previously
     /// consumed the single `code` manifest field.
     pub code_path: String,
+    /// Compatibility rendering of `data_paths` (comma-joined), mirroring `code_path`.
     pub data_path: String,
+    /// Ordered data files of this package (P50 ①).
+    pub data_paths: Vec<String>,
+    /// Ordered `code/*.chg` files (P50 ③). Empty when the package ships no
+    /// diachronic functions.
+    pub function_paths: Vec<String>,
     pub exports: Vec<LibraryExport>,
     pub code: &'static str,
+    /// 歷時 function 原始碼(`.chg`),**verbatim**;`language` 不解析(P20)。
+    pub functions: &'static str,
     pub data: &'static str,
 }
 
@@ -260,6 +271,10 @@ struct EmbeddedPackage {
     config: &'static str,
     exports: &'static str,
     code: &'static str,
+    /// P50 ③:套件 `code/*.chg` 的歷時 function 原始碼,**verbatim 承載不解析**。
+    /// `language` 不得解析 `.chg`(P20 依賴方向 `changeset → language`),
+    /// 比照 dsl 域宣告以不透明區塊承載的既有作法(I15-a);由 `changeset` 端解析。
+    functions: &'static str,
     data: &'static str,
 }
 
@@ -268,12 +283,14 @@ const EMBEDDED_PACKAGES: &[EmbeddedPackage] = &[
         config: include_str!("../lib/std/core/config/package.conf"),
         exports: include_str!("../lib/std/core/config/exports.tsv"),
         code: include_str!("../lib/std/core/code/ontology.lang"),
+        functions: "",
         data: include_str!("../lib/std/core/data/categories.tsv"),
     },
     EmbeddedPackage {
         config: include_str!("../lib/std/grambank/config/package.conf"),
         exports: include_str!("../lib/std/grambank/config/exports.tsv"),
         code: include_str!("../lib/std/grambank/code/syntax.lang"),
+        functions: "",
         data: include_str!("../lib/std/grambank/data/features.tsv"),
     },
     EmbeddedPackage {
@@ -284,12 +301,21 @@ const EMBEDDED_PACKAGES: &[EmbeddedPackage] = &[
             "\n",
             include_str!("../lib/std/cxg/code/realizations.lang")
         ),
+        functions: "",
         data: include_str!("../lib/std/cxg/data/realizations.tsv"),
+    },
+    EmbeddedPackage {
+        config: include_str!("../lib/std/grammaticalization/config/package.conf"),
+        exports: include_str!("../lib/std/grammaticalization/config/exports.tsv"),
+        code: "",
+        functions: include_str!("../lib/std/grammaticalization/code/paths.chg"),
+        data: include_str!("../lib/std/grammaticalization/data/paths.tsv"),
     },
     EmbeddedPackage {
         config: include_str!("../lib/natural/en-standard/config/package.conf"),
         exports: include_str!("../lib/natural/en-standard/config/exports.tsv"),
         code: include_str!("../lib/natural/en-standard/code/grammar.lang"),
+        functions: "",
         data: include_str!("../lib/natural/en-standard/data/grambank-v1.0.3.tsv"),
     },
 ];
@@ -304,7 +330,8 @@ struct Manifest {
     priority: Option<i32>,
     requires: Option<Vec<LibraryId>>,
     code_paths: Option<Vec<String>>,
-    data_path: Option<String>,
+    data_paths: Option<Vec<String>>,
+    function_paths: Option<Vec<String>>,
 }
 
 fn valid_identifier(value: &str) -> bool {
@@ -489,13 +516,50 @@ fn parse_manifest(source: &str) -> Result<Manifest, LibraryLoadError> {
                     key,
                 )?;
             }
-            "data" => set_once(
-                &mut manifest.data_path,
-                value.replace('\\', "/"),
-                package_hint,
-                line_number,
-                key,
-            )?,
+            "functions" => {
+                // P50 ③:選填;列 `code/` 底下的 `.chg` 檔。
+                let paths = value
+                    .split(',')
+                    .map(|path| path.trim().replace('\\', "/"))
+                    .collect::<Vec<_>>();
+                if paths.iter().any(String::is_empty) {
+                    return Err(config_error(
+                        package_hint,
+                        line_number,
+                        "functions must contain one or more comma-separated paths",
+                    ));
+                }
+                set_once(
+                    &mut manifest.function_paths,
+                    paths,
+                    package_hint,
+                    line_number,
+                    key,
+                )?;
+            }
+            "data" => {
+                // P50 ①:data 與 code 同樣接受逗號分隔的多路徑(先驗快照、
+                // Weight DB、分佈表可並存);內容仍串接為單一字串,故既有的
+                // library lock digest 自動涵蓋全部檔案(可重現性不破)。
+                let paths = value
+                    .split(',')
+                    .map(|path| path.trim().replace('\\', "/"))
+                    .collect::<Vec<_>>();
+                if paths.is_empty() || paths.iter().any(String::is_empty) {
+                    return Err(config_error(
+                        package_hint,
+                        line_number,
+                        "data must contain one or more comma-separated paths",
+                    ));
+                }
+                set_once(
+                    &mut manifest.data_paths,
+                    paths,
+                    package_hint,
+                    line_number,
+                    key,
+                )?;
+            }
             _ => {
                 return Err(config_error(
                     package_hint,
@@ -649,7 +713,10 @@ fn load_embedded(source: &EmbeddedPackage) -> Result<LibraryPackage, LibraryLoad
             format!("rule_namespace must equal package id {id}"),
         ));
     }
-    let code_paths = required(manifest.code_paths, "<unknown>", "code")?;
+    // P50 ③:function-only 套件(只帶 `code/*.chg`)沒有 `.lang`,故 `code` 選填;
+    // 但兩者不得同時為空——套件必須帶點東西。
+    let code_paths = manifest.code_paths.unwrap_or_default();
+    let code_paths_empty = code_paths.is_empty();
     let package = LibraryPackage {
         exports: parse_exports(&id, source.exports)?,
         name: id.name.clone(),
@@ -661,8 +728,24 @@ fn load_embedded(source: &EmbeddedPackage) -> Result<LibraryPackage, LibraryLoad
         requires: manifest.requires.unwrap_or_default(),
         code_path: code_paths.join(","),
         code_paths,
-        data_path: required(manifest.data_path, "<unknown>", "data")?,
+        data_path: {
+            let paths = required(manifest.data_paths.clone(), "<unknown>", "data")?;
+            paths.join(",")
+        },
+        data_paths: required(manifest.data_paths, "<unknown>", "data")?,
+        function_paths: {
+            let functions = manifest.function_paths.unwrap_or_default();
+            if code_paths_empty && functions.is_empty() {
+                return Err(config_error(
+                    "<unknown>",
+                    0,
+                    "a package must declare `code` or `functions`",
+                ));
+            }
+            functions
+        },
         code: source.code,
+        functions: source.functions,
         data: source.data,
     };
     let language = validate_package_code(&package)?;
@@ -670,6 +753,10 @@ fn load_embedded(source: &EmbeddedPackage) -> Result<LibraryPackage, LibraryLoad
         let present = match export.kind {
             LibraryExportKind::Trait => language.trait_named(&export.alias).is_some(),
             LibraryExportKind::Sign => language.sign_named(&export.alias).is_some(),
+            // function export 的存在性**由 changeset 端查驗**——`language` 不得
+            // 解析 `.chg`(P20 依賴方向)。這裡只確認套件真的有帶 function 原始碼;
+            // 名字對不對由 `changeset::function` 載入 function 表時報錯。
+            LibraryExportKind::Function => !package.functions.trim().is_empty(),
         };
         if !present {
             return Err(LibraryLoadError::MissingAlias {
@@ -678,10 +765,17 @@ fn load_embedded(source: &EmbeddedPackage) -> Result<LibraryPackage, LibraryLoad
                 alias: export.alias.clone(),
             });
         }
-        if package.id.kind == LibraryKind::Std && export.kind != LibraryExportKind::Trait {
+        // std 套件可 export trait 與 function(P52:std::grammaticalization 的
+        // 路徑庫就是 std 的 function),但不 export sign。
+        if package.id.kind == LibraryKind::Std
+            && !matches!(
+                export.kind,
+                LibraryExportKind::Trait | LibraryExportKind::Function
+            )
+        {
             return Err(LibraryLoadError::UnsupportedContent {
                 package: package.id.to_string(),
-                message: "std packages may export traits only".to_owned(),
+                message: "std packages may export traits and functions only".to_owned(),
             });
         }
     }
@@ -917,10 +1011,45 @@ mod tests {
             code_paths: vec!["code/test.lang".to_owned()],
             code_path: "code/test.lang".to_owned(),
             data_path: "data/test.tsv".to_owned(),
+            data_paths: vec!["data/test.tsv".to_owned()],
+            function_paths: Vec::new(),
             exports: Vec::new(),
             code: "",
+            functions: "",
             data: "",
         }
+    }
+
+    /// P50 ①:`data` 與 `code` 同樣接受逗號分隔的多路徑(先驗快照 / Weight DB /
+    /// 分佈表可並存)。內容仍串接為單一字串,故既有 library lock digest 自動涵蓋。
+    #[test]
+    fn a_manifest_accepts_several_data_paths() {
+        let manifest = parse_manifest(
+            "kind = std\nname = t\nversion = 0.1.0\nrule_namespace = std:t\nenabled = true\npriority = 0\nrequires =\ncode = code/a.lang\ndata = data/paths.tsv, data/weights.tsv\n",
+        )
+        .expect("multi-data manifest parses");
+        assert_eq!(
+            manifest.data_paths.as_deref(),
+            Some(["data/paths.tsv".to_owned(), "data/weights.tsv".to_owned()].as_slice())
+        );
+    }
+
+    #[test]
+    fn an_empty_data_path_is_rejected() {
+        assert!(parse_manifest(
+            "kind = std\nname = t\nversion = 0.1.0\nrule_namespace = std:t\nenabled = true\npriority = 0\nrequires =\ncode = code/a.lang\ndata = data/a.tsv,\n",
+        )
+        .is_err());
+    }
+
+    /// P50 ②:`exports.tsv` 認得 `function` 這個 kind(歷時 function 層)。
+    #[test]
+    fn the_export_table_understands_functions() {
+        assert_eq!(
+            LibraryExportKind::parse("function"),
+            Some(LibraryExportKind::Function)
+        );
+        assert_eq!(LibraryExportKind::parse("recipe"), None, "非關鍵字(P48)");
     }
 
     #[test]
@@ -1045,8 +1174,11 @@ mod tests {
             code_paths: vec!["code/schema.lang".to_owned()],
             code_path: "code/schema.lang".to_owned(),
             data_path: "data/none.tsv".to_owned(),
+            data_paths: vec!["data/none.tsv".to_owned()],
+            function_paths: Vec::new(),
             exports: Vec::new(),
             code: "trait Schema:\n    syn:\n        slots:\n            head [Noun]\n        map head rename nucleus\n",
+            functions: "",
             data: "",
         };
 

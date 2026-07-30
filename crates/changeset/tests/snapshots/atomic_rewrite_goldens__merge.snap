@@ -1,0 +1,6 @@
+---
+source: crates/changeset/tests/atomic_rewrite_goldens.rs
+expression: shape(&edits)
+---
+move Sense to Sign at End
+delete Sign

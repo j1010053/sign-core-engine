@@ -83,8 +83,11 @@ sign TestCountTransfer:
     phon:
         /{agent}{theme}/
         realization:
-            /{agent}{theme}s/ / $self.syn.number == plural
-            else /{agent}{theme}/
+            case:
+                $self.syn.number == plural:
+                    /{agent}{theme}s/
+                else:
+                    /{agent}{theme}/
 
 sign FixedCountForm:
     syn:
@@ -117,7 +120,7 @@ fn feature_enum_self_roles_and_realization_execute_as_one_deep_sign() {
     assert!(dumped.contains("number = enum(singular, plural)"));
     assert!(dumped.contains("number => $self.syn.number / $self == [TestTransferFrame]"));
     assert!(dumped.contains("agent [TestHuman]"));
-    assert!(dumped.contains("else /{agent}{theme}/"));
+    assert!(dumped.contains("$self.syn.number == plural:"));
     assert_eq!(
         Language::parse(&dumped).expect("round-trip parse").dump(),
         dumped
@@ -153,13 +156,15 @@ fn feature_enum_self_roles_and_realization_execute_as_one_deep_sign() {
     assert_eq!(singular.realization.branch, Some(1));
     assert_eq!(plural.realization.branch, Some(0));
     assert!(plural.realization.source.line > 0);
+    // Typed realization records the guard evaluation as a matched branch in
+    // `cases` (the former flat `self_reads` recording was removed with the V1
+    // `RealizationBranch` form); selecting branch 0 for `== plural` proves the
+    // `syn.number == plural` guard read.
     assert!(plural
         .realization
-        .self_reads
+        .cases
         .iter()
-        .any(|read| read.dim == Dim::Syn
-            && read.path == "number"
-            && read.value.as_deref() == Some("plural")));
+        .any(|record| record.branch == 0));
 
     assert_eq!(
         plural.token.sem.features.get("number"),
@@ -372,6 +377,9 @@ fn semantic_document_v1_canonicalizes_types_and_object_keys_at_every_boundary() 
                         types: vec!["Child".to_owned(), "Child".to_owned()],
                         features: BTreeMap::new(),
                         roles: BTreeMap::new(),
+                        fields: BTreeMap::new(),
+                        senses: Vec::new(),
+                        edges: Vec::new(),
                     },
                 ),
                 (
@@ -384,9 +392,15 @@ fn semantic_document_v1_canonicalizes_types_and_object_keys_at_every_boundary() 
                         types: vec!["Omega".to_owned(), "Beta".to_owned()],
                         features: BTreeMap::new(),
                         roles: BTreeMap::new(),
+                        fields: BTreeMap::new(),
+                        senses: Vec::new(),
+                        edges: Vec::new(),
                     },
                 ),
             ]),
+            fields: BTreeMap::new(),
+            senses: Vec::new(),
+            edges: Vec::new(),
         },
     };
 
@@ -553,8 +567,11 @@ sign GuardedForm:
     phon:
         /x/
         realization:
-            /x/ / $slot.stem == [Noun]
-            else /y/
+            case:
+                $slot.stem == [Noun]:
+                    /x/
+                else:
+                    /y/
 "#;
     let system = compile_system(Language::parse(source).expect("fixture parses"))
         .expect("realization guard is valid form-pole use");
@@ -642,4 +659,82 @@ fn english_count_noun_uses_one_deep_sign_for_dog_and_dogs() {
     assert_eq!(repeated.surface, plural.surface);
     assert_eq!(repeated.token, plural.token);
     assert_eq!(repeated.realization, plural.realization);
+}
+
+/// 相容性:V1 硬移除後,扁平 `realization:` 分支語法(`/tmpl/ / guard` + `else`)
+/// 被明確拒絕;唯一支援形式是 typed `case:`(共用機制)。
+#[test]
+fn flat_realization_branch_syntax_is_rejected_after_v1_removal() {
+    let flat = "\
+Symbol x
+Symbol y
+
+trait TReal:
+    syn:
+        feature:
+            n = enum(a, b)
+
+sign s:
+    belongs TReal
+    phon:
+        /x/
+        realization:
+            /x/ / $self.syn.n == a
+            else /y/
+";
+    let err = Language::parse(flat).expect_err("flat realization must not parse");
+    assert!(
+        format!("{err:?}").contains("realization must contain a `case:`"),
+        "expected flat-realization rejection, got {err:?}"
+    );
+
+    // 對照:等價的 typed 形式解析成功。
+    let typed = "\
+Symbol x
+Symbol y
+
+trait TReal:
+    syn:
+        feature:
+            n = enum(a, b)
+
+sign s:
+    belongs TReal
+    phon:
+        /x/
+        realization:
+            case:
+                $self.syn.n == a:
+                    /x/
+                else:
+                    /y/
+";
+    assert!(
+        Language::parse(typed).is_ok(),
+        "typed realization must parse"
+    );
+}
+
+/// `phon:` 不再接受 latent 的 `field = value` Def(無消費者);只收 `/…/` UR、
+/// 規則、`realization:`。
+#[test]
+fn phon_field_equals_value_definition_is_rejected() {
+    let src = "\
+Symbol x
+
+sign s:
+    phon:
+        /x/
+        stress = high
+";
+    let err = Language::parse(src).expect_err("phon field=value must not parse");
+    assert!(
+        format!("{err:?}").contains("field = value"),
+        "expected phon field-def rejection, got {err:?}"
+    );
+    // 對照:UR + 規則仍可解析。
+    assert!(Language::parse(
+        "Symbol x\nSymbol y\n\nsign s:\n    phon:\n        /x/\n        x => y\n"
+    )
+    .is_ok());
 }

@@ -1,0 +1,5 @@
+---
+source: crates/changeset/tests/atomic_rewrite_goldens.rs
+expression: shape(&edits)
+---
+insert Rule into Block at End

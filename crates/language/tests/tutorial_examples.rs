@@ -4,9 +4,10 @@ use conlang_language::{compile_system, DerivationContext, Dim, Language};
 const FIXTURE: &str = include_str!("fixtures/tutorial_complete.lang");
 const TUTORIAL: &str = include_str!("../../../docs/21_共時lang語法教學_v1.md");
 
-fn tagged_complete_example() -> &'static str {
+fn tagged_complete_example() -> String {
     let marker = "<!-- conlang-test: tutorial-complete -->";
-    let after = TUTORIAL.split_once(marker).unwrap().1;
+    let normalized = TUTORIAL.replace("\r\n", "\n").replace('\r', "\n");
+    let after = normalized.split_once(marker).unwrap().1;
     after
         .split_once("```lang\n")
         .unwrap()
@@ -14,16 +15,17 @@ fn tagged_complete_example() -> &'static str {
         .split_once("\n```")
         .unwrap()
         .0
+        .to_owned()
 }
 
 #[test]
 fn documented_complete_grammar_is_the_compiled_fixture() {
     let documented = tagged_complete_example();
     assert_eq!(
-        Language::parse(documented).unwrap().dump(),
+        Language::parse(&documented).unwrap().dump(),
         Language::parse(FIXTURE).unwrap().dump()
     );
-    compile_system(Language::parse(documented).unwrap()).unwrap();
+    compile_system(Language::parse(&documented).unwrap()).unwrap();
 }
 
 #[test]

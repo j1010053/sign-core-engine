@@ -17,9 +17,17 @@ fn catalog_selection_is_explicit_and_deterministic() {
         .iter()
         .map(|package| package.id.to_string())
         .collect::<Vec<_>>();
+    // 序 = kind → priority → name(std:grammaticalization 與 std:core 同為
+    // priority 0,故排在 grambank(10)/cxg(20)之前)。
     assert_eq!(
         ids,
-        ["std:core", "std:grambank", "std:cxg", "natural:en-standard"]
+        [
+            "std:core",
+            "std:grammaticalization",
+            "std:grambank",
+            "std:cxg",
+            "natural:en-standard"
+        ]
     );
 
     let default = compile_system(Language::new()).unwrap();
@@ -47,7 +55,13 @@ fn catalog_selection_is_explicit_and_deterministic() {
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>(),
-        ["std:core", "std:grambank", "std:cxg", "natural:en-standard"]
+        [
+            "std:core",
+            "std:grammaticalization",
+            "std:grambank",
+            "std:cxg",
+            "natural:en-standard"
+        ]
     );
 }
 

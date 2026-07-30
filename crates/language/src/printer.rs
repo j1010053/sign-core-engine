@@ -9,8 +9,8 @@
 //! 非 canonical 正規化為不動點(維度分組是冪等重排)。
 
 use crate::{
-    Block, CaseCondition, CaseSelection, Expression, ExpressionType, Language, LanguageSchema,
-    SignArgumentValue, SignItem, SignProjection, SlotMapOp, Stage, TraitDef, TypedCase,
+    Block, CaseCondition, CaseSelection, Expression, ExpressionType, Language, SignArgumentValue,
+    SignItem, SignProjection, SlotMapOp, Stage, TraitDef, TypedCase,
 };
 
 const DIMS: [&str; 4] = ["syn", "phon", "sem", "prag"];
@@ -29,12 +29,75 @@ fn def_dim(path: &str) -> Option<&str> {
     DIMS.contains(&head).then_some(head)
 }
 
+/// 印結構化 `PhonBlock`(P46 S2):leading block 直接印;後續冠 `Then:`/`Else:` 縮排。
+fn push_phon_block(out: &mut String, block: &crate::PhonBlock, indent: &str) {
+    match block {
+        crate::PhonBlock::Leaf(stmts) => {
+            for statement in stmts {
+                out.push_str(indent);
+                out.push_str(statement);
+                out.push('\n');
+            }
+        }
+        crate::PhonBlock::Then(blocks) | crate::PhonBlock::Else(blocks) => {
+            let keyword = if matches!(block, crate::PhonBlock::Then(_)) {
+                "Then"
+            } else {
+                "Else"
+            };
+            if let Some(first) = blocks.first() {
+                push_phon_block(out, first, indent);
+            }
+            let inner = format!("{indent}    ");
+            for sub in blocks.iter().skip(1) {
+                // P46 S4: `Propagate` is a *modifier* on the element the boundary
+                // introduces, so it prints as `Then propagate:` and the wrapped
+                // block's own content follows (no extra nesting level).
+                let (modifier, body) = match sub {
+                    crate::PhonBlock::Propagate(inner) => (" propagate", inner.as_ref()),
+                    other => ("", other),
+                };
+                out.push_str(&format!("{indent}{keyword}{modifier}:\n"));
+                push_phon_block(out, body, &inner);
+            }
+        }
+        // A `Propagate` reached directly (element 0, or a rule root) has no
+        // surface form of its own — the boundary above carries the modifier.
+        crate::PhonBlock::Propagate(inner) => push_phon_block(out, inner, indent),
+    }
+}
+
 fn push_rule(out: &mut String, indent: &str, r: &crate::Rule) {
-    out.push_str(&format!(
-        "{indent}{} @stage {}\n",
-        r.body,
-        stage_str(r.stage)
-    ));
+    // P46 S2: a structured phon block prints as `name:` + recursive block.
+    if let Some(block) = &r.phon_block {
+        // P46 S4: rule-level `propagate` is a header modifier (`name propagate:`).
+        let modifier = if r.propagate { " propagate" } else { "" };
+        out.push_str(&format!(
+            "{indent}{}{modifier}:\n",
+            r.name.as_deref().unwrap_or("")
+        ));
+        push_phon_block(out, block, &format!("{indent}    "));
+        return;
+    }
+    // phon names use the Lexurgy-style `name:` prefix (P46 取徑 A); other
+    // dimensions keep the `@name` suffix (P45).
+    match (&r.name, r.dim) {
+        (Some(name), crate::Dim::Phon) => out.push_str(&format!(
+            "{indent}{name}: {} @stage {}\n",
+            r.body,
+            stage_str(r.stage)
+        )),
+        (Some(name), _) => out.push_str(&format!(
+            "{indent}{} @name {name} @stage {}\n",
+            r.body,
+            stage_str(r.stage)
+        )),
+        (None, _) => out.push_str(&format!(
+            "{indent}{} @stage {}\n",
+            r.body,
+            stage_str(r.stage)
+        )),
+    }
     for e in &r.else_chain {
         out.push_str(&format!("{indent}    else {e}\n")); // Lexurgy Else(P43)
     }
@@ -71,7 +134,7 @@ fn expression_source(expression: &Expression) -> String {
                     argument
                         .name
                         .as_ref()
-                        .map(|name| format!("{name} = {value}"))
+                        .map(|name| format!("{name}: {value}"))
                         .unwrap_or(value)
                 })
                 .collect::<Vec<_>>()
@@ -110,9 +173,14 @@ fn push_case(out: &mut String, indent: &str, case: &TypedCase) {
         CaseSelection::FirstMatch => "case",
         CaseSelection::Accumulate => "when",
     };
+    let case_label = case
+        .name
+        .as_ref()
+        .map(|name| format!(" @name {name}"))
+        .unwrap_or_default();
     match &case.scrutinee {
-        Some(scrutinee) => out.push_str(&format!("{indent}{keyword} {scrutinee}:\n")),
-        None => out.push_str(&format!("{indent}{keyword}:\n")),
+        Some(scrutinee) => out.push_str(&format!("{indent}{keyword} {scrutinee}{case_label}:\n")),
+        None => out.push_str(&format!("{indent}{keyword}{case_label}:\n")),
     }
     let branch_indent = format!("{indent}    ");
     let result_indent = format!("{branch_indent}    ");
@@ -122,7 +190,12 @@ fn push_case(out: &mut String, indent: &str, case: &TypedCase) {
             CaseCondition::Guard(guard) => guard.clone(),
             CaseCondition::Else => "else".to_owned(),
         };
-        out.push_str(&format!("{branch_indent}{condition}:\n"));
+        let branch_label = branch
+            .name
+            .as_ref()
+            .map(|name| format!(" @name {name}"))
+            .unwrap_or_default();
+        out.push_str(&format!("{branch_indent}{condition}{branch_label}:\n"));
         match &branch.result {
             Expression::Case(nested) => push_case(out, &result_indent, nested),
             Expression::SignFragment(items) => {
@@ -228,6 +301,13 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                             | SignItem::RoleExpression(_)
                     )
                 });
+            // §10.3:sem 的 senses / 衍生邊。
+            let has_senses =
+                dim == "sem" && items.iter().any(|item| matches!(item, SignItem::Sense(_)));
+            let has_sense_edges = dim == "sem"
+                && items
+                    .iter()
+                    .any(|item| matches!(item, SignItem::SenseEdge(_)));
             let has_realization = dim == "phon"
                 && items
                     .iter()
@@ -255,6 +335,8 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                 || has_rule
                 || has_feature
                 || has_roles
+                || has_senses
+                || has_sense_edges
                 || has_realization
                 || has_context_expression)
             {
@@ -337,23 +419,39 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                     }
                 }
             }
+            if has_senses {
+                out.push_str("        senses:\n");
+                for item in items {
+                    if let SignItem::Sense(sense) = item {
+                        out.push_str(&format!("            {} = {}\n", sense.name, sense.gloss));
+                    }
+                }
+            }
+            if has_sense_edges {
+                out.push_str("        edges:\n");
+                for item in items {
+                    if let SignItem::SenseEdge(edge) = item {
+                        // `to from from-sense kind [opaque]`;transparent 為預設,省略。
+                        let transparency = match edge.transparency {
+                            crate::SenseTransparency::Transparent => String::new(),
+                            crate::SenseTransparency::Opaque => " opaque".to_owned(),
+                        };
+                        out.push_str(&format!(
+                            "            {} from {} {}{}\n",
+                            edge.to,
+                            edge.from,
+                            edge.kind.keyword(),
+                            transparency
+                        ));
+                    }
+                }
+            }
             if has_realization {
                 out.push_str("        realization:\n");
                 for item in items {
                     if let SignItem::Realization(realization) = item {
                         if let Some(case) = &realization.expression {
                             push_case(out, "            ", case);
-                        }
-                        for branch in &realization.branches {
-                            match &branch.guard {
-                                Some(guard) => out.push_str(&format!(
-                                    "            {} / {}\n",
-                                    branch.template, guard
-                                )),
-                                None => {
-                                    out.push_str(&format!("            else {}\n", branch.template))
-                                }
-                            }
                         }
                     }
                 }
@@ -441,10 +539,6 @@ fn push_trait(out: &mut String, t: &TraitDef) {
 /// canonical 印出;空 Language → 空字串。
 pub fn print(l: &Language) -> String {
     let mut sections: Vec<String> = Vec::new();
-
-    if l.schema() == LanguageSchema::V2 {
-        sections.push(format!("{}\n", LanguageSchema::V2_HEADER));
-    }
 
     if !l.dsl_decls.is_empty() {
         let body: String = l

@@ -8,3 +8,6 @@ description = "Step 13 persistent primitive edits over caller Language source"
 conlang-language = { path = "../language" }
 thiserror = "2"
 
+
+[dev-dependencies]
+insta = "1"

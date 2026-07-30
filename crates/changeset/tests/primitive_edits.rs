@@ -1127,7 +1127,7 @@ sign caller:
         /caller/
     case:
         else:
-            target(subject = {$self})
+            target(subject: {$self})
 "#,
         "evo:slot-rename",
     )
@@ -1157,7 +1157,7 @@ sign caller:
         "before(actor, object)",
         "$slot.actor == [LocalEntity]:",
         "wrap({actor})",
-        "target(actor = {$self})",
+        "target(actor: {$self})",
     ] {
         assert!(source.contains(expected), "missing rewritten {expected:?}");
     }

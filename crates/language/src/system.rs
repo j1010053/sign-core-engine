@@ -325,6 +325,21 @@ fn validate_defs_and_rules(
                               sign_metadata: bool,
                               slots: &[crate::Slot]| {
         let mut slot_feature_targets = BTreeSet::new();
+        // 同一個 sign/trait 內重複宣告同名義項 = 撰寫錯誤(繼承層的覆寫走 effective)。
+        let mut seen_senses: Vec<&str> = Vec::new();
+        for sense in items.iter().filter_map(|item| match item {
+            SignItem::Sense(sense) => Some(sense),
+            _ => None,
+        }) {
+            if seen_senses.contains(&sense.name.as_str()) {
+                report.push(Diagnostic::new(
+                    Severity::Error,
+                    "SENSE_DUPLICATE",
+                    format!("{owner:?} declares sense {:?} more than once", sense.name),
+                ));
+            }
+            seen_senses.push(&sense.name);
+        }
         for item in items {
             match item {
                 SignItem::Def(def) => {
@@ -336,6 +351,8 @@ fn validate_defs_and_rules(
                                 .is_ok_and(|value| value.is_finite() && value >= 0.0),
                             "lexicalized" => matches!(def.value.as_str(), "true" | "false"),
                             "origin" => crate::metadata::parse_origin(&def.value).is_some(),
+                            // P54:至少兩個 `sign(x)`,逗號分隔。
+                            "components" => crate::metadata::parse_components(&def.value).is_some(),
                             "provenance" => SignProvenance::parse(&def.value).is_some(),
                             "lifecycle" => SignLifecycle::parse(&def.value).is_some(),
                             "source_package" => LibraryId::from_str(&def.value).is_ok(),
@@ -1166,11 +1183,45 @@ fn validate_typed_schemas(
             }
         }
 
+        // §10.3 義項網絡:義項名在一個 sign 內唯一;衍生邊兩端都必須是已宣告的義項
+        // (不默默略過——否則 lexicalize_sense/derive_sense 會作用在幽靈節點上)。
+        // 注意:`effective` 已依名字合併義項(本地覆寫繼承是**功能**),故重複宣告
+        // 的偵測放在 `validate_defs_and_rules` 看**原始** items 之處。
+        let sense_names: Vec<&str> = effective
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                SignItem::Sense(sense) => Some(sense.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        for edge in effective.items.iter().filter_map(|item| match item {
+            SignItem::SenseEdge(edge) => Some(edge),
+            _ => None,
+        }) {
+            for (role, name) in [("to", &edge.to), ("from", &edge.from)] {
+                if !sense_names.contains(&name.as_str()) {
+                    report.push(Diagnostic::new(
+                        Severity::Error,
+                        "SENSE_EDGE_UNKNOWN",
+                        format!("{owner:?} sense edge {role} refers to undeclared sense {name:?}"),
+                    ));
+                }
+            }
+            if edge.to == edge.from {
+                report.push(Diagnostic::new(
+                    Severity::Error,
+                    "SENSE_EDGE_SELF",
+                    format!("{owner:?} sense edge derives {:?} from itself", edge.to),
+                ));
+            }
+        }
+
         for realization in effective.items.iter().filter_map(|item| match item {
             SignItem::Realization(realization) => Some(realization),
             _ => None,
         }) {
-            if realization.branches.is_empty() && realization.expression.is_none() {
+            if realization.expression.is_none() {
                 report.push(Diagnostic::new(
                     Severity::Error,
                     "REALIZATION_EMPTY",
@@ -1249,76 +1300,6 @@ fn validate_typed_schemas(
                                 format!("{owner:?} realization template: {error}"),
                             )),
                         }
-                    }
-                }
-            }
-            let mut saw_else = false;
-            for branch in &realization.branches {
-                if branch.guard.is_none() {
-                    if saw_else {
-                        report.push(Diagnostic::new(
-                            Severity::Error,
-                            "REALIZATION_MULTIPLE_ELSE",
-                            format!("{owner:?} has more than one realization else branch"),
-                        ));
-                    }
-                    saw_else = true;
-                } else if saw_else {
-                    report.push(Diagnostic::new(
-                        Severity::Error,
-                        "REALIZATION_BRANCH_AFTER_ELSE",
-                        format!("{owner:?} has a guarded realization after else"),
-                    ));
-                }
-                let inner = branch
-                    .template
-                    .strip_prefix('/')
-                    .and_then(|value| value.strip_suffix('/'));
-                if inner.is_none() {
-                    report.push(Diagnostic::new(
-                        Severity::Error,
-                        "REALIZATION_INVALID_TEMPLATE",
-                        format!("{owner:?} realization must be a complete `/.../` template"),
-                    ));
-                    continue;
-                }
-                let Some(inner) = inner else {
-                    continue;
-                };
-                match template_references(inner) {
-                    Ok(references) => {
-                        for reference in references {
-                            if !slots.iter().any(|slot| slot.name == reference) {
-                                report.push(Diagnostic::new(
-                                    Severity::Error,
-                                    "REALIZATION_UNKNOWN_SLOT",
-                                    format!("{owner:?} realization refers to unknown slot {reference:?}"),
-                                ));
-                            }
-                        }
-                    }
-                    Err(error) => report.push(Diagnostic::new(
-                        Severity::Error,
-                        "REALIZATION_INVALID_TEMPLATE",
-                        format!("{owner:?} realization template: {error}"),
-                    )),
-                }
-                if let Some(guard) = &branch.guard {
-                    if let Err(error) =
-                        synchronic::validate_realization_guard(guard, registry, &slots)
-                    {
-                        report.push(
-                            Diagnostic::new(
-                                Severity::Error,
-                                "REALIZATION_INVALID_GUARD",
-                                format!("{owner:?}: {error}"),
-                            )
-                            .with_sources(vec![DiagnosticSource {
-                                owner: owner.clone(),
-                                path: Some("phon.realization".to_owned()),
-                                location: branch.source,
-                            }]),
-                        );
                     }
                 }
             }
@@ -1511,6 +1492,8 @@ fn validate_fp_expressions(
             SignItem::FeatureValue(value) => value.dim == dim,
             SignItem::FeatureExpression(value) => value.dim == dim,
             SignItem::FeatureRule(rule) | SignItem::Rule(rule) => rule.dim == dim,
+            // 義項與衍生邊只屬 sem 維(《修補05》§10.3)。
+            SignItem::Sense(_) | SignItem::SenseEdge(_) => dim == Dim::Sem,
             SignItem::Def(definition) => definition
                 .path
                 .strip_prefix(dim.keyword())
@@ -2127,20 +2110,6 @@ fn validate_constructions_and_local_phon(
                 SignItem::Realization(realization) => Some(realization),
                 _ => None,
             }) {
-                for branch in &realization.branches {
-                    if let Some(inner) = branch
-                        .template
-                        .strip_prefix('/')
-                        .and_then(|value| value.strip_suffix('/'))
-                    {
-                        if let Ok(references) = template_references(inner) {
-                            used_slots.extend(references);
-                        }
-                    }
-                    if let Some(guard) = &branch.guard {
-                        used_slots.extend(synchronic::realization_guard_slot_references(guard));
-                    }
-                }
                 if let Some(case) = &realization.expression {
                     if let Some((slot, "phon")) = case
                         .scrutinee
@@ -2150,6 +2119,9 @@ fn validate_constructions_and_local_phon(
                         used_slots.insert(slot.to_owned());
                     }
                     for branch in &case.branches {
+                        if let crate::CaseCondition::Guard(guard) = &branch.condition {
+                            used_slots.extend(synchronic::realization_guard_slot_references(guard));
+                        }
                         if let Expression::PhonTemplate(template) = &branch.result {
                             if let Some(inner) = template
                                 .strip_prefix('/')
@@ -3948,9 +3920,8 @@ impl CompiledSystem {
             SignItem::Realization(realization) => Some(realization),
             _ => None,
         });
-        let mut selected = None;
-        let mut slot_reads = Vec::new();
-        let mut self_reads = Vec::new();
+        let slot_reads = Vec::new();
+        let self_reads = Vec::new();
         let mut cases = Vec::new();
         let mut nested_rules = Vec::new();
         let default = token.phon_form()?;
@@ -3965,45 +3936,9 @@ impl CompiledSystem {
                     &mut nested_rules,
                 )?);
             }
-            for (index, branch) in realization
-                .branches
-                .iter()
-                .enumerate()
-                .take(if typed.is_none() { usize::MAX } else { 0 })
-            {
-                if let Some(guard) = &branch.guard {
-                    let (status, slots, self_values, error) =
-                        synchronic::evaluate_token_guard(token, guard, &self.ontology);
-                    slot_reads.extend(slots);
-                    self_reads.extend(self_values);
-                    match status {
-                        RuleStatus::Matched => {
-                            selected = Some((index, branch));
-                            break;
-                        }
-                        RuleStatus::Unmatched => continue,
-                        RuleStatus::Error => {
-                            return Err(SystemError::RealizationGuard(
-                                error.unwrap_or_else(|| {
-                                    "unknown realization guard error".to_owned()
-                                }),
-                            ));
-                        }
-                    }
-                } else {
-                    selected = Some((index, branch));
-                    break;
-                }
-            }
         }
         let (input, branch, source) = if let Some(result) = typed {
             result
-        } else if let Some((index, selected)) = selected {
-            (
-                token.expand_phon_template(&selected.template)?,
-                Some(index),
-                selected.source,
-            )
         } else {
             (default, None, SourceLocation::unknown())
         };

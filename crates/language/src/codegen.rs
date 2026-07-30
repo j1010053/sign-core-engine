@@ -31,6 +31,14 @@ pub enum CodegenError {
         "generated phon rule-set rejected by dsl: {msg}\n--- generated source ---\n{generated}"
     )]
     Dsl { msg: String, generated: String },
+    /// P46 S4:`.qy` 的 propagate 只能掛在**邊界**(`Then propagate:`)或 **header**
+    /// (`name propagate:`);block 的**首元素**在邊界之前,無處可掛修飾詞。
+    /// 這種 IR(僅 S3 編輯可造成)**顯式拒絕**,不默默丟掉 propagate 語意。
+    #[error(
+        "phon rule {rule:?}: a leading block element cannot carry `propagate` \
+         (no boundary to attach it to); use a rule-level `propagate:` header instead"
+    )]
+    LeadingPropagateUnsupported { rule: String },
 }
 
 /// Compiled Grammar(P8):共時執行表示,Engine 只讀這個。
@@ -103,6 +111,93 @@ pub(crate) fn emit_rule(out: &mut String, n: &mut u32, r: &Rule) -> Result<(), C
     emit_rule_mapped(out, n, r, &mut Vec::new())
 }
 
+/// 排放結構化 `PhonBlock`(P46 S2)→ `.qy`:leading block 直接印;後續 block 冠
+/// `Then:`/`Else:` 邊界並縮排。
+/// A `Then`/`Else` block whose element must become a **braced group** in `.qy`
+/// rather than a bare statement list. A `Leaf` element is a plain expression
+/// list (needs no braces); a nested `Then`/`Else` must be grouped so its inner
+/// boundaries don't read as flat-mixing at the parent level (P46 L1; engine
+/// grouped-block parser, tshiatūn wuc-claudecode / PR #1).
+fn is_grouped_element(block: &crate::PhonBlock) -> bool {
+    match block {
+        crate::PhonBlock::Leaf(_) => false,
+        crate::PhonBlock::Then(_) | crate::PhonBlock::Else(_) => true,
+        crate::PhonBlock::Propagate(inner) => is_grouped_element(inner),
+    }
+}
+
+/// Split a block element into its `propagate` modifier and the block the
+/// modifier applies to (P46 S4). `Propagate` is a *modifier*, not a level.
+fn split_propagate(block: &crate::PhonBlock) -> (bool, &crate::PhonBlock) {
+    match block {
+        crate::PhonBlock::Propagate(inner) => (true, inner.as_ref()),
+        other => (false, other),
+    }
+}
+
+fn emit_phon_block(
+    out: &mut String,
+    block: &crate::PhonBlock,
+    indent: &str,
+    rule_label: &str,
+) -> Result<(), CodegenError> {
+    match block {
+        crate::PhonBlock::Leaf(stmts) => {
+            for statement in stmts {
+                out.push_str(indent);
+                out.push_str(statement);
+                out.push('\n');
+            }
+        }
+        crate::PhonBlock::Then(blocks) | crate::PhonBlock::Else(blocks) => {
+            let keyword = if matches!(block, crate::PhonBlock::Then(_)) {
+                "Then"
+            } else {
+                "Else"
+            };
+            let inner = format!("{indent}    ");
+            for (index, sub) in blocks.iter().enumerate() {
+                let (propagate, body) = split_propagate(sub);
+                if index == 0 {
+                    // The leading element precedes every boundary, so there is no
+                    // place to hang a modifier: reject rather than drop it.
+                    if propagate {
+                        return Err(CodegenError::LeadingPropagateUnsupported {
+                            rule: rule_label.to_owned(),
+                        });
+                    }
+                    if is_grouped_element(body) {
+                        // Leading nested block: a `{ … }` group on its own lines.
+                        out.push_str(&format!("{indent}{{\n"));
+                        emit_phon_block(out, body, &inner, rule_label)?;
+                        out.push_str(&format!("{indent}}}\n"));
+                    } else {
+                        // Leading bare leaf: statements straight at this indent.
+                        emit_phon_block(out, body, indent, rule_label)?;
+                    }
+                    continue;
+                }
+                let modifier = if propagate { " propagate" } else { "" };
+                if is_grouped_element(body) {
+                    // Boundary then a nested block: `Keyword[ propagate]: { … }`.
+                    out.push_str(&format!("{indent}{keyword}{modifier}: {{\n"));
+                    emit_phon_block(out, body, &inner, rule_label)?;
+                    out.push_str(&format!("{indent}}}\n"));
+                } else {
+                    // Boundary then a bare leaf (flat single-level form — without
+                    // `propagate` this is byte-identical to the pre-S4 output).
+                    out.push_str(&format!("{indent}{keyword}{modifier}:\n"));
+                    emit_phon_block(out, body, &inner, rule_label)?;
+                }
+            }
+        }
+        // A `Propagate` reached directly (a rule root) carries no boundary of its
+        // own; the rule-level `propagate:` header expresses it instead.
+        crate::PhonBlock::Propagate(inner) => emit_phon_block(out, inner, indent, rule_label)?,
+    }
+    Ok(())
+}
+
 fn generated_line(out: &str) -> usize {
     out.bytes().filter(|byte| *byte == b'\n').count() + 1
 }
@@ -140,6 +235,19 @@ fn emit_rule_mapped(
             .map(str::to_owned)
             .collect::<Vec<_>>()
     };
+    if let Some(block) = &r.phon_block {
+        // P46 S2: structured Lexurgy block → `.qy` verbatim.
+        let label = r.name.clone().unwrap_or_else(|| format!("r{n}"));
+        *n += 1;
+        // P46 S4: rule-level propagate → engine header modifier `name propagate:`.
+        let modifier = if r.propagate { " propagate" } else { "" };
+        out.push_str(&format!("{label}{modifier}:\n"));
+        if r.stage != Stage::Word {
+            out.push_str(&format!("    stage: {}\n", stage_str(r.stage)));
+        }
+        emit_phon_block(out, block, "    ", &label)?;
+        return Ok(());
+    }
     if r.body.starts_with("Scan ") {
         if r.stage != Stage::Word {
             return Err(CodegenError::ScanStageUnsupported {
@@ -162,7 +270,12 @@ fn emit_rule_mapped(
             }
         }
     } else {
-        out.push_str(&format!("r{n}:\n"));
+        // A named phon rule (P46 取徑 A) emits its Lexurgy `name:` label; an
+        // unnamed rule keeps the synthetic `rN:` label.
+        out.push_str(&format!(
+            "{}:\n",
+            r.name.clone().unwrap_or_else(|| format!("r{n}"))
+        ));
         *n += 1;
         if r.stage != Stage::Word {
             out.push_str(&format!("    stage: {}\n", stage_str(r.stage)));

@@ -14,14 +14,23 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+mod call;
+pub mod diff;
+pub mod evolution;
+pub mod function;
+pub mod merge;
+pub mod reconstruct;
+pub mod rewrite;
+
+use crate::rewrite::DonorScope;
 use conlang_language::{
     check_document, compile_document, sha256_hex, AddressSegment, BinaryConstraint, Block,
-    CaseBranch, CompileSystemError, CompiledSystem, Def, Dim, Expression, FeatureDecl,
-    FeatureValue, IdentityError, IdentityManifestV2, Language, LanguageDocument, LibraryId,
-    LibrarySpec, NodeAddress, NodeEntryV1, NodeId, NodeKind, NodeRef, Realization,
-    RealizationBranch, RoleBinding, RoleDecl, Rule, Severity, SignApplication, SignArgumentValue,
-    SignDef, SignItem, Slot, SlotConstraint, SlotFeatureBinding, SlotMapOp, Stage, TraitDef,
-    TypedCase, ValidationReport,
+    CaseBranch, CompileSystemError, CompiledSystem, Def, DerivationKind, Dim, Expression,
+    FeatureDecl, FeatureValue, IdentityError, IdentityManifestV2, Language, LanguageDocument,
+    LibraryId, LibrarySpec, NodeAddress, NodeEntryV1, NodeId, NodeKind, NodeRef, PhonBlock,
+    Realization, RoleBinding, RoleDecl, Rule, SenseTransparency, Severity, SignApplication,
+    SignArgumentValue, SignDef, SignItem, Slot, SlotConstraint, SlotFeatureBinding, SlotMapOp,
+    Stage, TraitDef, TypedCase, ValidationReport,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,14 +46,20 @@ pub enum Anchor {
 pub enum DetachedNode {
     DslDeclaration(String),
     Prosody(Vec<String>),
-    Distribution { key: String, value: String },
+    Distribution {
+        key: String,
+        value: String,
+    },
     Trait(TraitDef),
     Sign(SignDef),
     Block(Block),
     Item(SignItem),
     RuleElseBranch(String),
     RuleThenBranch(String),
-    RealizationBranch(RealizationBranch),
+    /// A single phon `Leaf` statement line (P46 S3).
+    PhonStatement(String),
+    /// A whole phon sub-block — one element of a `Then`/`Else` vec (P46 S3).
+    PhonBlockNode(PhonBlock),
     CaseBranch(CaseBranch),
 }
 
@@ -60,7 +75,8 @@ impl DetachedNode {
             DetachedNode::Item(item) => item_kind(item),
             DetachedNode::RuleElseBranch(_) => NodeKind::RuleElseBranch,
             DetachedNode::RuleThenBranch(_) => NodeKind::RuleThenBranch,
-            DetachedNode::RealizationBranch(_) => NodeKind::RealizationBranch,
+            DetachedNode::PhonStatement(_) => NodeKind::PhonStatement,
+            DetachedNode::PhonBlockNode(_) => NodeKind::PhonBlockNode,
             DetachedNode::CaseBranch(_) => NodeKind::CaseBranch,
         }
     }
@@ -73,17 +89,29 @@ pub enum NodeUpdate {
     TraitGlobal(bool),
     DslDeclaration(String),
     Prosody(Vec<String>),
-    Distribution { key: String, value: String },
+    Distribution {
+        key: String,
+        value: String,
+    },
     DefinitionPath(String),
     DefinitionValue(String),
     RuleBody(String),
     RuleStage(Stage),
     RuleDimension(Dim),
     RuleBranchBody(String),
+    /// P46 S4: rule-level or block-element fixpoint iteration (`propagate`).
+    Propagate(bool),
+    /// §10.3 義項/衍生邊(Atomic Rewrite drift / lexicalize_sense 的落點)。
+    SenseGloss(String),
+    SenseEdgeKind(DerivationKind),
+    SenseEdgeTransparency(SenseTransparency),
     SlotName(String),
     SlotConstraint(SlotConstraint),
     SlotOptional(bool),
-    TraitUse { name: String, block: Option<u32> },
+    TraitUse {
+        name: String,
+        block: Option<u32>,
+    },
     Belongs(String),
     FeatureDeclaration(FeatureDecl),
     FeatureValue(FeatureValue),
@@ -91,8 +119,6 @@ pub enum NodeUpdate {
     SlotMap(SlotMapOp),
     RoleDeclaration(RoleDecl),
     RoleBinding(RoleBinding),
-    RealizationTemplate(String),
-    RealizationGuard(Option<String>),
     CaseSelection(conlang_language::CaseSelection),
     CaseBranch(CaseBranch),
     SignApplication(SignApplication),
@@ -242,6 +268,9 @@ fn sequence_tag(address: &NodeAddress) -> u8 {
         Some(AddressSegment::CaseBranches(_)) => 12,
         Some(AddressSegment::CaseResult) => 13,
         Some(AddressSegment::ApplicationArguments(_)) => 14,
+        Some(AddressSegment::PhonLeaf(_)) => 15,
+        Some(AddressSegment::PhonThen(_)) => 16,
+        Some(AddressSegment::PhonElse(_)) => 17,
     }
 }
 
@@ -442,6 +471,9 @@ enum ListKey {
     Items,
     RuleElse,
     RuleThen,
+    PhonLeaf,
+    PhonThen,
+    PhonElse,
     Realization,
     CaseBranches,
 }
@@ -456,6 +488,9 @@ fn segment(key: ListKey, index: usize) -> AddressSegment {
         ListKey::Items => AddressSegment::Items(index),
         ListKey::RuleElse => AddressSegment::RuleElse(index),
         ListKey::RuleThen => AddressSegment::RuleThen(index),
+        ListKey::PhonLeaf => AddressSegment::PhonLeaf(index),
+        ListKey::PhonThen => AddressSegment::PhonThen(index),
+        ListKey::PhonElse => AddressSegment::PhonElse(index),
         ListKey::Realization => AddressSegment::RealizationBranches(index),
         ListKey::CaseBranches => AddressSegment::CaseBranches(index),
     }
@@ -471,6 +506,9 @@ fn segment_index(value: &AddressSegment, key: ListKey) -> Option<usize> {
         | (ListKey::Items, AddressSegment::Items(index))
         | (ListKey::RuleElse, AddressSegment::RuleElse(index))
         | (ListKey::RuleThen, AddressSegment::RuleThen(index))
+        | (ListKey::PhonLeaf, AddressSegment::PhonLeaf(index))
+        | (ListKey::PhonThen, AddressSegment::PhonThen(index))
+        | (ListKey::PhonElse, AddressSegment::PhonElse(index))
         | (ListKey::Realization, AddressSegment::RealizationBranches(index)) => Some(*index),
         (ListKey::CaseBranches, AddressSegment::CaseBranches(index)) => Some(*index),
         _ => None,
@@ -630,16 +668,40 @@ fn insertion_site(
             let rule = rule_at(language, &parent.address)?;
             (ListKey::RuleThen, rule.then_chain.len(), None)
         }
-        (NodeKind::Realization, NodeKind::RealizationBranch) => {
-            let realization = realization_at(language, &parent.address)?;
-            (ListKey::Realization, realization.branches.len(), None)
-        }
         (NodeKind::Case, NodeKind::CaseBranch) => {
             let case = case_at(language, &parent.address).ok_or_else(|| {
                 EditError::FieldMismatch("case parent address is stale".to_owned())
             })?;
             (ListKey::CaseBranches, case.branches.len(), None)
         }
+        // P46 S3: insert a statement into a phon `Leaf`, or a sub-block into a
+        // phon `Then`/`Else`. Parent is a rule (its phon_block root) or a nested
+        // `PhonBlockNode`.
+        (
+            NodeKind::Rule | NodeKind::FeatureRule | NodeKind::PhonBlockNode,
+            NodeKind::PhonStatement,
+        ) => match phon_container_block(language, &parent.address)? {
+            PhonBlock::Leaf(statements) => (ListKey::PhonLeaf, statements.len(), None),
+            _ => {
+                return Err(EditError::ParentKind {
+                    child,
+                    parent: parent.kind,
+                })
+            }
+        },
+        (
+            NodeKind::Rule | NodeKind::FeatureRule | NodeKind::PhonBlockNode,
+            NodeKind::PhonBlockNode,
+        ) => match phon_container_block(language, &parent.address)? {
+            PhonBlock::Then(elements) => (ListKey::PhonThen, elements.len(), None),
+            PhonBlock::Else(elements) => (ListKey::PhonElse, elements.len(), None),
+            _ => {
+                return Err(EditError::ParentKind {
+                    child,
+                    parent: parent.kind,
+                })
+            }
+        },
         (NodeKind::Language, NodeKind::Prosody) if language.prosody.is_empty() => {
             if !matches!(anchor, Anchor::End) {
                 return Err(EditError::AnchorInvalid(
@@ -808,10 +870,39 @@ fn insert_payload(
                 .then_chain
                 .insert(index, value)
         }
-        DetachedNode::RealizationBranch(value) if parent.kind == NodeKind::Realization => {
-            realization_at_mut(language, &parent.address)?
-                .branches
-                .insert(index, value)
+        DetachedNode::PhonStatement(value)
+            if matches!(
+                parent.kind,
+                NodeKind::Rule | NodeKind::FeatureRule | NodeKind::PhonBlockNode
+            ) =>
+        {
+            match phon_container_block_mut(language, &parent.address)? {
+                PhonBlock::Leaf(statements) => statements.insert(index, value),
+                _ => {
+                    return Err(EditError::ParentKind {
+                        child: NodeKind::PhonStatement,
+                        parent: parent.kind,
+                    })
+                }
+            }
+        }
+        DetachedNode::PhonBlockNode(value)
+            if matches!(
+                parent.kind,
+                NodeKind::Rule | NodeKind::FeatureRule | NodeKind::PhonBlockNode
+            ) =>
+        {
+            match phon_container_block_mut(language, &parent.address)? {
+                PhonBlock::Then(elements) | PhonBlock::Else(elements) => {
+                    elements.insert(index, value)
+                }
+                _ => {
+                    return Err(EditError::ParentKind {
+                        child: NodeKind::PhonBlockNode,
+                        parent: parent.kind,
+                    })
+                }
+            }
         }
         DetachedNode::CaseBranch(value) if parent.kind == NodeKind::Case => {
             case_at_mut(language, &parent.address)?
@@ -893,11 +984,15 @@ fn child_addresses(
             for index in 0..rule.then_chain.len() {
                 children.push(address.child(AddressSegment::RuleThen(index)));
             }
+            if let Some(block) = &rule.phon_block {
+                push_phon_children(block, address, &mut children);
+            }
+        }
+        NodeKind::PhonBlockNode => {
+            let block = phon_container_block(language, address)?;
+            push_phon_children(block, address, &mut children);
         }
         NodeKind::Realization => {
-            for index in 0..realization_at(language, address)?.branches.len() {
-                children.push(address.child(AddressSegment::RealizationBranches(index)));
-            }
             if realization_at(language, address)?.expression.is_some() {
                 children.push(address.child(AddressSegment::CaseExpression));
             }
@@ -1004,10 +1099,29 @@ fn delete_nested_payload(
         Some(AddressSegment::RuleThen(index)) => {
             rule_at_mut(language, &address)?.then_chain.remove(*index);
         }
-        Some(AddressSegment::RealizationBranches(index)) => {
-            realization_at_mut(language, &address)?
-                .branches
-                .remove(*index);
+        Some(AddressSegment::PhonLeaf(index)) => {
+            match phon_container_block_mut(language, &address)? {
+                PhonBlock::Leaf(statements) => {
+                    statements.remove(*index);
+                }
+                _ => {
+                    return Err(EditError::FieldMismatch(
+                        "phon statement parent is not a Leaf".to_owned(),
+                    ))
+                }
+            }
+        }
+        Some(AddressSegment::PhonThen(index) | AddressSegment::PhonElse(index)) => {
+            match phon_container_block_mut(language, &address)? {
+                PhonBlock::Then(elements) | PhonBlock::Else(elements) => {
+                    elements.remove(*index);
+                }
+                _ => {
+                    return Err(EditError::FieldMismatch(
+                        "phon sub-block parent is not a Then/Else".to_owned(),
+                    ))
+                }
+            }
         }
         Some(AddressSegment::CaseBranches(index)) => {
             case_at_mut(language, &address)?.branches.remove(*index);
@@ -1205,6 +1319,57 @@ fn update_payload(
             set_rule_branch(language, &node.address, value)?;
             Ok(None)
         }
+        (NodeKind::Sense, NodeUpdate::SenseGloss(value)) => {
+            match item_at_address_mut(language, &node.address)? {
+                SignItem::Sense(sense) => sense.gloss = value,
+                _ => return Err(field_mismatch(node, "sense")),
+            }
+            Ok(None)
+        }
+        (NodeKind::SenseEdge, NodeUpdate::SenseEdgeKind(value)) => {
+            match item_at_address_mut(language, &node.address)? {
+                SignItem::SenseEdge(edge) => edge.kind = value,
+                _ => return Err(field_mismatch(node, "sense edge")),
+            }
+            Ok(None)
+        }
+        (NodeKind::SenseEdge, NodeUpdate::SenseEdgeTransparency(value)) => {
+            match item_at_address_mut(language, &node.address)? {
+                SignItem::SenseEdge(edge) => edge.transparency = value,
+                _ => return Err(field_mismatch(node, "sense edge")),
+            }
+            Ok(None)
+        }
+        (NodeKind::PhonStatement, NodeUpdate::RuleBranchBody(value)) => {
+            *phon_statement_at_mut(language, &node.address)? = value;
+            Ok(None)
+        }
+        (NodeKind::Rule | NodeKind::FeatureRule, NodeUpdate::Propagate(value)) => {
+            let rule = rule_at_mut(language, &node.address)?;
+            if rule.phon_block.is_none() {
+                return Err(EditError::FieldMismatch(
+                    "`propagate` applies to a phon block rule".to_owned(),
+                ));
+            }
+            rule.propagate = value;
+            Ok(None)
+        }
+        (NodeKind::PhonBlockNode, NodeUpdate::Propagate(value)) => {
+            // Wrap/unwrap the element in place. `Propagate` contributes no address
+            // segment, so child identities are untouched by this toggle.
+            let slot = phon_element_raw_mut(language, &node.address)?;
+            let current = std::mem::replace(slot, PhonBlock::Leaf(Vec::new()));
+            let bare = match current {
+                PhonBlock::Propagate(inner) => *inner,
+                other => other,
+            };
+            *slot = if value {
+                PhonBlock::Propagate(Box::new(bare))
+            } else {
+                bare
+            };
+            Ok(None)
+        }
         (NodeKind::Slot, NodeUpdate::SlotName(value)) => {
             let old = slot_at_mut(language, &node.address)?.name.clone();
             let scope = slot_rename_scope(language, node, &old)?;
@@ -1252,14 +1417,6 @@ fn update_payload(
         }
         (NodeKind::RoleBinding, NodeUpdate::RoleBinding(value)) => {
             *item_at_address_mut(language, &node.address)? = SignItem::RoleBinding(value);
-            Ok(None)
-        }
-        (NodeKind::RealizationBranch, NodeUpdate::RealizationTemplate(value)) => {
-            realization_branch_at_mut(language, &node.address)?.template = value;
-            Ok(None)
-        }
-        (NodeKind::RealizationBranch, NodeUpdate::RealizationGuard(value)) => {
-            realization_branch_at_mut(language, &node.address)?.guard = value;
             Ok(None)
         }
         (NodeKind::Case, NodeUpdate::CaseSelection(value)) => {
@@ -1459,6 +1616,10 @@ fn detached_at(language: &Language, node: &NodeEntryV1) -> Result<DetachedNode, 
         [AddressSegment::Signs(sign), AddressSegment::Items(item)] => Ok(DetachedNode::Item(
             language.signs[*sign].items[*item].clone(),
         )),
+        // Language 根沒有「拆下來」的形式——它就是文件本身。**回錯誤而非算術溢位**:
+        // 先前這裡直接 `path.len() - 1`,拿根節點呼叫會 panic(§4 禁 panic;溢位同類)。
+        // 之前沒暴露是因為沒有呼叫端用根節點問過。
+        [] => Err(field_mismatch(node, "move")),
         path => {
             let parent = NodeAddress(path[..path.len() - 1].to_vec());
             match path.last() {
@@ -1468,11 +1629,6 @@ fn detached_at(language: &Language, node: &NodeEntryV1) -> Result<DetachedNode, 
                 Some(AddressSegment::RuleThen(index)) => Ok(DetachedNode::RuleThenBranch(
                     rule_at(language, &parent)?.then_chain[*index].clone(),
                 )),
-                Some(AddressSegment::RealizationBranches(index)) => {
-                    Ok(DetachedNode::RealizationBranch(
-                        realization_at(language, &parent)?.branches[*index].clone(),
-                    ))
-                }
                 Some(AddressSegment::CaseBranches(index)) => Ok(DetachedNode::CaseBranch(
                     case_at(language, &parent)
                         .ok_or_else(|| field_mismatch(node, "move"))?
@@ -1490,6 +1646,29 @@ fn detached_at(language: &Language, node: &NodeEntryV1) -> Result<DetachedNode, 
                     };
                     Ok(DetachedNode::Item(
                         items_at(language, &parent_entry)?
+                            .get(*index)
+                            .cloned()
+                            .ok_or_else(|| field_mismatch(node, "move"))?,
+                    ))
+                }
+                Some(AddressSegment::PhonLeaf(index)) => {
+                    match phon_container_block(language, &parent)? {
+                        PhonBlock::Leaf(statements) => Ok(DetachedNode::PhonStatement(
+                            statements
+                                .get(*index)
+                                .cloned()
+                                .ok_or_else(|| field_mismatch(node, "move"))?,
+                        )),
+                        _ => Err(field_mismatch(node, "move")),
+                    }
+                }
+                Some(AddressSegment::PhonThen(index) | AddressSegment::PhonElse(index)) => {
+                    let elements = match phon_container_block(language, &parent)? {
+                        PhonBlock::Then(elements) | PhonBlock::Else(elements) => elements,
+                        _ => return Err(field_mismatch(node, "move")),
+                    };
+                    Ok(DetachedNode::PhonBlockNode(
+                        elements
                             .get(*index)
                             .cloned()
                             .ok_or_else(|| field_mismatch(node, "move"))?,
@@ -1536,6 +1715,9 @@ fn address_list_position(address: &NodeAddress) -> Result<(ListKey, usize), Edit
         AddressSegment::Items(index) => (ListKey::Items, *index),
         AddressSegment::RuleElse(index) => (ListKey::RuleElse, *index),
         AddressSegment::RuleThen(index) => (ListKey::RuleThen, *index),
+        AddressSegment::PhonLeaf(index) => (ListKey::PhonLeaf, *index),
+        AddressSegment::PhonThen(index) => (ListKey::PhonThen, *index),
+        AddressSegment::PhonElse(index) => (ListKey::PhonElse, *index),
         AddressSegment::RealizationBranches(index) => (ListKey::Realization, *index),
         AddressSegment::CaseBranches(index) => (ListKey::CaseBranches, *index),
         AddressSegment::Prosody
@@ -1561,6 +1743,8 @@ fn item_kind(item: &SignItem) -> NodeKind {
         SignItem::SlotFeatureBinding(_) => NodeKind::SlotFeatureBinding,
         SignItem::RoleDecl(_) => NodeKind::RoleDeclaration,
         SignItem::RoleBinding(_) => NodeKind::RoleBinding,
+        SignItem::Sense(_) => NodeKind::Sense,
+        SignItem::SenseEdge(_) => NodeKind::SenseEdge,
         SignItem::Realization(_) => NodeKind::Realization,
         SignItem::SignExpression(expression) => {
             expression_node_kind(&expression.expression).unwrap_or(NodeKind::Case)
@@ -1617,6 +1801,98 @@ enum UnresolvedOperation {
         anchor: UnresolvedAnchor,
         source: String,
     },
+    /// General single-payload insert: the block is a verbatim `.lang` fragment
+    /// yielding exactly one node (a `trait NAME:` / `sign NAME:`, or one sign
+    /// body item). Lowers to a single `Insert`; the block reuses the `.lang`
+    /// grammar and its dimension validation.
+    InsertBlock {
+        target: Selector,
+        anchor: UnresolvedAnchor,
+        block: String,
+    },
+    /// Authoring sugar: copy an existing sign under a fresh name. Lowers to a
+    /// single `Insert` of a deep copy, so the resolved/dumped ChangeSet holds
+    /// only the four primitives — `clone` never persists as its own operation.
+    Clone {
+        source: Selector,
+        name: String,
+    },
+    /// 層②③④ **統一呼叫語法**:`name(位置參數, key: value, …)`,可尾接 `:` 帶
+    /// 一段 `.lang` block 當最後一個參數。層級**由名字解析決定**,不靠關鍵字——
+    /// 現階段只有 P16 的 12 個內建 Atomic Rewrite 解析得出來(封閉內建集);
+    /// Recipe/Goal(步驟 16–17)落地後沿用同一文法,不必改 parser。
+    ///
+    /// 與 `clone` 同構:呼叫是**未解析層的授權糖**,`resolve` 時降成四原語,
+    /// `ResolvedChangeSet` 維持 primitive-only(步驟 14 已封板的契約)。
+    Call {
+        name: String,
+        positional: Option<String>,
+        named: Vec<(String, String)>,
+        block: Option<String>,
+    },
+}
+
+/// 切一個具名參數 `key: value`。`key` 必須是識別字,否則視為位置參數
+/// (例如 selector `sign("x")` 內部雖然沒有冒號,仍走這條保護)。
+fn split_named_argument(argument: &str) -> Option<(String, String)> {
+    let (key, value) = argument.split_once(':')?;
+    let key = key.trim();
+    if key.is_empty()
+        || !key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return None;
+    }
+    Some((key.to_owned(), unquote_change_value(value.trim())))
+}
+
+/// 解析 `name(arg, key: value, …)`。回傳 `None` 表示這行不是呼叫語法
+/// (交回給既有的原語語句處理)。
+fn parse_call_head(head: &str) -> Option<(String, Vec<String>)> {
+    let head = head.strip_suffix(':').unwrap_or(head).trim_end();
+    let open = head.find('(')?;
+    let name = head[..open].trim();
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return None;
+    }
+    let args = head[open + 1..].strip_suffix(')')?;
+    let args = args.trim();
+    if args.is_empty() {
+        return Some((name.to_owned(), Vec::new()));
+    }
+    // 以頂層逗號切分(括號內的逗號屬於 selector,如 `sign("a")` 沒有,但保守處理)。
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut current = String::new();
+    for ch in args.chars() {
+        match ch {
+            '(' | '[' => {
+                depth += 1;
+                current.push(ch);
+            }
+            ')' | ']' => {
+                depth = depth.saturating_sub(1);
+                current.push(ch);
+            }
+            ',' if depth == 0 => {
+                parts.push(std::mem::take(&mut current));
+            }
+            _ => current.push(ch),
+        }
+    }
+    parts.push(current);
+    Some((
+        name.to_owned(),
+        parts
+            .into_iter()
+            .map(|part| part.trim().to_owned())
+            .collect(),
+    ))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1640,7 +1916,86 @@ pub struct UnresolvedChangeSet {
     pub base_source: String,
     pub base_identities: String,
     pub libraries: Vec<LibraryLock>,
+    /// **本 changeset 讀得到哪些別的語言**(P62 `ContactInjection` 的宣告面)。
+    pub donors: Vec<DonorRef>,
     pub statements: Vec<UnresolvedStatement>,
+}
+
+/// 一筆借入的**引用結構**(docs/06 §3.2)。
+///
+/// 規格明定「`source` **不是獨立欄位**……由引用結構派生」(§3.1),故借來的 sign 上
+/// 只記 `provenance = loan`(是不是借的),**「從哪借」不存成欄位**——它由這裡派生。
+///
+/// 提供這個**窄入口**而非公開整棵未解析 AST:派生來源只需要「哪個 sign 來自哪個
+/// donor」,把 `UnresolvedOperation`/`Selector` 全部公開會讓大量內部形狀變成對外契約。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Adoption {
+    /// 已解析過 prelude 宣告的 donor(別名 + node-id)。
+    pub donor: DonorRef,
+    /// donor 裡的 sign 名字。
+    pub sign: String,
+}
+
+/// donor 的**內容**來源(P62/P63 §8.2)。
+///
+/// 檔案裡的 `donor <別名> <node-id>` 只是**指標 + 摘要**,不含內容;`adopt` 要複製一個
+/// sign,需要那份文件本身。這與 prelude 既有的 `library` 鎖是**同一個模式**——
+/// 鎖也只宣告身分與摘要,內容由 `LibrarySpec` 參數注入。故 donor 照辦,
+/// **不碰 `ServiceContext`**(那是 P34 的 History 側表,語意上與 donor 相反:
+/// donor 內容定址、讀兩次必同、不需記錄;外部服務不可重現、必須記 History)。
+///
+/// **範圍靠「不放進去」達成**(P63 §8.3):建構者(演化圖)只放本節點的 parents 與
+/// 本 `.chg` 宣告的 donor。範圍外的節點在**型別上**就取不到,不需要另一道檢查。
+///
+/// 鍵是 **node-id 而非別名**:別名只在單一檔案內有意義,身分是 node-id。
+#[derive(Debug, Clone, Default)]
+pub struct DonorSpec {
+    documents: BTreeMap<String, LanguageDocument>,
+}
+
+impl DonorSpec {
+    pub fn new() -> DonorSpec {
+        DonorSpec::default()
+    }
+
+    pub fn insert(&mut self, node: impl Into<String>, document: LanguageDocument) {
+        self.documents.insert(node.into(), document);
+    }
+
+    pub fn get(&self, node: &str) -> Option<&LanguageDocument> {
+        self.documents.get(node)
+    }
+
+    pub fn len(&self) -> usize {
+        self.documents.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.documents.is_empty()
+    }
+}
+
+/// prelude 的 `donor <別名> <node-id>` 宣告(P62 §7.3)。
+///
+/// ## 為什麼要有別名
+///
+/// §7.3 定「body 的條目**按名引用**已宣告的 donor」,而 P58 之下 node-id 是 64 字元的
+/// 內容雜湊——直接寫進每一個條目沒法用。形狀比照既有的
+/// `library <package>@<version> sha256:<digest>`:**名字 + 摘要**,同一個先例。
+///
+/// ## 為什麼 `node` 是 `String` 而不是 `evolution::NodeId`
+///
+/// `.chg` 這一層不該依賴演化圖——它只是解析出一個 token,由圖在需要時去解析。
+/// (`NodeId` 的欄位也是私有的,只能由內容雜湊產生,正是為了「身分不能自取」。)
+///
+/// **不需要另外的 digest 欄位**:P58 之下 `NodeId` 就是內容雜湊,故 `node` 本身
+/// 已經是 digest——donor 的內容變了就是另一個 `NodeId`,引用自然失效。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DonorRef {
+    /// 檔案內的短名,供 body 引用。
+    pub alias: String,
+    /// 演化圖的節點識別(P58:內容雜湊)。
+    pub node: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1656,6 +2011,9 @@ pub struct ResolvedChangeSet {
     pub base_source: String,
     pub base_identities: String,
     pub libraries: Vec<LibraryLock>,
+    /// 承 `UnresolvedChangeSet`:donor 是 prelude 的**外部依賴宣告**(與 library lock
+    /// 同類),不是操作,故不影響步驟 14「`ResolvedChangeSet` 只含四原語」的封板契約。
+    pub donors: Vec<DonorRef>,
     pub statements: Vec<ResolvedStatement>,
 }
 
@@ -1687,10 +2045,25 @@ pub enum ReplayError {
     BaseIdentitiesMismatch,
     #[error("CHANGESET_LIBRARY_LOCK_MISMATCH: {0}")]
     LibraryLockMismatch(String),
+    /// 宣告的 donor 在注入的 `DonorSpec` 裡找不到——與 `LibraryLockMismatch` 同類:
+    /// **檔案宣告的外部依賴,與實際提供的內容對不上**。
+    #[error("CHANGESET_UNKNOWN_DONOR: {alias} -> {node}")]
+    UnknownDonor { alias: String, node: String },
     #[error("CHANGESET_NAMESPACE_MISMATCH: {0}")]
     NamespaceMismatch(String),
     #[error("CHANGESET_SELECTOR: {0}")]
     Selector(String),
+    /// 語句**內**的 selector 解析失敗:與 `Statement` 對稱地帶上句號。
+    ///
+    /// 獨立變體而非把 ordinal 加進 `Selector(String)`:後者有約 20 處建構點,
+    /// 且那些地方都不知道自己屬於哪一句;句號只有 `UnresolvedChangeSet::resolve`
+    /// 的語句迴圈知道,故在該處單點包裝(《修補11》§3.3)。
+    ///
+    /// **為什麼需要它**:rebase 最常見的衝突就是「目標在新 base 上不存在」,而依
+    /// 名字定址找不到目標時錯誤發生在 selector 層、不在 `Statement` 層——沒有這個
+    /// 變體,最重要的那類衝突反而說不出是哪一句。
+    #[error("CHANGESET_STATEMENT_{ordinal}_SELECTOR: {message}")]
+    StatementSelector { ordinal: u64, message: String },
     #[error("CHANGESET_STATEMENT_{ordinal}: {source}")]
     Statement {
         ordinal: u64,
@@ -1735,6 +2108,10 @@ fn parse_kind(value: &str) -> Result<NodeKind, ReplayError> {
         "rule" => Ok(NodeKind::Rule),
         "then" => Ok(NodeKind::RuleThenBranch),
         "else" => Ok(NodeKind::RuleElseBranch),
+        "phon_statement" => Ok(NodeKind::PhonStatement),
+        "sense" => Ok(NodeKind::Sense),
+        "sense_edge" => Ok(NodeKind::SenseEdge),
+        "phon_block" => Ok(NodeKind::PhonBlockNode),
         "realization_branch" => Ok(NodeKind::RealizationBranch),
         "application" => Ok(NodeKind::Application),
         "case" => Ok(NodeKind::Case),
@@ -1756,6 +2133,10 @@ fn kind_keyword(kind: NodeKind) -> &'static str {
         NodeKind::Rule | NodeKind::FeatureRule => "rule",
         NodeKind::RuleThenBranch => "then",
         NodeKind::RuleElseBranch => "else",
+        NodeKind::PhonStatement => "phon_statement",
+        NodeKind::Sense => "sense",
+        NodeKind::SenseEdge => "sense_edge",
+        NodeKind::PhonBlockNode => "phon_block",
         NodeKind::RealizationBranch => "realization_branch",
         NodeKind::Application => "application",
         NodeKind::Case => "case",
@@ -1867,6 +2248,39 @@ fn unquote_change_value(value: &str) -> String {
 }
 
 fn parse_statement_body(ordinal: u64, body: &[String]) -> Result<UnresolvedStatement, ReplayError> {
+    // Split the body into operation chunks: a line at indent 0 (after the outer
+    // 8-space strip) starts a new operation; deeper block lines belong to the
+    // current one. This lets a statement hold several operations (e.g. the
+    // per-item inserts a fan-out lowers to) and validate only its final state.
+    let mut chunks: Vec<Vec<String>> = Vec::new();
+    for line in body {
+        if line.chars().next().is_some_and(|c| !c.is_whitespace()) {
+            chunks.push(vec![line.clone()]);
+        } else {
+            chunks
+                .last_mut()
+                .ok_or_else(|| {
+                    ReplayError::Parse(format!(
+                        "statement {ordinal} has an indented line before any operation"
+                    ))
+                })?
+                .push(line.clone());
+        }
+    }
+    if chunks.is_empty() {
+        return Err(ReplayError::Parse(format!("statement {ordinal} is empty")));
+    }
+    let operations = chunks
+        .iter()
+        .map(|chunk| parse_operation(ordinal, chunk))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(UnresolvedStatement {
+        ordinal,
+        operations,
+    })
+}
+
+fn parse_operation(ordinal: u64, body: &[String]) -> Result<UnresolvedOperation, ReplayError> {
     let first = body
         .first()
         .ok_or_else(|| ReplayError::Parse(format!("statement {ordinal} is empty")))?
@@ -1900,6 +2314,39 @@ fn parse_statement_body(ordinal: u64, body: &[String]) -> Result<UnresolvedState
             parent: parse_selector(parent)?,
             anchor: parse_anchor(anchor)?,
         }
+    } else if let Some(rest) = first.strip_prefix("clone ") {
+        let (source, name) = rest.rsplit_once(" as ").ok_or_else(|| {
+            ReplayError::Parse(format!("clone has no `as <name>` in statement {ordinal}"))
+        })?;
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(ReplayError::Parse(format!(
+                "clone has an empty name in statement {ordinal}"
+            )));
+        }
+        UnresolvedOperation::Clone {
+            source: parse_selector(source)?,
+            name: name.to_owned(),
+        }
+    } else if let Some(rest) = first.strip_prefix("insert into ") {
+        let (target, anchor) = rest
+            .strip_suffix(':')
+            .unwrap_or(rest)
+            .rsplit_once(" at ")
+            .ok_or_else(|| {
+                ReplayError::Parse(format!("insert has no `at` in statement {ordinal}"))
+            })?;
+        let block = body.iter().skip(1).cloned().collect::<Vec<_>>().join("\n");
+        if block.trim().is_empty() {
+            return Err(ReplayError::Parse(format!(
+                "insert statement {ordinal} has no .lang block"
+            )));
+        }
+        UnresolvedOperation::InsertBlock {
+            target: parse_selector(target)?,
+            anchor: parse_anchor(anchor)?,
+            block,
+        }
     } else if let Some(rest) = first.strip_prefix("insert sign under ") {
         let (parent, anchor) = rest
             .strip_suffix(':')
@@ -1919,23 +2366,57 @@ fn parse_statement_body(ordinal: u64, body: &[String]) -> Result<UnresolvedState
             anchor: parse_anchor(anchor)?,
             source: fragment,
         }
+    } else if let Some((name, args)) = parse_call_head(first) {
+        // 層②③④ 統一呼叫。首個不含 `key:` 的參數是位置參數(通常是 selector)。
+        let mut positional = None;
+        let mut named = Vec::new();
+        for arg in args {
+            match split_named_argument(&arg) {
+                Some((key, value)) => named.push((key, value)),
+                None if positional.is_none() && !arg.is_empty() => positional = Some(arg),
+                None if arg.is_empty() => {}
+                None => {
+                    return Err(ReplayError::Parse(format!(
+                        "statement {ordinal}: {name}(…) takes at most one positional argument"
+                    )))
+                }
+            }
+        }
+        let block = if first.trim_end().ends_with(':') {
+            let text = body.iter().skip(1).cloned().collect::<Vec<_>>().join("\n");
+            if text.trim().is_empty() {
+                return Err(ReplayError::Parse(format!(
+                    "statement {ordinal}: {name}(…): has no .lang block"
+                )));
+            }
+            Some(text)
+        } else {
+            None
+        };
+        UnresolvedOperation::Call {
+            name,
+            positional,
+            named,
+            block,
+        }
     } else {
         return Err(ReplayError::Parse(format!(
             "unsupported primitive statement {ordinal}: {first}"
         )));
     };
-    Ok(UnresolvedStatement {
-        ordinal,
-        operations: vec![operation],
-    })
+    Ok(operation)
 }
 
 impl UnresolvedChangeSet {
     pub fn parse(source: &str) -> Result<UnresolvedChangeSet, ReplayError> {
+        // 三種格式共用 `/* … */` 區塊註解(擁有者 2026-07-12 定案;`#` 在 `.qy`
+        // 已被詞界 D19 佔用)。剝除保留換行,行號不漂移。
+        let source = conlang_language::parser::strip_comments(source);
+        let source = source.as_str();
         let lines = source.lines().collect::<Vec<_>>();
         let header = lines
             .iter()
-            .find(|line| !line.trim().is_empty() && !line.trim().starts_with('#'))
+            .find(|line| !line.trim().is_empty())
             .ok_or_else(|| ReplayError::Parse("empty ChangeSet".to_owned()))?
             .trim();
         let namespace = header
@@ -1947,11 +2428,13 @@ impl UnresolvedChangeSet {
         let mut base_source = None;
         let mut base_identities = None;
         let mut libraries = Vec::new();
+        let mut donors: Vec<DonorRef> = Vec::new();
         let mut statements = Vec::new();
         let mut index = 1;
         while index < lines.len() {
             let line = lines[index].trim();
-            if line.is_empty() || line.starts_with('#') {
+            // 注意:`#` 現在是**語句標記**不是註解(註解已統一為 `/* … */`)。
+            if line.is_empty() {
                 index += 1;
                 continue;
             }
@@ -1975,8 +2458,30 @@ impl UnresolvedChangeSet {
                     version: version.to_owned(),
                     digest: strip_digest(digest),
                 });
+            } else if let Some(value) = line.strip_prefix("donor ") {
+                let (alias, node) = value.split_once(' ').ok_or_else(|| {
+                    ReplayError::Parse(format!("expected `donor <alias> <node-id>` {line:?}"))
+                })?;
+                let (alias, node) = (alias.trim(), node.trim());
+                if alias.is_empty() || node.is_empty() || node.contains(' ') {
+                    return Err(ReplayError::Parse(format!("malformed donor {line:?}")));
+                }
+                // 別名在檔案內必須唯一——同名兩次會讓 body 的引用**指向哪一個是任意的**,
+                // 而那是靜默的:結果照樣算得出來,只是取錯了語言。
+                if donors.iter().any(|donor| donor.alias == alias) {
+                    return Err(ReplayError::Parse(format!(
+                        "duplicate donor alias {alias:?}"
+                    )));
+                }
+                donors.push(DonorRef {
+                    alias: alias.to_owned(),
+                    node: node.to_owned(),
+                });
             } else if let Some(value) = line
-                .strip_prefix("statement ")
+                // `#N:` 為 canonical;`statement N:` 為舊形,仍接受(dump 排新形,
+                // 非 canonical 正規化為不動點——與 `.lang` 的 `=`→`:` 同一作法)。
+                .strip_prefix('#')
+                .or_else(|| line.strip_prefix("statement "))
                 .and_then(|value| value.strip_suffix(':'))
             {
                 let ordinal = value.parse().map_err(|_| {
@@ -1986,7 +2491,12 @@ impl UnresolvedChangeSet {
                 index += 1;
                 while index < lines.len() {
                     let candidate = lines[index];
-                    if candidate.trim().starts_with("statement ") {
+                    // 下一句的標記結束本句 body——兩種寫法都要認,否則 `#1:` 會被
+                    // 吞進前一句的 insert block。
+                    let trimmed = candidate.trim();
+                    if trimmed.starts_with("statement ")
+                        || (trimmed.starts_with('#') && trimmed.ends_with(':'))
+                    {
                         index -= 1;
                         break;
                     }
@@ -2030,15 +2540,89 @@ impl UnresolvedChangeSet {
             base_identities: base_identities
                 .ok_or_else(|| ReplayError::Parse("missing base_identities".to_owned()))?,
             libraries,
+            donors,
             statements,
         })
     }
 
+    /// **這份 changeset 借入了哪些 sign、各自來自哪個 donor**(docs/06 §3.2 的來源派生)。
+    ///
+    /// 只看**作者原文**——`resolve` 之後 `adopt` 已降階成 Insert,引用結構就沒了。
+    /// P56 存在邊上的、rebase 也刻意保留的正是原文,故派生永遠做得到。
+    ///
+    /// **界線**:連結是「借入當下的名字」。若該 sign 之後在本語言裡被改名,這裡回的
+    /// 仍是 donor 那邊的原名——那是對的(它記的是**借用事件**,不是現況)。
+    pub fn adoptions(&self) -> Result<Vec<Adoption>, ReplayError> {
+        let mut adoptions = Vec::new();
+        for statement in &self.statements {
+            for operation in &statement.operations {
+                let UnresolvedOperation::Call {
+                    name,
+                    positional,
+                    named,
+                    block,
+                } = operation
+                else {
+                    continue;
+                };
+                if name != "adopt" {
+                    continue;
+                }
+                // 與降階**共用**同一段目標解析(`call::adopt_targets`)——兩份實作會走鐘,
+                // 而走鐘的後果是「跑出來的來源」與「查出來的來源」不一致。
+                let (alias, signs) = call::adopt_targets(&call::Call {
+                    name,
+                    positional: positional.as_deref(),
+                    named,
+                    block: block.as_deref(),
+                })?;
+                let donor = self
+                    .donors
+                    .iter()
+                    .find(|donor| donor.alias == alias)
+                    .ok_or_else(|| ReplayError::Parse(format!("undeclared donor {alias:?}")))?;
+                for sign in signs {
+                    adoptions.push(Adoption {
+                        donor: donor.clone(),
+                        sign,
+                    });
+                }
+            }
+        }
+        Ok(adoptions)
+    }
+
+    /// 不提供任何 donor 內容的解析(絕大多數呼叫端)。宣告了 donor 的 `.chg` 走這條路
+    /// 會在驗證時明確失敗,而非默默把宣告當空氣。
     pub fn resolve(
         &self,
         base: &LanguageDocument,
         libraries: &LibrarySpec,
     ) -> Result<ResolvedChangeSet, ReplayError> {
+        self.resolve_with(base, libraries, &DonorSpec::default())
+    }
+
+    /// 帶 donor 內容的解析(P63 §8.2)。
+    ///
+    /// **另開一個入口而非給 `resolve` 加參數**:`resolve` 全庫有數十個呼叫點,加參數
+    /// 等於為了一個少數路徑改動全部。這與 rebase 不動 `lib.rs` 驗證路徑是同一個原則
+    /// ——既有契約字面不動,新能力另闢一條。
+    pub fn resolve_with(
+        &self,
+        base: &LanguageDocument,
+        libraries: &LibrarySpec,
+        donors: &DonorSpec,
+    ) -> Result<ResolvedChangeSet, ReplayError> {
+        // 宣告的 donor 必須拿得到內容。比照 library 鎖:檔案宣告 vs 實際提供,
+        // 對不上就硬錯——不得默默略過,那會讓引用條目在後面才以難懂的方式失敗。
+        for donor in &self.donors {
+            if donors.get(&donor.node).is_none() {
+                return Err(ReplayError::UnknownDonor {
+                    alias: donor.alias.clone(),
+                    node: donor.node.clone(),
+                });
+            }
+        }
         verify_base_and_locks(
             base,
             libraries,
@@ -2046,12 +2630,33 @@ impl UnresolvedChangeSet {
             &self.base_identities,
             &self.libraries,
         )?;
+        // 別名 → 內容。宣告(別名 → node-id)在 prelude,內容(node-id → 文件)由參數
+        // 注入;這裡把兩張表接起來,展開層就只認別名。
+        let mut scope = DonorScope::new();
+        for donor in &self.donors {
+            let document = donors
+                .get(&donor.node)
+                .expect("donor content is verified above");
+            scope.insert(donor.alias.as_str(), document);
+        }
         let mut working = base.fork(self.namespace.clone())?;
         let mut resolved = Vec::new();
         for statement in &self.statements {
             let mut edits = Vec::new();
             for operation in &statement.operations {
-                edits.push(resolve_operation(operation, &working)?);
+                // 語句歸屬**只有這裡知道**——`resolve_operation` 底下約 20 處建構
+                // `Selector` 的地方都拿不到 ordinal。故在此單點補上句號,而不是把
+                // ordinal 灌進每個建構點(《修補11》§3.3)。
+                let operation_edits = resolve_operation(operation, &working, &scope).map_err(
+                    |error| match error {
+                        ReplayError::Selector(message) => ReplayError::StatementSelector {
+                            ordinal: statement.ordinal,
+                            message,
+                        },
+                        other => other,
+                    },
+                )?;
+                edits.extend(operation_edits);
             }
             let (candidate, _) =
                 apply_statement_structural(&working, statement.ordinal, &edits, libraries)?;
@@ -2067,6 +2672,7 @@ impl UnresolvedChangeSet {
             base_source: self.base_source.clone(),
             base_identities: self.base_identities.clone(),
             libraries: self.libraries.clone(),
+            donors: self.donors.clone(),
             statements: resolved,
         })
     }
@@ -2144,6 +2750,31 @@ fn selector_argument(segment: &str) -> Result<(&str, &str), ReplayError> {
         .ok_or_else(|| ReplayError::Selector(format!("malformed path segment {segment:?}")))
 }
 
+/// `[n]` = ordinal（回傳 None）；`["name"]` 或非數字 `[name]` = keyed（回傳 Some(name)）。
+fn keyed_name(argument: &str) -> Option<&str> {
+    match argument
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+    {
+        Some(name) => Some(name),
+        None if argument.parse::<usize>().is_err() => Some(argument),
+        None => None,
+    }
+}
+
+/// 取 case-branch 位址對應的 `@name` 標籤。
+fn branch_name_at<'a>(language: &'a Language, address: &NodeAddress) -> Option<&'a str> {
+    let (last, rest) = address.0.split_last()?;
+    let AddressSegment::CaseBranches(index) = last else {
+        return None;
+    };
+    case_at(language, &NodeAddress(rest.to_vec()))?
+        .branches
+        .get(*index)?
+        .name
+        .as_deref()
+}
+
 fn resolve_path_child(
     document: &LanguageDocument,
     parent: &NodeRef,
@@ -2168,21 +2799,85 @@ fn resolve_path_child(
             .filter(|entry| entry.kind == NodeKind::Block)
             .nth(numeric()?)
             .copied(),
-        "rule" => children
+        "rule" => {
+            // `rule[n]` = ordinal; `rule["name"]`/`rule[name]` = keyed `@name` label.
+            let mut rules = children
+                .iter()
+                .filter(|entry| matches!(entry.kind, NodeKind::Rule | NodeKind::FeatureRule));
+            match keyed_name(argument) {
+                Some(name) => rules
+                    .find(|entry| {
+                        matches!(
+                            item_at_address(document.language(), &entry.address),
+                            Some(SignItem::Rule(rule) | SignItem::FeatureRule(rule))
+                                if rule.name.as_deref() == Some(name)
+                        )
+                    })
+                    .copied(),
+                None => rules.nth(numeric()?).copied(),
+            }
+        }
+        "case" => {
+            let mut cases = children.iter().filter(|entry| entry.kind == NodeKind::Case);
+            match keyed_name(argument) {
+                Some(name) => cases
+                    .find(|entry| {
+                        case_at(document.language(), &entry.address)
+                            .and_then(|case| case.name.as_deref())
+                            == Some(name)
+                    })
+                    .copied(),
+                None => cases.nth(numeric()?).copied(),
+            }
+        }
+        "branch" => {
+            let mut branches = children
+                .iter()
+                .filter(|entry| entry.kind == NodeKind::CaseBranch);
+            match keyed_name(argument) {
+                Some(name) => branches
+                    .find(|entry| branch_name_at(document.language(), &entry.address) == Some(name))
+                    .copied(),
+                None => branches.nth(numeric()?).copied(),
+            }
+        }
+        // P46 S3: a phon `Leaf` statement.
+        "leaf" => children
             .iter()
-            .filter(|entry| matches!(entry.kind, NodeKind::Rule | NodeKind::FeatureRule))
+            .filter(|entry| matches!(entry.address.0.last(), Some(AddressSegment::PhonLeaf(_))))
             .nth(numeric()?)
             .copied(),
-        "then" => children
-            .iter()
-            .filter(|entry| entry.kind == NodeKind::RuleThenBranch)
-            .nth(numeric()?)
-            .copied(),
-        "else" => children
-            .iter()
-            .filter(|entry| entry.kind == NodeKind::RuleElseBranch)
-            .nth(numeric()?)
-            .copied(),
+        // `then`/`else` descend into a phon block when the parent has one (a phon
+        // rule's flat then_chain/else_chain is empty); otherwise they address the
+        // flat RuleThenBranch/RuleElseBranch chain.
+        "then" => {
+            let index = numeric()?;
+            children
+                .iter()
+                .filter(|entry| matches!(entry.address.0.last(), Some(AddressSegment::PhonThen(_))))
+                .nth(index)
+                .or_else(|| {
+                    children
+                        .iter()
+                        .filter(|entry| entry.kind == NodeKind::RuleThenBranch)
+                        .nth(index)
+                })
+                .copied()
+        }
+        "else" => {
+            let index = numeric()?;
+            children
+                .iter()
+                .filter(|entry| matches!(entry.address.0.last(), Some(AddressSegment::PhonElse(_))))
+                .nth(index)
+                .or_else(|| {
+                    children
+                        .iter()
+                        .filter(|entry| entry.kind == NodeKind::RuleElseBranch)
+                        .nth(index)
+                })
+                .copied()
+        }
         "def" => children.iter().copied().find(|entry| {
             entry.kind == NodeKind::Definition
                 && matches!(
@@ -2204,24 +2899,22 @@ fn resolve_path_child(
                     Some(SignItem::RoleDecl(role)) if role.name == argument
                 )
         }),
-        "realization" => {
-            let index = numeric()?;
-            let realization = children
-                .iter()
-                .find(|entry| entry.kind == NodeKind::Realization)
-                .copied();
-            realization.and_then(|realization| {
-                document
-                    .identities()
-                    .nodes
-                    .iter()
-                    .filter(|entry| {
-                        entry.parent.as_ref() == Some(&realization.id)
-                            && entry.kind == NodeKind::RealizationBranch
-                    })
-                    .nth(index)
+        // §10.3:`sense["log"]` 依義項名;`edge[n]` 依序數(邊無名字)。
+        "sense" => {
+            let name = keyed_name(argument).unwrap_or(argument);
+            children.iter().copied().find(|entry| {
+                entry.kind == NodeKind::Sense
+                    && matches!(
+                        item_at_address(document.language(), &entry.address),
+                        Some(SignItem::Sense(sense)) if sense.name == name
+                    )
             })
         }
+        "edge" => children
+            .iter()
+            .filter(|entry| entry.kind == NodeKind::SenseEdge)
+            .nth(numeric()?)
+            .copied(),
         other => {
             return Err(ReplayError::Selector(format!(
                 "unknown path selector {other:?}"
@@ -2258,10 +2951,8 @@ fn update_for(reference: &NodeRef, field: &str, value: &str) -> Result<NodeUpdat
         (NodeKind::RuleElseBranch | NodeKind::RuleThenBranch, "body") => {
             Ok(NodeUpdate::RuleBranchBody(value.to_owned()))
         }
+        (NodeKind::PhonStatement, "body") => Ok(NodeUpdate::RuleBranchBody(value.to_owned())),
         (NodeKind::Slot, "name") => Ok(NodeUpdate::SlotName(value.to_owned())),
-        (NodeKind::RealizationBranch, "template") => {
-            Ok(NodeUpdate::RealizationTemplate(value.to_owned()))
-        }
         (NodeKind::Case, "selection") => match value {
             "case" | "first_match" => Ok(NodeUpdate::CaseSelection(
                 conlang_language::CaseSelection::FirstMatch,
@@ -2273,6 +2964,34 @@ fn update_for(reference: &NodeRef, field: &str, value: &str) -> Result<NodeUpdat
                 "case selection must be `case` or `when`, got {value:?}"
             ))),
         },
+        (NodeKind::Trait, "global") => Ok(NodeUpdate::TraitGlobal(parse_bool(value)?)),
+        (NodeKind::Rule | NodeKind::FeatureRule | NodeKind::PhonBlockNode, "propagate") => {
+            Ok(NodeUpdate::Propagate(parse_bool(value)?))
+        }
+        (NodeKind::Sense, "gloss") => Ok(NodeUpdate::SenseGloss(value.to_owned())),
+        (NodeKind::SenseEdge, "kind") => DerivationKind::parse(value)
+            .map(NodeUpdate::SenseEdgeKind)
+            .ok_or_else(|| {
+                ReplayError::Selector(format!(
+                    "sense edge kind must be metaphor|metonymy|narrow|broaden, got {value:?}"
+                ))
+            }),
+        (NodeKind::SenseEdge, "transparency") => SenseTransparency::parse(value)
+            .map(NodeUpdate::SenseEdgeTransparency)
+            .ok_or_else(|| {
+                ReplayError::Selector(format!(
+                    "sense edge transparency must be transparent|opaque, got {value:?}"
+                ))
+            }),
+        (NodeKind::Slot, "optional") => Ok(NodeUpdate::SlotOptional(parse_bool(value)?)),
+        (NodeKind::Belongs, "target") => Ok(NodeUpdate::Belongs(value.to_owned())),
+        (NodeKind::Rule | NodeKind::FeatureRule, "dim") => Ok(NodeUpdate::RuleDimension(
+            Dim::parse(value)
+                .ok_or_else(|| ReplayError::Selector(format!("unknown dim {value:?}")))?,
+        )),
+        (NodeKind::Rule | NodeKind::FeatureRule, "stage") => {
+            Ok(NodeUpdate::RuleStage(parse_stage(value)?))
+        }
         _ => Err(ReplayError::Selector(format!(
             "field {field:?} is not editable on {:?}",
             reference.expected
@@ -2280,10 +2999,210 @@ fn update_for(reference: &NodeRef, field: &str, value: &str) -> Result<NodeUpdat
     }
 }
 
+fn parse_bool(value: &str) -> Result<bool, ReplayError> {
+    match value.trim() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        other => Err(ReplayError::Selector(format!(
+            "expected `true` or `false`, got {other:?}"
+        ))),
+    }
+}
+
+fn parse_stage(value: &str) -> Result<Stage, ReplayError> {
+    match value.trim() {
+        "stem" => Ok(Stage::Stem),
+        "word" => Ok(Stage::Word),
+        "phrase" => Ok(Stage::Phrase),
+        other => Err(ReplayError::Selector(format!(
+            "stage must be stem/word/phrase, got {other:?}"
+        ))),
+    }
+}
+
+fn stage_keyword(stage: Stage) -> &'static str {
+    match stage {
+        Stage::Stem => "stem",
+        Stage::Word => "word",
+        Stage::Phrase => "phrase",
+    }
+}
+
+/// Wrapper name for synthesising a one-item `.lang` fragment so the whole
+/// `.lang` parser/printer (and its dimension validation) is reused verbatim.
+const FRAGMENT_SIGN: &str = "chg_fragment";
+
+/// Parse an `insert into … :` block (a verbatim `.lang` fragment) into one or
+/// more detached payloads: a whole `trait`/`sign`, or the sign-body items of a
+/// dimension fragment (each item becomes its own `Insert`, so a multi-item
+/// block fans out — §④).
+fn parse_insert_block(block: &str) -> Result<Vec<DetachedNode>, ReplayError> {
+    let head = block
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(str::trim)
+        .unwrap_or("");
+    let parse_lang = |source: &str| {
+        Language::parse(source)
+            .map_err(|error| ReplayError::Parse(format!("insert .lang: {error}")))
+    };
+    if head.starts_with("trait ") || head.starts_with("global trait ") {
+        let language = parse_lang(block)?;
+        if language.traits.len() != 1 || !language.signs.is_empty() {
+            return Err(ReplayError::Parse(
+                "insert block must contain exactly one trait".to_owned(),
+            ));
+        }
+        return Ok(vec![DetachedNode::Trait(language.traits[0].clone())]);
+    }
+    if head.starts_with("sign ") {
+        let language = parse_lang(block)?;
+        if language.signs.len() != 1 || !language.traits.is_empty() {
+            return Err(ReplayError::Parse(
+                "insert block must contain exactly one sign".to_owned(),
+            ));
+        }
+        return Ok(vec![DetachedNode::Sign(language.signs[0].clone())]);
+    }
+    // Rule-chain branches: the body after `else `/`then ` is an opaque rule
+    // line (a `DetachedNode::RuleElseBranch`/`RuleThenBranch` string). The
+    // parent Rule is addressed with a `…rule[n]` authoring path.
+    if let Some(rest) = head.strip_prefix("else ") {
+        return Ok(vec![DetachedNode::RuleElseBranch(rest.trim().to_owned())]);
+    }
+    if let Some(rest) = head.strip_prefix("then ") {
+        return Ok(vec![DetachedNode::RuleThenBranch(rest.trim().to_owned())]);
+    }
+    // P46 S3: `leaf <stmt>` inserts a single statement line into a phon `Leaf`.
+    if let Some(rest) = head.strip_prefix("leaf ") {
+        return Ok(vec![DetachedNode::PhonStatement(rest.trim().to_owned())]);
+    }
+    // Otherwise the block is a sign-body item fragment: wrap it in a synthetic
+    // sign so the dimension keywords (`syn:`/`phon:`/`slots:`/…) parse in
+    // context, then take each produced item.
+    let language = parse_lang(&format!("sign {FRAGMENT_SIGN}:\n{block}"))?;
+    let items = language
+        .signs
+        .first()
+        .map(|sign| sign.items.as_slice())
+        .unwrap_or_default();
+    if items.is_empty() {
+        return Err(ReplayError::Parse(
+            "insert block produced no item".to_owned(),
+        ));
+    }
+    Ok(items.iter().cloned().map(DetachedNode::Item).collect())
+}
+
+/// Render a single sign-body item back to its `.lang` block form (inverse of
+/// the item branch of [`parse_insert_block`]): print a synthetic one-item sign,
+/// drop the `sign …:` header and dedent one level.
+fn render_item_block(item: &SignItem) -> String {
+    let mut fragment = Language::new();
+    fragment.signs.push(SignDef {
+        id: conlang_language::SignId::synthetic(),
+        name: FRAGMENT_SIGN.to_owned(),
+        items: vec![item.clone()],
+    });
+    let dumped = fragment.dump();
+    dumped
+        .lines()
+        .skip(1)
+        .map(|line| line.strip_prefix("    ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Parse an `insert into <case> … :` block into `CaseBranch` payloads. The block
+/// is re-indented under a synthetic case whose keyword/scrutinee mirror the
+/// target case, so the branch grammar parses in the right context. Multi-branch
+/// blocks fan out. Scoped to `SignContext` cases (`case:`/`when:` at Sign level).
+fn parse_case_branch_block(
+    block: &str,
+    case: &conlang_language::TypedCase,
+) -> Result<Vec<DetachedNode>, ReplayError> {
+    if case.expected != conlang_language::ExpressionType::SignContext {
+        return Err(ReplayError::Parse(
+            "case-branch insert currently supports SignContext `case:`/`when:` cases".to_owned(),
+        ));
+    }
+    let keyword = match case.selection {
+        conlang_language::CaseSelection::FirstMatch => "case",
+        conlang_language::CaseSelection::Accumulate => "when",
+    };
+    let header = match &case.scrutinee {
+        Some(scrutinee) => format!("    {keyword} {scrutinee}:"),
+        None => format!("    {keyword}:"),
+    };
+    let indented = block
+        .lines()
+        .map(|line| {
+            if line.trim().is_empty() {
+                String::new()
+            } else {
+                format!("    {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let wrapped = format!("sign {FRAGMENT_SIGN}:\n{header}\n{indented}");
+    let language = Language::parse(&wrapped)
+        .map_err(|error| ReplayError::Parse(format!("insert case branch: {error}")))?;
+    let branches = language
+        .signs
+        .first()
+        .and_then(|sign| sign.items.first())
+        .and_then(|item| match item {
+            SignItem::SignExpression(expr) => match &expr.expression {
+                Expression::Case(case) => Some(&case.branches),
+                _ => None,
+            },
+            _ => None,
+        })
+        .filter(|branches| !branches.is_empty())
+        .ok_or_else(|| ReplayError::Parse("insert block produced no case branch".to_owned()))?;
+    Ok(branches
+        .iter()
+        .cloned()
+        .map(DetachedNode::CaseBranch)
+        .collect())
+}
+
+/// Render one `CaseBranch` back to its block form (inverse of the branch arm of
+/// [`parse_case_branch_block`]): print it inside a synthetic `SignContext` case
+/// and strip the `sign …:` + `case:` headers.
+fn render_case_branch_block(branch: &CaseBranch) -> String {
+    let case = conlang_language::TypedCase {
+        selection: conlang_language::CaseSelection::FirstMatch,
+        expected: conlang_language::ExpressionType::SignContext,
+        scrutinee: None,
+        name: None,
+        branches: vec![branch.clone()],
+        source: conlang_language::SourceLocation::unknown(),
+    };
+    let mut fragment = Language::new();
+    fragment.signs.push(SignDef {
+        id: conlang_language::SignId::synthetic(),
+        name: FRAGMENT_SIGN.to_owned(),
+        items: vec![SignItem::SignExpression(conlang_language::SignExpression {
+            expression: Expression::Case(Box::new(case)),
+            source: conlang_language::SourceLocation::unknown(),
+        })],
+    });
+    fragment
+        .dump()
+        .lines()
+        .skip(2)
+        .map(|line| line.strip_prefix("        ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn resolve_operation(
     operation: &UnresolvedOperation,
     document: &LanguageDocument,
-) -> Result<PrimitiveEdit, ReplayError> {
+    donors: &DonorScope<'_>,
+) -> Result<Vec<PrimitiveEdit>, ReplayError> {
     match operation {
         UnresolvedOperation::Update {
             selector,
@@ -2291,23 +3210,23 @@ fn resolve_operation(
             value,
         } => {
             let node = resolve_selector(selector, document)?;
-            Ok(PrimitiveEdit::Update {
+            Ok(vec![PrimitiveEdit::Update {
                 change: update_for(&node, field, value)?,
                 node,
-            })
+            }])
         }
-        UnresolvedOperation::Delete(selector) => Ok(PrimitiveEdit::Delete {
+        UnresolvedOperation::Delete(selector) => Ok(vec![PrimitiveEdit::Delete {
             node: resolve_selector(selector, document)?,
-        }),
+        }]),
         UnresolvedOperation::Move {
             node,
             parent,
             anchor,
-        } => Ok(PrimitiveEdit::Move {
+        } => Ok(vec![PrimitiveEdit::Move {
             node: resolve_selector(node, document)?,
             new_parent: resolve_selector(parent, document)?,
             anchor: resolve_anchor(anchor, document)?,
-        }),
+        }]),
         UnresolvedOperation::InsertSign {
             parent,
             anchor,
@@ -2320,11 +3239,80 @@ fn resolve_operation(
                     "insert sign fragment must contain exactly one sign".to_owned(),
                 ));
             }
-            Ok(PrimitiveEdit::Insert {
+            Ok(vec![PrimitiveEdit::Insert {
                 parent: resolve_selector(parent, document)?,
                 anchor: resolve_anchor(anchor, document)?,
                 subtree: DetachedNode::Sign(language.signs[0].clone()),
-            })
+            }])
+        }
+        UnresolvedOperation::InsertBlock {
+            target,
+            anchor,
+            block,
+        } => {
+            let parent = resolve_selector(target, document)?;
+            let anchor = resolve_anchor(anchor, document)?;
+            // A Case target takes case-branch blocks (parsed in the target
+            // case's context); any other target takes node/item fragments. Both
+            // fan out to one `Insert` per payload, sharing parent/anchor, so the
+            // statement validates only its final state.
+            let payloads = if parent.expected == NodeKind::Case {
+                let entry = ensure_target(document, &parent)
+                    .map_err(|error| ReplayError::Selector(error.to_string()))?;
+                let case = case_at(document.language(), &entry.address).ok_or_else(|| {
+                    ReplayError::Selector("target is not a resolvable case".to_owned())
+                })?;
+                parse_case_branch_block(block, case)?
+            } else {
+                parse_insert_block(block)?
+            };
+            Ok(payloads
+                .into_iter()
+                .map(|subtree| PrimitiveEdit::Insert {
+                    parent: parent.clone(),
+                    anchor: anchor.clone(),
+                    subtree,
+                })
+                .collect())
+        }
+        UnresolvedOperation::Call {
+            name,
+            positional,
+            named,
+            block,
+        } => call::lower(
+            &call::Call {
+                name,
+                positional: positional.as_deref(),
+                named,
+                block: block.as_deref(),
+            },
+            document,
+            donors,
+        ),
+        UnresolvedOperation::Clone { source, name } => {
+            let reference = resolve_selector(source, document)?;
+            let entry = ensure_target(document, &reference)
+                .map_err(|error| ReplayError::Selector(error.to_string()))?;
+            let detached = detached_at(document.language(), entry)
+                .map_err(|error| ReplayError::Selector(error.to_string()))?;
+            let mut sign = match detached {
+                DetachedNode::Sign(sign) => sign,
+                other => {
+                    return Err(ReplayError::Selector(format!(
+                        "clone supports only signs, not {:?}",
+                        other.kind()
+                    )))
+                }
+            };
+            // The Insert primitive reassigns a fresh SignId, RuleIds and stable
+            // NodeIds, so the clone is a new entity; only the name is authored.
+            sign.name = name.clone();
+            Ok(vec![PrimitiveEdit::Insert {
+                parent: document.root_ref(),
+                anchor: Anchor::End,
+                subtree: DetachedNode::Sign(sign),
+            }])
         }
     }
 }
@@ -2361,7 +3349,6 @@ fn dump_update(change: &NodeUpdate) -> Option<(&'static str, String)> {
             Some(("body", value.clone()))
         }
         NodeUpdate::SlotName(value) => Some(("name", value.clone())),
-        NodeUpdate::RealizationTemplate(value) => Some(("template", value.clone())),
         NodeUpdate::CaseSelection(value) => Some((
             "selection",
             match value {
@@ -2370,6 +3357,17 @@ fn dump_update(change: &NodeUpdate) -> Option<(&'static str, String)> {
             }
             .to_owned(),
         )),
+        NodeUpdate::TraitGlobal(value) => Some(("global", value.to_string())),
+        NodeUpdate::Propagate(value) => Some(("propagate", value.to_string())),
+        NodeUpdate::SenseGloss(value) => Some(("gloss", value.clone())),
+        NodeUpdate::SenseEdgeKind(value) => Some(("kind", value.keyword().to_owned())),
+        NodeUpdate::SenseEdgeTransparency(value) => {
+            Some(("transparency", value.keyword().to_owned()))
+        }
+        NodeUpdate::SlotOptional(value) => Some(("optional", value.to_string())),
+        NodeUpdate::Belongs(value) => Some(("target", value.clone())),
+        NodeUpdate::RuleDimension(dim) => Some(("dim", dim.keyword().to_owned())),
+        NodeUpdate::RuleStage(stage) => Some(("stage", stage_keyword(*stage).to_owned())),
         _ => None,
     }
 }
@@ -2386,8 +3384,11 @@ impl ResolvedChangeSet {
                 lock.package, lock.version, lock.digest
             ));
         }
+        for donor in &self.donors {
+            output.push_str(&format!("    donor {} {}\n", donor.alias, donor.node));
+        }
         for statement in &self.statements {
-            output.push_str(&format!("\n    statement {}:\n", statement.ordinal));
+            output.push_str(&format!("\n    #{}:\n", statement.ordinal));
             for edit in &statement.edits {
                 match edit {
                     PrimitiveEdit::Update { node, change } => {
@@ -2431,12 +3432,121 @@ impl ResolvedChangeSet {
                             output.push('\n');
                         }
                     }
+                    PrimitiveEdit::Insert {
+                        parent,
+                        anchor,
+                        subtree: DetachedNode::Trait(trait_def),
+                    } => {
+                        output.push_str(&format!(
+                            "        insert into {} at {}:\n",
+                            dump_node(parent),
+                            dump_anchor(anchor)
+                        ));
+                        let mut fragment = Language::new();
+                        fragment.traits.push(trait_def.clone());
+                        for line in fragment.dump().lines() {
+                            output.push_str("            ");
+                            output.push_str(line);
+                            output.push('\n');
+                        }
+                    }
+                    PrimitiveEdit::Insert {
+                        parent,
+                        anchor,
+                        subtree: DetachedNode::Item(item),
+                    } => {
+                        output.push_str(&format!(
+                            "        insert into {} at {}:\n",
+                            dump_node(parent),
+                            dump_anchor(anchor)
+                        ));
+                        for line in render_item_block(item).lines() {
+                            output.push_str("            ");
+                            output.push_str(line);
+                            output.push('\n');
+                        }
+                    }
+                    PrimitiveEdit::Insert {
+                        parent,
+                        anchor,
+                        subtree: DetachedNode::CaseBranch(branch),
+                    } => {
+                        output.push_str(&format!(
+                            "        insert into {} at {}:\n",
+                            dump_node(parent),
+                            dump_anchor(anchor)
+                        ));
+                        for line in render_case_branch_block(branch).lines() {
+                            output.push_str("            ");
+                            output.push_str(line);
+                            output.push('\n');
+                        }
+                    }
+                    PrimitiveEdit::Insert {
+                        parent,
+                        anchor,
+                        subtree:
+                            subtree @ (DetachedNode::RuleElseBranch(_)
+                            | DetachedNode::RuleThenBranch(_)
+                            | DetachedNode::PhonStatement(_)),
+                    } => {
+                        let (keyword, body) = match subtree {
+                            DetachedNode::RuleElseBranch(body) => ("else", body),
+                            DetachedNode::RuleThenBranch(body) => ("then", body),
+                            DetachedNode::PhonStatement(body) => ("leaf", body),
+                            _ => unreachable!(),
+                        };
+                        output.push_str(&format!(
+                            "        insert into {} at {}:\n            {} {}\n",
+                            dump_node(parent),
+                            dump_anchor(anchor),
+                            keyword,
+                            body
+                        ));
+                    }
                     PrimitiveEdit::Insert { .. } => {}
                 }
             }
         }
         output
     }
+}
+
+/// 一個套件進 lock digest 的**全部內容**。抽成獨立函式是為了可直接斷言
+/// 「哪些東西被涵蓋」——digest 漏掉任何一項都會讓對應檔案改了卻不使 lock 失效
+/// (破 P26 可重現性)。
+fn package_lock_content(package: &conlang_language::LibraryPackage) -> String {
+    let mut content = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}\n",
+        package.id,
+        package.version,
+        package.rule_namespace,
+        package.priority,
+        package.code_path,
+        package.data_path
+    );
+    for dependency in &package.requires {
+        content.push_str(&format!("requires {dependency}\n"));
+    }
+    for export in &package.exports {
+        content.push_str(&format!(
+            "export {} {:?} {}\n",
+            export.stable_id, export.kind, export.alias
+        ));
+    }
+    content.push_str(package.code);
+    content.push('\n');
+    // P50 ③:function 原始碼必須進 digest。
+    content.push_str(package.functions);
+    content.push('\n');
+    content.push_str(package.data);
+    content
+}
+
+/// 測試用:讓外部斷言 digest 涵蓋範圍(見 `function_loading.rs`)。
+#[doc(hidden)]
+pub fn __lock_content_for_tests(package: &conlang_language::LibraryPackage) -> String {
+    package_lock_content(package)
 }
 
 fn package_locks(spec: &LibrarySpec) -> Result<Vec<LibraryLock>, ReplayError> {
@@ -2452,27 +3562,7 @@ fn package_locks(spec: &LibrarySpec) -> Result<Vec<LibraryLock>, ReplayError> {
             .iter()
             .find(|package| package.id == id)
             .expect("catalog selection returns catalog IDs");
-        let mut content = format!(
-            "{}\n{}\n{}\n{}\n{}\n{}\n",
-            package.id,
-            package.version,
-            package.rule_namespace,
-            package.priority,
-            package.code_path,
-            package.data_path
-        );
-        for dependency in &package.requires {
-            content.push_str(&format!("requires {dependency}\n"));
-        }
-        for export in &package.exports {
-            content.push_str(&format!(
-                "export {} {:?} {}\n",
-                export.stable_id, export.kind, export.alias
-            ));
-        }
-        content.push_str(package.code);
-        content.push('\n');
-        content.push_str(package.data);
+        let content = package_lock_content(package);
         locks.push(LibraryLock {
             package: package.id.clone(),
             version: package.version.clone(),
@@ -2770,6 +3860,8 @@ fn is_item_kind(kind: NodeKind) -> bool {
             | NodeKind::SlotFeatureBinding
             | NodeKind::RoleDeclaration
             | NodeKind::RoleBinding
+            | NodeKind::Sense
+            | NodeKind::SenseEdge
             | NodeKind::Realization
             | NodeKind::Case
             | NodeKind::Constraint
@@ -2807,6 +3899,9 @@ fn item_group(item: &SignItem) -> u16 {
         SignItem::RoleDecl(_) | SignItem::RoleBinding(_) | SignItem::RoleExpression(_) => {
             dim_base(Dim::Sem) + 3
         }
+        // 義項先於衍生邊(邊引用義項),兩者都在 sem 區段。
+        SignItem::Sense(_) => dim_base(Dim::Sem) + 1,
+        SignItem::SenseEdge(_) => dim_base(Dim::Sem) + 2,
         SignItem::Realization(_) => dim_base(Dim::Phon) + 3,
         SignItem::Def(def) => dim_base(def_dimension(&def.path).unwrap_or(Dim::Syn)) + 4,
         SignItem::Rule(rule) => dim_base(rule.dim) + 4,
@@ -2854,10 +3949,29 @@ fn kind_at(language: &Language, address: &NodeAddress) -> Option<NodeKind> {
                 {
                     Some(NodeKind::RuleThenBranch)
                 }
-                AddressSegment::RealizationBranches(index)
-                    if *index < realization_at(language, &parent).ok()?.branches.len() =>
-                {
-                    Some(NodeKind::RealizationBranch)
+                AddressSegment::PhonLeaf(index) => {
+                    match phon_container_block(language, &parent).ok()? {
+                        PhonBlock::Leaf(statements) if *index < statements.len() => {
+                            Some(NodeKind::PhonStatement)
+                        }
+                        _ => None,
+                    }
+                }
+                AddressSegment::PhonThen(index) => {
+                    match phon_container_block(language, &parent).ok()? {
+                        PhonBlock::Then(elements) if *index < elements.len() => {
+                            Some(NodeKind::PhonBlockNode)
+                        }
+                        _ => None,
+                    }
+                }
+                AddressSegment::PhonElse(index) => {
+                    match phon_container_block(language, &parent).ok()? {
+                        PhonBlock::Else(elements) if *index < elements.len() => {
+                            Some(NodeKind::PhonBlockNode)
+                        }
+                        _ => None,
+                    }
                 }
                 AddressSegment::CaseExpression => realization_at(language, &parent)
                     .ok()?
@@ -3545,24 +4659,186 @@ fn rule_at_mut<'a>(
     }
 }
 
+// ── P46 S3: phon `PhonBlock` navigation ───────────────────────────────────
+// A phon node address is the rule item address followed by a trailing run of
+// `Phon*` segments. `PhonThen`/`PhonElse`/`PhonPropagate` descend into a
+// sub-block; `PhonLeaf` indexes a statement string (terminal, not a descent).
+
+fn is_phon_segment(segment: &AddressSegment) -> bool {
+    matches!(
+        segment,
+        AddressSegment::PhonLeaf(_) | AddressSegment::PhonThen(_) | AddressSegment::PhonElse(_)
+    )
+}
+
+/// Split an address into (rule-item address, phon path). When the address has no
+/// phon segment the whole address is the rule and the phon path is empty (used
+/// when a rule itself is the phon container — its `phon_block` root).
+fn split_phon_address(address: &NodeAddress) -> (NodeAddress, Vec<AddressSegment>) {
+    match address.0.iter().position(is_phon_segment) {
+        Some(pos) => (
+            NodeAddress(address.0[..pos].to_vec()),
+            address.0[pos..].to_vec(),
+        ),
+        None => (address.clone(), Vec::new()),
+    }
+}
+
+/// P46 S4: `Propagate` is a modifier, not an addressing level — unwrap it
+/// transparently at every step so a propagate toggle never shifts an address.
+fn walk_phon_block<'a>(block: &'a PhonBlock, path: &[AddressSegment]) -> Option<&'a PhonBlock> {
+    let block = match block {
+        PhonBlock::Propagate(inner) => inner.as_ref(),
+        other => other,
+    };
+    match path.split_first() {
+        None => Some(block),
+        Some((AddressSegment::PhonThen(index), rest)) => match block {
+            PhonBlock::Then(elements) => walk_phon_block(elements.get(*index)?, rest),
+            _ => None,
+        },
+        Some((AddressSegment::PhonElse(index), rest)) => match block {
+            PhonBlock::Else(elements) => walk_phon_block(elements.get(*index)?, rest),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn walk_phon_block_mut<'a>(
+    block: &'a mut PhonBlock,
+    path: &[AddressSegment],
+) -> Option<&'a mut PhonBlock> {
+    let block = match block {
+        PhonBlock::Propagate(inner) => inner.as_mut(),
+        other => other,
+    };
+    match path.split_first() {
+        None => Some(block),
+        Some((AddressSegment::PhonThen(index), rest)) => match block {
+            PhonBlock::Then(elements) => walk_phon_block_mut(elements.get_mut(*index)?, rest),
+            _ => None,
+        },
+        Some((AddressSegment::PhonElse(index), rest)) => match block {
+            PhonBlock::Else(elements) => walk_phon_block_mut(elements.get_mut(*index)?, rest),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The **raw** element slot at a `PhonThen`/`PhonElse` address — i.e. still
+/// wrapped in `Propagate` if it carries the modifier. Used by the propagate
+/// toggle, which must see and replace the wrapper itself.
+fn phon_element_raw_mut<'a>(
+    language: &'a mut Language,
+    address: &NodeAddress,
+) -> Result<&'a mut PhonBlock, EditError> {
+    let (last, head) = address
+        .0
+        .split_last()
+        .ok_or_else(|| EditError::FieldMismatch("expected phon element address".to_owned()))?;
+    let index = match last {
+        AddressSegment::PhonThen(index) | AddressSegment::PhonElse(index) => *index,
+        _ => {
+            return Err(EditError::FieldMismatch(
+                "expected phon element address".to_owned(),
+            ))
+        }
+    };
+    let container = NodeAddress(head.to_vec());
+    match phon_container_block_mut(language, &container)? {
+        PhonBlock::Then(elements) | PhonBlock::Else(elements) => elements
+            .get_mut(index)
+            .ok_or_else(|| EditError::FieldMismatch("stale phon element index".to_owned())),
+        _ => Err(EditError::FieldMismatch(
+            "phon element parent is not a Then/Else".to_owned(),
+        )),
+    }
+}
+
+/// The `PhonBlock` addressed by a container node (a rule with a phon block, or a
+/// `PhonBlockNode`).
+fn phon_container_block<'a>(
+    language: &'a Language,
+    address: &NodeAddress,
+) -> Result<&'a PhonBlock, EditError> {
+    let (rule_address, path) = split_phon_address(address);
+    let root = rule_at(language, &rule_address)?
+        .phon_block
+        .as_ref()
+        .ok_or_else(|| EditError::FieldMismatch("rule has no phon block".to_owned()))?;
+    walk_phon_block(root, &path)
+        .ok_or_else(|| EditError::FieldMismatch("stale phon block address".to_owned()))
+}
+
+fn phon_container_block_mut<'a>(
+    language: &'a mut Language,
+    address: &NodeAddress,
+) -> Result<&'a mut PhonBlock, EditError> {
+    let (rule_address, path) = split_phon_address(address);
+    let root = rule_at_mut(language, &rule_address)?
+        .phon_block
+        .as_mut()
+        .ok_or_else(|| EditError::FieldMismatch("rule has no phon block".to_owned()))?;
+    walk_phon_block_mut(root, &path)
+        .ok_or_else(|| EditError::FieldMismatch("stale phon block address".to_owned()))
+}
+
+/// Direct addressable children of a phon block: `Leaf` → its statements
+/// (`PhonLeaf`), `Then`/`Else` → their elements (`PhonThen`/`PhonElse`),
+/// `Propagate` → transparently its inner block's children under `PhonPropagate`.
+/// Mirrors `enumerate_phon_block` in the identity walker.
+fn push_phon_children(block: &PhonBlock, base: &NodeAddress, out: &mut Vec<NodeAddress>) {
+    match block {
+        PhonBlock::Leaf(statements) => {
+            for index in 0..statements.len() {
+                out.push(base.child(AddressSegment::PhonLeaf(index)));
+            }
+        }
+        PhonBlock::Then(elements) => {
+            for index in 0..elements.len() {
+                out.push(base.child(AddressSegment::PhonThen(index)));
+            }
+        }
+        PhonBlock::Else(elements) => {
+            for index in 0..elements.len() {
+                out.push(base.child(AddressSegment::PhonElse(index)));
+            }
+        }
+        // Transparent modifier: children keep the enclosing element's address.
+        PhonBlock::Propagate(inner) => push_phon_children(inner, base, out),
+    }
+}
+
+/// Mutable reference to a phon statement (a `Leaf` line). `address` ends in a
+/// `PhonLeaf(index)` segment; its container block must be a `Leaf`.
+fn phon_statement_at_mut<'a>(
+    language: &'a mut Language,
+    address: &NodeAddress,
+) -> Result<&'a mut String, EditError> {
+    let Some(&AddressSegment::PhonLeaf(index)) = address.0.last() else {
+        return Err(EditError::FieldMismatch(
+            "expected phon statement address".to_owned(),
+        ));
+    };
+    let container = NodeAddress(address.0[..address.0.len() - 1].to_vec());
+    match phon_container_block_mut(language, &container)? {
+        PhonBlock::Leaf(statements) => statements
+            .get_mut(index)
+            .ok_or_else(|| EditError::FieldMismatch("stale phon statement index".to_owned())),
+        _ => Err(EditError::FieldMismatch(
+            "phon statement parent is not a Leaf".to_owned(),
+        )),
+    }
+}
+
 fn realization_at<'a>(
     language: &'a Language,
     address: &NodeAddress,
 ) -> Result<&'a Realization, EditError> {
     match item_at_address(language, address) {
         Some(SignItem::Realization(value)) => Ok(value),
-        _ => Err(EditError::FieldMismatch(
-            "expected realization address".to_owned(),
-        )),
-    }
-}
-
-fn realization_at_mut<'a>(
-    language: &'a mut Language,
-    address: &NodeAddress,
-) -> Result<&'a mut Realization, EditError> {
-    match item_at_address_mut(language, address)? {
-        SignItem::Realization(value) => Ok(value),
         _ => Err(EditError::FieldMismatch(
             "expected realization address".to_owned(),
         )),
@@ -3723,7 +4999,12 @@ fn rewrite_slot_consumers(language: &mut Language, scope: &SlotRenameScope, old:
 fn rewrite_local_slot_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
     for item in items {
         match item {
-            SignItem::Slot(_) | SignItem::FeatureDecl(_) | SignItem::FeatureValue(_) => {}
+            // 義項/衍生邊不持 slot 引用。
+            SignItem::Slot(_)
+            | SignItem::FeatureDecl(_)
+            | SignItem::FeatureValue(_)
+            | SignItem::Sense(_)
+            | SignItem::SenseEdge(_) => {}
             SignItem::SlotFeatureBinding(binding) => {
                 if binding.slot == old {
                     binding.slot = new.to_owned();
@@ -3763,12 +5044,8 @@ fn rewrite_local_slot_refs_in_items(items: &mut [SignItem], old: &str, new: &str
                 def.value = rewrite_slot_accesses(&def.value, old, new);
             }
             SignItem::Realization(realization) => {
-                for branch in &mut realization.branches {
-                    branch.template = rewrite_slot_template(&branch.template, old, new);
-                    if let Some(guard) = &mut branch.guard {
-                        *guard = rewrite_slot_accesses(guard, old, new);
-                    }
-                }
+                // Typed realization case slot-renames flow through the shared
+                // case-expression rewrite; the former flat branches are gone.
                 if let Some(case) = &mut realization.expression {
                     rewrite_local_slot_refs_in_case(case, old, new);
                 }
@@ -3967,22 +5244,6 @@ fn rewrite_slot_accesses(source: &str, old: &str, new: &str) -> String {
 
 fn is_identifier_character(character: char) -> bool {
     character.is_alphanumeric() || matches!(character, '_' | '-' | ':' | '/')
-}
-
-fn realization_branch_at_mut<'a>(
-    language: &'a mut Language,
-    address: &NodeAddress,
-) -> Result<&'a mut RealizationBranch, EditError> {
-    let parent = address.parent().ok_or(EditError::RootImmutable)?;
-    let Some(AddressSegment::RealizationBranches(index)) = address.0.last() else {
-        return Err(EditError::FieldMismatch(
-            "expected realization branch".to_owned(),
-        ));
-    };
-    realization_at_mut(language, &parent)?
-        .branches
-        .get_mut(*index)
-        .ok_or_else(|| EditError::FieldMismatch("branch address is stale".to_owned()))
 }
 
 fn rewrite_sign_refs(language: &mut Language, old: &str, new: &str) {
@@ -4249,12 +5510,6 @@ fn debug_value(language: &Language, entry: &NodeEntryV1) -> String {
                     rule_at(language, &parent)
                         .ok()
                         .and_then(|rule| rule.then_chain.get(*index))
-                ),
-                Some(AddressSegment::RealizationBranches(index)) => format!(
-                    "{:?}",
-                    realization_at(language, &parent)
-                        .ok()
-                        .and_then(|value| value.branches.get(*index))
                 ),
                 Some(AddressSegment::CaseExpression) => case_at(language, &entry.address)
                     .map(case_header_value)

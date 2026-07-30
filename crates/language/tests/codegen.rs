@@ -253,3 +253,81 @@ fn empty_and_decls_only_languages_codegen() {
     assert!(a.grammar.program.rules.is_empty());
     assert!(a.grammar.phon_source.contains("Symbol a"));
 }
+
+/// P46 取徑 A(slice 1):phon `name:` 前綴 → 具名 rule;canonical dump 用前綴;
+/// codegen 排放 Lexurgy `name:` 標籤(非合成 rN:)。
+#[test]
+fn phon_named_rule_uses_lexurgy_name_prefix_and_label() {
+    let src = "\
+Symbol a
+Symbol b
+
+global trait Core:
+    phon:
+        lenition: a => b
+";
+    let l = Language::parse(src).expect("named phon rule parses");
+    let dumped = l.dump();
+    assert!(
+        dumped.contains("lenition: a => b"),
+        "canonical 前綴:\n{dumped}"
+    );
+    assert_eq!(
+        Language::parse(&dumped).unwrap().dump(),
+        dumped,
+        "round-trip 穩定"
+    );
+    let a = codegen::compile_full(&l).unwrap();
+    assert!(
+        a.grammar.phon_source.contains("lenition:"),
+        "phon_source 用 Lexurgy 名:\n{}",
+        a.grammar.phon_source
+    );
+    assert!(
+        !a.grammar.phon_source.contains("r0:"),
+        "具名 rule 不用合成 rN 標籤"
+    );
+}
+
+/// P46 S2:結構化 phon block(`name:` + 單層 `Then:`/`Else:`)→ round-trip → codegen
+/// 排放可被引擎接受的 `.qy`。巢狀 Then/Else 需 upstream grouped-block parser,暫不測。
+#[test]
+fn phon_structured_block_then_and_else_codegen_flat() {
+    let src = "\
+Symbol a
+Symbol b
+Symbol c
+Symbol d
+
+global trait Core:
+    phon:
+        seq:
+            a => b
+            Then:
+                c => d
+        alt:
+            a => a
+            Else: a => b
+";
+    let l = Language::parse(src).expect("structured phon blocks parse");
+    let dumped = l.dump();
+    assert!(
+        dumped.contains("seq:") && dumped.contains("Then:"),
+        "Then block:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("alt:") && dumped.contains("Else:"),
+        "Else block:\n{dumped}"
+    );
+    assert_eq!(
+        Language::parse(&dumped).unwrap().dump(),
+        dumped,
+        "round-trip 穩定"
+    );
+    let a = codegen::compile_full(&l).expect("flat blocks compile via engine");
+    let s = &a.grammar.phon_source;
+    assert!(
+        s.contains("seq:") && s.contains("Then:") && s.contains("alt:") && s.contains("Else:"),
+        "phon_source:\n{s}"
+    );
+}

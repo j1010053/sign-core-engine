@@ -1,6 +1,6 @@
 use conlang_language::{
     check_document, compile_system_ref, AddressSegment, IdentityError, IdentityNamespace, Language,
-    LanguageDocument, LibrarySpec, NodeKind, RefTargetV1, IDENTITY_SCHEMA_V1, IDENTITY_SCHEMA_V2,
+    LanguageDocument, LibrarySpec, NodeKind, RefTargetV1,
 };
 
 const SOURCE: &str = r#"
@@ -85,25 +85,30 @@ fn invalid_namespace_is_rejected_instead_of_using_random_identity() {
     );
 }
 
+/// v1 identity 已**硬移除**(2026-07-24):v1 sidecar 不再可載入 → `UnknownSchema`
+/// (顯式拒絕、不默默升級)。升級無損的證據見 Stage A commit 前的
+/// `v1_is_read_and_canonically_upgraded_to_v2`(git history)。
 #[test]
-fn v1_is_read_and_canonically_upgraded_to_v2() {
+fn v1_identity_sidecar_is_rejected_after_hard_removal() {
     let document = LanguageDocument::import_new_root(SOURCE, "evo:legacy").unwrap();
     let source = document.source();
     let current = document.identities();
     let legacy = serde_json::json!({
-        "schema": IDENTITY_SCHEMA_V1,
+        "schema": "conlang.language-identities/v1",
         "namespace": current.root_namespace,
         "next_ordinal": current.allocators[0].next_ordinal,
         "source_sha256": current.source_sha256,
         "nodes": current.nodes,
         "refs": current.refs,
     });
-    let reopened =
-        LanguageDocument::open(&source, &serde_json::to_string(&legacy).unwrap()).unwrap();
-    assert_eq!(reopened.identities().schema, IDENTITY_SCHEMA_V2);
-    assert_eq!(reopened.identities().root_namespace, "evo:legacy");
-    assert_eq!(reopened.identities().active_namespace, "evo:legacy");
-    assert_eq!(reopened.identities().allocators.len(), 1);
+    let err = LanguageDocument::open(&source, &serde_json::to_string(&legacy).unwrap())
+        .expect_err("v1 sidecar must be rejected");
+    match err {
+        IdentityError::UnknownSchema(schema) => {
+            assert_eq!(schema, "conlang.language-identities/v1")
+        }
+        other => panic!("expected UnknownSchema, got {other:?}"),
+    }
 }
 
 #[test]
@@ -168,10 +173,10 @@ sign root:
         realization:
             case:
                 else:
-                    /{Outer(value = Wrap(value = {$self})).phon.ret}/
+                    /{Outer(value: Wrap(value: {$self})).phon.ret}/
     case:
         else:
-            Outer(value = Wrap(value = {$self}))
+            Outer(value: Wrap(value: {$self}))
             belongs Marked
 "#;
 

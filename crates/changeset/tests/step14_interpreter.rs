@@ -1,6 +1,6 @@
 use conlang_changeset::{
     change_set_prelude, Anchor, ChangeInterpreter, ChangeSession, DetachedNode, PrimitiveEdit,
-    ResolvedStatement, UnresolvedChangeSet,
+    ReplayError, ResolvedStatement, UnresolvedChangeSet,
 };
 use conlang_language::{IdentityNamespace, LanguageDocument, LibrarySpec};
 
@@ -120,6 +120,48 @@ fn digest_mismatch_is_rejected_before_any_statement() {
     let unresolved = UnresolvedChangeSet::parse(&source).unwrap();
     assert!(unresolved.resolve(&base, &spec).is_err());
     assert!(base.ref_for_sign("dog").is_some());
+}
+
+/// 相容性:identity-manifest digest 不符 → replay 前拒絕(第二道 digest,補 base_source 之外)。
+#[test]
+fn identity_manifest_digest_mismatch_is_rejected_before_any_statement() {
+    let base = base();
+    let spec = LibrarySpec::default();
+    let mut source = change_set_prelude(&base, &spec, "evo:badid").unwrap();
+    source = source.replace("base_identities = sha256:", "base_identities = sha256:00");
+    source.push_str(
+        r#"
+    statement 0:
+        update sign("dog").name = hound
+"#,
+    );
+    let unresolved = UnresolvedChangeSet::parse(&source).unwrap();
+    assert!(matches!(
+        unresolved.resolve(&base, &spec),
+        Err(ReplayError::BaseIdentitiesMismatch)
+    ));
+    assert!(base.ref_for_sign("dog").is_some(), "base 未被污染");
+}
+
+/// 相容性:library lock 不符(注入 spec 沒有的 lock)→ replay 前拒絕(第三道 digest)。
+#[test]
+fn library_lock_mismatch_is_rejected_before_any_statement() {
+    let base = base();
+    let spec = LibrarySpec::default(); // 無 library → package_locks 為空
+    let mut source = change_set_prelude(&base, &spec, "evo:badlock").unwrap();
+    source.push_str("    library std:ghost@0.0 sha256:0000\n"); // 憑空 lock,實際 spec 沒有
+    source.push_str(
+        r#"
+    statement 0:
+        update sign("dog").name = hound
+"#,
+    );
+    let unresolved = UnresolvedChangeSet::parse(&source).unwrap();
+    assert!(matches!(
+        unresolved.resolve(&base, &spec),
+        Err(ReplayError::LibraryLockMismatch(_))
+    ));
+    assert!(base.ref_for_sign("dog").is_some(), "base 未被污染");
 }
 
 #[test]

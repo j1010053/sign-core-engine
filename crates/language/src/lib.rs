@@ -47,9 +47,8 @@ pub use construction::{OccurrenceCaseRecord, OccurrenceCaseStatus, OccurrenceRec
 pub use diagnostic::{Diagnostic, DiagnosticSource, Severity, SourceLocation, ValidationReport};
 pub use identity::{
     sha256_hex, AddressSegment, AstNode, EditableField, IdentityAllocatorV2, IdentityError,
-    IdentityManifestV1, IdentityManifestV2, IdentityNamespace, LanguageDocument, NodeAddress,
-    NodeEntryV1, NodeId, NodeKind, NodeRef, RefBindingV1, RefTargetV1, ResolvedTarget,
-    IDENTITY_SCHEMA_V1, IDENTITY_SCHEMA_V2,
+    IdentityManifestV2, IdentityNamespace, LanguageDocument, NodeAddress, NodeEntryV1, NodeId,
+    NodeKind, NodeRef, RefBindingV1, RefTargetV1, ResolvedTarget, IDENTITY_SCHEMA_V2,
 };
 pub use library::{
     LibraryCatalog, LibraryExport, LibraryExportKind, LibraryId, LibraryKind, LibraryLoadError,
@@ -310,36 +309,94 @@ pub struct RoleBinding {
     pub source: SourceLocation,
 }
 
+/// 義項(sense)——**sem 維的一級節點**(《修補05》§10.3「sign 內:… sem(senses +
+/// 衍生邊)」;docs/07 §5)。多義 = 多個 `Sense`,**各有身分**(可定址、可被四原語
+/// 編輯),取代先前用自創欄位名(`sense2 = …`)假裝義項的土法。
+/// Atomic Rewrite `derive_sense` / `drift` 的作用對象(P16)。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RealizationBranch {
-    /// Complete `/.../` phon template.
-    pub template: String,
-    /// Read-only guard over `$self` and frozen `$slot`; `None` is `else`.
-    pub guard: Option<String>,
+pub struct Sense {
+    pub name: String,
+    /// 義項的語意內容(純量;複雜語意模型日後以新欄位擴充,不破壞此 API)。
+    pub gloss: String,
+    pub source: SourceLocation,
+}
+
+/// 衍生邊的種類(P16 `derive_sense{kind: metaphor|metonymy|narrow|broaden}`)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum DerivationKind {
+    Metaphor,
+    Metonymy,
+    Narrow,
+    Broaden,
+}
+
+impl DerivationKind {
+    pub fn keyword(self) -> &'static str {
+        match self {
+            DerivationKind::Metaphor => "metaphor",
+            DerivationKind::Metonymy => "metonymy",
+            DerivationKind::Narrow => "narrow",
+            DerivationKind::Broaden => "broaden",
+        }
+    }
+    pub fn parse(value: &str) -> Option<DerivationKind> {
+        match value {
+            "metaphor" => Some(DerivationKind::Metaphor),
+            "metonymy" => Some(DerivationKind::Metonymy),
+            "narrow" => Some(DerivationKind::Narrow),
+            "broaden" => Some(DerivationKind::Broaden),
+            _ => None,
+        }
+    }
+}
+
+/// 衍生邊是否仍透明。`Opaque` = 已 `lexicalize_sense`(語源關係固化、不再透明)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+pub enum SenseTransparency {
+    #[default]
+    Transparent,
+    Opaque,
+}
+
+impl SenseTransparency {
+    pub fn keyword(self) -> &'static str {
+        match self {
+            SenseTransparency::Transparent => "transparent",
+            SenseTransparency::Opaque => "opaque",
+        }
+    }
+    pub fn parse(value: &str) -> Option<SenseTransparency> {
+        match value {
+            "transparent" => Some(SenseTransparency::Transparent),
+            "opaque" => Some(SenseTransparency::Opaque),
+            _ => None,
+        }
+    }
+}
+
+/// 義項間的**衍生邊**:`to` 由 `from` 經 `kind` 衍生而來。
+/// `transparency` 由 Atomic Rewrite `lexicalize_sense` 翻成 `Opaque`(P16)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SenseEdge {
+    pub to: String,
+    pub from: String,
+    pub kind: DerivationKind,
+    pub transparency: SenseTransparency,
     pub source: SourceLocation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Realization {
-    pub branches: Vec<RealizationBranch>,
-    /// V2 context-typed expression.  Legacy flat branches remain available so
-    /// a V1 document can be parsed and dumped byte-for-byte compatibly.
+    /// Context-typed realization: a `PhonContext` `case:` selecting a full phon
+    /// template by guard (shared typed-case machinery; the former flat V1
+    /// `RealizationBranch` list was removed with the v1 path).
     pub expression: Option<TypedCase>,
 }
 
-/// Surface-language version.  V1 remains the default deliberately: parsing a
-/// historical document must never silently opt it in to V2 syntax or change
-/// its canonical identity digest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum LanguageSchema {
-    #[default]
-    V1,
-    V2,
-}
-
-impl LanguageSchema {
-    pub const V2_HEADER: &'static str = "schema conlang.lang/v2";
-}
+/// 舊 v2 schema 標頭。**v1 已淘汰、v2 為唯一模型**(2026-07-24 硬移除):FP 層永遠
+/// 可用,不再需要標頭選版。為 back-compat,parser 仍**接受並忽略**此行(printer 不再
+/// 輸出);它不影響解析、canonical dump 或 identity digest。
+pub const LEGACY_V2_HEADER: &str = "schema conlang.lang/v2";
 
 /// The type expected at an expression site.  `Feature` carries its declared
 /// enum domain separately during type checking; it is not an untyped string.
@@ -447,6 +504,8 @@ pub struct CaseBranch {
     pub result: Expression,
     /// Only meaningful for `case<SignContext>`; type checking rejects it elsewhere.
     pub belongs: Vec<String>,
+    /// 可選標籤(P 系列取徑 B):`@name <label>` → keyed 定址 `branch["label"]`。
+    pub name: Option<String>,
     pub source: SourceLocation,
 }
 
@@ -455,6 +514,8 @@ pub struct TypedCase {
     pub selection: CaseSelection,
     pub expected: ExpressionType,
     pub scrutinee: Option<String>,
+    /// 可選標籤(P 系列取徑 B):`@name <label>` → keyed 定址 `case["label"]`。
+    pub name: Option<String>,
     pub branches: Vec<CaseBranch>,
     pub source: SourceLocation,
 }
@@ -514,10 +575,32 @@ pub struct BinaryConstraint {
 
 /// Rule(`=>`):狀態轉換,同 stage 內依書寫順序(P18)。
 /// 步驟 8 以 raw body 承載(I15-c);env/action/else 結構化屬步驟 9。
+/// 結構化 Lexurgy phon block(P46 取徑 A),1:1 對映引擎 `tshiatun_dsl` 的 `RuleBlock`:
+/// `Leaf` 多語句同時套用;`Then` 逐 block commit 接力(Sequential);`Else` 第一個 match 的
+/// block 整組勝出、其餘不跑(FirstMatching);`Propagate` 迭代到 fixpoint。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PhonBlock {
+    Leaf(Vec<String>),
+    Then(Vec<PhonBlock>),
+    Else(Vec<PhonBlock>),
+    Propagate(Box<PhonBlock>),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rule {
     /// 穩定 ID(fossilize/generalize 的 move 對象;P25 定址靠它)。
     pub id: RuleId,
+    /// 可選人類可讀標籤(P 系列取徑 B):`@name <label>` 後綴宣告,供 keyed 定址
+    /// `rule["label"]`。`None` = 匿名(仍可用序數/穩定 id 定址)。
+    pub name: Option<String>,
+    /// P46 取徑 A(限 phon):結構化 Lexurgy block(`Then:`/`Else:` 巢狀,對映引擎
+    /// `RuleBlock`)。`Some` 時 codegen/printer 以此為準,`body`/`else_chain`/`then_chain`
+    /// 空置;`None` = 沿用扁平 body + 鏈(向後相容,syn/sem/prag 的 P43 Else 亦走此路)。
+    pub phon_block: Option<PhonBlock>,
+    /// P46 S4(限 phon,對映引擎 header modifier `name propagate:`):整條 rule
+    /// **迭代到 fixpoint**。與 block **邊界** propagate(`Then propagate:` →
+    /// `PhonBlock::Propagate`)正交——後者只重複它修飾的那個 block element。
+    pub propagate: bool,
     /// 主分支原文(`a => ə / _#`),不含 `@stage` 與 else。
     pub body: String,
     pub stage: Stage,
@@ -584,6 +667,10 @@ pub enum SignItem {
     RoleDecl(RoleDecl),
     RoleBinding(RoleBinding),
     RoleExpression(RoleExpression),
+    /// `sem:` 下 `senses:` 的一個義項(§10.3)。
+    Sense(Sense),
+    /// `sem:` 下 `edges:` 的一條衍生邊(§10.3)。
+    SenseEdge(SenseEdge),
     Realization(Realization),
     SignExpression(SignExpression),
     Constraint(BinaryConstraint),
@@ -667,7 +754,6 @@ pub struct SignDef {
 /// `Language::new()` = canonical empty Language,四原語(步驟 13)有處掛靠。
 #[derive(Clone, PartialEq, Eq, Default)]
 pub struct Language {
-    schema: LanguageSchema,
     /// dsl 域宣告區(Lexurgy 形,不透明 verbatim 行;I15-a)。
     pub dsl_decls: Vec<String>,
     /// ① `prosody = μ σ Ft ω φ ι U`(七層鏈;空 = 未宣告)。
@@ -686,9 +772,6 @@ pub struct Language {
 impl std::fmt::Debug for Language {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut debug = formatter.debug_struct("Language");
-        if self.schema == LanguageSchema::V2 {
-            debug.field("schema", &self.schema);
-        }
         debug
             .field("dsl_decls", &self.dsl_decls)
             .field("prosody", &self.prosody)
@@ -706,24 +789,6 @@ impl Language {
     /// canonical empty Language(P28)。
     pub fn new() -> Language {
         Language::default()
-    }
-
-    pub fn schema(&self) -> LanguageSchema {
-        self.schema
-    }
-
-    pub fn is_v2(&self) -> bool {
-        self.schema == LanguageSchema::V2
-    }
-
-    /// Explicit migration switch.  Identity-aware migration lives on
-    /// `LanguageDocument`; this low-level method only changes source syntax.
-    pub fn migrate_to_v2(&mut self) {
-        self.schema = LanguageSchema::V2;
-    }
-
-    pub(crate) fn set_schema(&mut self, schema: LanguageSchema) {
-        self.schema = schema;
     }
 
     /// 決定性 RuleId 配發(P26:namespace 內純序列)。
@@ -787,9 +852,6 @@ impl Language {
     /// RuleIds retain their bound namespaces while SignIds are made unique in
     /// the combined runtime view.
     pub(crate) fn append_library(&mut self, mut other: Language) {
-        if other.is_v2() {
-            self.schema = LanguageSchema::V2;
-        }
         self.dsl_decls.append(&mut other.dsl_decls);
         self.prosody.append(&mut other.prosody);
         self.distribution.append(&mut other.distribution);
@@ -815,6 +877,9 @@ impl Language {
     pub fn rule_dim(&mut self, body: impl Into<String>, stage: Stage, dim: Dim) -> Rule {
         Rule {
             id: self.fresh_rule_id(),
+            name: None,
+            phon_block: None,
+            propagate: false,
             body: body.into(),
             stage,
             dim,

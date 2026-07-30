@@ -129,8 +129,11 @@ sign TutorialNP:
     phon:
         /{stem}/
         realization:
-            /{stem}s/ / $self.syn.number == plural
-            else /{stem}/
+            case:
+                $self.syn.number == plural:
+                    /{stem}s/
+                else:
+                    /{stem}/
 ```
 
 Rust 端以 `DerivationContext::new().feature(Dim::Syn, "number", "plural")` 約束同一個 `TutorialNP` deep SignId。這是 occurrence constraint，不是 priority override；與固定值或規則結果衝突時在 phon 前失敗。
@@ -196,8 +199,11 @@ sign TutorialNP:
     phon:
         /{stem}/
         realization:
-            /{stem}s/ / $self.syn.number == plural
-            else /{stem}/
+            case:
+                $self.syn.number == plural:
+                    /{stem}s/
+                else:
+                    /{stem}/
 
 sign TutorialClause:
     belongs TutorialClauseFrame

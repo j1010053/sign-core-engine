@@ -81,6 +81,16 @@ pub(crate) fn parse_origin(value: &str) -> Option<SignRef> {
         .map(|inner| SignRef(inner.to_owned()))
 }
 
+/// `sign(a), sign(b)` —— 融合成分清單(P54)。與 `origin` 的差別:`origin` 是
+/// **單一**來源(衍生自誰),`components` 是**線性組合的各成分**(au = à + le)。
+pub(crate) fn parse_components(value: &str) -> Option<Vec<SignRef>> {
+    let parsed: Option<Vec<SignRef>> = value
+        .split(',')
+        .map(|part| parse_origin(part.trim()))
+        .collect();
+    parsed.filter(|refs| refs.len() >= 2)
+}
+
 fn last_meta<'a>(sign: &'a SignDef, path: &str) -> Option<&'a str> {
     sign.items.iter().rev().find_map(|item| match item {
         SignItem::Def(def) if def.path == path => Some(def.value.as_str()),
@@ -110,6 +120,24 @@ impl SignDef {
 
     pub fn with_origin(&self, origin: SignRef) -> SignDef {
         with_meta(self, "origin", format!("sign({})", origin.0))
+    }
+
+    /// 融合成分(P54;《修補05》§4.3 對 `fuse` 要求的「component 引用」)。
+    /// **至少兩個**——只有一個來源請用 `origin`。
+    pub fn components(&self) -> Option<Vec<SignRef>> {
+        last_meta(self, "components").and_then(parse_components)
+    }
+
+    pub fn with_components(&self, components: &[SignRef]) -> SignDef {
+        with_meta(
+            self,
+            "components",
+            components
+                .iter()
+                .map(|reference| format!("sign({})", reference.0))
+                .collect::<Vec<_>>()
+                .join(", "),
+        )
     }
 
     pub fn provenance(&self) -> Option<SignProvenance> {

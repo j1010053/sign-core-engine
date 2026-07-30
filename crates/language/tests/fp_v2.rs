@@ -3,8 +3,8 @@ use conlang_language::system::{
     compile_system, CandidateSelector, DerivationContext, SignValue, SystemError,
 };
 use conlang_language::{
-    CaseBranchStatus, CaseSelection, CompileSystemError, Dim, FeatureDecl, Language,
-    LanguageDocument, LanguageSchema, SignItem, SourceLocation,
+    CaseBranchStatus, CaseSelection, CompileSystemError, Dim, FeatureDecl, Language, SignItem,
+    SourceLocation,
 };
 
 const FP_SOURCE: &str = r#"schema conlang.lang/v2
@@ -60,7 +60,6 @@ sign hiss:
 #[test]
 fn v2_round_trip_keeps_context_typed_case() {
     let parsed = Language::parse(FP_SOURCE).expect("V2 source parses");
-    assert_eq!(parsed.schema(), LanguageSchema::V2);
     let canonical = parsed.dump();
     assert_eq!(Language::parse(&canonical).unwrap().dump(), canonical);
     assert!(canonical.contains("case stem.phon:"));
@@ -432,9 +431,12 @@ sign nested_fragment_schema:
     }));
 }
 
+/// v1 淘汰後(2026-07-24):FP `case` 語法為預設,**無需 schema 標頭**即可解析;
+/// canonical dump 不再輸出標頭(printer 已移除)。舊 `schema conlang.lang/v2` 行仍被
+/// 接受並忽略(back-compat),見 `legacy_v2_header_is_accepted_and_ignored`。
 #[test]
-fn v1_does_not_accept_v2_case_syntax() {
-    let error = Language::parse(
+fn case_syntax_parses_without_any_schema_header() {
+    let language = Language::parse(
         r#"sign walk:
     phon:
         /walk/
@@ -443,8 +445,31 @@ fn v1_does_not_accept_v2_case_syntax() {
             inflect({$self})
 "#,
     )
-    .unwrap_err();
-    assert!(error.msg.contains("conlang.lang/v2"));
+    .expect("headerless FP case syntax must parse after v1 removal");
+    let canonical = language.dump();
+    assert!(
+        !canonical.contains("conlang.lang/v2"),
+        "printer 不再輸出 schema 標頭:\n{canonical}"
+    );
+    assert!(canonical.contains("case"), "case 保留於 canonical");
+    assert_eq!(
+        Language::parse(&canonical).unwrap().dump(),
+        canonical,
+        "不動點"
+    );
+}
+
+/// 舊 `schema conlang.lang/v2` 標頭 = 被接受並忽略的 no-op(back-compat):有無標頭的
+/// 同一來源產出**逐位元相同**的 canonical(標頭不進 dump / 不影響 identity digest)。
+#[test]
+fn legacy_v2_header_is_accepted_and_ignored() {
+    let body = "sign walk:\n    phon:\n        /walk/\n";
+    let with_header = format!("schema conlang.lang/v2\n\n{body}");
+    assert_eq!(
+        Language::parse(&with_header).unwrap().dump(),
+        Language::parse(body).unwrap().dump(),
+        "標頭有無不影響 canonical"
+    );
 }
 
 #[test]
@@ -599,7 +624,7 @@ sign seed:
         /S/
     case:
         $self == [Piece]:
-            Pairing(first = {$self})
+            Pairing(first: {$self})
 "#,
     )
     .unwrap();
@@ -838,35 +863,6 @@ fn entrenchment_sampling_normalizes_finite_weights_before_they_overflow() {
             .unwrap(),
         "the same seed must remain replayable",
     );
-}
-
-#[test]
-fn explicit_document_migration_preserves_existing_node_ids() {
-    let source = r#"trait Root:
-
-sign item:
-    belongs Root
-    phon:
-        /x/
-"#;
-    let document = LanguageDocument::import_new_root(source, "project:root").unwrap();
-    let before = document
-        .identities()
-        .nodes
-        .iter()
-        .map(|node| (node.id.clone(), node.kind, node.address.clone()))
-        .collect::<Vec<_>>();
-    let migrated = document.migrate_to_v2().unwrap();
-    let after = migrated
-        .identities()
-        .nodes
-        .iter()
-        .map(|node| (node.id.clone(), node.kind, node.address.clone()))
-        .collect::<Vec<_>>();
-    assert_eq!(before, after);
-    assert!(migrated.source().starts_with("schema conlang.lang/v2\n"));
-    let (source, sidecar) = migrated.dump_pair().unwrap();
-    assert_eq!(LanguageDocument::open(&source, &sidecar).unwrap(), migrated);
 }
 
 #[test]
@@ -1533,7 +1529,9 @@ trait EnrichedContract:
             theme = {adjunct}
     phon:
         realization:
-            /{adjunct}/ / $self.syn.committed == yes
+            case:
+                $self.syn.committed == yes:
+                    /{adjunct}/
 
 sign seed:
     belongs ContractAtom

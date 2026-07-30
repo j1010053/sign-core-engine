@@ -8,8 +8,11 @@
 
 1. **規格已凍結,以編號決策為準。** 全部設計爭議都已裁決並編號:D1–D28(語法/本體論)、
    A1–A4 / B5–B9 / C10–C11(執行語意)、I1–I18(實作層,docs/05 §9)、
-   **P1–P44(架構修補層;P1–P19 權威=《架構修補彙整 01–04》§1 總表、P20–P28 權威=《修補05》§11、
-   P29–P37 權威=《修補06 插件服務與DSL API》§8、P38–P44 權威=《修補07 共時四維系統》§9;
+   **P1–P64(架構修補層;P1–P19 權威=《架構修補彙整 01–04》§1 總表、P20–P28 權威=《修補05》§11、
+   P29–P37 權威=《修補06 插件服務與DSL API》§8、P38–P44 權威=《修補07 共時四維系統》§9、
+   P45 權威=《修補08 具名可定址節點》、P46 權威=《修補09 phon 命名 block》、
+   **P47–P55 權威=《修補10 歷時 function 層與載入》、
+   P56–P64 權威=《修補11 演化樹節點模型》**;
    個別修補文件與彙整出入處以彙整/最新修補為準;P7 已廢止→P14)**。
    任何實作若與編號決策矛盾,**停下來明確指出衝突**,不要自行變通。規格未覆蓋的新問題:
    實作層提案編 I 系列入 docs/05 §9;架構層變更走 P 系列。
@@ -44,6 +47,10 @@
 | `架構2.0總鳥瞰_v1.0.md` | **2.0 單一入口**:Language/ChangeSet 雙軌全圖、四條資訊流、Debug 模塊化、**新實作順序(步驟 8–22,M1–M4)** |
 | `架構修補05_Primitive與檔案格式_v0.1.md` | **P20–P28 權威**:DSL 獨立性、IR dump/canonical printer、條件語法(else/Path/tier-adjacency)、四原語、Ref 模型、.lang/.chg 檔案格式 |
 | `架構修補06_插件服務與DSL_API_v0.1.md` | **P29–P37 權威**:插件系統(資料層/程式碼層分離)、外部服務生命週期(ServiceRef→resolve→執行→驗證→History)、音變 DSL 最小對外 API(承 P5/P22 鐵律)。完整插件仍是設計層；embedded std 已先實作 package code/data/config 子集。 |
+| `架構修補10_歷時function層與載入_v0.1.md` | **P47–P55 權威**:層①=語句/層②③④=函數呼叫 `name(args)`(層級由名字解析,非關鍵字);Recipe/Goal 是 `code/` 檔案分工,body 語意由既有 case/when 承載;定義住套件 `code/*.chg`(`function Name(參數 [約束]):`);**載入沿用 P29 auto-discovery,否決顯式 import**(可重現性靠既有 library lock);Recipe **接力**展開;路徑庫 = 參數化 function(code)+ 路徑表(data);`expand` 先開好 `ServiceContext` 接點;**P54** sign 增 `components` metadata(兌現 §4.3 對 fuse 的 component 引用;與單一來源的 `origin` 職責不同);**P55** `.chg` 語句標記 `#N:` + 註解統一 `/* … */`(三格式一致;`#` 在 `.qy` 為詞界 D19) |
+| `架構修補11_演化樹節點模型_v0.1.md` | **P56–P64 權威**:記錄「digest 契約 vs stale 傳播」結構衝突;**節點存 snapshot、邊存 changeset,兩者不可變**(P56;覆寫 docs/06 §5「不存副本」實作面但保留因果精神,不變式可 fsck;紅利=讀節點 O(1));**rebase 判定依型別化錯誤變體**(P57;先放寬 digest 再分類,`Statement{ordinal}` 免費給出哪一句衝突);**節點內容定址**(P58,同構 git commit hash);**digest 重新定位**為跨系統防掉包 + rebase 入口(P59);**snapshot 持久化採共享物件庫**(P60,sign=blob/清單=tree/節點=commit)。**v0.3 補演化樹「橫向」**:**多親 = 全 parent 機械合併**(P61;取代語意空轉的 `parents[0]` 佔位,即 docs/06 §5【M+】;**只合併 `signs`**,其餘四區塊人工指定;**3-way**、空基準退化為聯集、**以穩定 id 對齊**(同 docs/06 §6.1 diff);兩邊異值=衝突則節點建不出來;命名碰撞用前綴改名規則;合併後查懸空引用);**落地 `ContactInjection`**(P62;docs/06 §3.2 早已指定從未實作的**跨語言集合選擇器**,`adopt`/接觸/融合三機制共用;**不得加接觸邊**(§2 只有一種邊);宣告 = prelude `donor <node-id>` 行,P58 下 NodeId 即 digest;**來源由引用派生不加欄位**);**`ServiceContext` 放寬為「document 以外的唯讀來源」且範圍限 parents ∪ donor 宣告**(P63;否則 P58 內容定址失效;**P56 必須先於 P62**);**節點 folder 儲存 + 雜湊邊界**(P64;給 docs/07 §5c 旁註層存放位置;**雜湊內不可變、annotation/config 在雜湊外**;判準=會改變語言狀態的一律寫在邊上,`ContactInjection` 不得放 config) |
+| `架構修補09_phon命名block_v0.md` | **P46 權威**:phon 規則命名/塊對齊 Lexurgy `.qy`(`name:` 前綴 + `Then:`/`Else:` 塊);取徑 A。slice 1 已落地(`name:` 前綴 inline + codegen 標籤);S2–S4(巢狀 block IR/語句定址/propagate)staged |
+| `架構修補08_具名可定址節點_v0.1.md` | **P45 權威**:Rule/TypedCase/CaseBranch 可選 `@name` 標籤 + keyed 定址(`rule["x"]`/`case["x"]`/`branch["x"]`);承 P24/P25/P26,標籤不取代穩定 id。取徑 B(不動 sign 扁平結構) |
 | `架構修補07_共時四維系統_v0.1.md` | **P38–P44 權威**:phon/syn/sem/prag 四維獨立(OntologyRegistry)、Defs+typed projection/patch、`belongs`(取代 provides)、valence=slots、construction-as-Sign+slot mapping、Lexurgy 式 Else 三分、四維同步規則;路線圖插入步驟 12a–12e(M1++,M2 前) |
 | `14_共時lang語法與資料貼合度_v0.1.md` | **共時 surface 實作對照**:巢狀 Path、`.lang` SlotMap、typed sign metadata，以及 Language 與 Evidence/Attestation 的 type/token 邊界。 |
 | `15_std_Grambank預設traits_v0.1.md` | **stdlib 資料對照**:修補06 package 分層、Grambank v1.0 的 25 項 trait 子集、0/1/? 知識狀態、行為映射、限制與測試證據。 |
@@ -337,8 +344,17 @@ slot／trait rename 會重寫 typed consumers，巢狀 typed case 可 round-trip
 Primitive Edit。功能回歸為根 workspace 251/251、Tshiatūn 157/157；完整本機工具閘門
 仍為基礎設施 exit 2，未宣稱 release gate exit 0；證據見 docs/20、docs/23。
 
-**步驟 14 尚未封板**：identity mixed namespace、Primitive-only `.chg`、statement
-transaction、replay 與 lazy compile 的程式碼只視為 preview，不是目前 release／相容性
-聲明。舊檔不要求直接 replay；V1 `.lang` reader 只為明示遷移暫時 frozen。preview 契約見
-docs/22，完成 Step 14 與相容性測試後才能重新標為完成。
+**步驟 14 已封板（2026-07-24）**：Primitive-only `.chg` 的 parse／resolve／replay／
+lazy compile 與 statement 交易定稿為 Step 14 completion。相容性測試補齊——replay 跨執行
+決定性、`.chg` dump round-trip、**三道 digest**(base source／identity-manifest／library
+lock)replay 前拒絕、交易回滾/部分保留、lazy compile cache(`step14_interpreter.rs`)。
+契約見 docs/22;`cargo test --workspace` 全綠為證(本機無 pwsh,`.ps1` 閘門未實跑)。
+
+**v1 路徑已硬移除(2026-07-24)**:v2 為唯一模型。移除 `LanguageSchema` V1/V2 分野
+(FP `case`/`when`/`constraints` 永遠可用,無需標頭;舊 `schema conlang.lang/v2` 行被
+接受並忽略,printer 不再輸出)、identity manifest v1(`IdentityManifestV1`/
+`IDENTITY_SCHEMA_V1`/`migrate_v1`/read 分支——`LanguageDocument::open` 只吃 v2 sidecar,
+v1/未知 → `UnknownSchema`)。**舊 v1 檔不可載入**。移除前已證 v1→v2 升級無損(Stage A,
+git history)。12 base fixtures 於 v2 逐字不變(goldens 零 churn);263/263 綠、0 警告、
+引擎零觸動。共用型別 `NodeEntryV1`/`RefTargetV1`/`RefBindingV1`(v2 沿用)保留。
 

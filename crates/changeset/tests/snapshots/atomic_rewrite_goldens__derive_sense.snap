@@ -1,0 +1,6 @@
+---
+source: crates/changeset/tests/atomic_rewrite_goldens.rs
+expression: shape(&edits)
+---
+insert Sense into Sign at End
+insert SenseEdge into Sign at End

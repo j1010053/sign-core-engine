@@ -26,10 +26,9 @@ use crate::path::parse_path;
 use crate::{
     BinaryConstraint, Block, CaseBranch, CaseCondition, CaseSelection, ConstraintPredicate, Def,
     Dim, Expression, ExpressionType, FeatureDecl, FeatureExpression, FeatureValue, Language,
-    LanguageSchema, Realization, RealizationBranch, RoleBinding, RoleDecl, RoleExpression, Rule,
-    SignApplication, SignArgument, SignArgumentValue, SignExpression, SignItem, SignProjection,
-    Slot, SlotConstraint, SlotFeatureBinding, SlotMapOp, SourceLocation, Stage, TraitDef,
-    TypedCase,
+    PhonBlock, Realization, RoleBinding, RoleDecl, RoleExpression, Rule, SignApplication,
+    SignArgument, SignArgumentValue, SignExpression, SignItem, SignProjection, Slot,
+    SlotConstraint, SlotFeatureBinding, SlotMapOp, SourceLocation, Stage, TraitDef, TypedCase,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -74,7 +73,7 @@ fn container_head(text: &str) -> Option<(&'static str, &str)> {
 }
 
 fn is_language_head(text: &str) -> bool {
-    text == LanguageSchema::V2_HEADER
+    text == crate::LEGACY_V2_HEADER
         || text.starts_with("prosody =")
         || text == "distribution:"
         || container_head(text).is_some()
@@ -132,6 +131,21 @@ fn parse_argument_value(source: &str, line: usize) -> Result<SignArgumentValue, 
         .map(SignArgumentValue::Application)
 }
 
+/// 在**巢狀深度 0** 找具名引數的分隔符(`:`,或舊寫法 `=`)。
+/// 巢狀 application/`{…}` 內的分隔符屬於內層,不能在這裡切。
+fn split_argument_name(argument: &str) -> Option<(&str, &str)> {
+    let mut depth = 0usize;
+    for (index, character) in argument.char_indices() {
+        match character {
+            '(' | '{' | '[' => depth += 1,
+            ')' | '}' | ']' => depth = depth.saturating_sub(1),
+            ':' | '=' if depth == 0 => return Some((&argument[..index], &argument[index + 1..])),
+            _ => {}
+        }
+    }
+    None
+}
+
 fn parse_sign_application(source: &str, line: usize) -> Result<SignApplication, ParseError> {
     let Some(open) = source.find('(') else {
         return Err(err(line, "expected a Sign application `name(...)`"));
@@ -145,14 +159,13 @@ fn parse_sign_application(source: &str, line: usize) -> Result<SignApplication, 
     }
     let mut parsed = Vec::new();
     for argument in split_arguments(arguments, line)? {
-        let (name, value) = match argument.split_once('=') {
-            Some((name, value)) => {
-                let name = name.trim();
-                if !ident_ok(name) {
-                    return Err(err(line, "named argument must name a slot"));
-                }
-                (Some(name.to_owned()), value)
-            }
+        // 具名引數 `slot: value`(步驟 15c:層②③④ 的呼叫與此處 sign 引用統一
+        // 用 `key: value`)。`=` 為舊寫法,仍接受以免既有檔案失效。
+        // **必須只在頂層切**:巢狀 application(`Outer(v: Wrap(v: {$self}))`)
+        // 內層的分隔符不屬於這一層。
+        let (name, value) = match split_argument_name(argument) {
+            Some((name, value)) if ident_ok(name.trim()) => (Some(name.trim().to_owned()), value),
+            Some(_) => return Err(err(line, "named argument must name a slot")),
             None => (None, argument),
         };
         parsed.push(SignArgument {
@@ -311,7 +324,8 @@ fn parse_typed_case(
     let Some(scrutinee) = case_head.strip_suffix(':') else {
         return Err(err(head.no, "case header must end with `:`"));
     };
-    let scrutinee = scrutinee.trim();
+    let (scrutinee, case_name) = split_name_suffix(scrutinee);
+    let case_name = validate_label(case_name, head.no)?;
     let scrutinee = (!scrutinee.is_empty()).then(|| scrutinee.to_owned());
     let mut index = start + 1;
     while index < body.len() && body[index].text.is_empty() {
@@ -335,7 +349,8 @@ fn parse_typed_case(
         let Some(label) = branch.text.strip_suffix(':') else {
             return Err(err(branch.no, "case branch header must end with `:`"));
         };
-        let label = label.trim();
+        let (label, branch_name) = split_name_suffix(label);
+        let branch_name = validate_label(branch_name, branch.no)?;
         if saw_else && !matches!(label, "else" | "Else") {
             return Err(err(branch.no, "case branch cannot follow `else`"));
         }
@@ -437,6 +452,7 @@ fn parse_typed_case(
             condition,
             result,
             belongs,
+            name: branch_name,
             source: SourceLocation::line(branch.no),
         });
     }
@@ -445,6 +461,7 @@ fn parse_typed_case(
             selection,
             expected,
             scrutinee,
+            name: case_name,
             branches,
             source: SourceLocation::line(head.no),
         },
@@ -661,8 +678,203 @@ fn parse_slot_map(l: &str, line: usize) -> Result<Option<SlotMapOp>, ParseError>
 }
 
 /// 規則行 → Rule(尾綴 `@stage`;body 原文;維度依所在區塊 I25/P44)。
+/// Lexurgy 式命名前綴(P46 取徑 A,限 phon):`name: <rule>`。name 可含連字號;
+/// 空 body、含空白的 head、保留字(Scan/stage/Then/Else/realization/case/when/
+/// propagate)不視為名。回傳 (name, 規則本文)。
+fn lexurgy_name_prefix(text: &str) -> Option<(String, &str)> {
+    let (head, rest) = text.split_once(':')?;
+    let name = head.trim();
+    let rest = rest.trim();
+    if name.is_empty()
+        || rest.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        || matches!(
+            name,
+            "Scan"
+                | "stage"
+                | "Then"
+                | "Else"
+                | "then"
+                | "else"
+                | "realization"
+                | "case"
+                | "when"
+                | "propagate"
+                | "Propagate"
+        )
+    {
+        return None;
+    }
+    Some((name.to_owned(), rest))
+}
+
+/// phon block 頭(P46 S2):`<name>:`(冒號後無內容);後接縮排 body 即結構化 block。
+/// phon block 頭:`name:` 或 **`name propagate:`**(P46 S4,對映引擎 header
+/// modifier)。回傳 (name, rule-level propagate)。
+fn phon_block_header(text: &str) -> Option<(String, bool)> {
+    let head = text.strip_suffix(':')?.trim();
+    // `name propagate` → 整條 rule 迭代到 fixpoint。
+    let (name, propagate) = match head
+        .strip_suffix("propagate")
+        .or_else(|| head.strip_suffix("Propagate"))
+    {
+        // 尾綴必須是**獨立的字**(前面有空白),否則 `xpropagate` 會被誤判。
+        Some(rest) if rest.ends_with(char::is_whitespace) => (rest.trim(), true),
+        _ => (head, false),
+    };
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        || matches!(
+            name,
+            "Scan"
+                | "stage"
+                | "Then"
+                | "Else"
+                | "then"
+                | "else"
+                | "realization"
+                | "case"
+                | "when"
+                | "propagate"
+                | "Propagate"
+        )
+    {
+        return None;
+    }
+    Some((name.to_owned(), propagate))
+}
+
+/// `Then:`/`Else:` 邊界,可帶 **`propagate`** 修飾(P46 S4,對映引擎 boundary
+/// modifier → `PhonBlock::Propagate`)。回傳 (is_then, propagate, inline 語句)。
+fn phon_block_boundary(text: &str) -> Option<(bool, bool, Option<String>)> {
+    for (kw, is_then) in [
+        ("Then", true),
+        ("then", true),
+        ("Else", false),
+        ("else", false),
+    ] {
+        let Some(rest) = text.strip_prefix(kw) else {
+            continue;
+        };
+        // `Then:` / `Then propagate:` —— propagate 前必須有空白。
+        let (rest, propagate) = match rest.strip_prefix(char::is_whitespace) {
+            Some(after) => {
+                let after = after.trim_start();
+                match after
+                    .strip_prefix("propagate")
+                    .or_else(|| after.strip_prefix("Propagate"))
+                {
+                    Some(tail) => (tail, true),
+                    None => (rest, false),
+                }
+            }
+            None => (rest, false),
+        };
+        if let Some(after) = rest.trim_start().strip_prefix(':') {
+            let inline = after.trim();
+            return Some((
+                is_then,
+                propagate,
+                (!inline.is_empty()).then(|| inline.to_owned()),
+            ));
+        }
+    }
+    None
+}
+
+/// 把 `name:` 下的縮排 body 解析成結構化 `PhonBlock`(對映引擎 `RuleBlock`)。
+/// leading 語句 = 第一個 Leaf;`Then:`/`Else:`(inline 或縮排子 block)開後續 block;
+/// 同層不得混 Then/Else。
+fn parse_phon_block(lines: &[Line]) -> Result<PhonBlock, ParseError> {
+    let mut first: Vec<String> = Vec::new();
+    let mut subs: Vec<PhonBlock> = Vec::new();
+    let mut is_then: Option<bool> = None;
+    let mut i = 0usize;
+    while i < lines.len() {
+        let ln = &lines[i];
+        if ln.text.is_empty() {
+            i += 1;
+            continue;
+        }
+        let text = ln.text.trim();
+        if let Some((then, propagate, inline)) = phon_block_boundary(text) {
+            if is_then.is_some_and(|k| k != then) {
+                return Err(err(
+                    ln.no,
+                    "cannot mix `Then:` and `Else:` at one block level",
+                ));
+            }
+            is_then = Some(then);
+            let sub = if let Some(stmt) = inline {
+                PhonBlock::Leaf(vec![stmt])
+            } else {
+                let start = i + 1;
+                let mut j = start;
+                while j < lines.len() && (lines[j].text.is_empty() || lines[j].indent > ln.indent) {
+                    j += 1;
+                }
+                let sub = parse_phon_block(&lines[start..j])?;
+                i = j - 1;
+                sub
+            };
+            // P46 S4:`Then propagate:` 只修飾**它引入的那個 element**。
+            subs.push(if propagate {
+                PhonBlock::Propagate(Box::new(sub))
+            } else {
+                sub
+            });
+        } else if is_then.is_some() {
+            return Err(err(
+                ln.no,
+                "statement after a `Then:`/`Else:` boundary must sit inside its block",
+            ));
+        } else {
+            first.push(text.to_owned());
+        }
+        i += 1;
+    }
+    Ok(match is_then {
+        None => PhonBlock::Leaf(first),
+        Some(then) => {
+            let mut blocks = vec![PhonBlock::Leaf(first)];
+            blocks.extend(subs);
+            if then {
+                PhonBlock::Then(blocks)
+            } else {
+                PhonBlock::Else(blocks)
+            }
+        }
+    })
+}
+
+/// 拆 `… @name <label>` 後綴(或整行 `@name <label>`):回傳 (剩餘, Option<label>)。
+fn split_name_suffix(text: &str) -> (&str, Option<&str>) {
+    let text = text.trim();
+    if let Some(rest) = text.strip_prefix("@name ") {
+        return ("", Some(rest.trim()));
+    }
+    if let Some((head, name)) = text.rsplit_once(" @name ") {
+        return (head.trim(), Some(name.trim()));
+    }
+    (text, None)
+}
+
+/// 標籤須為單一識別字。
+fn validate_label(label: Option<&str>, line: usize) -> Result<Option<String>, ParseError> {
+    match label {
+        Some(name) if ident_ok(name) => Ok(Some(name.to_owned())),
+        Some(_) => Err(err(line, "label must be a single identifier")),
+        None => Ok(None),
+    }
+}
+
 fn parse_rule(lang: &mut Language, l: &str, line: usize, dim: Dim) -> Result<Rule, ParseError> {
-    let (body, stage) = match l.rsplit_once(" @stage ") {
+    // `@stage` is the outermost suffix (parsed first); `@name <label>` is inner.
+    let (rest, stage) = match l.rsplit_once(" @stage ") {
         Some((b, s)) => {
             let stage = match s.trim() {
                 "stem" => Stage::Stem,
@@ -674,7 +886,18 @@ fn parse_rule(lang: &mut Language, l: &str, line: usize, dim: Dim) -> Result<Rul
         }
         None => (l, Stage::Word),
     };
+    let (body, name) = match rest.rsplit_once(" @name ") {
+        Some((b, label)) => {
+            let label = label.trim();
+            if !ident_ok(label) {
+                return Err(err(line, "rule label must be a single identifier"));
+            }
+            (b.trim(), Some(label.to_owned()))
+        }
+        None => (rest, None),
+    };
     let mut rule = lang.rule_dim(body, stage, dim);
+    rule.name = name;
     rule.source = SourceLocation::line(line);
     Ok(rule)
 }
@@ -731,6 +954,11 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
     let mut feature_indent = 0usize;
     let mut in_roles = false;
     let mut roles_indent = 0usize;
+    // §10.3:sem 的 senses / 衍生邊子區塊。
+    let mut in_senses = false;
+    let mut senses_indent = 0usize;
+    let mut in_edges = false;
+    let mut edges_indent = 0usize;
     let mut in_realization = false;
     let mut realization_indent = 0usize;
     let mut in_constraints = false;
@@ -753,6 +981,12 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
         if in_roles && ind <= roles_indent {
             in_roles = false;
         }
+        if in_senses && ind <= senses_indent {
+            in_senses = false;
+        }
+        if in_edges && ind <= edges_indent {
+            in_edges = false;
+        }
         if in_realization && ind <= realization_indent {
             in_realization = false;
         }
@@ -766,23 +1000,16 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             in_slot_features = false;
             in_feature = false;
             in_roles = false;
+            in_senses = false;
+            in_edges = false;
             in_realization = false;
             in_constraints = false;
             if text == "==" {
                 blocks.push(Block::default());
             } else if text == "constraints:" {
-                if !lang.is_v2() {
-                    return Err(err(no, "`constraints:` requires `schema conlang.lang/v2`"));
-                }
                 in_constraints = true;
                 constraints_indent = ind;
             } else if is_context_head(text) {
-                if !lang.is_v2() {
-                    return Err(err(
-                        no,
-                        "typed `case`/`when` requires `schema conlang.lang/v2`",
-                    ));
-                }
                 let (case, next) =
                     parse_typed_case(lang, body, index - 1, ExpressionType::SignContext)?;
                 blocks
@@ -839,15 +1066,11 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             && !in_slot_features
             && !in_feature
             && !in_roles
+            && !in_senses
+            && !in_edges
             && !in_realization
             && is_context_head(text)
         {
-            if !lang.is_v2() {
-                return Err(err(
-                    no,
-                    "typed `case`/`when` requires `schema conlang.lang/v2`",
-                ));
-            }
             if dim.to_dim() == Dim::Phon {
                 return Err(err(
                     no,
@@ -912,9 +1135,6 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                 continue;
             }
             if let Some(name) = text.strip_suffix("=>").map(str::trim) {
-                if !lang.is_v2() {
-                    return Err(err(no, "typed feature expression requires V2"));
-                }
                 if !ident_ok(name) {
                     return Err(err(no, "feature expression target must be an identifier"));
                 }
@@ -1014,14 +1234,77 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             }
             continue;
         }
+        if in_senses {
+            // `name = gloss`
+            let Some((name, gloss)) = text.split_once('=') else {
+                return Err(err(no, "a sense line is `name = gloss`"));
+            };
+            let (name, gloss) = (name.trim(), gloss.trim());
+            if !ident_ok(name) {
+                return Err(err(no, "sense name must be an identifier"));
+            }
+            if gloss.is_empty() {
+                return Err(err(no, "sense gloss must not be empty"));
+            }
+            blocks
+                .last_mut()
+                .unwrap()
+                .items
+                .push(SignItem::Sense(crate::Sense {
+                    name: name.to_owned(),
+                    gloss: gloss.to_owned(),
+                    source: SourceLocation::line(no),
+                }));
+            continue;
+        }
+        if in_edges {
+            // `<to> from <from> <kind> [opaque]`
+            let mut parts = text.split_whitespace();
+            let (Some(to), Some(keyword), Some(from), Some(kind)) =
+                (parts.next(), parts.next(), parts.next(), parts.next())
+            else {
+                return Err(err(
+                    no,
+                    "a sense edge is `<sense> from <sense> <kind> [opaque]`",
+                ));
+            };
+            if keyword != "from" {
+                return Err(err(no, "a sense edge uses the `from` keyword"));
+            }
+            let Some(kind) = crate::DerivationKind::parse(kind) else {
+                return Err(err(
+                    no,
+                    "sense edge kind must be metaphor|metonymy|narrow|broaden",
+                ));
+            };
+            let transparency = match parts.next() {
+                None => crate::SenseTransparency::Transparent,
+                Some(word) => match crate::SenseTransparency::parse(word) {
+                    Some(value) => value,
+                    None => return Err(err(no, "sense edge modifier must be `opaque`")),
+                },
+            };
+            if parts.next().is_some() {
+                return Err(err(no, "trailing text after a sense edge"));
+            }
+            blocks
+                .last_mut()
+                .unwrap()
+                .items
+                .push(SignItem::SenseEdge(crate::SenseEdge {
+                    to: to.to_owned(),
+                    from: from.to_owned(),
+                    kind,
+                    transparency,
+                    source: SourceLocation::line(no),
+                }));
+            continue;
+        }
         if in_roles {
             if let Some((name, value)) = text.split_once('=') {
                 let name = name.trim();
                 let value = value.trim();
                 if value.is_empty() {
-                    if !lang.is_v2() {
-                        return Err(err(no, "typed role expression requires V2"));
-                    }
                     if !ident_ok(name) {
                         return Err(err(no, "role expression target must be an identifier"));
                     }
@@ -1100,66 +1383,23 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
         }
         if in_realization {
             if text == "case:" || (text.starts_with("case ") && text.ends_with(':')) {
-                if !lang.is_v2() {
-                    return Err(err(no, "typed `case` requires `schema conlang.lang/v2`"));
-                }
                 let (case, next) =
                     parse_typed_case(lang, body, index - 1, ExpressionType::PhonContext)?;
                 let item = blocks.last_mut().unwrap().items.last_mut();
                 let Some(SignItem::Realization(realization)) = item else {
                     return Err(err(no, "internal realization block state is invalid"));
                 };
-                if !realization.branches.is_empty() || realization.expression.is_some() {
-                    return Err(err(
-                        no,
-                        "realization may contain one typed case or V1 branches",
-                    ));
+                if realization.expression.is_some() {
+                    return Err(err(no, "realization may contain one typed case"));
                 }
                 realization.expression = Some(case);
                 index = next;
                 continue;
             }
-            let (is_else, branch) = text
-                .strip_prefix("else ")
-                .map(|rest| (true, rest.trim()))
-                .unwrap_or((false, text));
-            if !branch.starts_with('/') {
-                return Err(err(
-                    no,
-                    "realization branch must begin with a complete `/.../` template",
-                ));
-            }
-            let Some(end) = branch[1..].find('/').map(|offset| offset + 1) else {
-                return Err(err(no, "realization template is missing its closing `/`"));
-            };
-            let template = branch[..=end].to_owned();
-            let tail = branch[end + 1..].trim();
-            let guard = if is_else {
-                if !tail.is_empty() {
-                    return Err(err(no, "`else` realization cannot have a guard"));
-                }
-                None
-            } else if tail.is_empty() {
-                return Err(err(no, "non-`else` realization branch requires a guard"));
-            } else {
-                let Some(guard) = tail.strip_prefix('/').map(str::trim) else {
-                    return Err(err(no, "realization guard must follow ` / `"));
-                };
-                if guard.is_empty() {
-                    return Err(err(no, "realization guard cannot be empty"));
-                }
-                Some(guard.to_owned())
-            };
-            let item = blocks.last_mut().unwrap().items.last_mut();
-            let Some(SignItem::Realization(realization)) = item else {
-                return Err(err(no, "internal realization block state is invalid"));
-            };
-            realization.branches.push(RealizationBranch {
-                template,
-                guard,
-                source: SourceLocation::line(no),
-            });
-            continue;
+            return Err(err(
+                no,
+                "realization must contain a `case:` selecting phon templates by guard",
+            ));
         }
         if text == "slots:" {
             if dim != DimKw::Syn {
@@ -1191,6 +1431,22 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             }
             in_roles = true;
             roles_indent = ind;
+            continue;
+        }
+        if text == "senses:" {
+            if dim != DimKw::Sem {
+                return Err(err(no, "`senses:` is only valid under `sem:`"));
+            }
+            in_senses = true;
+            senses_indent = ind;
+            continue;
+        }
+        if text == "edges:" {
+            if dim != DimKw::Sem {
+                return Err(err(no, "`edges:` is only valid under `sem:`"));
+            }
+            in_edges = true;
+            edges_indent = ind;
             continue;
         }
         if text == "realization:" {
@@ -1265,6 +1521,14 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             text.split_once('=')
         };
         if let Some((field, _)) = definition {
+            if dim == DimKw::Phon {
+                // phon has no consumable `field = value` metadata: only a `/…/`
+                // UR template, a rule, or `realization:`.
+                return Err(err(
+                    no,
+                    "`phon:` takes a `/…/` UR template, a rule, or `realization:` — not a `field = value` definition",
+                ));
+            }
             let field = field.trim();
             let path = format!("{}.{}", dim.prefix(), field);
             parse_path(&path)
@@ -1274,8 +1538,33 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                 path: format!("{}.{}", dim.prefix(), field.trim()),
                 value: value.trim().to_owned(),
             }));
+        } else if dim == DimKw::Phon
+            && phon_block_header(text).is_some()
+            && index < body.len()
+            && body[index].indent > ind
+        {
+            // phon: bare `name:` header + indented body = structured Lexurgy block
+            // (P46 S2).
+            let (name, propagate) = phon_block_header(text).expect("checked above");
+            let start = index;
+            while index < body.len() && (body[index].text.is_empty() || body[index].indent > ind) {
+                index += 1;
+            }
+            let block = parse_phon_block(&body[start..index])?;
+            let mut r = lang.rule_dim(String::new(), Stage::Word, Dim::Phon);
+            r.name = Some(name);
+            r.propagate = propagate;
+            r.phon_block = Some(block);
+            r.source = SourceLocation::line(no);
+            blocks.last_mut().unwrap().items.push(SignItem::Rule(r));
         } else {
-            let r = parse_rule(lang, text, no, dim.to_dim())?;
+            // phon: accept a Lexurgy-style `name:` prefix (P46 取徑 A, inline).
+            let (prefix_name, rule_text) = match (dim, lexurgy_name_prefix(text)) {
+                (DimKw::Phon, Some((name, rest))) => (Some(name), rest),
+                _ => (None, text),
+            };
+            let mut r = parse_rule(lang, rule_text, no, dim.to_dim())?;
+            r.name = prefix_name.or(r.name);
             blocks.last_mut().unwrap().items.push(SignItem::Rule(r));
         }
     }
@@ -1286,7 +1575,10 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
 /// 至檔尾)。**保留換行**以維持行號一致(錯誤定位不漂移);註解內容以空白取代,
 /// 使整行註解成空白行(被 parser 略過)、行尾/行內註解不影響縮排與 token。
 /// 註解於 canonical 不保留(IR dump 慣例)。
-fn strip_comments(src: &str) -> String {
+///
+/// **公開供 `.chg` 重用**:三種格式(`.qy`/`.lang`/`.chg`)共用同一套區塊註解
+/// (擁有者 2026-07-12 定案;`#` 在 `.qy` 已被詞界 D19 佔用,故不可當註解)。
+pub fn strip_comments(src: &str) -> String {
     let mut out = String::with_capacity(src.len());
     let mut chars = src.chars().peekable();
     let mut in_comment = false;
@@ -1330,19 +1622,8 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
             i += 1;
             continue;
         }
-        if ln.text == LanguageSchema::V2_HEADER {
-            if lang.is_v2()
-                || seen_language
-                || !lang.dsl_decls.is_empty()
-                || !lang.traits.is_empty()
-                || !lang.signs.is_empty()
-            {
-                return Err(err(
-                    ln.no,
-                    "V2 schema header must occur once before language content",
-                ));
-            }
-            lang.set_schema(LanguageSchema::V2);
+        // 舊 v2 schema 標頭:v1 已淘汰、v2 唯一 → 接受並忽略(back-compat;printer 不再輸出)。
+        if ln.text == crate::LEGACY_V2_HEADER {
             i += 1;
             continue;
         }

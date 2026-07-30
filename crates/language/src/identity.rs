@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{metadata, Language, Realization, RuleId, SignId, SignItem, SlotConstraint};
 
-pub const IDENTITY_SCHEMA_V1: &str = "conlang.language-identities/v1";
 pub const IDENTITY_SCHEMA_V2: &str = "conlang.language-identities/v2";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -74,12 +73,21 @@ pub enum NodeKind {
     SlotFeatureBinding,
     RoleDeclaration,
     RoleBinding,
+    /// 義項節點(sem 維一級節點,《修補05》§10.3「sem(senses + 衍生邊)」)。
+    Sense,
+    /// 義項間的衍生邊(同上)。
+    SenseEdge,
     Realization,
     FeatureRule,
     Definition,
     Rule,
     RuleElseBranch,
     RuleThenBranch,
+    /// A single statement line inside a phon `PhonBlock::Leaf` (P46 S3).
+    PhonStatement,
+    /// One element of a phon `PhonBlock::Then`/`Else` vec — itself a recursive
+    /// `PhonBlock` (P46 S3).
+    PhonBlockNode,
     RealizationBranch,
     Application,
     Case,
@@ -107,6 +115,9 @@ pub enum EditableField {
     RuleBody,
     RuleStage,
     RuleDimension,
+    /// P46 S4: rule-level (`name propagate:`) or block-element
+    /// (`Then propagate:`) fixpoint iteration.
+    Propagate,
     BranchBody,
     SlotName,
     SlotConstraint,
@@ -120,6 +131,10 @@ pub enum EditableField {
     SlotMap,
     RoleConstraint,
     RoleSlot,
+    /// §10.3 義項/衍生邊的可編輯欄位(Atomic Rewrite drift / lexicalize_sense)。
+    SenseGloss,
+    SenseEdgeKind,
+    SenseEdgeTransparency,
     RealizationTemplate,
     RealizationGuard,
     CaseSelection,
@@ -160,6 +175,12 @@ pub enum AddressSegment {
     Items(usize),
     RuleElse(usize),
     RuleThen(usize),
+    /// Index into a phon `PhonBlock::Leaf` statement list (P46 S3).
+    PhonLeaf(usize),
+    /// Index into a phon `PhonBlock::Then` element vec (P46 S3).
+    PhonThen(usize),
+    /// Index into a phon `PhonBlock::Else` element vec (P46 S3).
+    PhonElse(usize),
     RealizationBranches(usize),
     CaseExpression,
     CaseBranches(usize),
@@ -222,17 +243,6 @@ pub struct RefBindingV1 {
     pub owner: NodeId,
     pub field: String,
     pub target: RefTargetV1,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct IdentityManifestV1 {
-    pub schema: String,
-    pub namespace: String,
-    pub next_ordinal: u64,
-    pub source_sha256: String,
-    pub nodes: Vec<NodeEntryV1>,
-    pub refs: Vec<RefBindingV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -325,12 +335,8 @@ impl LanguageDocument {
             .get("schema")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| IdentityError::InvalidManifest("missing schema".to_owned()))?;
-        let identities = match schema {
-            IDENTITY_SCHEMA_V1 => {
-                let legacy: IdentityManifestV1 = serde_json::from_value(envelope)
-                    .map_err(|error| IdentityError::InvalidManifest(error.to_string()))?;
-                migrate_v1(legacy)?
-            }
+        // v1 identity 已淘汰(硬移除 2026-07-24):只接受 v2 sidecar;v1/未知 → UnknownSchema。
+        let identities: IdentityManifestV2 = match schema {
             IDENTITY_SCHEMA_V2 => serde_json::from_value(envelope)
                 .map_err(|error| IdentityError::InvalidManifest(error.to_string()))?,
             other => return Err(IdentityError::UnknownSchema(other.to_owned())),
@@ -399,19 +405,6 @@ impl LanguageDocument {
             .allocators
             .sort_by(|left, right| left.namespace.cmp(&right.namespace));
         Ok(fork)
-    }
-
-    /// Explicit, identity-preserving V1 -> V2 source migration.  The schema
-    /// header is not an editable AST node, so every existing NodeId remains
-    /// bound to the same address.  Future expression nodes are allocated by
-    /// the active namespace through the ordinary edit transaction.
-    pub fn migrate_to_v2(&self) -> Result<LanguageDocument, IdentityError> {
-        if self.language.is_v2() {
-            return Ok(self.clone());
-        }
-        let mut language = self.language.clone();
-        language.migrate_to_v2();
-        LanguageDocument::from_edit_parts(language, self.identities.clone())
     }
 
     pub fn source(&self) -> String {
@@ -696,6 +689,13 @@ fn editable_field(kind: NodeKind, name: &str) -> Option<EditableField> {
         (NodeKind::RuleElseBranch | NodeKind::RuleThenBranch, "body") => {
             Some(EditableField::BranchBody)
         }
+        (NodeKind::PhonStatement, "body") => Some(EditableField::BranchBody),
+        (NodeKind::Sense, "gloss") => Some(EditableField::SenseGloss),
+        (NodeKind::SenseEdge, "kind") => Some(EditableField::SenseEdgeKind),
+        (NodeKind::SenseEdge, "transparency") => Some(EditableField::SenseEdgeTransparency),
+        (NodeKind::Rule | NodeKind::FeatureRule | NodeKind::PhonBlockNode, "propagate") => {
+            Some(EditableField::Propagate)
+        }
         (NodeKind::Slot, "name") => Some(EditableField::SlotName),
         (NodeKind::Slot, "constraint") => Some(EditableField::SlotConstraint),
         (NodeKind::Slot | NodeKind::RoleDeclaration, "optional") => Some(EditableField::Optional),
@@ -724,22 +724,6 @@ fn validate_namespace(namespace: &str) -> Result<(), IdentityError> {
         return Err(IdentityError::InvalidNamespace);
     }
     Ok(())
-}
-
-fn migrate_v1(legacy: IdentityManifestV1) -> Result<IdentityManifestV2, IdentityError> {
-    validate_namespace(&legacy.namespace)?;
-    Ok(IdentityManifestV2 {
-        schema: IDENTITY_SCHEMA_V2.to_owned(),
-        root_namespace: legacy.namespace.clone(),
-        active_namespace: legacy.namespace.clone(),
-        allocators: vec![IdentityAllocatorV2 {
-            namespace: legacy.namespace,
-            next_ordinal: legacy.next_ordinal,
-        }],
-        source_sha256: legacy.source_sha256,
-        nodes: legacy.nodes,
-        refs: legacy.refs,
-    })
 }
 
 fn validate_manifest_namespaces(manifest: &IdentityManifestV2) -> Result<(), IdentityError> {
@@ -779,6 +763,8 @@ fn item_kind(item: &SignItem) -> NodeKind {
         SignItem::SlotFeatureBinding(_) => NodeKind::SlotFeatureBinding,
         SignItem::RoleDecl(_) => NodeKind::RoleDeclaration,
         SignItem::RoleBinding(_) => NodeKind::RoleBinding,
+        SignItem::Sense(_) => NodeKind::Sense,
+        SignItem::SenseEdge(_) => NodeKind::SenseEdge,
         SignItem::Realization(_) => NodeKind::Realization,
         SignItem::SignExpression(expression) => expression_root_kind(&expression.expression),
         SignItem::FeatureExpression(expression) => expression_root_kind(&expression.expression),
@@ -821,6 +807,67 @@ fn push_entry(
         address,
     });
     id
+}
+
+/// Recursively enumerate a phon `PhonBlock` into addressable nodes (P46 S3).
+/// `address`/`parent` are the enclosing container's address/id (the rule item, or
+/// an outer `PhonBlockNode`). Deterministic order = address order (P26).
+fn enumerate_phon_block(
+    block: &crate::PhonBlock,
+    address: &NodeAddress,
+    parent: &NodeId,
+    namespace: &str,
+    next: &mut u64,
+    entries: &mut Vec<NodeEntryV1>,
+) {
+    match block {
+        crate::PhonBlock::Leaf(statements) => {
+            for (index, _) in statements.iter().enumerate() {
+                push_entry(
+                    entries,
+                    namespace,
+                    next,
+                    NodeKind::PhonStatement,
+                    Some(parent.clone()),
+                    address.child(AddressSegment::PhonLeaf(index)),
+                );
+            }
+        }
+        crate::PhonBlock::Then(elements) | crate::PhonBlock::Else(elements) => {
+            let is_then = matches!(block, crate::PhonBlock::Then(_));
+            for (index, element) in elements.iter().enumerate() {
+                let segment = if is_then {
+                    AddressSegment::PhonThen(index)
+                } else {
+                    AddressSegment::PhonElse(index)
+                };
+                let element_address = address.child(segment);
+                let element_id = push_entry(
+                    entries,
+                    namespace,
+                    next,
+                    NodeKind::PhonBlockNode,
+                    Some(parent.clone()),
+                    element_address.clone(),
+                );
+                enumerate_phon_block(
+                    element,
+                    &element_address,
+                    &element_id,
+                    namespace,
+                    next,
+                    entries,
+                );
+            }
+        }
+        crate::PhonBlock::Propagate(inner) => {
+            // P46 S4: `Propagate` is a *modifier* on the element it wraps, not an
+            // addressing level — it contributes no segment. Toggling it therefore
+            // never moves a child, so statement identities stay stable across an
+            // `update <node>.propagate = …` (P25/P26).
+            enumerate_phon_block(inner, address, parent, namespace, next, entries);
+        }
+    }
 }
 
 fn enumerate_item_children(
@@ -1021,33 +1068,25 @@ fn enumerate_item_children(
                     address.child(AddressSegment::RuleThen(index)),
                 );
             }
+            // P46 S3: structured phon block statements/sub-blocks are addressable
+            // nodes (recursive). Only walked when the rule carries a phon_block.
+            if let Some(block) = &rule.phon_block {
+                enumerate_phon_block(block, address, parent, namespace, next, entries);
+            }
         }
         SignItem::Realization(Realization {
-            branches,
-            expression,
+            expression: Some(case),
         }) => {
-            for (index, _) in branches.iter().enumerate() {
-                push_entry(
-                    entries,
-                    namespace,
-                    next,
-                    NodeKind::RealizationBranch,
-                    Some(parent.clone()),
-                    address.child(AddressSegment::RealizationBranches(index)),
-                );
-            }
-            if let Some(case) = expression {
-                let case_address = address.child(AddressSegment::CaseExpression);
-                let case_id = push_entry(
-                    entries,
-                    namespace,
-                    next,
-                    NodeKind::Case,
-                    Some(parent.clone()),
-                    case_address.clone(),
-                );
-                enumerate_case(case, &case_address, &case_id, namespace, next, entries);
-            }
+            let case_address = address.child(AddressSegment::CaseExpression);
+            let case_id = push_entry(
+                entries,
+                namespace,
+                next,
+                NodeKind::Case,
+                Some(parent.clone()),
+                case_address.clone(),
+            );
+            enumerate_case(case, &case_address, &case_id, namespace, next, entries);
         }
         SignItem::SignExpression(expression) => enumerate_root_expression_children(
             &expression.expression,
@@ -1951,6 +1990,7 @@ sign root:
             selection: crate::CaseSelection::FirstMatch,
             expected: crate::ExpressionType::SignContext,
             scrutinee: None,
+            name: None,
             branches: vec![crate::CaseBranch {
                 condition: crate::CaseCondition::Else,
                 result: crate::Expression::Projection {
@@ -1958,6 +1998,7 @@ sign root:
                     dimension: crate::SignProjection::Syn,
                 },
                 belongs: Vec::new(),
+                name: None,
                 source: crate::SourceLocation::line(7),
             }],
             source: crate::SourceLocation::line(7),

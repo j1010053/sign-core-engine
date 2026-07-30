@@ -96,6 +96,16 @@ enum Guard {
     SelfFieldEq(SelfAccess, String),
 }
 
+/// Slots a realization/phon-case guard reads (so slot-usage validation counts a
+/// slot referenced only from a guard, not just from a template).
+pub(crate) fn realization_guard_slot_references(source: &str) -> Vec<String> {
+    match parse_guard(source) {
+        Ok(Guard::SlotFieldEq(access, _)) => vec![access.slot],
+        Ok(Guard::SlotIsA(slot, _)) => vec![slot],
+        _ => Vec::new(),
+    }
+}
+
 fn parse_self_access(value: &str) -> Result<SelfAccess, String> {
     let mut parts = value.trim().splitn(3, '.');
     if parts.next() != Some("$self") {
@@ -569,18 +579,6 @@ pub(crate) fn validate_realization_guard(
         Guard::FieldEq(_, _) => {
             Err("realization guards require explicit `$self` or `$slot` reads".to_owned())
         }
-    }
-}
-
-/// Slot reads in a phon realization guard also make a construction slot part
-/// of its form pole, even when the selected template itself has no `{slot}`.
-/// Invalid guards are reported by `validate_realization_guard`; this helper is
-/// deliberately best-effort for unused-slot diagnostics.
-pub(crate) fn realization_guard_slot_references(source: &str) -> Vec<String> {
-    match parse_guard(source) {
-        Ok(Guard::SlotFieldEq(access, _)) => vec![access.slot],
-        Ok(Guard::SlotIsA(slot, _)) => vec![slot],
-        _ => Vec::new(),
     }
 }
 

@@ -1,0 +1,5 @@
+source	target	delta
+GO	FUTURE	0.3
+WANT	FUTURE	0.3
+COME	FUTURE	0.3
+FINISH	PERFECT	0.3
