@@ -22,12 +22,17 @@ fn base() -> LanguageDocument {
     LanguageDocument::import_new_root(SOURCE, "evo:root").unwrap()
 }
 
-fn resolve(chg_body: &str, ns: &str) -> Result<conlang_changeset::ResolvedChangeSet, conlang_changeset::ReplayError> {
+fn resolve(
+    chg_body: &str,
+    ns: &str,
+) -> Result<conlang_changeset::ResolvedChangeSet, conlang_changeset::ReplayError> {
     let base = base();
     let spec = LibrarySpec::default();
     let mut source = change_set_prelude(&base, &spec, ns).unwrap();
     source.push_str(chg_body);
-    UnresolvedChangeSet::parse(&source).unwrap().resolve(&base, &spec)
+    UnresolvedChangeSet::parse(&source)
+        .unwrap()
+        .resolve(&base, &spec)
 }
 
 #[test]
@@ -46,7 +51,10 @@ fn inserts_an_else_branch_into_an_addressed_rule() {
     // 降階為單一 Insert{RuleElseBranch};父定址成 stable node。
     assert_eq!(resolved.statements[0].edits.len(), 1);
     let dump = resolved.dump();
-    assert!(dump.contains("insert into node(rule, @"), "父為 stable rule node:\n{dump}");
+    assert!(
+        dump.contains("insert into node(rule, @"),
+        "父為 stable rule node:\n{dump}"
+    );
     assert!(dump.contains("else class => other"));
 
     // round-trip 穩定。
@@ -62,7 +70,11 @@ fn inserts_an_else_branch_into_an_addressed_rule() {
         .run(&resolved)
         .unwrap()
         .document;
-    assert!(doc.source().contains("else class => other"), "{}", doc.source());
+    assert!(
+        doc.source().contains("else class => other"),
+        "{}",
+        doc.source()
+    );
 }
 
 #[test]

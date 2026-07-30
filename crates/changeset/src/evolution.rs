@@ -178,6 +178,11 @@ pub enum EvolutionError {
     /// fsck:snapshot ≠ replay(parent.snapshot, edge.changeset)(P56 §2.2 不變式)。
     #[error("EVOLUTION_SNAPSHOT_MISMATCH: {0} snapshot is not the replay of its trunk edge")]
     SnapshotMismatch(NodeId),
+    /// fsck:原文雖相同,identity sidecar 卻不是 replay 的結果。
+    #[error(
+        "EVOLUTION_SNAPSHOT_IDENTITY_MISMATCH: {0} identity manifest is not the replay of its trunk edge"
+    )]
+    SnapshotIdentityMismatch(NodeId),
     /// rebase 找不到可重寫的 base digest 行——邊上的 `.chg` 不合格式。
     #[error("EVOLUTION_PRELUDE_WITHOUT_DIGESTS: the edge changeset has no base digest lines")]
     PreludeWithoutDigests,
@@ -236,16 +241,13 @@ impl EvolutionGraph {
     /// 的檢查——**兩側都有、但共同基底沒有的 id 即為碰撞**(空基底時任何共有 id 都是
     /// 碰撞)。該檢查屬 P61,本刀不做。
     ///
-    /// 內容定址下重加同一份 root 是冪等的(同內容 = 同節點),故先查 id 再查 namespace。
-    ///
-    /// ⚠️ **`NodeId` 雜湊的是 `snapshot.source()`,而 namespace 不在 `.lang` 文字裡**
-    /// (身分是 sidecar)。故「同一份 `.lang`、不同 namespace」的兩個 root **id 相同**。
-    /// 若讓它走冪等路徑,呼叫端指定的 namespace 會被**默默忽略**,之後對著它寫的
-    /// changeset 才會因 `base_identities` 不符而失敗——錯誤離成因很遠。故在冪等路徑上
-    /// 額外比對 identity manifest,不一致就當場硬錯。
+    /// 內容定址下重加同一份 root 是冪等的(同原文、同 identity = 同節點),故先查 id
+    /// 再查 namespace。同一份 `.lang` 若使用不同 namespace,identity manifest digest
+    /// 不同,會得到不同的 `NodeId`;兩個獨立語言因此可以合法共存。
     pub fn add_root(&mut self, document: LanguageDocument) -> Result<NodeId, EvolutionError> {
-        let id = node_id(&document, &[], Nativization::None);
+        let id = node_id(&document, &[], Nativization::None)?;
         if let Some(existing) = self.nodes.get(&id) {
+            // node-v2 已把 identity digest 放入 id;這個比較是雜湊碰撞的防禦線。
             let (kept, incoming) = (
                 identity_manifest_digest(existing.snapshot())?,
                 identity_manifest_digest(&document)?,
@@ -332,7 +334,7 @@ impl EvolutionGraph {
             .ok_or(EvolutionError::TrunkWithoutChangeset)?;
         let base = self.merged_base(&parent_ids(&parents))?;
         let snapshot = self.replay(&base, &changeset, &parent_ids(&parents))?;
-        let id = node_id(&snapshot, &parents, nativization);
+        let id = node_id(&snapshot, &parents, nativization)?;
         self.nodes.entry(id.clone()).or_insert(Node {
             parents,
             snapshot,
@@ -351,7 +353,7 @@ impl EvolutionGraph {
             .nodes
             .get(id)
             .ok_or_else(|| EvolutionError::UnknownNode(id.clone()))?;
-        let computed = node_id(&node.snapshot, &node.parents, node.nativization);
+        let computed = node_id(&node.snapshot, &node.parents, node.nativization)?;
         if &computed != id {
             return Err(EvolutionError::CorruptId {
                 stored: id.clone(),
@@ -372,6 +374,9 @@ impl EvolutionGraph {
         let replayed = self.replay(&base, changeset, &parent_ids(&node.parents))?;
         if replayed.source() != node.snapshot.source() {
             return Err(EvolutionError::SnapshotMismatch(id.clone()));
+        }
+        if identity_manifest_digest(&replayed)? != identity_manifest_digest(&node.snapshot)? {
+            return Err(EvolutionError::SnapshotIdentityMismatch(id.clone()));
         }
         Ok(())
     }
@@ -684,11 +689,22 @@ fn parent_ids(parents: &[Edge]) -> Vec<NodeId> {
 /// 而「怎麼走到這個狀態」正是來歷。若只雜湊 `from`,兩條不同 changeset 走到相同
 /// 狀態的邊會摺疊成一個節點,**其中一份 changeset 會被靜默丟棄**——違反
 /// docs/06「存事實(ChangeSet)」。故採含 changeset 的讀法。
-fn node_id(snapshot: &LanguageDocument, parents: &[Edge], nativization: Nativization) -> NodeId {
-    let mut buffer = String::from("conlang-node-v1\n");
+///
+/// identity manifest 是 snapshot 的 sidecar 狀態,同樣屬於節點內容。`node-v2` 把它
+/// 納入雜湊,避免同原文、不同 namespace 的獨立語言被誤判成同一節點。
+fn node_id(
+    snapshot: &LanguageDocument,
+    parents: &[Edge],
+    nativization: Nativization,
+) -> Result<NodeId, ReplayError> {
+    let mut buffer = String::from("conlang-node-v2\n");
     buffer.push_str(&format!(
         "snapshot {}\n",
         sha256_hex(snapshot.source().as_bytes())
+    ));
+    buffer.push_str(&format!(
+        "identities {}\n",
+        identity_manifest_digest(snapshot)?
     ));
     for edge in parents {
         buffer.push_str(&format!(
@@ -699,7 +715,7 @@ fn node_id(snapshot: &LanguageDocument, parents: &[Edge], nativization: Nativiza
         ));
     }
     buffer.push_str(&format!("nativization {}\n", nativization.canonical()));
-    NodeId(sha256_hex(buffer.as_bytes()))
+    Ok(NodeId(sha256_hex(buffer.as_bytes())))
 }
 
 /// 讓 rebase(P57,下一刀)與外部工具能取得節點 snapshot 的 identity digest。
@@ -751,7 +767,8 @@ mod tests {
             "evo:forged",
         )
         .expect("forged parses");
-        let forged_id = node_id(&node.snapshot, &node.parents, node.nativization);
+        let forged_id =
+            node_id(&node.snapshot, &node.parents, node.nativization).expect("identity digest");
         graph.nodes.insert(forged_id.clone(), node);
 
         let err = graph
@@ -759,6 +776,26 @@ mod tests {
             .expect_err("fsck 必須擋下手改的 snapshot");
         assert!(
             matches!(err, EvolutionError::SnapshotMismatch(_)),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn fsck_catches_a_hand_edited_identity_manifest() {
+        let (mut graph, id) = fixture();
+        let mut node = graph.nodes.remove(&id).expect("node exists");
+        let source = node.snapshot.source().to_owned();
+        node.snapshot =
+            LanguageDocument::import_new_root(&source, "evo:forged").expect("forged root parses");
+        let forged_id =
+            node_id(&node.snapshot, &node.parents, node.nativization).expect("identity digest");
+        graph.nodes.insert(forged_id.clone(), node);
+
+        let err = graph
+            .verify(&forged_id)
+            .expect_err("fsck 必須擋下手改的 identity manifest");
+        assert!(
+            matches!(err, EvolutionError::SnapshotIdentityMismatch(_)),
             "{err:?}"
         );
     }

@@ -26,10 +26,9 @@ use crate::path::parse_path;
 use crate::{
     BinaryConstraint, Block, CaseBranch, CaseCondition, CaseSelection, ConstraintPredicate, Def,
     Dim, Expression, ExpressionType, FeatureDecl, FeatureExpression, FeatureValue, Language,
-    PhonBlock, Realization, RoleBinding, RoleDecl, RoleExpression, Rule,
-    SignApplication, SignArgument, SignArgumentValue, SignExpression, SignItem, SignProjection,
-    Slot, SlotConstraint, SlotFeatureBinding, SlotMapOp, SourceLocation, Stage, TraitDef,
-    TypedCase,
+    PhonBlock, Realization, RoleBinding, RoleDecl, RoleExpression, Rule, SignApplication,
+    SignArgument, SignArgumentValue, SignExpression, SignItem, SignProjection, Slot,
+    SlotConstraint, SlotFeatureBinding, SlotMapOp, SourceLocation, Stage, TraitDef, TypedCase,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -693,8 +692,17 @@ fn lexurgy_name_prefix(text: &str) -> Option<(String, &str)> {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
         || matches!(
             name,
-            "Scan" | "stage" | "Then" | "Else" | "then" | "else" | "realization" | "case"
-                | "when" | "propagate" | "Propagate"
+            "Scan"
+                | "stage"
+                | "Then"
+                | "Else"
+                | "then"
+                | "else"
+                | "realization"
+                | "case"
+                | "when"
+                | "propagate"
+                | "Propagate"
         )
     {
         return None;
@@ -722,8 +730,17 @@ fn phon_block_header(text: &str) -> Option<(String, bool)> {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
         || matches!(
             name,
-            "Scan" | "stage" | "Then" | "Else" | "then" | "else" | "realization" | "case"
-                | "when" | "propagate" | "Propagate"
+            "Scan"
+                | "stage"
+                | "Then"
+                | "Else"
+                | "then"
+                | "else"
+                | "realization"
+                | "case"
+                | "when"
+                | "propagate"
+                | "Propagate"
         )
     {
         return None;
@@ -734,7 +751,12 @@ fn phon_block_header(text: &str) -> Option<(String, bool)> {
 /// `Then:`/`Else:` 邊界,可帶 **`propagate`** 修飾(P46 S4,對映引擎 boundary
 /// modifier → `PhonBlock::Propagate`)。回傳 (is_then, propagate, inline 語句)。
 fn phon_block_boundary(text: &str) -> Option<(bool, bool, Option<String>)> {
-    for (kw, is_then) in [("Then", true), ("then", true), ("Else", false), ("else", false)] {
+    for (kw, is_then) in [
+        ("Then", true),
+        ("then", true),
+        ("Else", false),
+        ("else", false),
+    ] {
         let Some(rest) = text.strip_prefix(kw) else {
             continue;
         };
@@ -781,7 +803,10 @@ fn parse_phon_block(lines: &[Line]) -> Result<PhonBlock, ParseError> {
         let text = ln.text.trim();
         if let Some((then, propagate, inline)) = phon_block_boundary(text) {
             if is_then.is_some_and(|k| k != then) {
-                return Err(err(ln.no, "cannot mix `Then:` and `Else:` at one block level"));
+                return Err(err(
+                    ln.no,
+                    "cannot mix `Then:` and `Else:` at one block level",
+                ));
             }
             is_then = Some(then);
             let sub = if let Some(stmt) = inline {

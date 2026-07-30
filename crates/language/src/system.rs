@@ -2120,8 +2120,7 @@ fn validate_constructions_and_local_phon(
                     }
                     for branch in &case.branches {
                         if let crate::CaseCondition::Guard(guard) = &branch.condition {
-                            used_slots
-                                .extend(synchronic::realization_guard_slot_references(guard));
+                            used_slots.extend(synchronic::realization_guard_slot_references(guard));
                         }
                         if let Expression::PhonTemplate(template) = &branch.result {
                             if let Some(inner) = template

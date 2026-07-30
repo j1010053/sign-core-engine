@@ -9,8 +9,8 @@
 //! 非 canonical 正規化為不動點(維度分組是冪等重排)。
 
 use crate::{
-    Block, CaseCondition, CaseSelection, Expression, ExpressionType, Language,
-    SignArgumentValue, SignItem, SignProjection, SlotMapOp, Stage, TraitDef, TypedCase,
+    Block, CaseCondition, CaseSelection, Expression, ExpressionType, Language, SignArgumentValue,
+    SignItem, SignProjection, SlotMapOp, Stage, TraitDef, TypedCase,
 };
 
 const DIMS: [&str; 4] = ["syn", "phon", "sem", "prag"];
@@ -92,7 +92,11 @@ fn push_rule(out: &mut String, indent: &str, r: &crate::Rule) {
             r.body,
             stage_str(r.stage)
         )),
-        (None, _) => out.push_str(&format!("{indent}{} @stage {}\n", r.body, stage_str(r.stage))),
+        (None, _) => out.push_str(&format!(
+            "{indent}{} @stage {}\n",
+            r.body,
+            stage_str(r.stage)
+        )),
     }
     for e in &r.else_chain {
         out.push_str(&format!("{indent}    else {e}\n")); // Lexurgy Else(P43)
@@ -175,9 +179,7 @@ fn push_case(out: &mut String, indent: &str, case: &TypedCase) {
         .map(|name| format!(" @name {name}"))
         .unwrap_or_default();
     match &case.scrutinee {
-        Some(scrutinee) => {
-            out.push_str(&format!("{indent}{keyword} {scrutinee}{case_label}:\n"))
-        }
+        Some(scrutinee) => out.push_str(&format!("{indent}{keyword} {scrutinee}{case_label}:\n")),
         None => out.push_str(&format!("{indent}{keyword}{case_label}:\n")),
     }
     let branch_indent = format!("{indent}    ");

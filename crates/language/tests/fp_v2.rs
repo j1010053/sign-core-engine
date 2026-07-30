@@ -452,7 +452,11 @@ fn case_syntax_parses_without_any_schema_header() {
         "printer 不再輸出 schema 標頭:\n{canonical}"
     );
     assert!(canonical.contains("case"), "case 保留於 canonical");
-    assert_eq!(Language::parse(&canonical).unwrap().dump(), canonical, "不動點");
+    assert_eq!(
+        Language::parse(&canonical).unwrap().dump(),
+        canonical,
+        "不動點"
+    );
 }
 
 /// 舊 `schema conlang.lang/v2` 標頭 = 被接受並忽略的 no-op(back-compat):有無標頭的
@@ -860,7 +864,6 @@ fn entrenchment_sampling_normalizes_finite_weights_before_they_overflow() {
         "the same seed must remain replayable",
     );
 }
-
 
 #[test]
 fn phon_projection_evaluates_the_full_sign_before_extracting_phon() {

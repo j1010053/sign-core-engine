@@ -268,7 +268,10 @@ global trait Core:
 ";
     let l = Language::parse(src).expect("named phon rule parses");
     let dumped = l.dump();
-    assert!(dumped.contains("lenition: a => b"), "canonical 前綴:\n{dumped}");
+    assert!(
+        dumped.contains("lenition: a => b"),
+        "canonical 前綴:\n{dumped}"
+    );
     assert_eq!(
         Language::parse(&dumped).unwrap().dump(),
         dumped,
@@ -308,11 +311,23 @@ global trait Core:
 ";
     let l = Language::parse(src).expect("structured phon blocks parse");
     let dumped = l.dump();
-    assert!(dumped.contains("seq:") && dumped.contains("Then:"), "Then block:\n{dumped}");
-    assert!(dumped.contains("alt:") && dumped.contains("Else:"), "Else block:\n{dumped}");
-    assert_eq!(Language::parse(&dumped).unwrap().dump(), dumped, "round-trip 穩定");
+    assert!(
+        dumped.contains("seq:") && dumped.contains("Then:"),
+        "Then block:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("alt:") && dumped.contains("Else:"),
+        "Else block:\n{dumped}"
+    );
+    assert_eq!(
+        Language::parse(&dumped).unwrap().dump(),
+        dumped,
+        "round-trip 穩定"
+    );
     let a = codegen::compile_full(&l).expect("flat blocks compile via engine");
     let s = &a.grammar.phon_source;
-    assert!(s.contains("seq:") && s.contains("Then:") && s.contains("alt:") && s.contains("Else:"),
-        "phon_source:\n{s}");
+    assert!(
+        s.contains("seq:") && s.contains("Then:") && s.contains("alt:") && s.contains("Else:"),
+        "phon_source:\n{s}"
+    );
 }

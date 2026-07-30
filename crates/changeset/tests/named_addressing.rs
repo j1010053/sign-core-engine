@@ -107,7 +107,9 @@ fn named_case_and_branch_round_trip_and_address() {
     // case["agr"] 定址 → 改 selection。
     let spec = LibrarySpec::default();
     let mut source = change_set_prelude(&base, &spec, "evo:case").unwrap();
-    source.push_str("\n    statement 0:\n        update sign(\"walk\").case[\"agr\"].selection = when\n");
+    source.push_str(
+        "\n    statement 0:\n        update sign(\"walk\").case[\"agr\"].selection = when\n",
+    );
     let resolved = UnresolvedChangeSet::parse(&source)
         .unwrap()
         .resolve(&base, &spec)
@@ -118,11 +120,17 @@ fn named_case_and_branch_round_trip_and_address() {
         .run(&resolved)
         .unwrap()
         .document;
-    assert!(doc.source().contains("when @name agr:"), "selection→when:\n{}", doc.source());
+    assert!(
+        doc.source().contains("when @name agr:"),
+        "selection→when:\n{}",
+        doc.source()
+    );
 
     // branch["sg"] 定址 → delete 該分支。
     let mut source2 = change_set_prelude(&base, &spec, "evo:branch").unwrap();
-    source2.push_str("\n    statement 0:\n        delete sign(\"walk\").case[\"agr\"].branch[\"sg\"]\n");
+    source2.push_str(
+        "\n    statement 0:\n        delete sign(\"walk\").case[\"agr\"].branch[\"sg\"]\n",
+    );
     let resolved2 = UnresolvedChangeSet::parse(&source2)
         .unwrap()
         .resolve(&base, &spec)

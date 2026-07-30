@@ -24,19 +24,31 @@ fn example(name: &str) -> PathBuf {
     tshiatun_dir().join("examples").join(name)
 }
 
+fn cli_target_dir() -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| tshiatun_dir().join("target"))
+        .join("tshiatun-cli-functional")
+}
+
 /// 每個測試進程建置一次(冪等;cargo 有快取,只寫 target/ 編譯產物)。
 fn binary() -> PathBuf {
     static BUILD: Once = Once::new();
+    let target_dir = cli_target_dir();
     BUILD.call_once(|| {
         let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
         let st = Command::new(cargo)
             .args(["build", "-q", "--bin", "tshiatun"])
+            .arg("--target-dir")
+            .arg(&target_dir)
             .current_dir(tshiatun_dir())
             .status()
             .expect("spawn cargo build");
         assert!(st.success(), "tshiatun binary build failed");
     });
-    tshiatun_dir().join("target/debug/tshiatun")
+    target_dir
+        .join("debug")
+        .join(format!("tshiatun{}", std::env::consts::EXE_SUFFIX))
 }
 
 fn run(args: &[&dyn AsRef<std::ffi::OsStr>]) -> Output {

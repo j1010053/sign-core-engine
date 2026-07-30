@@ -1042,18 +1042,25 @@ fn re_adding_the_same_root_is_idempotent() {
 }
 
 #[test]
-fn the_same_source_under_a_different_namespace_is_rejected() {
-    // `NodeId` 只雜湊 `.lang` 原文,而 namespace 不在原文裡 → 兩者 id 相同。
-    // 若放行,呼叫端指定的 namespace 會被**默默忽略**(冪等路徑回舊節點),
-    // 之後才在 `base_identities` 不符時爆掉,錯誤離成因很遠。
+fn the_same_source_under_different_namespaces_has_distinct_node_ids() {
     let mut graph = EvolutionGraph::new(LibrarySpec::default());
-    graph.add_root(root()).unwrap();
+    let first = graph.add_root(root()).unwrap();
     let same_text_other_namespace =
         LanguageDocument::import_new_root(ROOT, "evo:elsewhere").unwrap();
-    let err = graph
-        .add_root(same_text_other_namespace)
-        .expect_err("同原文不同 namespace 必須擋下");
-    assert!(format!("{err}").contains("ROOT_IDENTITY_CONFLICT"), "{err}");
+    let second = graph.add_root(same_text_other_namespace).unwrap();
+
+    assert_ne!(first, second);
+    assert_eq!(graph.roots().count(), 2);
+    assert_eq!(
+        graph.snapshot(&first).unwrap().identities().root_namespace,
+        "evo:root"
+    );
+    assert_eq!(
+        graph.snapshot(&second).unwrap().identities().root_namespace,
+        "evo:elsewhere"
+    );
+    graph.verify(&first).unwrap();
+    graph.verify(&second).unwrap();
 }
 
 // ── 合併基準:最近共同祖先(P61 §6.3)───────────────────────────────────────

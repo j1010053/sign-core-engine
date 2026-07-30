@@ -54,7 +54,10 @@ fn inserts_a_phon_tshiatun_rule_into_a_sign() {
         "evo:phon",
     );
     let rendered = doc.source();
-    assert!(rendered.contains("g => k"), "phon 規則寫入 dog:\n{rendered}");
+    assert!(
+        rendered.contains("g => k"),
+        "phon 規則寫入 dog:\n{rendered}"
+    );
     assert!(rendered.contains("/dog/"), "既有 UR 模板保留");
 }
 
@@ -150,7 +153,11 @@ fn a_statement_may_hold_multiple_operations() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    assert_eq!(resolved.statements[0].edits.len(), 2, "update + insert 同句");
+    assert_eq!(
+        resolved.statements[0].edits.len(),
+        2,
+        "update + insert 同句"
+    );
     let doc = ChangeInterpreter::new(base, spec, "evo:multiop")
         .unwrap()
         .run(&resolved)
@@ -169,7 +176,9 @@ fn generic_item_insert_covers_feature_and_def_items() {
         "\n    statement 0:\n        insert into sign(\"dog\") at end:\n            syn:\n                feature:\n                    transitivity = enum(transitive, intransitive)\n",
         "evo:feat",
     );
-    assert!(feat.source().contains("transitivity = enum(transitive, intransitive)"));
+    assert!(feat
+        .source()
+        .contains("transitivity = enum(transitive, intransitive)"));
 
     let def = resolve_and_run(
         "\n    statement 0:\n        insert into sign(\"dog\") at end:\n            sem:\n                senses[core].concept = DOG\n",

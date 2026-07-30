@@ -78,7 +78,12 @@ fn packages_exports_and_combined_ontology_are_deterministic() {
             .iter()
             .map(|package| package.rule_namespace.as_str())
             .collect::<Vec<_>>(),
-        ["std:core", "std:grammaticalization", "std:grambank", "std:cxg"]
+        [
+            "std:core",
+            "std:grammaticalization",
+            "std:grambank",
+            "std:cxg"
+        ]
     );
     // 依**名字**查,不用位置索引——加新套件不該弄壞這些斷言。
     let by_name = |namespace: &str| {
