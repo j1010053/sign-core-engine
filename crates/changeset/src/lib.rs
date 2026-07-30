@@ -19,6 +19,7 @@ pub mod diff;
 pub mod evolution;
 pub mod function;
 pub mod merge;
+pub mod reconstruct;
 pub mod rewrite;
 
 use crate::rewrite::DonorScope;
@@ -1615,6 +1616,10 @@ fn detached_at(language: &Language, node: &NodeEntryV1) -> Result<DetachedNode, 
         [AddressSegment::Signs(sign), AddressSegment::Items(item)] => Ok(DetachedNode::Item(
             language.signs[*sign].items[*item].clone(),
         )),
+        // Language 根沒有「拆下來」的形式——它就是文件本身。**回錯誤而非算術溢位**:
+        // 先前這裡直接 `path.len() - 1`,拿根節點呼叫會 panic(§4 禁 panic;溢位同類)。
+        // 之前沒暴露是因為沒有呼叫端用根節點問過。
+        [] => Err(field_mismatch(node, "move")),
         path => {
             let parent = NodeAddress(path[..path.len() - 1].to_vec());
             match path.last() {
