@@ -5,7 +5,7 @@ changeset evo:en-standard-restore:
     library std:core@0.1.0 sha256:7cef96786d539d1f03309b12287c27d51c1c6807c68af8d91b6b6427e13f2dcd
     library std:cxg@0.1.0 sha256:3373753602ed9283cfa27ab84bf0296121c8a2f389957963c6974eadb7b05089
     library std:grambank@1.0-subset.1 sha256:9f8a01abbb8f5c1795bac21616cc7a3719e69e45ccd83b89ddc77bd86b75bed9
-    library std:grammaticalization@0.4.0 sha256:646e30f0a99cb71e95ca439a38ff8f2e0dbd24b788bf9fd50964b95c10ab6905
+    library std:grammaticalization@0.4.0 sha256:e5bad04a65e13ad325f29bcff4e9a57337189c03750995eb955372c189e225d7
 
     #0:
         insert into node(language, @evo:en-standard:0) at end:
