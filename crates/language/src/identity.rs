@@ -59,7 +59,6 @@ impl fmt::Display for NodeId {
 pub enum NodeKind {
     Language,
     DslDeclaration,
-    Prosody,
     Distribution,
     Trait,
     Sign,
@@ -107,7 +106,6 @@ pub enum EditableField {
     Name,
     Global,
     Text,
-    Prosody,
     DistributionKey,
     DistributionValue,
     DefinitionPath,
@@ -167,7 +165,6 @@ pub struct AstNode<T> {
 #[serde(tag = "collection", content = "index", rename_all = "snake_case")]
 pub enum AddressSegment {
     DslDeclarations(usize),
-    Prosody,
     Distribution(usize),
     Traits(usize),
     Signs(usize),
@@ -678,7 +675,6 @@ fn editable_field(kind: NodeKind, name: &str) -> Option<EditableField> {
         (NodeKind::Trait | NodeKind::Sign, "name") => Some(EditableField::Name),
         (NodeKind::Trait, "global") => Some(EditableField::Global),
         (NodeKind::DslDeclaration, "text") => Some(EditableField::Text),
-        (NodeKind::Prosody, "prosody") => Some(EditableField::Prosody),
         (NodeKind::Distribution, "key") => Some(EditableField::DistributionKey),
         (NodeKind::Distribution, "value") => Some(EditableField::DistributionValue),
         (NodeKind::Definition, "path") => Some(EditableField::DefinitionPath),
@@ -1134,16 +1130,6 @@ fn enumerate_nodes(language: &Language, namespace: &str, next: &mut u64) -> Vec<
             NodeKind::DslDeclaration,
             Some(root.clone()),
             NodeAddress(vec![AddressSegment::DslDeclarations(index)]),
-        );
-    }
-    if !language.prosody.is_empty() {
-        push_entry(
-            &mut entries,
-            namespace,
-            next,
-            NodeKind::Prosody,
-            Some(root.clone()),
-            NodeAddress(vec![AddressSegment::Prosody]),
         );
     }
     for index in 0..language.distribution.len() {

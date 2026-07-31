@@ -1,0 +1,105 @@
+# A / B 模組需求分配(v0.2)
+
+> v0.2:B1 原語集由草案升級為**三層定稿規格**(L1 資料/L2 語言/L3 理論宏),納入 Drift/SemanticBackend、Reanalyze 結構化 target、Adopt(取代 inject)、cross-layer、macro↔primitive 映射;回填 06 的 ChangeEntry op = L1∪L2。命名分層規約見 CLAUDE.md §6。A 部分不變。
+
+基於 06/07(v0.1.1 修補後)重新分配造詞(A)與語法化(B)的需求。兩個結構性修補直接改寫了分配:06 的 ChangeEntry 需要一套「sign 演化原語」(→ B 的新定位),07 的 entrenchment 需要初值來源(→ A 的新職責)。
+
+---
+
+## 1. B 的重定位:從「語法化引擎」到「sign 演化原語集 + 路徑宏」
+
+**核心洞見**:語法化的四機制(漂白/重新分析/類推擴展/磨損)在 sign 本體下**分解為對 sign 各維度的基本操作**。故 B 的第一職責不是「做語法化」,而是**定義 D 的 ChangeEntry 所需的原語集**;語法化路徑是原語的具名組合(宏)——與 DSL「associate/delink 原語、spread/dock 具名特例」**完全同一設計模式**。
+
+### B1 原語集(三層規格,定稿)
+
+命名與分層規約見 **CLAUDE.md §6**(全專案規範,凌駕本檔)。核心:操作屬哪層由**原子性/正交性**決定,不由「是不是術語」決定;名字服務讀者(L1 工程名、L2 慣例名、L3 理論術語)。**`enum ChangeOp` = L1 + L2**(小而穩、正交、原子);**L3 是資料表,非 enum variant**,加新理論只加資料。
+
+**L1 — 純資料原語(工程名;讀者=引擎)**
+對 sign/sense/邊 的資料操作,不含語言學語意:
+
+| 原語 | 作用 |
+|---|---|
+| `Create(target)` / `Delete(target)` | sign / sense / concept 的生滅(target 指明對象種類) |
+| `Modify(target, field, value)` | 改某維某欄位(承載大多數維度內變更) |
+| `Split(target)` / `Merge(a,b)` | 一分二 / 二合一(sign 或 concept/sense) |
+| `Reference(from, to, kind)` | 建立引用邊(origin / component / derivation) |
+| `SetTransparency(edge, level)` | 設連結透明度(component 或 derivation 邊) |
+
+**L2 — 語言原語(慣例名;讀者=規則作者、演化樹 UI)**
+凡對應穩定、正交、單步的語言學慣例即用慣例名;每個展開為 L1 序列,並掛既有理論來源。
+
+| 原語 | 展開(L1) | 維度 | 理論來源 |
+|---|---|---|---|
+| `SoundChange(DslRuleId)` | 委派 M0(不展開);語意=**編輯 Grammar Store**(AddRule/LoseRule/Reorder/Invert,《架構修補01》P2),非「對詞表跑規則」 | form | 歷史音韻學;erosion 即此 |
+| `DeriveSense{kind: metaphor\|metonymy\|narrow\|broaden}` | Create(sense)+Reference(derivation) | sem | Bloomfield/Blank 語意變化類型學 |
+| `Drift{direction?}` | Modify(sense.meaning) | sem | Sapir;量化交 **SemanticBackend**(見下) |
+| `Reanalyze{target: Valence\|Category\|Slot\|Boundary}` | Modify(syn.*) 或 SetTransparency/Reference(成分切分) | syn | Harris & Campbell;**target 為結構化列舉**(非自由 metadata) |
+| `Fuse(a,b)` | Merge + Reference | 結構 | coalescence;univerbation 是其 L3 之一 |
+| `Adopt{source: Loan\|Dialect\|Ancestor}` | Reference(引他節點 sign)+ Create(新 SignId+origin) | 結構/接觸 | 接觸語言學;A4 為前端(取代舊 `inject`) |
+| `Entrench{delta}` / `Attrit{delta}` | Modify(entrenchment) | usage | Langacker/Bybee |
+| `Lexicalize` | Modify(entrenchment 跨閾值,token→type) | usage | usage-based chunking |
+| `LexicalizeSense` | SetTransparency(derivation → opaque) | sem | desemanticization 的透明度面 |
+
+- **Drift 的 SemanticBackend**:`Drift` 只代表「sense 語意變了」這個**事件**;「怎麼算位移/原型」交可替換後端(`Embedding`(Hamilton 歷時詞向量)/ `Prototype`(Geeraerts 原型)/ `Graph` / `LLM`)。**LLM 接口 = SemanticBackend 的一種實作**,非原語;離線(共現向量)與線上(contextualized/LLM)同一介面。原型(prototypicity)是後端維護的**狀態**,非獨立原語(故不設 `shift-prototype`)。
+- **不設獨立原語者**(審查裁決,皆為 L2 特例或 L3):`bleach` = `Drift{direction: bleaching}` 或 L3;`shift-valence` = `Reanalyze{target: Valence}`;`decategorialize` = `Reanalyze{target: Category}` + L3;`univerbate` = `Fuse` + L3;`extend`(類推擴展)= `Modify(syn.distribution)` 或 L3(視理論切法)。
+
+**L3 — 理論宏(理論術語;讀者=語言學家)**
+理論標籤,展開為 L1/L2 序列;對齊 Heine & Kuteva《世界語法化辭典》。**macro↔primitive 雙向映射是儲存的一等資料**(演化樹回放要能對使用者顯示術語、對引擎跑資料):
+
+- `Grammaticalization`(路徑庫,每條一個宏):如 GO→未來 = `Drift{bleaching}` → `Reanalyze{Category}` → `Entrench` → `SoundChange`(磨損)。
+- `Bleaching` = `Drift{direction: bleaching}`
+- `Univerbation` = `Fuse` + `Lexicalize`
+- `Decategorialization` = `Reanalyze{Category, lose}`
+- `Subjectification` / `PragToGram` 等 → 見 cross-layer。
+- **搬遷宏雙向化(修補02/P7)**:`Fossilize`(下移:global→trait→sign)/`Generalize`(上移,同軸反向);類推擴展、規則泛化、schema 化 = Generalize 的語言學表現;Lexicalization = Fossilize 到底。
+- **生命週期三宏(《架構修補01》,音韻過程生命週期)**:`Phonologization`(歷時音變→安裝為共時規則,= SoundChange{AddRule})、`Morphologization`(規則自 Grammar Store 搬進構式 cophonology)、`Lexicalization`(表層烤進 UR + LoseRule;= lexical sandhi 的機制)。
+
+**Cross-layer(跨維遷移,不歸單一維)**
+語法化斜坡的「維度遷移」步驟同時改多維,獨立成類(不塞進 prag):
+- `PragToGram` — 語用值下沉為語法範疇(敬語 prag→morph→syn,實例 10);展開為跨維的 Modify 序列 + Reanalyze。屬 L3,但標記為 cross-layer 以示它非單維。
+
+**回填 D**:06 的 `ChangeEntry.op` 型別 = **L1 ∪ L2**;`ChangeEntry` 另帶 `macro: Option<MacroId>` 回指所屬 L3 宏(供回放顯示術語)。06 v0.1.1 的佔位就此定死。
+
+### B 的需求清單
+1. 原語集**已定稿(B1 三層規格)**,為 D ChangeEntry 型別(L1∪L2)的唯一來源【form/adopt 已可用;其餘 M+】
+2. 斜坡路徑資料庫(Heine & Kuteva 式,30–50 條起步)= 宏庫
+3. 四機制 → 原語的映射與觸發條件;裂變/合併動力學(實例 2、9)
+4. 義項衍生自動化(實例 7 動力學)、固著動力學(實例 5 動力學)
+5. 文法檔約束器聯動(範疇勾選過濾路徑;範疇取自 C §9 受控本體)
+6. 頻率消費:B 的路徑可帶預設頻率變化(07 v0.1.1 三來源之一)
+7. 簡化(克里奧爾)= 原語 lose/merge/reanalyze 的組合,無獨立型別(承 D §3.3)
+
+## 2. A 的重定位:從「造詞器」到「完整 sign 的生產者」
+
+造詞不再只產 phon 詞形,而是產**完整 sign**:phon(既有 DSL 生成器)+ sem(掛概念/義項)+ syn(trait 初值)+ **entrenchment 初值**(手動造 = 直接固化,填 07 v0.1.1 的頻率來源洞)。
+
+### A 的需求清單
+1. **詞形生成器**(phonotactics + 頻率抽樣、約束過濾、預選 10–20 候選)【M,原規格不變】
+2. **組合造詞 = sign 組合**【M,新】:選一個帶槽位的構式 sign(如 V+O→N)+ 填入 sign → 新複合 sign(實例 1「枕頭/擦桌子」)。**這是 C §3.3 SYN 槽位欄位的第一驅動者**——A 細化時逼出槽位匹配需要哪些欄位。
+3. **sem 掛載**:Swadesh/Leipzig-Jakarta = 對 sem 維的**概念覆蓋追蹤**;造詞即掛義項。
+4. **避撞升級**:phon 同音檢查(既有)+ sem 撞義檢查(新)。
+5. **借詞子模組**:donor sign → 複製為新 SignId + origin 指標(07 v0.1.1)+ phon 修復(DSL 規則)+ sem 可調 → 產出 D 的 `inject` 條目與借詞層。
+6. **生成偏好參數**:音節數目標等(實例 5 的「二字詞傾向」= A 的生成偏好 + B 的固著動力學,兩段式)。
+7. 詞典視圖、詞源鏈顯示、匯出(既有規格,改讀 sign)。
+
+## 3. 十實例歸屬(修訂版)
+
+| 實例 | 歸屬 |
+|---|---|
+| 1 OV 複合 | **A**(組合造詞)+ C(構式表徵) |
+| 2 自他分化 | **B**(split + reanalyze 配價 trait) |
+| 3 倒裝標記 | C(上層 sign)+ **B**(構式語法化,後期) |
+| 4 WALS 詞綴分類 | C §9 本體 + **B** 路徑庫對齊 |
+| 5 二字詞傾向 | **A**(生成偏好)+ **B**(固著動力學) |
+| 6 方言演化 | D + multi-agent(不變) |
+| 7 隱喻固化 | **B**(derive-sense + lexicalize);A 可手動建衍生義項 |
+| 8 借詞層 | **A**(借詞子模組)+ D(inject 條目) |
+| 9 連接詞分化 | **B**(split + sem 衍生) |
+| 10 evidentiality | C §9 本體 + **B**(路徑 + 文法檔過濾) |
+
+## 4. 細化順序建議
+
+**A 先、B 後**:
+- A 是 MVP 前置(路線圖 M1),且其「組合造詞」是 SYN 槽位欄位的第一驅動;
+- B 的原語集雖是 D ChangeEntry 的來源,但 MVP 的 ChangeEntry 只需 form(已有)+ inject(A 借詞產出)即可運作,其餘原語隨 B 補齊;
+- A 的案例(實例 1、5、8)+ B 的案例(2、7、9、10)合起來,才回頭定稿 C §3.3 的 SYN 欄位——**兩模組是 C 細節的雙驅動**,順序 A→B→回填 C。

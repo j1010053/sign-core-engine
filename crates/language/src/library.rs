@@ -115,6 +115,18 @@ pub struct LibraryExport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibraryFunctionSource {
+    pub path: String,
+    pub source: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibraryDataSource {
+    pub path: String,
+    pub source: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LibraryPackage {
     pub id: LibraryId,
     /// Compatibility short name used by the former stdlib API.
@@ -134,9 +146,16 @@ pub struct LibraryPackage {
     pub data_path: String,
     /// Ordered data files of this package (P50 ①).
     pub data_paths: Vec<String>,
+    /// Ordered data documents paired with their manifest paths.
+    pub data_sources: Vec<LibraryDataSource>,
     /// Ordered `code/*.chg` files (P50 ③). Empty when the package ships no
     /// diachronic functions.
     pub function_paths: Vec<String>,
+    /// Ordered function definition documents paired with their manifest paths.
+    ///
+    /// `functions` remains a compatibility fallback for callers that still
+    /// provide one synthetic document.
+    pub function_sources: Vec<LibraryFunctionSource>,
     pub exports: Vec<LibraryExport>,
     pub code: &'static str,
     /// 歷時 function 原始碼(`.chg`),**verbatim**;`language` 不解析(P20)。
@@ -274,24 +293,77 @@ struct EmbeddedPackage {
     /// P50 ③:套件 `code/*.chg` 的歷時 function 原始碼,**verbatim 承載不解析**。
     /// `language` 不得解析 `.chg`(P20 依賴方向 `changeset → language`),
     /// 比照 dsl 域宣告以不透明區塊承載的既有作法(I15-a);由 `changeset` 端解析。
-    functions: &'static str,
+    functions: &'static [EmbeddedFunctionSource],
     data: &'static str,
+    data_sources: &'static [EmbeddedDataSource],
 }
+
+#[derive(Debug)]
+struct EmbeddedFunctionSource {
+    path: &'static str,
+    source: &'static str,
+}
+
+#[derive(Debug)]
+struct EmbeddedDataSource {
+    path: &'static str,
+    source: &'static str,
+}
+
+const GRAMMATICALIZATION_FUNCTIONS: &[EmbeddedFunctionSource] = &[
+    EmbeddedFunctionSource {
+        path: "code/recipes.chg",
+        source: include_str!("../lib/std/grammaticalization/code/recipes.chg"),
+    },
+    EmbeddedFunctionSource {
+        path: "code/goals.chg",
+        source: include_str!("../lib/std/grammaticalization/code/goals.chg"),
+    },
+];
+
+const CORE_DATA: &[EmbeddedDataSource] = &[EmbeddedDataSource {
+    path: "data/categories.tsv",
+    source: include_str!("../lib/std/core/data/categories.tsv"),
+}];
+const GRAMBANK_DATA: &[EmbeddedDataSource] = &[EmbeddedDataSource {
+    path: "data/features.tsv",
+    source: include_str!("../lib/std/grambank/data/features.tsv"),
+}];
+const CXG_DATA: &[EmbeddedDataSource] = &[EmbeddedDataSource {
+    path: "data/realizations.tsv",
+    source: include_str!("../lib/std/cxg/data/realizations.tsv"),
+}];
+const GRAMMATICALIZATION_DATA: &[EmbeddedDataSource] = &[
+    EmbeddedDataSource {
+        path: "data/paths.tsv",
+        source: include_str!("../lib/std/grammaticalization/data/paths.tsv"),
+    },
+    EmbeddedDataSource {
+        path: "data/weights.tsv",
+        source: include_str!("../lib/std/grammaticalization/data/weights.tsv"),
+    },
+];
+const EN_STANDARD_DATA: &[EmbeddedDataSource] = &[EmbeddedDataSource {
+    path: "data/grambank-v1.0.3.tsv",
+    source: include_str!("../lib/natural/en-standard/data/grambank-v1.0.3.tsv"),
+}];
 
 const EMBEDDED_PACKAGES: &[EmbeddedPackage] = &[
     EmbeddedPackage {
         config: include_str!("../lib/std/core/config/package.conf"),
         exports: include_str!("../lib/std/core/config/exports.tsv"),
         code: include_str!("../lib/std/core/code/ontology.lang"),
-        functions: "",
+        functions: &[],
         data: include_str!("../lib/std/core/data/categories.tsv"),
+        data_sources: CORE_DATA,
     },
     EmbeddedPackage {
         config: include_str!("../lib/std/grambank/config/package.conf"),
         exports: include_str!("../lib/std/grambank/config/exports.tsv"),
         code: include_str!("../lib/std/grambank/code/syntax.lang"),
-        functions: "",
+        functions: &[],
         data: include_str!("../lib/std/grambank/data/features.tsv"),
+        data_sources: GRAMBANK_DATA,
     },
     EmbeddedPackage {
         config: include_str!("../lib/std/cxg/config/package.conf"),
@@ -301,22 +373,29 @@ const EMBEDDED_PACKAGES: &[EmbeddedPackage] = &[
             "\n",
             include_str!("../lib/std/cxg/code/realizations.lang")
         ),
-        functions: "",
+        functions: &[],
         data: include_str!("../lib/std/cxg/data/realizations.tsv"),
+        data_sources: CXG_DATA,
     },
     EmbeddedPackage {
         config: include_str!("../lib/std/grammaticalization/config/package.conf"),
         exports: include_str!("../lib/std/grammaticalization/config/exports.tsv"),
         code: "",
-        functions: include_str!("../lib/std/grammaticalization/code/paths.chg"),
-        data: include_str!("../lib/std/grammaticalization/data/paths.tsv"),
+        functions: GRAMMATICALIZATION_FUNCTIONS,
+        data: concat!(
+            include_str!("../lib/std/grammaticalization/data/paths.tsv"),
+            "\n",
+            include_str!("../lib/std/grammaticalization/data/weights.tsv")
+        ),
+        data_sources: GRAMMATICALIZATION_DATA,
     },
     EmbeddedPackage {
         config: include_str!("../lib/natural/en-standard/config/package.conf"),
         exports: include_str!("../lib/natural/en-standard/config/exports.tsv"),
         code: include_str!("../lib/natural/en-standard/code/grammar.lang"),
-        functions: "",
+        functions: &[],
         data: include_str!("../lib/natural/en-standard/data/grambank-v1.0.3.tsv"),
+        data_sources: EN_STANDARD_DATA,
     },
 ];
 
@@ -653,7 +732,6 @@ fn validate_package_code(package: &LibraryPackage) -> Result<Language, LibraryLo
         })?;
     if package.id.kind == LibraryKind::Std {
         if !language.dsl_decls.is_empty()
-            || !language.prosody.is_empty()
             || !language.distribution.is_empty()
             || !language.signs.is_empty()
         {
@@ -732,7 +810,32 @@ fn load_embedded(source: &EmbeddedPackage) -> Result<LibraryPackage, LibraryLoad
             let paths = required(manifest.data_paths.clone(), "<unknown>", "data")?;
             paths.join(",")
         },
-        data_paths: required(manifest.data_paths, "<unknown>", "data")?,
+        data_paths: {
+            let paths = required(manifest.data_paths, "<unknown>", "data")?;
+            let embedded_paths = source
+                .data_sources
+                .iter()
+                .map(|data| data.path)
+                .collect::<Vec<_>>();
+            if paths.iter().map(String::as_str).collect::<Vec<_>>() != embedded_paths {
+                return Err(config_error(
+                    "<unknown>",
+                    0,
+                    format!(
+                        "data manifest paths {paths:?} do not match embedded sources {embedded_paths:?}"
+                    ),
+                ));
+            }
+            paths
+        },
+        data_sources: source
+            .data_sources
+            .iter()
+            .map(|data| LibraryDataSource {
+                path: data.path.to_owned(),
+                source: data.source,
+            })
+            .collect(),
         function_paths: {
             let functions = manifest.function_paths.unwrap_or_default();
             if code_paths_empty && functions.is_empty() {
@@ -742,10 +845,32 @@ fn load_embedded(source: &EmbeddedPackage) -> Result<LibraryPackage, LibraryLoad
                     "a package must declare `code` or `functions`",
                 ));
             }
+            let embedded_paths = source
+                .functions
+                .iter()
+                .map(|function| function.path)
+                .collect::<Vec<_>>();
+            if functions.iter().map(String::as_str).collect::<Vec<_>>() != embedded_paths {
+                return Err(config_error(
+                    "<unknown>",
+                    0,
+                    format!(
+                        "functions manifest paths {functions:?} do not match embedded sources {embedded_paths:?}"
+                    ),
+                ));
+            }
             functions
         },
+        function_sources: source
+            .functions
+            .iter()
+            .map(|function| LibraryFunctionSource {
+                path: function.path.to_owned(),
+                source: function.source,
+            })
+            .collect(),
         code: source.code,
-        functions: source.functions,
+        functions: "",
         data: source.data,
     };
     let language = validate_package_code(&package)?;
@@ -756,7 +881,9 @@ fn load_embedded(source: &EmbeddedPackage) -> Result<LibraryPackage, LibraryLoad
             // function export 的存在性**由 changeset 端查驗**——`language` 不得
             // 解析 `.chg`(P20 依賴方向)。這裡只確認套件真的有帶 function 原始碼;
             // 名字對不對由 `changeset::function` 載入 function 表時報錯。
-            LibraryExportKind::Function => !package.functions.trim().is_empty(),
+            LibraryExportKind::Function => {
+                !package.function_sources.is_empty() || !package.functions.trim().is_empty()
+            }
         };
         if !present {
             return Err(LibraryLoadError::MissingAlias {
@@ -1012,7 +1139,9 @@ mod tests {
             code_path: "code/test.lang".to_owned(),
             data_path: "data/test.tsv".to_owned(),
             data_paths: vec!["data/test.tsv".to_owned()],
+            data_sources: Vec::new(),
             function_paths: Vec::new(),
+            function_sources: Vec::new(),
             exports: Vec::new(),
             code: "",
             functions: "",
@@ -1175,7 +1304,9 @@ mod tests {
             code_path: "code/schema.lang".to_owned(),
             data_path: "data/none.tsv".to_owned(),
             data_paths: vec!["data/none.tsv".to_owned()],
+            data_sources: Vec::new(),
             function_paths: Vec::new(),
+            function_sources: Vec::new(),
             exports: Vec::new(),
             code: "trait Schema:\n    syn:\n        slots:\n            head [Noun]\n        map head rename nucleus\n",
             functions: "",

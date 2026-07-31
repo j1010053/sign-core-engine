@@ -1,6 +1,6 @@
 //! canonical printer(P21 + I22):`Language → text`,**確定性** colon+縮排 形式。
 //!
-//! 區段序固定:dsl 域 → prosody → distribution → global trait → trait → sign
+//! 區段序固定:dsl 域 → distribution → global trait → trait → sign
 //! (具名容器按名排序,I15-d)。容器 body **依維度分組**(I22):belongs → `Name[n]`
 //! → 頂層 Def → 維度區塊(固定序 syn/phon/sem/prag);`syn:` 內 `slots:` 先於 Def;
 //! 維度內 slot/Def/Rule 保插入序(有序語意)。縮排 4 空格/層。
@@ -547,9 +547,6 @@ pub fn print(l: &Language) -> String {
             .map(|line| format!("{}\n", line.trim_end()))
             .collect();
         sections.push(body);
-    }
-    if !l.prosody.is_empty() {
-        sections.push(format!("prosody = {}\n", l.prosody.join(" ")));
     }
     if !l.distribution.is_empty() {
         let mut entries = l.distribution.clone();

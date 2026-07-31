@@ -15,10 +15,8 @@ fn lang_dump_golden_matches_patch05_sample() {
         "Symbol m [+sonorant]".into(),
         "Class vowel {a, e, i, o, u}".into(),
     ];
-    // ① prosody 七層(P1)
-    l.prosody = ["μ", "σ", "Ft", "ω", "φ", "ι", "U"]
-        .map(String::from)
-        .to_vec();
+    l.dsl_decls
+        .push("Prosody mora < syllable < foot < pword".into());
     // ⑤ 分佈覆寫(故意亂序;canonical 應排序)
     l.distribution = vec![("/t/".into(), "0.20".into()), ("/k/".into(), "0.15".into())];
 

@@ -6,8 +6,7 @@ Feature voice(+voice, -voice)
 Feature sonorant(+sonorant)
 Symbol m [+sonorant]
 Class vowel {a, e, i, o, u}
-
-prosody = μ σ Ft ω φ ι U
+Prosody mora < syllable < foot < pword
 
 distribution:
     /k/ = 0.15

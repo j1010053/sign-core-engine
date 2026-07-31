@@ -95,8 +95,20 @@ fn packages_exports_and_combined_ontology_are_deterministic() {
     assert_eq!(by_name("std:core").exports.len(), 30);
     assert_eq!(by_name("std:grambank").exports.len(), 76);
     assert_eq!(by_name("std:cxg").exports.len(), 27);
-    // P52 路徑庫:一個參數化 function(機制在 code、路徑在 data)。
-    assert_eq!(by_name("std:grammaticalization").exports.len(), 1);
+    // P52 路徑庫:一個參數化 Recipe 加功能 Goal；路徑與權重留在 data。
+    let grammaticalization = by_name("std:grammaticalization");
+    assert_eq!(
+        grammaticalization
+            .exports
+            .iter()
+            .map(|export| export.alias.as_str())
+            .collect::<Vec<_>>(),
+        ["VerbToTense", "Future", "Perfect"]
+    );
+    assert_eq!(
+        grammaticalization.data_paths,
+        ["data/paths.tsv", "data/weights.tsv"]
+    );
     assert_eq!(
         by_name("std:cxg").code_paths,
         ["code/schema.lang", "code/realizations.lang"]
@@ -120,8 +132,9 @@ fn packages_exports_and_combined_ontology_are_deterministic() {
         .flat_map(|package| package.exports.iter())
         .map(|export| export.alias.as_str())
         .collect();
-    assert_eq!(stable_ids.len(), 134);
-    assert_eq!(aliases.len(), 134);
+    // Step 17 adds the Future and Perfect Goal exports to the prior 134.
+    assert_eq!(stable_ids.len(), 136);
+    assert_eq!(aliases.len(), 136);
 
     for alias in [
         "Semantic",

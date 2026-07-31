@@ -845,7 +845,7 @@ fn entrenchment_sampling_normalizes_finite_weights_before_they_overflow() {
     let second_draw = system
         .select_candidate(
             &candidates,
-            CandidateSelector::SampleEntrenchment { seed: 0 },
+            CandidateSelector::SampleEntrenchment { seed: 11 },
             None,
         )
         .unwrap();

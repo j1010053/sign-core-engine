@@ -299,7 +299,6 @@ impl GraphStore {
         let language = document.language();
         let mut globals = Language::new();
         globals.dsl_decls.clone_from(&language.dsl_decls);
-        globals.prosody.clone_from(&language.prosody);
         globals.distribution.clone_from(&language.distribution);
         let globals = self.put_object(globals.dump().as_bytes())?;
 

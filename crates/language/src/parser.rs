@@ -14,7 +14,7 @@
 //!   - `phon:` 下 `/…/` → Def `phon`(UR/模板);其餘行 → phon 規則(`=>`/dsl 動詞;
 //!     尾綴 `@stage`,`else` 續行掛前一規則,P22);
 //!   - 各維 lhs 共用 Path 文法(`.`/`[key]`/`~tier`)。
-//! - `prosody = …`、`distribution:`(縮排 `key = value`)為 language 級語句。
+//! - `distribution:`(縮排 `key = value`)為 language 級語句。
 //! dsl 域宣告(Feature/Symbol/Class/Melody/Spell-out/Parse…)= 首個 language 頭
 //! 之前的 verbatim 行(裁決 1)。id 依文件序決定性再生(I15-b/P26)。
 //! **`/* … */` 區塊註解**(貼合 tshiatun dsl)可出現於任意位置(檔首/檔中/行尾/
@@ -73,10 +73,7 @@ fn container_head(text: &str) -> Option<(&'static str, &str)> {
 }
 
 fn is_language_head(text: &str) -> bool {
-    text == crate::LEGACY_V2_HEADER
-        || text.starts_with("prosody =")
-        || text == "distribution:"
-        || container_head(text).is_some()
+    text == crate::LEGACY_V2_HEADER || text == "distribution:" || container_head(text).is_some()
 }
 
 fn split_arguments(source: &str, line: usize) -> Result<Vec<&str>, ParseError> {
@@ -1627,6 +1624,12 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
             i += 1;
             continue;
         }
+        if ln.text.starts_with("prosody =") {
+            return Err(err(
+                ln.no,
+                "`prosody = …` is retired; use DSL `Prosody LEVEL < …` in the declaration preamble",
+            ));
+        }
         // dsl 域 verbatim(首個 language 頭之前)
         if !seen_language && !is_language_head(&ln.text) {
             lang.dsl_decls.push(ln.text.clone());
@@ -1635,10 +1638,7 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
         }
         seen_language = true;
 
-        if let Some(rest) = ln.text.strip_prefix("prosody =") {
-            lang.prosody = rest.split_whitespace().map(str::to_owned).collect();
-            i += 1;
-        } else if ln.text == "distribution:" {
+        if ln.text == "distribution:" {
             let base = ln.indent;
             i += 1;
             while i < lines.len() && (lines[i].text.is_empty() || lines[i].indent > base) {
@@ -1699,9 +1699,15 @@ mod tests {
 
     #[test]
     fn dsl_region_is_verbatim_by_file_position() {
-        let l = parse("Feature voice(+voice, -voice)\n\nprosody = μ σ\n").unwrap();
+        let l = parse("Feature voice(+voice, -voice)\n\ndistribution:\n    /k/ = 0.15\n").unwrap();
         assert_eq!(l.dsl_decls, vec!["Feature voice(+voice, -voice)"]);
-        assert_eq!(l.prosody, vec!["μ", "σ"]);
+        assert_eq!(l.distribution, vec![("/k/".to_owned(), "0.15".to_owned())]);
+    }
+
+    #[test]
+    fn rejects_retired_language_prosody_syntax() {
+        let error = parse("prosody = μ σ\n").unwrap_err();
+        assert!(error.msg.contains("retired"), "{error}");
     }
 
     #[test]

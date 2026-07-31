@@ -28,10 +28,10 @@ use conlang_language::{
     check_document, compile_document, sha256_hex, AddressSegment, BinaryConstraint, Block,
     CaseBranch, CompileSystemError, CompiledSystem, Def, DerivationKind, Dim, Expression,
     FeatureDecl, FeatureValue, IdentityError, IdentityManifestV2, Language, LanguageDocument,
-    LibraryId, LibrarySpec, NodeAddress, NodeEntryV1, NodeId, NodeKind, NodeRef, PhonBlock,
-    Realization, RoleBinding, RoleDecl, Rule, SenseTransparency, Severity, SignApplication,
-    SignArgumentValue, SignDef, SignItem, Slot, SlotConstraint, SlotFeatureBinding, SlotMapOp,
-    Stage, TraitDef, TypedCase, ValidationReport,
+    LibraryCatalog, LibraryId, LibrarySpec, NodeAddress, NodeEntryV1, NodeId, NodeKind, NodeRef,
+    PhonBlock, Realization, RoleBinding, RoleDecl, Rule, SenseTransparency, Severity,
+    SignApplication, SignArgumentValue, SignDef, SignItem, Slot, SlotConstraint,
+    SlotFeatureBinding, SlotMapOp, Stage, TraitDef, TypedCase, ValidationReport,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,7 +46,6 @@ pub enum Anchor {
 #[allow(clippy::large_enum_variant)]
 pub enum DetachedNode {
     DslDeclaration(String),
-    Prosody(Vec<String>),
     Distribution {
         key: String,
         value: String,
@@ -68,7 +67,6 @@ impl DetachedNode {
     pub fn kind(&self) -> NodeKind {
         match self {
             DetachedNode::DslDeclaration(_) => NodeKind::DslDeclaration,
-            DetachedNode::Prosody(_) => NodeKind::Prosody,
             DetachedNode::Distribution { .. } => NodeKind::Distribution,
             DetachedNode::Trait(_) => NodeKind::Trait,
             DetachedNode::Sign(_) => NodeKind::Sign,
@@ -89,7 +87,6 @@ pub enum NodeUpdate {
     Rename(String),
     TraitGlobal(bool),
     DslDeclaration(String),
-    Prosody(Vec<String>),
     Distribution {
         key: String,
         value: String,
@@ -250,7 +247,7 @@ fn sibling_ranks(
             // Distribution, Trait, and Sign order is a canonical-printing
             // concern, not a semantic Move. A rename/key update may change
             // their rendered order while every node retains the same parent.
-            if matches!(tag, 3..=5) {
+            if matches!(tag, 2..=4) {
                 continue;
             }
             sequences
@@ -273,22 +270,21 @@ fn sequence_tag(address: &NodeAddress) -> u8 {
     match address.0.last() {
         None => 0,
         Some(AddressSegment::DslDeclarations(_)) => 1,
-        Some(AddressSegment::Prosody) => 2,
-        Some(AddressSegment::Distribution(_)) => 3,
-        Some(AddressSegment::Traits(_)) => 4,
-        Some(AddressSegment::Signs(_)) => 5,
-        Some(AddressSegment::Blocks(_)) => 6,
-        Some(AddressSegment::Items(_)) => 7,
-        Some(AddressSegment::RuleElse(_)) => 8,
-        Some(AddressSegment::RuleThen(_)) => 9,
-        Some(AddressSegment::RealizationBranches(_)) => 10,
-        Some(AddressSegment::CaseExpression) => 11,
-        Some(AddressSegment::CaseBranches(_)) => 12,
-        Some(AddressSegment::CaseResult) => 13,
-        Some(AddressSegment::ApplicationArguments(_)) => 14,
-        Some(AddressSegment::PhonLeaf(_)) => 15,
-        Some(AddressSegment::PhonThen(_)) => 16,
-        Some(AddressSegment::PhonElse(_)) => 17,
+        Some(AddressSegment::Distribution(_)) => 2,
+        Some(AddressSegment::Traits(_)) => 3,
+        Some(AddressSegment::Signs(_)) => 4,
+        Some(AddressSegment::Blocks(_)) => 5,
+        Some(AddressSegment::Items(_)) => 6,
+        Some(AddressSegment::RuleElse(_)) => 7,
+        Some(AddressSegment::RuleThen(_)) => 8,
+        Some(AddressSegment::RealizationBranches(_)) => 9,
+        Some(AddressSegment::CaseExpression) => 10,
+        Some(AddressSegment::CaseBranches(_)) => 11,
+        Some(AddressSegment::CaseResult) => 12,
+        Some(AddressSegment::ApplicationArguments(_)) => 13,
+        Some(AddressSegment::PhonLeaf(_)) => 14,
+        Some(AddressSegment::PhonThen(_)) => 15,
+        Some(AddressSegment::PhonElse(_)) => 16,
     }
 }
 
@@ -638,9 +634,7 @@ fn insert(
     let parent = ensure_target(&source, parent_ref)?.clone();
     let (mut language, mut manifest) = source.into_edit_parts();
     let (key, index, address) = insertion_site(&language, &manifest, &parent, anchor, &subtree)?;
-    if !matches!(address.0.last(), Some(AddressSegment::Prosody)) {
-        shift_list(&mut manifest, &parent.address, key, index, 1);
-    }
+    shift_list(&mut manifest, &parent.address, key, index, 1);
     insert_payload(&mut language, &parent, index, subtree)?;
     allocate_inserted_subtree(&language, &mut manifest, &address, Some(parent.id.clone()))?;
     finish_edit(language, manifest)
@@ -720,14 +714,6 @@ fn insertion_site(
                 })
             }
         },
-        (NodeKind::Language, NodeKind::Prosody) if language.prosody.is_empty() => {
-            if !matches!(anchor, Anchor::End) {
-                return Err(EditError::AnchorInvalid(
-                    "the singleton prosody declaration only accepts End".to_owned(),
-                ));
-            }
-            return Ok((ListKey::Dsl, 0, NodeAddress(vec![AddressSegment::Prosody])));
-        }
         _ => {
             return Err(EditError::ParentKind {
                 child,
@@ -845,9 +831,6 @@ fn insert_payload(
     match subtree {
         DetachedNode::DslDeclaration(value) if parent.kind == NodeKind::Language => {
             language.dsl_decls.insert(index, value)
-        }
-        DetachedNode::Prosody(value) if parent.kind == NodeKind::Language => {
-            language.prosody = value
         }
         DetachedNode::Distribution { key, value } if parent.kind == NodeKind::Language => {
             language.distribution.insert(index, (key, value))
@@ -1055,11 +1038,7 @@ fn delete(source: LanguageDocument, node_ref: &NodeRef) -> Result<LanguageDocume
         return Err(EditError::RootImmutable);
     }
     let parent_address = node.address.parent().ok_or(EditError::RootImmutable)?;
-    let list_position = if node.kind == NodeKind::Prosody {
-        None
-    } else {
-        Some(address_list_position(&node.address)?)
-    };
+    let list_position = Some(address_list_position(&node.address)?);
     let (mut language, mut manifest) = source.into_edit_parts();
     delete_payload(&mut language, &node)?;
     let removed = extract_identity_subtree(&mut manifest, &node.address);
@@ -1078,7 +1057,6 @@ fn delete_payload(language: &mut Language, node: &NodeEntryV1) -> Result<(), Edi
         [AddressSegment::DslDeclarations(index)] => {
             language.dsl_decls.remove(*index);
         }
-        [AddressSegment::Prosody] => language.prosody.clear(),
         [AddressSegment::Distribution(index)] => {
             language.distribution.remove(*index);
         }
@@ -1295,10 +1273,6 @@ fn update_payload(
                 return Err(field_mismatch(node, "dsl declaration"));
             };
             language.dsl_decls[*index] = value;
-            Ok(None)
-        }
-        (NodeKind::Prosody, NodeUpdate::Prosody(value)) => {
-            language.prosody = value;
             Ok(None)
         }
         (NodeKind::Distribution, NodeUpdate::Distribution { key, value }) => {
@@ -1799,8 +1773,7 @@ fn address_list_position(address: &NodeAddress) -> Result<(ListKey, usize), Edit
         AddressSegment::PhonElse(index) => (ListKey::PhonElse, *index),
         AddressSegment::RealizationBranches(index) => (ListKey::Realization, *index),
         AddressSegment::CaseBranches(index) => (ListKey::CaseBranches, *index),
-        AddressSegment::Prosody
-        | AddressSegment::CaseExpression
+        AddressSegment::CaseExpression
         | AddressSegment::CaseResult
         | AddressSegment::ApplicationArguments(_) => {
             return Err(EditError::FieldMismatch(
@@ -2740,6 +2713,9 @@ impl UnresolvedChangeSet {
                 .expect("donor content is verified above");
             scope.insert(donor.alias.as_str(), document);
         }
+        let catalog =
+            LibraryCatalog::embedded().map_err(|error| ReplayError::Library(error.to_string()))?;
+        let functions = function::load_functions(&catalog, libraries)?;
         let mut working = base.fork(self.namespace.clone())?;
         let mut resolved = Vec::new();
         for statement in &self.statements {
@@ -2748,15 +2724,53 @@ impl UnresolvedChangeSet {
                 // 語句歸屬**只有這裡知道**——`resolve_operation` 底下約 20 處建構
                 // `Selector` 的地方都拿不到 ordinal。故在此單點補上句號,而不是把
                 // ordinal 灌進每個建構點(《修補11》§3.3)。
-                let operation_edits = resolve_operation(operation, &working, &scope).map_err(
-                    |error| match error {
+                let operation_edits = (|| {
+                    if let UnresolvedOperation::Call {
+                        name,
+                        positional,
+                        named,
+                        block,
+                    } = operation
+                    {
+                        if functions.contains(name) {
+                            if block.is_some() {
+                                return Err(ReplayError::Parse(format!(
+                                    "function {name:?} does not accept an indented block"
+                                )));
+                            }
+                            let invocation = function::FunctionCall {
+                                name: name.clone(),
+                                positional: positional.clone(),
+                                named: named.clone(),
+                            };
+                            return match function::evaluate_function_offline(
+                                &functions,
+                                &invocation,
+                                &working,
+                                libraries,
+                            )? {
+                                function::FunctionEvaluation::Executed(execution) => {
+                                    Ok(execution.edits)
+                                }
+                                function::FunctionEvaluation::Candidates(candidates) => {
+                                    Err(ReplayError::Parse(format!(
+                                        "FUNCTION_CANDIDATES_REQUIRE_SELECTION: {:?} returned {} candidates",
+                                        candidates.source,
+                                        candidates.candidates.len()
+                                    )))
+                                }
+                            };
+                        }
+                    }
+                    resolve_operation(operation, &working, &scope)
+                })()
+                .map_err(|error| match error {
                         ReplayError::Selector(message) => ReplayError::StatementSelector {
                             ordinal: statement.ordinal,
                             message,
                         },
                         other => other,
-                    },
-                )?;
+                    })?;
                 edits.extend(operation_edits);
             }
             let (candidate, _) =
@@ -3150,6 +3164,27 @@ fn parse_insert_block(block: &str) -> Result<Vec<DetachedNode>, ReplayError> {
         Language::parse(source)
             .map_err(|error| ReplayError::Parse(format!("insert .lang: {error}")))
     };
+    if head.starts_with("Symbol ") || head.starts_with("Class ") {
+        let language = parse_lang(block)?;
+        let only_symbol_or_class = !language.dsl_decls.is_empty()
+            && language.dsl_decls.iter().all(|declaration| {
+                declaration.starts_with("Symbol ") || declaration.starts_with("Class ")
+            })
+            && language.distribution.is_empty()
+            && language.traits.is_empty()
+            && language.signs.is_empty();
+        if !only_symbol_or_class {
+            return Err(ReplayError::Parse(
+                "a Symbol/Class insert block may contain only Symbol and Class declarations"
+                    .to_owned(),
+            ));
+        }
+        return Ok(language
+            .dsl_decls
+            .into_iter()
+            .map(DetachedNode::DslDeclaration)
+            .collect());
+    }
     if head.starts_with("trait ") || head.starts_with("global trait ") {
         let language = parse_lang(block)?;
         if language.traits.len() != 1 || !language.signs.is_empty() {
@@ -3532,7 +3567,7 @@ fn resolve_operation(
             // case's context); any other target takes node/item fragments. Both
             // fan out to one `Insert` per payload, sharing parent/anchor, so the
             // statement validates only its final state.
-            let payloads = if parent.expected == NodeKind::Case {
+            let mut payloads = if parent.expected == NodeKind::Case {
                 let entry = ensure_target(document, &parent)
                     .map_err(|error| ReplayError::Selector(error.to_string()))?;
                 let case = case_at(document.language(), &entry.address).ok_or_else(|| {
@@ -3558,6 +3593,12 @@ fn resolve_operation(
             } else {
                 parse_insert_block(block)?
             };
+            // Repeated inserts at `start` or `after X` would otherwise reverse
+            // a multi-payload block. Commit them in reverse so the final
+            // Language order remains the authored block order.
+            if matches!(anchor, Anchor::Start | Anchor::After(_)) {
+                payloads.reverse();
+            }
             Ok(payloads
                 .into_iter()
                 .map(|subtree| PrimitiveEdit::Insert {
@@ -3721,6 +3762,18 @@ impl ResolvedChangeSet {
                     PrimitiveEdit::Insert {
                         parent,
                         anchor,
+                        subtree: DetachedNode::DslDeclaration(declaration),
+                    } => {
+                        output.push_str(&format!(
+                            "        insert into {} at {}:\n            {}\n",
+                            dump_node(parent),
+                            dump_anchor(anchor),
+                            declaration
+                        ));
+                    }
+                    PrimitiveEdit::Insert {
+                        parent,
+                        anchor,
                         subtree: DetachedNode::Sign(sign),
                     } => {
                         output.push_str(&format!(
@@ -3858,10 +3911,29 @@ fn package_lock_content(package: &conlang_language::LibraryPackage) -> String {
     }
     content.push_str(package.code);
     content.push('\n');
-    // P50 ③:function 原始碼必須進 digest。
-    content.push_str(package.functions);
+    // P50 ③:function 路徑與逐檔原始碼都必須進 digest。路徑也是 ordered
+    // package contract；只 hash 合併後文字會漏掉檔案邊界與重排。
+    if package.function_sources.is_empty() {
+        content.push_str(package.functions);
+    } else {
+        for source in &package.function_sources {
+            content.push_str("\nfunction-source ");
+            content.push_str(&source.path);
+            content.push('\n');
+            content.push_str(source.source);
+        }
+    }
     content.push('\n');
-    content.push_str(package.data);
+    if package.data_sources.len() <= 1 {
+        content.push_str(package.data);
+    } else {
+        for source in &package.data_sources {
+            content.push_str("\ndata-source ");
+            content.push_str(&source.path);
+            content.push('\n');
+            content.push_str(source.source);
+        }
+    }
     content
 }
 
@@ -4242,7 +4314,6 @@ fn kind_at(language: &Language, address: &NodeAddress) -> Option<NodeKind> {
         [AddressSegment::DslDeclarations(index)] if *index < language.dsl_decls.len() => {
             Some(NodeKind::DslDeclaration)
         }
-        [AddressSegment::Prosody] if !language.prosody.is_empty() => Some(NodeKind::Prosody),
         [AddressSegment::Distribution(index)] if *index < language.distribution.len() => {
             Some(NodeKind::Distribution)
         }
@@ -5783,7 +5854,6 @@ fn debug_value(language: &Language, entry: &NodeEntryV1) -> String {
     match entry.address.0.as_slice() {
         [] => "Language".to_owned(),
         [AddressSegment::DslDeclarations(index)] => format!("{:?}", language.dsl_decls[*index]),
-        [AddressSegment::Prosody] => format!("{:?}", language.prosody),
         [AddressSegment::Distribution(index)] => format!("{:?}", language.distribution[*index]),
         [AddressSegment::Traits(index)] => {
             let value = &language.traits[*index];

@@ -61,20 +61,22 @@ V2 typed `case` 以封閉 context type 檢查 branch。Sign body 可回傳完整
 `SynContext`、`SemContext`、`PragContext` 則限制匿名 fragment 只能包含各自維度的內容。
 `when:` 累加所有命中 fragment，但所有 guard 一律讀同一份合併前 frozen snapshot；
 確定 match 結果後才按來源序 merge，前一命中不能影響後一 guard。完整契約與反例見
-[docs/24_case_when與context_fragment_v2.md](docs/24_case_when與context_fragment_v2.md)。
+[docs/specifications/case_when與context_fragment_v2.md](docs/specifications/case_when與context_fragment_v2.md)。
 
 **Step 13 source interface 與 Primitive Edit 的語義／API 契約已封板**：caller `.lang` 搭配版本化
 identity sidecar，為 V1 節點及 V2 Application／Case／CaseBranch／Constraint 提供 stable
 `NodeId`／typed resolver；四原語、`check_language`、Language diff 與 trace 均只修改
 caller source。slot／trait rename 會重寫 typed consumers，巢狀 case 亦可 round-trip、定址與
 移動。2026-07-22 根 workspace 251/251、Tshiatūn 157/157 通過；完整工具閘門仍因
-本機工具鏈與既存 dirty submodule 回傳 exit 2，未宣稱 release gate exit 0；詳見 docs/20。
+本機工具鏈與既存 dirty submodule 回傳 exit 2，未宣稱 release gate exit 0；詳見
+`docs/verification/Step13_PrimitiveEdit與SourceIdentity_封板_v1.md`。
 
 **Step 14 已封板（2026-07-24）**：Primitive-only `.chg` 的 parse／resolve／replay／
 lazy compile 與 statement 交易定稿。相容性測試涵蓋 replay 跨執行決定性、`.chg` dump
 round-trip、三道 digest(base source／identity-manifest／library lock)replay 前拒絕、
 交易回滾/部分保留、lazy compile cache。`cargo test --workspace` 全綠為證(本機無
-PowerShell,`.ps1` 閘門未實跑)。契約見 docs/22。
+PowerShell,`.ps1` 閘門未實跑)。契約見
+`docs/verification/Step14_ChangeSetInterpreter_封板_v1.md`。
 
 **Step 15／16 已收官（2026-07-30）**：12 項 Atomic Rewrite 全部降階為四原語；
 歷時 function 載入與呼叫、分層 diff、不可變 EvolutionGraph、node-v2 內容定址、
@@ -85,8 +87,9 @@ realization 節點具明確 typed reconstruct capability，structured phon 可�
 顯式 bootstrap 並從 `.chg` 插入 leaf／Then／Else／propagate sub-block。P60／P64
 亦由 `crates/persistence` 收官：canonical sign／trait／non-sign fragment、changeset 與
 identity sidecar 進共享內容定址物件庫，節點落在 `nodes/<id>/`，annotation／config
-留在 node-v2 雜湊外。下一個歷時層為 Step 17；刻意不支援的細界線見 docs/26。
-收官矩陣見 [docs/26_Step16收官_文件契約與驗收矩陣_v1.0.md](docs/26_Step16收官_文件契約與驗收矩陣_v1.0.md)。
+留在 node-v2 雜湊外。下一個歷時層為 Step 17；刻意不支援的細界線見 Step 16 收官矩陣。
+收官矩陣見
+[docs/verification/Step16_文件契約與驗收矩陣_v1.0.md](docs/verification/Step16_文件契約與驗收矩陣_v1.0.md)。
 
 **v1 路徑已硬移除（2026-07-24）**：v2 為唯一模型。移除 `LanguageSchema` V1/V2 分野
 (FP `case`/`when`/`constraints` 為預設,無需標頭;舊 `schema conlang.lang/v2` 行被接受
@@ -119,12 +122,12 @@ sign give:
 `syn:`/`phon:`/`sem:`/`prag:`;`/* … */` 區塊註解可置任意位置。
 `.lang` 只記 construction type 與共時狀態；年代、文本出處、原文/正規化與可信度
 屬 Evidence/Attestation，不混入 Language。完整貼合矩陣見
-`docs/14_共時lang語法與資料貼合度_v0.1.md`。
+`docs/comparison/共時lang語法與資料貼合度_v0.1.md`。
 
 stdlib trait 以 `belongs` 引用，例如 `belongs GB107_Present`。Grambank 的「未掛
 trait」表示未陳述，不等於 code `0`；需要明確負值時使用 `GB107_Absent`，資料不足則
 使用參數根 trait `GB107_BoundVerbalNegation`（投影為 `?`）。完整選項與證據見
-`docs/15_std_Grambank預設traits_v0.1.md`。
+`docs/comparison/std_Grambank預設traits_v0.1.md`。
 
 顯式選取自然語言庫使用 `compile_with_libraries(Language, LibrarySpec)`；內建
 `natural:en-standard` 提供 12 類可執行 Standard English 核心 construction。抽象／
@@ -146,6 +149,10 @@ powershell -ExecutionPolicy Bypass -File scripts/verify-m1pp.ps1
 
 ## 文件
 
-規範文件依閱讀順序放 `docs/`。P1–P19 以架構修補彙整 01–04 為準，P20–P64
-依架構修補 05–11；Step 13–16 的實作封板契約分別見 docs/20、docs/22、docs/26。
-完整決策索引見 `CLAUDE.md` §0–§1；`docs/archive/` 為歷史檔勿引用。
+架構與 P 系列決策集中於 `docs/architecture/`；規範契約集中於
+`docs/specifications/`；實作架構集中於 `docs/implementation/`；資料與模型對照集中於
+`docs/comparison/`。P1–P19 以架構修補彙整 01–04 為準，P20–P64 以
+架構修補彙整 05–11 為準；測試索引與 Step 13–16 封板證據集中於
+`docs/verification/`。
+操作型教學放在根目錄 `tutorials/`。完整決策索引見 `CLAUDE.md` §0–§1；
+`docs/archive/` 為歷史檔勿引用。

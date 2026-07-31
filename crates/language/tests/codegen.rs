@@ -248,7 +248,8 @@ fn empty_and_decls_only_languages_codegen() {
     assert!(g.program.rules.is_empty());
     assert!(signs.is_empty());
 
-    let l = Language::parse("Symbol a\n\nClass vowel {a}\n\nprosody = μ σ\n").unwrap();
+    let l = Language::parse("Symbol a\nClass vowel {a}\nProsody mora < syllable < foot < pword\n")
+        .unwrap();
     let a = codegen::compile_full(&l).unwrap();
     assert!(a.grammar.program.rules.is_empty());
     assert!(a.grammar.phon_source.contains("Symbol a"));

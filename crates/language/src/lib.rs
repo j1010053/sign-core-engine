@@ -36,6 +36,7 @@ pub mod patch;
 pub mod path;
 pub mod printer;
 pub mod projection;
+pub mod sampling;
 pub mod sem;
 pub mod semantic_dto;
 pub mod stdlib;
@@ -51,10 +52,13 @@ pub use identity::{
     NodeKind, NodeRef, RefBindingV1, RefTargetV1, ResolvedTarget, IDENTITY_SCHEMA_V2,
 };
 pub use library::{
-    LibraryCatalog, LibraryExport, LibraryExportKind, LibraryId, LibraryKind, LibraryLoadError,
-    LibraryPackage, LibrarySpec,
+    LibraryCatalog, LibraryDataSource, LibraryExport, LibraryExportKind, LibraryFunctionSource,
+    LibraryId, LibraryKind, LibraryLoadError, LibraryPackage, LibrarySpec,
 };
 pub use metadata::{SignLifecycle, SignProvenance};
+pub use sampling::{
+    sample_weighted_index, WeightedSampleError, WeightedSampleTrace, WEIGHTED_SAMPLER_ALGORITHM,
+};
 pub use semantic_dto::{
     SemanticDocumentError, SemanticDocumentV1, SemanticNodeV1, SemanticSourceV1, SEMANTIC_SCHEMA_V1,
 };
@@ -756,8 +760,6 @@ pub struct SignDef {
 pub struct Language {
     /// dsl 域宣告區(Lexurgy 形,不透明 verbatim 行;I15-a)。
     pub dsl_decls: Vec<String>,
-    /// ① `prosody = μ σ Ft ω φ ι U`(七層鏈;空 = 未宣告)。
-    pub prosody: Vec<String>,
     /// ⑤ 分佈覆寫(E 的覆寫層,稀疏;鍵→值,印出時按鍵排序)。
     pub distribution: Vec<(String, String)>,
     /// ③ trait 容器(含 global;印出時按名排序,I15-d)。
@@ -774,7 +776,6 @@ impl std::fmt::Debug for Language {
         let mut debug = formatter.debug_struct("Language");
         debug
             .field("dsl_decls", &self.dsl_decls)
-            .field("prosody", &self.prosody)
             .field("distribution", &self.distribution)
             .field("traits", &self.traits)
             .field("signs", &self.signs)
@@ -853,7 +854,6 @@ impl Language {
     /// the combined runtime view.
     pub(crate) fn append_library(&mut self, mut other: Language) {
         self.dsl_decls.append(&mut other.dsl_decls);
-        self.prosody.append(&mut other.prosody);
         self.distribution.append(&mut other.distribution);
         self.traits.append(&mut other.traits);
         for sign in other.signs.drain(..) {

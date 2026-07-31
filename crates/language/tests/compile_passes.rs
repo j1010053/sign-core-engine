@@ -9,7 +9,7 @@ use conlang_language::{Block, Def, Language, SignItem, TraitDef};
 const SOURCE: &str = "\
 Feature voice(+voice, -voice)
 
-prosody = μ σ Ft ω φ ι U
+Prosody mora < syllable < foot < pword < phrase < iphrase < utterance
 
 global trait CorePhonology:
     phon:

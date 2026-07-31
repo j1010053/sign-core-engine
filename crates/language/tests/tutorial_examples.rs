@@ -2,7 +2,7 @@ use conlang_language::construction::{SlotFiller, SlotMap};
 use conlang_language::{compile_system, DerivationContext, Dim, Language};
 
 const FIXTURE: &str = include_str!("fixtures/tutorial_complete.lang");
-const TUTORIAL: &str = include_str!("../../../docs/21_共時lang語法教學_v1.md");
+const TUTORIAL: &str = include_str!("../../../tutorials/共時lang語法教學_v1.md");
 
 fn tagged_complete_example() -> String {
     let marker = "<!-- conlang-test: tutorial-complete -->";

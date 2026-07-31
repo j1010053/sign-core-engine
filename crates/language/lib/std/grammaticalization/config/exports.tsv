@@ -1,2 +1,4 @@
 stable_id	kind	alias
 std:grammaticalization:VerbToTense	function	VerbToTense
+std:grammaticalization:Future	function	Future
+std:grammaticalization:Perfect	function	Perfect

@@ -1,7 +1,10 @@
 //! `insert into <target> at <pos>:` — 通用單一 payload 插入(trait / 單一 item),
 //! block 為逐字 `.lang` fragment(重用 `.lang` parser + 維度驗證),降階為單一 `Insert`。
 
-use conlang_changeset::{change_set_prelude, ChangeInterpreter, UnresolvedChangeSet};
+use conlang_changeset::{
+    change_set_prelude, ChangeInterpreter, DetachedNode, PrimitiveEdit, ReplayError,
+    UnresolvedChangeSet,
+};
 use conlang_language::{LanguageDocument, LibrarySpec};
 
 const SOURCE: &str = r#"Symbol d
@@ -185,4 +188,96 @@ fn generic_item_insert_covers_feature_and_def_items() {
         "evo:def",
     );
     assert!(def.source().contains("senses[core].concept = DOG"));
+}
+
+#[test]
+fn symbol_and_class_insert_replay_and_dump_round_trip() {
+    let base = base();
+    let spec = LibrarySpec::default();
+    let mut source = change_set_prelude(&base, &spec, "evo:dsl").unwrap();
+    source.push_str(
+        "\n    statement 0:\n        insert into language at end:\n            Symbol a\n            Class front {a}\n",
+    );
+    let resolved = UnresolvedChangeSet::parse(&source)
+        .unwrap()
+        .resolve(&base, &spec)
+        .unwrap();
+    assert_eq!(resolved.statements[0].edits.len(), 2);
+    assert!(matches!(
+        &resolved.statements[0].edits[0],
+        PrimitiveEdit::Insert {
+            subtree: DetachedNode::DslDeclaration(value),
+            ..
+        } if value == "Symbol a"
+    ));
+    assert!(matches!(
+        &resolved.statements[0].edits[1],
+        PrimitiveEdit::Insert {
+            subtree: DetachedNode::DslDeclaration(value),
+            ..
+        } if value == "Class front {a}"
+    ));
+
+    let replayed = ChangeInterpreter::new(base.clone(), spec.clone(), "evo:dsl")
+        .unwrap()
+        .run(&resolved)
+        .unwrap()
+        .document;
+    let symbol = replayed.source().find("Symbol a").unwrap();
+    let class = replayed.source().find("Class front {a}").unwrap();
+    assert!(symbol < class, "authored declaration order is retained");
+
+    let dump = resolved.dump();
+    assert!(dump.contains("Symbol a"));
+    assert!(dump.contains("Class front {a}"));
+    let round = UnresolvedChangeSet::parse(&dump)
+        .unwrap()
+        .resolve(&base, &spec)
+        .unwrap();
+    let replayed_round = ChangeInterpreter::new(base, spec, "evo:dsl")
+        .unwrap()
+        .run(&round)
+        .unwrap()
+        .document;
+    assert_eq!(round.dump(), dump);
+    assert_eq!(replayed_round.source(), replayed.source());
+    assert_eq!(replayed_round.identities(), replayed.identities());
+}
+
+#[test]
+fn symbol_and_class_insert_at_start_preserves_block_order() {
+    let base = base();
+    let spec = LibrarySpec::default();
+    let mut source = change_set_prelude(&base, &spec, "evo:dsl-start").unwrap();
+    source.push_str(
+        "\n    statement 0:\n        insert into language at start:\n            Symbol a\n            Class front {a}\n",
+    );
+    let resolved = UnresolvedChangeSet::parse(&source)
+        .unwrap()
+        .resolve(&base, &spec)
+        .unwrap();
+    let replayed = ChangeInterpreter::new(base, spec, "evo:dsl-start")
+        .unwrap()
+        .run(&resolved)
+        .unwrap()
+        .document;
+    assert_eq!(
+        &replayed.language().dsl_decls[..2],
+        ["Symbol a", "Class front {a}"]
+    );
+}
+
+#[test]
+fn symbol_insert_rejects_a_mixed_top_level_payload() {
+    let base = base();
+    let spec = LibrarySpec::default();
+    let mut source = change_set_prelude(&base, &spec, "evo:dsl-invalid").unwrap();
+    source.push_str(
+        "\n    statement 0:\n        insert into language at end:\n            Symbol a\n            trait Mixed:\n",
+    );
+    let error = UnresolvedChangeSet::parse(&source)
+        .unwrap()
+        .resolve(&base, &spec)
+        .unwrap_err();
+    assert!(matches!(error, ReplayError::Parse(_)));
 }

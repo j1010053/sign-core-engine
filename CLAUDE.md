@@ -8,12 +8,10 @@
 
 1. **規格已凍結,以編號決策為準。** 全部設計爭議都已裁決並編號:D1–D28(語法/本體論)、
    A1–A4 / B5–B9 / C10–C11(執行語意)、I1–I18(實作層,docs/05 §9)、
-   **P1–P64(架構修補層;P1–P19 權威=《架構修補彙整 01–04》§1 總表、P20–P28 權威=《修補05》§11、
-   P29–P37 權威=《修補06 插件服務與DSL API》§8、P38–P44 權威=《修補07 共時四維系統》§9、
-   P45 權威=《修補08 具名可定址節點》、P46 權威=《修補09 phon 命名 block》、
-   **P47–P55 權威=《修補10 歷時 function 層與載入》、
-   P56–P64 權威=《修補11 演化樹節點模型》**;
-   個別修補文件與彙整出入處以彙整/最新修補為準;P7 已廢止→P14)**。
+   **P1–P64(架構修補層;P1–P19 權威=《架構修補彙整 01–04》§1，
+   P20–P64 權威=《架構修補彙整 05–11》§1；
+   個別修補文件保留詳細理由與落地紀錄，出入處一律以彙整為準；
+   P7 已廢止→P14，P19 的 nativization 放置由 P56/P58/P64 局部覆寫)**。
    任何實作若與編號決策矛盾,**停下來明確指出衝突**,不要自行變通。規格未覆蓋的新問題:
    實作層提案編 I 系列入 docs/05 §9;架構層變更走 P 系列。
 2. **每個開發階段必須以測試出口收尾。** 不存在「做完但沒有測試綠燈」的階段
@@ -27,34 +25,38 @@
 
 | 檔案 | 角色 |
 |---|---|
-| `01_架構書_v0.3.md` | 全局:產品定位、模組、路線圖(M0–M4) |
-| `02_語法規格_v0.3.md` | DSL「能寫什麼」:selector、動詞、Scan、決策 D15–D28 |
-| `03_語法規格_v0.2_凍結附錄.md` | **凍結但仍規範性**:D1–D14 與基礎定義的權威來源(v0.3 以「承 v0.2」引用) |
-| `04_執行語意規格_v0.1.md` | 「怎麼跑」:Execution Model 生命週期、動詞語意表、locality、spell-out 純函數、A/B/C 決策 |
-| `05_M0實作參照_v1.0.md` | 實作層:workspace、表徵方案、crate 清單、開發順序、I1–I8 |
-| `06_演化圖本體論_v0.1.md` | 模組 D(容器層):節點/邊/來源統一、克里奧爾、互通度、replay。**設計層,非 M0 實作範圍** |
-| `07_分層結構檔本體論_v0.1.md` | 模組 C(節點內部):sign 統一本體、四維特徵結構、組合=運算、固化=語法化、層作視圖投影(v0.1.1 修補)。**設計層,SYN 欄位待 A/B 驅動** |
-| `08_AB模組需求分配_v0.2.md` | A=完整 sign 生產者(含組合造詞、借詞、entrenchment 初值);B=**原語集三層定稿**(L1 資料/L2 語言/L3 理論宏),已回填 06 的 ChangeEntry op=L1∪L2。命名分層規約見本檔 §6 |
-| `09_Sign生成引擎本體論_v0.1.md` | 模組 A 核心:Sign 稀疏容器、四維、Need→Generator→Builder→Store 職責契約、五連接關係、兩種構詞、生命週期;附 18 案折磨測試(0 破壞)。**設計層** |
-| `10_統計先驗與抽樣引擎_v0.1.md` | 模組 E:唯讀先驗庫(PHOIBLE/Grambank/WALS/CLICS,附網址與授權)+ 無狀態抽樣;有效分佈=手動>導入 provider>投影>E1 先驗,覆寫層住節點。**設計層;01–10 設計鏈至此閉合** |
-| `11_測試案例集總索引_v0.1.md` | **全專案測試索引**:DSL 範例 8.1–8.6、18 案折磨測試、十實例、Rust 測試、Lexurgy 黑盒的統一映射與狀態;動工任一模組前先查其驗收案例 |
-| `12_邏輯分層架構_v0.1.md` | 四層架構(展示/應用/引擎/資料);引擎分即時+批次兩子層,DSL core crate 跨兩子層共用;應用層(Command/Query API)為下一個設計空白。**設計層** |
-| `架構修補01_共時規則系統與臨時韻律域_v0.1.md` | **P 系列決策權威(P1–P4)**:Word=臨時韻律域、Grammar Store、strata 層級錨定+循環套用、cophonology 閂;對 M0 步驟 2–3 零衝擊,插入點=步驟 4(`stage:` 標記,I14)與步驟 6(phrase-level 掛鉤);修補內容已回寫 docs/01–09、12 |
-| `架構修補02_Trait機制_v0.1.md` | Trait = macro 展開模板(P5–P7;P7 廢止→P14) |
-| `架構修補03_Trait與CompiledGrammar_v0.2.md` | Compiled Grammar 責任分離、Definition/Rule 二分(P8/P9) |
-| `架構修補04_共時／歷時分離與歷時實作分層_v0.1.md` | 共時=編譯器/歷時=直譯器、歷時四層、State(P10–P13) |
-| `架構修補彙整_01-04_v1.0.md` | **P1–P19 權威總表** + 裁決(P14–P19)+ 廢止/更名對照(全庫檢索用) |
-| `架構2.0總鳥瞰_v1.0.md` | **2.0 單一入口**:Language/ChangeSet 雙軌全圖、四條資訊流、Debug 模塊化、**新實作順序(步驟 8–22,M1–M4)** |
-| `架構修補05_Primitive與檔案格式_v0.1.md` | **P20–P28 權威**:DSL 獨立性、IR dump/canonical printer、條件語法(else/Path/tier-adjacency)、四原語、Ref 模型、.lang/.chg 檔案格式 |
-| `架構修補06_插件服務與DSL_API_v0.1.md` | **P29–P37 權威**:插件系統(資料層/程式碼層分離)、外部服務生命週期(ServiceRef→resolve→執行→驗證→History)、音變 DSL 最小對外 API(承 P5/P22 鐵律)。完整插件仍是設計層；embedded std 已先實作 package code/data/config 子集。 |
-| `架構修補10_歷時function層與載入_v0.1.md` | **P47–P55 權威**:層①=語句/層②③④=函數呼叫 `name(args)`(層級由名字解析,非關鍵字);Recipe/Goal 是 `code/` 檔案分工,body 語意由既有 case/when 承載;定義住套件 `code/*.chg`(`function Name(參數 [約束]):`);**載入沿用 P29 auto-discovery,否決顯式 import**(可重現性靠既有 library lock);Recipe **接力**展開;路徑庫 = 參數化 function(code)+ 路徑表(data);`expand` 先開好 `ServiceContext` 接點;**P54** sign 增 `components` metadata(兌現 §4.3 對 fuse 的 component 引用;與單一來源的 `origin` 職責不同);**P55** `.chg` 語句標記 `#N:` + 註解統一 `/* … */`(三格式一致;`#` 在 `.qy` 為詞界 D19) |
-| `架構修補11_演化樹節點模型_v0.1.md` | **P56–P64 權威**:節點存 immutable snapshot、邊存 changeset(P56)；rebase 依型別化錯誤(P57)；**node-v2** 內容定址納入 source digest、identity-manifest digest、完整 parent edge(from + changeset digest)與 nativization(P58/P59)；全 parent 3-way merge 已涵蓋 `signs`/`traits`/`distribution` 逐項及 `prosody`/`dsl_decls` 整塊(P61)；donor 由 `DonorSpec` 注入、`ServiceContext` 不變，`adopt` 來源由引用派生(P62/P63)；P60/P64 由獨立 `conlang-persistence` host crate 實作共享物件庫、node folder、annotation/config 雜湊外層，語意 crates 不碰 `std::fs`。 |
-| `架構修補09_phon命名block_v0.md` | **P46 權威**:phon 規則命名/塊對齊 Lexurgy `.qy`(`name:` 前綴 + `Then:`/`Else:` 塊);取徑 A。S1–S5 已落地：具名規則、巢狀 `PhonBlock`、語句/子 block 四原語、`propagate`、`{ }` grouped-block codegen→Tshiatūn parser，以及 `.chg` source insert／顯式 `.phon_block:` bootstrap。leading-propagate 仍明確拒絕。 |
-| `26_Step16收官_文件契約與驗收矩陣_v1.0.md` | **Step 16 現行實作契約**：彙整分層 diff、EvolutionGraph、P60–P64、identity reconciliation、完整 typed reconstruct、同父重排與跨引擎 grouped phon。 |
-| `架構修補08_具名可定址節點_v0.1.md` | **P45 權威**:Rule/TypedCase/CaseBranch 可選 `@name` 標籤 + keyed 定址(`rule["x"]`/`case["x"]`/`branch["x"]`);承 P24/P25/P26,標籤不取代穩定 id。取徑 B(不動 sign 扁平結構) |
-| `架構修補07_共時四維系統_v0.1.md` | **P38–P44 權威**:phon/syn/sem/prag 四維獨立(OntologyRegistry)、Defs+typed projection/patch、`belongs`(取代 provides)、valence=slots、construction-as-Sign+slot mapping、Lexurgy 式 Else 三分、四維同步規則;路線圖插入步驟 12a–12e(M1++,M2 前) |
-| `14_共時lang語法與資料貼合度_v0.1.md` | **共時 surface 實作對照**:巢狀 Path、`.lang` SlotMap、typed sign metadata，以及 Language 與 Evidence/Attestation 的 type/token 邊界。 |
-| `15_std_Grambank預設traits_v0.1.md` | **stdlib 資料對照**:修補06 package 分層、Grambank v1.0 的 25 項 trait 子集、0/1/? 知識狀態、行為映射、限制與測試證據。 |
+| `architecture/架構書_v0.3.md` | 全局:產品定位、模組、路線圖(M0–M4) |
+| `specifications/02_語法規格_v0.3.md` | DSL「能寫什麼」:selector、動詞、Scan、決策 D15–D28 |
+| `specifications/03_語法規格_v0.2_凍結附錄.md` | **凍結但仍規範性**:D1–D14 與基礎定義的權威來源(v0.3 以「承 v0.2」引用) |
+| `specifications/04_執行語意規格_v0.1.md` | 「怎麼跑」:Execution Model 生命週期、動詞語意表、locality、spell-out 純函數、A/B/C 決策 |
+| `implementation/05_M0實作參照_v1.0.md` | 實作層:workspace、表徵方案、crate 清單、開發順序、I1–I8 |
+| `specifications/演化圖本體論_v0.1.md` | 模組 D(容器層):節點/邊/來源統一、克里奧爾、互通度、replay。**設計層,非 M0 實作範圍** |
+| `specifications/分層結構檔本體論_v0.1.md` | 模組 C(節點內部):sign 統一本體、四維特徵結構、組合=運算、固化=語法化、層作視圖投影(v0.1.1 修補)。**設計層,SYN 欄位待 A/B 驅動** |
+| `architecture/AB模組需求分配_v0.2.md` | A=完整 sign 生產者(含組合造詞、借詞、entrenchment 初值);B=**原語集三層定稿**(L1 資料/L2 語言/L3 理論宏),已回填 06 的 ChangeEntry op=L1∪L2。命名分層規約見本檔 §6 |
+| `specifications/Sign生成引擎本體論_v0.1.md` | 模組 A 核心:Sign 稀疏容器、四維、Need→Generator→Builder→Store 職責契約、五連接關係、兩種構詞、生命週期;附 18 案折磨測試(0 破壞)。**設計層** |
+| `specifications/統計先驗與抽樣引擎_v0.1.md` | 模組 E:唯讀先驗庫(PHOIBLE/Grambank/WALS/CLICS,附網址與授權)+ 無狀態抽樣;有效分佈=手動>導入 provider>投影>E1 先驗,覆寫層住節點。**設計層;01–10 設計鏈至此閉合** |
+| `verification/測試案例集總索引_v0.1.md` | **全專案測試索引**:DSL 範例 8.1–8.6、18 案折磨測試、十實例、Rust 測試、Lexurgy 黑盒的統一映射與狀態;動工任一模組前先查其驗收案例 |
+| `architecture/邏輯分層架構_v0.1.md` | 四層架構(展示/應用/引擎/資料);引擎分即時+批次兩子層,DSL core crate 跨兩子層共用;應用層(Command/Query API)為下一個設計空白。**設計層** |
+| `architecture/架構修補01_共時規則系統與臨時韻律域_v0.1.md` | **P 系列決策權威(P1–P4)**:Word=臨時韻律域、Grammar Store、strata 層級錨定+循環套用、cophonology 閂;對 M0 步驟 2–3 零衝擊,插入點=步驟 4(`stage:` 標記,I14)與步驟 6(phrase-level 掛鉤);修補內容已回寫 docs/01–09、12 |
+| `architecture/架構修補02_Trait機制_v0.1.md` | Trait = macro 展開模板(P5–P7;P7 廢止→P14) |
+| `architecture/架構修補03_Trait與CompiledGrammar_v0.2.md` | Compiled Grammar 責任分離、Definition/Rule 二分(P8/P9) |
+| `architecture/架構修補04_共時／歷時分離與歷時實作分層_v0.1.md` | 共時=編譯器/歷時=直譯器、歷時四層、State(P10–P13) |
+| `architecture/架構修補彙整_01-04_v1.0.md` | **P1–P19 權威總表** + 裁決(P14–P19)+ 廢止/更名對照(全庫檢索用) |
+| `architecture/架構修補彙整_05-11_v1.0.md` | **P20–P64 權威總表** + 覆寫／相容性清冊 + 契約到證據 + Step 17 缺口 |
+| `architecture/架構2.0總鳥瞰_v1.0.md` | **2.0 單一入口**:Language/ChangeSet 雙軌全圖、四條資訊流、Debug 模塊化、**新實作順序(步驟 8–22,M1–M4)** |
+| `architecture/架構修補05_Primitive與檔案格式_v0.1.md` | P20–P28 詳細來源:DSL 獨立性、IR dump/canonical printer、條件語法、四原語、Ref、檔案格式 |
+| `architecture/架構修補06_插件服務與DSL_API_v0.1.md` | P29–P37 詳細來源:插件 code/data/config、服務生命週期、DSL API；完整插件仍是設計層 |
+| `architecture/架構修補10_歷時function層與載入_v0.1.md` | P47–P55 詳細來源:function surface/load、接力展開、路徑庫、ServiceContext 接點、components、`.chg` canonical |
+| `architecture/架構修補11_演化樹節點模型_v0.1.md` | P56–P64 詳細來源:immutable snapshot、typed rebase、node-v2、全 parent merge、donor、persistence |
+| `architecture/架構修補09_phon命名block_v0.md` | P46 詳細來源:phon `name:`、結構化 block、propagate、grouped codegen 與 authoring |
+| `verification/` | 測試索引與封板證據：M1++、Step 13、Step 14、Step 16；只宣告可觀測完成狀態，不取代規範權威 |
+| `specifications/` | 規範性契約：DSL、Language、演化圖、Sign、統計與共時資料語意；02–04 的 D/A/B/C 決策編號保留於檔名。 |
+| `implementation/` | 實作路徑與 authoring 方案；05 的 I 系列決策編號保留於檔名。 |
+| `architecture/架構修補08_具名可定址節點_v0.1.md` | P45 詳細來源:可選標籤 + keyed 定址；標籤不取代 stable id |
+| `architecture/架構修補07_共時四維系統_v0.1.md` | P38–P44 詳細來源:單一 ontology、四維內容/規則/patch、slots、construction-as-Sign、Else 三分 |
+| `comparison/共時lang語法與資料貼合度_v0.1.md` | **共時 surface 實作對照**:巢狀 Path、`.lang` SlotMap、typed sign metadata，以及 Language 與 Evidence/Attestation 的 type/token 邊界。 |
+| `comparison/std_Grambank預設traits_v0.1.md` | **stdlib 資料對照**:修補06 package 分層、Grambank v1.0 的 25 項 trait 子集、0/1/? 知識狀態、行為映射、限制與測試證據。 |
+| `../tutorials/` | 可執行教學；規範仍以 `docs/` 與 P 系列彙整為準 |
 | `archive/` | 已取代的歷史文件,勿引用(各檔頭有橫幅說明) |
 
 ## 2. 不可違反的設計不變式(內化這些,寫每一行程式碼時對照)
@@ -337,20 +339,23 @@ std 含 core/grambank/cxg；釘選 Grambank v1.0.3 `stan1293` 的 25
 **步驟 13 已完成**：`LanguageDocument` 以 versioned sidecar 保存 caller source 的
 stable NodeId/Ref binding，`conlang-changeset` 實作 immutable checked
 insert/delete/update/move、stable Anchor、LanguageDiff 與 PrimitiveRecord；
-`check_language` 已從 codegen 前抽出供 compile/edit 共用。詳見 docs/20。
+`check_language` 已從 codegen 前抽出供 compile/edit 共用。詳見
+`docs/verification/Step13_PrimitiveEdit與SourceIdentity_封板_v1.md`。
 
 **步驟 13 語義／API 契約已再封板（2026-07-22）**：V2 Application／Case／CaseBranch／Constraint 亦納入
 stable identity、typed resolver 與四原語；未飽和 application 仍是同一 `SignValue`，以
 `apply_arguments` 補入自由參數；未飽和只是一個 `SignValue` 狀態，不是獨立實體。
 slot／trait rename 會重寫 typed consumers，巢狀 typed case 可 round-trip、執行、定址與
 Primitive Edit。功能回歸為根 workspace 251/251、Tshiatūn 157/157；完整本機工具閘門
-仍為基礎設施 exit 2，未宣稱 release gate exit 0；證據見 docs/20、docs/23。
+仍為基礎設施 exit 2，未宣稱 release gate exit 0；證據見
+`docs/verification/Step13_PrimitiveEdit與SourceIdentity_封板_v1.md`、docs/23。
 
 **步驟 14 已封板（2026-07-24）**：Primitive-only `.chg` 的 parse／resolve／replay／
 lazy compile 與 statement 交易定稿為 Step 14 completion。相容性測試補齊——replay 跨執行
 決定性、`.chg` dump round-trip、**三道 digest**(base source／identity-manifest／library
 lock)replay 前拒絕、交易回滾/部分保留、lazy compile cache(`step14_interpreter.rs`)。
-契約見 docs/22;`cargo test --workspace` 全綠為證(本機無 pwsh,`.ps1` 閘門未實跑)。
+契約見 `docs/verification/Step14_ChangeSetInterpreter_封板_v1.md`；
+`cargo test --workspace` 全綠為證(本機無 pwsh,`.ps1` 閘門未實跑)。
 
 **步驟 15 已封板（2026-07-30）**：義項／衍生邊成為 sem 一級節點；12 項
 Atomic Rewrite 皆展開為四原語；層②③④統一 `name(args)` 呼叫；function 定義、
@@ -363,7 +368,8 @@ typed rebase、全 parent 3-way merge、donor／`adopt`、狀態→四原語 rec
 persisted expression／realization typed reconstruct 與 phon source insert／顯式
 `.phon_block:` bootstrap。P60／P64 亦由獨立 host persistence crate 收官：共享
 content-addressed objects、node folder、hash-external annotation/config；細部拒絕邊界與
-驗證矩陣見 docs/26。下一個歷時層是 Step 17。
+驗證矩陣見 `docs/verification/Step16_文件契約與驗收矩陣_v1.0.md`。
+下一個歷時層是 Step 17。
 
 **v1 路徑已硬移除(2026-07-24)**:v2 為唯一模型。移除 `LanguageSchema` V1/V2 分野
 (FP `case`/`when`/`constraints` 永遠可用,無需標頭;舊 `schema conlang.lang/v2` 行被

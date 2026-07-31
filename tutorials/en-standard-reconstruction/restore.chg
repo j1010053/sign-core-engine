@@ -1,0 +1,591 @@
+changeset evo:en-standard-restore:
+    schema = conlang.changeset/v1
+    base_source = sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    base_identities = sha256:b60d365862eecde76dd4557a2e82f7487a492c0635b61c10d0d4404af130a9c8
+    library std:core@0.1.0 sha256:7cef96786d539d1f03309b12287c27d51c1c6807c68af8d91b6b6427e13f2dcd
+    library std:cxg@0.1.0 sha256:3373753602ed9283cfa27ab84bf0296121c8a2f389957963c6974eadb7b05089
+    library std:grambank@1.0-subset.1 sha256:9f8a01abbb8f5c1795bac21616cc7a3719e69e45ccd83b89ddc77bd86b75bed9
+    library std:grammaticalization@0.4.0 sha256:646e30f0a99cb71e95ca439a38ff8f2e0dbd24b788bf9fd50964b95c10ab6905
+
+    #0:
+        insert into node(language, @evo:en-standard:0) at end:
+            Symbol a
+        insert into node(language, @evo:en-standard:0) at end:
+            Symbol b
+        insert into node(language, @evo:en-standard:0) at end:
+            Symbol d
+        insert into node(language, @evo:en-standard:0) at end:
+            Symbol e
+        insert into node(language, @evo:en-standard:0) at end:
+            Symbol g
+        insert into node(language, @evo:en-standard:0) at end:
+            Symbol h
+        insert into node(language, @evo:en-standard:0) at end:
+            Symbol i
+        insert into node(language, @evo:en-standard:0) at end:
+            Symbol j
+        insert into node(language, @evo:en-standard:0) at end:
+            Symbol k
+        insert into node(language, @evo:en-standard:0) at end:
+            Symbol m
+        insert into node(language, @evo:en-standard:0) at end:
+            Symbol n
+        insert into node(language, @evo:en-standard:0) at end:
+            Symbol o
+        insert into node(language, @evo:en-standard:0) at end:
+            Symbol r
+        insert into node(language, @evo:en-standard:0) at end:
+            Symbol s
+        insert into node(language, @evo:en-standard:0) at end:
+            Symbol t
+        insert into node(language, @evo:en-standard:0) at end:
+            Symbol u
+        insert into node(language, @evo:en-standard:0) at end:
+            Symbol y
+        insert into node(language, @evo:en-standard:0) at end:
+            Class vowel {a, e, i, o, u, y}
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishAdjective:
+                belongs Semantic
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishAuxiliary:
+                belongs Predicate
+                belongs AgreementBearer
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishBigProperty:
+                belongs Semantic
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishBookConcept:
+                belongs Entity
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishCaseBearer:
+                belongs Nominal
+                syn:
+                    feature:
+                        case = enum(nominative, accusative)
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishClauseFrame:
+                belongs EventFrame
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishConstruction:
+                belongs StandardEnglishProfile
+                belongs FormMeaningConstruction
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishCopula:
+                belongs EnglishAuxiliary
+                belongs Copula
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishCopulaFrame:
+                belongs EventFrame
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishCopularFrame:
+                belongs EventFrame
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishCountMeaning:
+                sem:
+                    feature:
+                        number = enum(singular, plural)
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishCountNounFrame:
+                belongs SemanticFrame
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishDeterminer:
+                belongs Semantic
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishDoSupportFrame:
+                belongs EventFrame
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishDogConcept:
+                belongs Entity
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishFiniteIntransitivePredicate:
+                belongs Intransitive
+                belongs EnglishNominativeSubjectCaseAssigner
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishFiniteTransitiveCaseAssigner:
+                belongs EnglishNominativeSubjectCaseAssigner
+                belongs EnglishObjectCaseAssigner
+                syn:
+                    feature:
+                        object_case = accusative
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishFiniteTransitivePredicate:
+                belongs Transitive
+                belongs EnglishFiniteTransitiveCaseAssigner
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishHouseConcept:
+                belongs Entity
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishIdentifiability:
+                belongs Semantic
+                sem:
+                    feature:
+                        identifiability = enum(definite, indefinite)
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishInRelation:
+                belongs Relation
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishNegationFrame:
+                belongs EventFrame
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishNegator:
+                belongs Semantic
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishNominativeSubjectCaseAssigner:
+                belongs EnglishSubjectCaseAssigner
+                syn:
+                    feature:
+                        subject_case = nominative
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishObjectCaseAssigner:
+                belongs Predicate
+                syn:
+                    feature:
+                        object_case = enum(nominative, accusative)
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishPassiveFrame:
+                belongs EventFrame
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishPluralMarker:
+                belongs Semantic
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishQuestionFrame:
+                belongs EventFrame
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishReferenceFrame:
+                belongs SemanticFrame
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishRelationFrame:
+                belongs SemanticFrame
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishRunFrame:
+                belongs EventFrame
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishSeeFrame:
+                belongs EventFrame
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishSubjectCaseAssigner:
+                belongs Predicate
+                syn:
+                    feature:
+                        subject_case = enum(nominative, accusative)
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishThirdFemininePerson:
+                belongs Human
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishThirdSingular:
+                belongs AgreementBearer
+                syn:
+                    feature:
+                        number = singular
+                        person = third
+        insert into node(language, @evo:en-standard:0) at end:
+            trait EnglishVoiceBearer:
+                syn:
+                    feature:
+                        voice = enum(active, passive)
+        insert into node(language, @evo:en-standard:0) at end:
+            trait StandardEnglishProfile:
+                belongs GB020_Present
+                belongs GB021_Present
+                belongs GB028_Absent
+                belongs GB030_Present
+                belongs GB044_Present
+                belongs GB057_Absent
+                belongs GB059_Absent
+                belongs GB068_Absent
+                belongs GB070_Absent
+                belongs GB074_Present
+                belongs GB075_Absent
+                belongs GB082_Absent
+                belongs GB083_Present
+                belongs GB084_Absent
+                belongs GB086_Absent
+                belongs GB103_Absent
+                belongs GB107_Present
+                belongs GB117_Present
+                belongs GB118_Present
+                belongs GB132_Present
+                belongs GB147_Absent
+                belongs GB155_Absent
+                belongs GB262_Absent
+                belongs GB322_Absent
+                belongs GB522_Absent
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign EnglishAttributiveNP:
+                belongs EnglishConstruction
+                belongs AttributionConstruction
+                belongs EnglishReferenceFrame
+                syn:
+                    feature:
+                        order = enum(attribute_nominal)
+                        order = attribute_nominal
+                phon:
+                    /{attribute} {nominal}/
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign EnglishCopularPredication:
+                belongs EnglishConstruction
+                belongs CopularPredicationConstruction
+                belongs EnglishCopularFrame
+                belongs AgreementBearer
+                syn:
+                    feature:
+                        finite_form = enum(base, third_singular)
+                        number => $slot.subject.syn.number @stage word
+                        person => $slot.subject.syn.person @stage word
+                        finite_form => third_singular / $slot.subject == [EnglishThirdSingular] @stage word
+                            else finite_form => base
+                phon:
+                    realization:
+                        case:
+                            $self.syn.finite_form == third_singular:
+                                /{subject} is {predicate}/
+                            else:
+                                /{subject} {copula} {predicate}/
+                    /{subject} {copula} {predicate}/
+                prag:
+                    clause-type = declarative
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign EnglishCountNounForm:
+                belongs EnglishConstruction
+                belongs EnglishCountMeaning
+                belongs EnglishCountNounFrame
+                belongs AgreementBearer
+                syn:
+                    slots:
+                        stem [Noun]
+                phon:
+                    realization:
+                        case:
+                            $self.syn.number == plural:
+                                /{stem}s/
+                            else:
+                                /{stem}/
+                    /{stem}/
+                sem:
+                    feature:
+                        number => $self.syn.number @stage word
+                    roles:
+                        referent [Entity]
+                        referent = {stem}
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign EnglishDefiniteNP:
+                belongs EnglishConstruction
+                belongs DeterminationConstruction
+                belongs EnglishReferenceFrame
+                syn:
+                    feature:
+                        determination = enum(definite, indefinite)
+                        determination = definite
+                phon:
+                    /{determiner} {nominal}/
+                prag:
+                    identifiability = identifiable
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign EnglishDoNegation:
+                belongs EnglishConstruction
+                belongs NegationConstruction
+                belongs EnglishNegationFrame
+                belongs AgreementBearer
+                syn:
+                    slots:
+                        subject [Nominal]
+                        auxiliary [EnglishAuxiliary]
+                        negator [EnglishNegator]
+                    feature:
+                        finite_form = enum(base, third_singular)
+                        number => $slot.subject.syn.number @stage word
+                        person => $slot.subject.syn.person @stage word
+                        finite_form => third_singular / $slot.subject == [EnglishThirdSingular] @stage word
+                            else finite_form => base
+                phon:
+                    realization:
+                        case:
+                            $self.syn.finite_form == third_singular:
+                                /{subject} does {negator} {predicate}/
+                            else:
+                                /{subject} {auxiliary} {negator} {predicate}/
+                    /{subject} {auxiliary} {negator} {predicate}/
+                prag:
+                    clause-type = declarative
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign EnglishIndefiniteNP:
+                belongs EnglishConstruction
+                belongs DeterminationConstruction
+                belongs EnglishReferenceFrame
+                syn:
+                    feature:
+                        determination = enum(definite, indefinite)
+                        determination = indefinite
+                phon:
+                    /{determiner} {nominal}/
+                prag:
+                    identifiability = non-identifiable
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign EnglishIntransitiveClause:
+                belongs EnglishConstruction
+                belongs IntransitiveClauseConstruction
+                belongs EnglishClauseFrame
+                belongs AgreementBearer
+                syn:
+                    slot_features:
+                        subject.case = $slot.predicate.syn.subject_case
+                    feature:
+                        finite_form = enum(base, third_singular)
+                        agreement_number = enum(singular, plural)
+                        subject_case = enum(nominative, accusative)
+                        number => $slot.subject.syn.number @stage word
+                        person => $slot.subject.syn.person @stage word
+                        agreement_number => $slot.subject.syn.number @stage word
+                        subject_case => require($slot.subject.syn.case, $slot.predicate.syn.subject_case) @stage word
+                        finite_form => third_singular / $slot.subject == [EnglishThirdSingular] @stage word
+                            else finite_form => base
+                phon:
+                    realization:
+                        case:
+                            $self.syn.finite_form == third_singular:
+                                /{subject} {predicate}s/
+                            else:
+                                /{subject} {predicate}/
+                    /{subject} {predicate}/
+                prag:
+                    clause-type = declarative
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign EnglishPeriphrasticPassive:
+                belongs EnglishConstruction
+                belongs PassiveConstruction
+                belongs EnglishPassiveFrame
+                belongs AgreementBearer
+                syn:
+                    feature:
+                        finite_form = enum(base, third_singular)
+                        number => $slot.patient.syn.number @stage word
+                        person => $slot.patient.syn.person @stage word
+                        finite_form => third_singular / $slot.patient == [EnglishThirdSingular] @stage word
+                            else finite_form => base
+                phon:
+                    realization:
+                        case:
+                            $self.syn.finite_form == third_singular:
+                                /{patient} is {predicate} by {agent}/
+                            else:
+                                /{patient} {auxiliary} {predicate} by {agent}/
+                    /{patient} {auxiliary} {predicate} by {agent}/
+                prag:
+                    perspective = patient-prominent
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign EnglishPluralNP:
+                belongs EnglishConstruction
+                belongs NumberMarkingConstruction
+                belongs EnglishCountMeaning
+                belongs EnglishReferenceFrame
+                belongs AgreementBearer
+                syn:
+                    feature:
+                        number = plural
+                phon:
+                    /{nominal}{marker}/
+                sem:
+                    feature:
+                        number = plural
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign EnglishPolarQuestion:
+                belongs EnglishConstruction
+                belongs PolarQuestionConstruction
+                belongs EnglishQuestionFrame
+                belongs AgreementBearer
+                syn:
+                    slots:
+                        auxiliary [EnglishAuxiliary]
+                        subject [Nominal]
+                    feature:
+                        finite_form = enum(base, third_singular)
+                        number => $slot.subject.syn.number @stage word
+                        person => $slot.subject.syn.person @stage word
+                        finite_form => third_singular / $slot.subject == [EnglishThirdSingular] @stage word
+                            else finite_form => base
+                phon:
+                    realization:
+                        case:
+                            $self.syn.finite_form == third_singular:
+                                /does {subject} {clause}/
+                            else:
+                                /{auxiliary} {subject} {clause}/
+                    /{auxiliary} {subject} {clause}/
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign EnglishPossessiveNP:
+                belongs EnglishConstruction
+                belongs PossessionConstruction
+                belongs EnglishReferenceFrame
+                phon:
+                    /{possessor}s {possessed}/
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign EnglishPrepositionalPhrase:
+                belongs EnglishConstruction
+                belongs PrepositionalPhrase
+                belongs EnglishRelationFrame
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign EnglishSVOTransitiveClause:
+                belongs EnglishConstruction
+                belongs SVOTransitiveClause
+                belongs EnglishClauseFrame
+                belongs AgreementBearer
+                syn:
+                    slot_features:
+                        subject.case = $slot.predicate.syn.subject_case
+                        object.case = $slot.predicate.syn.object_case
+                    feature:
+                        finite_form = enum(base, third_singular)
+                        agreement_number = enum(singular, plural)
+                        subject_case = enum(nominative, accusative)
+                        object_case = enum(nominative, accusative)
+                        number => $slot.subject.syn.number @stage word
+                        person => $slot.subject.syn.person @stage word
+                        agreement_number => $slot.subject.syn.number @stage word
+                        subject_case => require($slot.subject.syn.case, $slot.predicate.syn.subject_case) @stage word
+                        object_case => require($slot.object.syn.case, $slot.predicate.syn.object_case) @stage word
+                        finite_form => third_singular / $slot.subject == [EnglishThirdSingular] @stage word
+                            else finite_form => base
+                phon:
+                    realization:
+                        case:
+                            $self.syn.finite_form == third_singular:
+                                /{subject} {predicate}s {object}/
+                            else:
+                                /{subject} {predicate} {object}/
+                    /{subject} {predicate} {object}/
+                prag:
+                    clause-type = declarative
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign a:
+                belongs EnglishDeterminer
+                belongs EnglishIdentifiability
+                phon:
+                    /a/
+                sem:
+                    feature:
+                        identifiability = indefinite
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign be:
+                belongs EnglishCopula
+                belongs EnglishCopulaFrame
+                phon:
+                    /be/
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign big:
+                belongs EnglishAdjective
+                belongs EnglishBigProperty
+                phon:
+                    /big/
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign book:
+                belongs Noun
+                belongs EnglishCaseBearer
+                belongs EnglishBookConcept
+                belongs EnglishThirdSingular
+                phon:
+                    /book/
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign do:
+                belongs EnglishAuxiliary
+                belongs EnglishDoSupportFrame
+                phon:
+                    /do/
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign dog:
+                belongs Noun
+                belongs EnglishCaseBearer
+                belongs EnglishDogConcept
+                belongs EnglishThirdSingular
+                phon:
+                    /dog/
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign house:
+                belongs Noun
+                belongs EnglishCaseBearer
+                belongs EnglishHouseConcept
+                belongs EnglishThirdSingular
+                phon:
+                    /house/
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign in:
+                belongs Adposition
+                belongs EnglishInRelation
+                phon:
+                    /in/
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign john:
+                belongs Noun
+                belongs EnglishCaseBearer
+                belongs Human
+                belongs EnglishThirdSingular
+                phon:
+                    /john/
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign mary:
+                belongs Noun
+                belongs EnglishCaseBearer
+                belongs Human
+                belongs EnglishThirdSingular
+                phon:
+                    /mary/
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign not:
+                belongs EnglishNegator
+                phon:
+                    /not/
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign plural_s:
+                belongs EnglishPluralMarker
+                belongs EnglishCountMeaning
+                phon:
+                    /s/
+                sem:
+                    feature:
+                        number = plural
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign run:
+                belongs EnglishFiniteIntransitivePredicate
+                belongs EnglishRunFrame
+                phon:
+                    /run/
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign see:
+                belongs EnglishFiniteTransitivePredicate
+                belongs EnglishSeeFrame
+                phon:
+                    /see/
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign seen:
+                belongs Transitive
+                belongs EnglishSeeFrame
+                belongs EnglishVoiceBearer
+                lexicalized = true
+                syn:
+                    feature:
+                        voice = passive
+                phon:
+                    /seen/
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign she:
+                belongs Pronoun
+                belongs EnglishCaseBearer
+                belongs EnglishThirdSingular
+                belongs EnglishThirdFemininePerson
+                phon:
+                    realization:
+                        case:
+                            $self.syn.case == nominative:
+                                /she/
+                            $self.syn.case == accusative:
+                                /her/
+                    /she/
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign the:
+                belongs EnglishDeterminer
+                belongs EnglishIdentifiability
+                phon:
+                    /the/
+                sem:
+                    feature:
+                        identifiability = definite

@@ -68,7 +68,6 @@ fn capability(kind: NodeKind) -> ReconstructCapability {
         NodeKind::Block => ReconstructCapability::StructuralContainer,
         NodeKind::RealizationBranch => ReconstructCapability::Unsupported,
         NodeKind::DslDeclaration
-        | NodeKind::Prosody
         | NodeKind::Distribution
         | NodeKind::Trait
         | NodeKind::Sign
@@ -386,8 +385,7 @@ fn sequence_key(document: &LanguageDocument, entry: &NodeEntryV1) -> Option<Sequ
         AddressSegment::PhonElse(_) => (17, 0),
         // Canonical unordered collections and expression-only singleton /
         // argument positions are intentionally not Move sequences.
-        AddressSegment::Prosody
-        | AddressSegment::Distribution(_)
+        AddressSegment::Distribution(_)
         | AddressSegment::Traits(_)
         | AddressSegment::Signs(_)
         | AddressSegment::CaseExpression
@@ -864,11 +862,6 @@ fn shallow_updates(
         (DetachedNode::DslDeclaration(old), DetachedNode::DslDeclaration(new)) => {
             if old != new {
                 updates.push(NodeUpdate::DslDeclaration(new.clone()));
-            }
-        }
-        (DetachedNode::Prosody(old), DetachedNode::Prosody(new)) => {
-            if old != new {
-                updates.push(NodeUpdate::Prosody(new.clone()));
             }
         }
         (

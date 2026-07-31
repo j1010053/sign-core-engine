@@ -1,0 +1,14 @@
+/* Standard evolution recipes.
+
+   Recipe is an authoring-time file grouping only. The executable declarations
+   remain ordinary functions, and their bodies use the common call syntax. */
+
+package std:grammaticalization:
+    schema = conlang.functions/v1
+
+/* Bleach a verb sense, reanalyse its syntactic category, then increase its
+   entrenchment. Step 17 evaluates these calls as a sequential handoff. */
+function VerbToTense(verb [Verb], tense, result_category):
+    drift(verb, sense: core, gloss: tense)
+    reanalyze(verb, target: category, to: result_category)
+    entrench(verb, delta: 0.3)

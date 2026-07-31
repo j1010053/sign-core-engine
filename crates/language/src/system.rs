@@ -10,6 +10,7 @@ use crate::diagnostic::{Diagnostic, DiagnosticSource, Severity, SourceLocation, 
 use crate::library::{self, LibraryId, LibraryLoadError, LibrarySpec};
 use crate::ontology::OntologyRegistry;
 use crate::path::parse_path;
+use crate::sampling::{sample_weighted_index, WeightedSampleError};
 use crate::semantic_dto::{SemanticDocumentError, SemanticDocumentV1, SemanticNodeV1};
 use crate::synchronic::{self, RuleRecord, RuleStatus, SelfRead, SlotRead};
 use crate::{
@@ -4105,52 +4106,23 @@ impl CompiledSystem {
                     .ok_or_else(|| SystemError::UnknownCandidate(id.clone()))?
             }
             CandidateSelector::SampleEntrenchment { seed } => {
-                // Normalize before summing. Individually finite weights can
-                // overflow when added (for example, 1e308 + 1e308), which
-                // would otherwise make every draw infinite and force the
-                // fallback candidate. Scaling preserves all weight ratios and
-                // bounds the total by the number of candidates.
-                let max_weight = candidates
+                let weights = candidates
                     .candidates
                     .iter()
                     .map(|candidate| candidate.entrenchment)
-                    .fold(0.0_f64, f64::max);
-                if max_weight <= 0.0 {
-                    return Err(SystemError::ZeroCandidateWeight);
-                }
-                let scaled_total: f64 = candidates
-                    .candidates
-                    .iter()
-                    .map(|candidate| candidate.entrenchment / max_weight)
-                    .sum();
-                // SplitMix64 is small, stable and entirely specified here;
-                // the exact draw is therefore replayable across platforms.
-                let mut state = seed.wrapping_add(0x9e3779b97f4a7c15);
-                state = (state ^ (state >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-                state = (state ^ (state >> 27)).wrapping_mul(0x94d049bb133111eb);
-                state ^= state >> 31;
-                let unit = (state >> 11) as f64 / ((1u64 << 53) as f64);
-                let mut draw = unit * scaled_total;
+                    .collect::<Vec<_>>();
+                let sample =
+                    sample_weighted_index(&weights, seed).map_err(|error| match error {
+                        WeightedSampleError::Empty | WeightedSampleError::AllZero => {
+                            SystemError::ZeroCandidateWeight
+                        }
+                        WeightedSampleError::InvalidWeight { .. } => {
+                            SystemError::InvalidSignExpression(error.to_string())
+                        }
+                    })?;
                 candidates
                     .candidates
-                    .iter()
-                    .filter(|candidate| candidate.entrenchment > 0.0)
-                    .find(|candidate| {
-                        let scaled_weight = candidate.entrenchment / max_weight;
-                        if draw < scaled_weight {
-                            true
-                        } else {
-                            draw -= scaled_weight;
-                            false
-                        }
-                    })
-                    .or_else(|| {
-                        candidates
-                            .candidates
-                            .iter()
-                            .rev()
-                            .find(|candidate| candidate.entrenchment > 0.0)
-                    })
+                    .get(sample.selected_index)
                     .ok_or(SystemError::ZeroCandidateWeight)?
             }
         };

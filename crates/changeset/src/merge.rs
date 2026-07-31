@@ -31,7 +31,6 @@
 //! | `signs` | 穩定 id | **逐項** |
 //! | `traits` | 穩定 id(向 identity manifest 取) | **逐項** |
 //! | `distribution` | 鍵字串 | **逐項** |
-//! | `prosody` | 無——單一條鏈,沒有「第幾項對第幾項」 | 整塊 |
 //! | `dsl_decls` | 無——不透明 verbatim(I15-a),看不進內容 | 整塊 |
 //!
 //! 逐項的三個**共用同一段泛型程式**(`merge_keyed`)。寫三份幾乎一樣的程式會走鐘:
@@ -83,8 +82,6 @@ pub struct Pick {
 pub enum MergeBlock {
     /// 不透明 verbatim 行(I15-a),合併器看不進內容。
     DslDecls,
-    /// 單一條七層鏈——**沒有「聯集」可言**,只能擇一或重寫。
-    Prosody,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -245,16 +242,6 @@ pub fn plan_merge(
         &mut blocks,
         &mut conflicts,
     );
-    merge_block(
-        MergeBlock::Prosody,
-        base.map(|d| &d.language().prosody),
-        &sides
-            .iter()
-            .map(|d| &d.language().prosody)
-            .collect::<Vec<_>>(),
-        &mut blocks,
-        &mut conflicts,
-    );
 
     Ok(MergePlan {
         signs,
@@ -320,7 +307,6 @@ pub fn materialize(
         let source = source_of(base, sides, *from)?;
         match block {
             MergeBlock::DslDecls => language.dsl_decls = source.language().dsl_decls.clone(),
-            MergeBlock::Prosody => language.prosody = source.language().prosody.clone(),
         }
     }
     let mut origins = Origins::default();
@@ -509,7 +495,6 @@ fn inherited_id(
         AddressSegment::DslDeclarations(_) => {
             (block_source(plan, MergeBlock::DslDecls)?, head.clone())
         }
-        AddressSegment::Prosody => (block_source(plan, MergeBlock::Prosody)?, head.clone()),
         _ => return Err(MergeError::UnexpectedAddress(address.clone())),
     };
     let mut source_address = vec![source_head];
@@ -783,7 +768,7 @@ fn distribution_by_key(document: &LanguageDocument) -> BTreeMap<String, &String>
 
 #[cfg(test)]
 mod tests {
-    //! 無鍵區段的三態分支**只能在模組內測**——改 `prosody`/`dsl_decls` 沒有 `.chg`
+    //! 無鍵區段的三態分支**只能在模組內測**——改 `dsl_decls` 沒有 `.chg`
     //! 路徑,從文件層構造不出「只有一邊改過區塊」的輸入。而那正是 3-way 相對 2-way
     //! 的唯一差別所在;不測它,`merge_block` 可以退化成「全體一致才不衝突」而整合
     //! 測試全綠(每次合併都假衝突,但沒有測試看得到)。
@@ -796,7 +781,7 @@ mod tests {
     ) -> (Vec<(MergeBlock, Option<usize>)>, Vec<MergeConflict>) {
         let (mut blocks, mut conflicts) = (Vec::new(), Vec::new());
         merge_block(
-            MergeBlock::Prosody,
+            MergeBlock::DslDecls,
             base,
             sides,
             &mut blocks,
@@ -810,7 +795,7 @@ mod tests {
         // **3-way 的判別分支**。B 還是祖先的樣子 ⇒ 不是分歧,是 A 單方面改動。
         let (base, changed, same) = (vec!["mu"], vec!["sigma"], vec!["mu"]);
         let (blocks, conflicts) = block(Some(&base), &[&changed, &same]);
-        assert_eq!(blocks, vec![(MergeBlock::Prosody, Some(0))]);
+        assert_eq!(blocks, vec![(MergeBlock::DslDecls, Some(0))]);
         assert!(conflicts.is_empty(), "{conflicts:?}");
     }
 
@@ -818,7 +803,7 @@ mod tests {
     fn a_block_nobody_touched_stays_on_the_base() {
         let base = vec!["mu"];
         let (blocks, conflicts) = block(Some(&base), &[&base, &base]);
-        assert_eq!(blocks, vec![(MergeBlock::Prosody, None)]);
+        assert_eq!(blocks, vec![(MergeBlock::DslDecls, None)]);
         assert!(conflicts.is_empty());
     }
 
@@ -826,7 +811,7 @@ mod tests {
     fn a_block_changed_to_the_same_value_is_clean() {
         let (base, left, right) = (vec!["mu"], vec!["sigma"], vec!["sigma"]);
         let (blocks, conflicts) = block(Some(&base), &[&left, &right]);
-        assert_eq!(blocks, vec![(MergeBlock::Prosody, Some(0))]);
+        assert_eq!(blocks, vec![(MergeBlock::DslDecls, Some(0))]);
         assert!(conflicts.is_empty());
     }
 
@@ -835,7 +820,7 @@ mod tests {
         let (base, left, right) = (vec!["mu"], vec!["sigma"], vec!["foot"]);
         let (blocks, conflicts) = block(Some(&base), &[&left, &right]);
         assert!(blocks.is_empty(), "衝突時不得留下取值");
-        assert_eq!(conflicts, vec![MergeConflict::Block(MergeBlock::Prosody)]);
+        assert_eq!(conflicts, vec![MergeConflict::Block(MergeBlock::DslDecls)]);
     }
 
     #[test]
@@ -843,11 +828,11 @@ mod tests {
         // 無共同祖先 ⇒ 沒有「誰動過」可言 ⇒ 只有全體一致才不衝突。
         let (left, right) = (vec!["mu"], vec!["sigma"]);
         let (_, conflicts) = block(None, &[&left, &right]);
-        assert_eq!(conflicts, vec![MergeConflict::Block(MergeBlock::Prosody)]);
+        assert_eq!(conflicts, vec![MergeConflict::Block(MergeBlock::DslDecls)]);
 
         let same = vec!["mu"];
         let (blocks, conflicts) = block(None, &[&left, &same]);
-        assert_eq!(blocks, vec![(MergeBlock::Prosody, Some(0))]);
+        assert_eq!(blocks, vec![(MergeBlock::DslDecls, Some(0))]);
         assert!(conflicts.is_empty());
     }
 
