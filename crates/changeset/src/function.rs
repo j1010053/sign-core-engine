@@ -471,6 +471,10 @@ fn check_cycles(package: &FunctionPackage) -> Result<(), ReplayError> {
 pub struct ResolvedFunction {
     pub package: String,
     pub priority: i32,
+    /// 是否列在套件的 export 表。**未 export 者仍進表**,但只有同套件內的呼叫看得到
+    /// ——那就是「套件私有 function」。先前的作法是直接丟掉,導致套件內的呼叫圖
+    /// 根本不存在(一個 Recipe 無法把步驟拆成同套件的小函式)。
+    pub exported: bool,
     pub definition: FunctionDef,
 }
 
@@ -483,23 +487,53 @@ pub struct FunctionTable {
 
 impl FunctionTable {
     /// `套件::符號` 全名,或裸名(auto-discovery)。
+    /// 外部(`.chg` 或宿主)看得到的解析:**只有 export 表上的**。
+    ///
+    /// export 表是唯一穩定契約(P29),故跨套件與外部呼叫都走這條。
     pub fn get(&self, name: &str) -> Result<&FunctionDef, ReplayError> {
+        self.resolve(name, None).map(|entry| &entry.definition)
+    }
+
+    /// 帶**呼叫端套件**的解析:看得到 export 表上的,**外加該套件自己的私有 function**。
+    ///
+    /// 私有性是這樣達成的——不是「不進表」,而是「別的套件查不到」。前者會讓套件內
+    /// 的呼叫圖整個不存在。
+    pub fn resolve(
+        &self,
+        name: &str,
+        from_package: Option<&str>,
+    ) -> Result<&ResolvedFunction, ReplayError> {
+        let visible = |entry: &&ResolvedFunction| {
+            entry.exported || from_package.is_some_and(|package| package == entry.package)
+        };
         if let Some((package, symbol)) = name.split_once("::") {
             return self
                 .entries
                 .get(symbol)
-                .and_then(|found| found.iter().find(|entry| entry.package == package))
-                .map(|entry| &entry.definition)
+                .and_then(|found| {
+                    found
+                        .iter()
+                        .filter(visible)
+                        .find(|entry| entry.package == package)
+                })
                 .ok_or_else(|| ReplayError::Parse(format!("unknown function {name:?}")));
         }
-        let found = self
+        let found: Vec<&ResolvedFunction> = self
             .entries
             .get(name)
-            .ok_or_else(|| ReplayError::Parse(format!("unknown function {name:?}")))?;
-        let top = found
+            .map(|found| found.iter().filter(visible).collect())
+            .unwrap_or_default();
+        // **同套件的私有定義優先於外來的同名 export**:呼叫端寫的是自己套件裡的名字,
+        // 被別的套件的同名 export 搶走會是最難查的一種錯。
+        if let Some(package) = from_package {
+            if let Some(own) = found.iter().find(|entry| entry.package == package) {
+                return Ok(own);
+            }
+        }
+        let top = *found
             .iter()
             .max_by_key(|entry| entry.priority)
-            .expect("non-empty");
+            .ok_or_else(|| ReplayError::Parse(format!("unknown function {name:?}")))?;
         // 同名同 priority → 強制消歧(P29「warn + 強制消歧」的嚴格面:
         // 呼叫時才不得含糊)。
         if found
@@ -512,7 +546,7 @@ impl FunctionTable {
                 "ambiguous function {name:?} at equal priority; qualify it as `package::{name}`"
             )));
         }
-        Ok(&top.definition)
+        Ok(top)
     }
 
     pub fn names(&self) -> impl Iterator<Item = &str> {
@@ -521,6 +555,13 @@ impl FunctionTable {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// 表裡**有沒有這個名字**(不論可見性)。用來把「看不到」與「根本不是 function」
+    /// 分開報 —— 兩者的訊息差很多,混在一起會把使用者導向錯的方向。
+    pub(crate) fn defines(&self, name: &str) -> bool {
+        let symbol = name.split_once("::").map_or(name, |(_, symbol)| symbol);
+        self.entries.contains_key(symbol)
     }
 
     pub(crate) fn contains(&self, name: &str) -> bool {
@@ -597,17 +638,11 @@ fn validate_constraint(
     document: &LanguageDocument,
     libraries: &LibrarySpec,
 ) -> Result<(), ReplayError> {
-    let sign = value
-        .trim()
-        .strip_prefix("sign(")
-        .and_then(|rest| rest.strip_suffix(')'))
-        .map(str::trim)
-        .map(|name| name.trim_matches('"'))
-        .ok_or_else(|| {
-            ReplayError::Parse(format!(
-                "function {function:?} parameter {parameter:?} [{constraint}] expects sign(\"…\"), got {value:?}"
-            ))
-        })?;
+    let sign = sign_argument(value).ok_or_else(|| {
+        ReplayError::Parse(format!(
+            "function {function:?} parameter {parameter:?} [{constraint}] expects sign(\"…\"), got {value:?}"
+        ))
+    })?;
     let definition = document
         .language()
         .signs
@@ -631,6 +666,147 @@ fn validate_constraint(
         )));
     }
     Ok(())
+}
+
+/// `sign("x")` → `x`。參數約束與 guard 都要認這個形狀,**共用一個解析**
+/// ——兩份會走鐘,而走鐘的後果是「約束擋得住的、guard 擋不住」。
+fn sign_argument(value: &str) -> Option<&str> {
+    value
+        .trim()
+        .strip_prefix("sign(")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .map(str::trim)
+        .map(|name| name.trim_matches('"'))
+}
+
+/// guard 裡出現在**路徑頭**的已綁定參數名(`verb.syn.category` 的 `verb`)。
+///
+/// 以識別字為單位掃描而非用 `contains`:參數叫 `verb` 而值裡剛好有 `verb.` 時,
+/// 字串比對會誤判成「這個 guard 讀的是該參數」。
+fn guard_subjects(guard: &str, bindings: &BTreeMap<String, String>) -> BTreeSet<String> {
+    let bytes = guard.as_bytes();
+    let mut subjects = BTreeSet::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if !(bytes[index].is_ascii_alphabetic() || bytes[index] == b'_') {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while index < bytes.len() && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+        {
+            index += 1;
+        }
+        // 只有後面緊跟 `.` 才是「路徑頭」;單獨出現的識別字是**值**(如 `== verb`)。
+        if bytes.get(index) == Some(&b'.') {
+            let name = &guard[start..index];
+            if bindings.contains_key(name) {
+                subjects.insert(name.to_owned());
+            }
+        }
+    }
+    subjects
+}
+
+/// 把 guard 改寫成求值器認得的形式:主體換成 `$self`,**其餘已綁定的參數換成它的值**。
+///
+/// 兩者都必要:`x.syn.category == y` 裡 `x` 是主體、`y` 是**值**。只換主體的話,
+/// 右端會拿字面上的 `y` 去比,而那**永遠不相等** —— 是靜默的錯答案,不是錯誤。
+fn rewrite_guard(guard: &str, subject: &str, bindings: &BTreeMap<String, String>) -> String {
+    let bytes = guard.as_bytes();
+    let mut output = String::with_capacity(guard.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if !(bytes[index].is_ascii_alphabetic() || bytes[index] == b'_') {
+            output.push(bytes[index] as char);
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while index < bytes.len() && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+        {
+            index += 1;
+        }
+        let name = &guard[start..index];
+        let is_path_head = bytes.get(index) == Some(&b'.');
+        if is_path_head && name == subject {
+            output.push_str("$self");
+        } else if !is_path_head && bindings.contains_key(name) {
+            output.push_str(&bindings[name]);
+        } else {
+            output.push_str(name);
+        }
+    }
+    output
+}
+
+/// 對一個 function guard 求值(P49 `function Name(…) / guard:`;
+/// 分支的 `<call> / guard` 同一套)。
+///
+/// ## 一套 guard 語言,不是兩套
+///
+/// 形狀沿用 `.lang` 規則的 `/ guard`(修補10 §3 的例:`/ verb.syn.category == verb`),
+/// 差別只在**主體是參數名而非 `$self`**。故求值方式是:把參數名代換成 `$self`,
+/// 再交給 `.lang` 既有的求值器(`synchronic::guard_matches_sign`)。
+///
+/// 自己在這裡另寫一個述詞求值器會製造第二套語意——而那個走鐘是**無聲的**:
+/// 同一句 guard 共時求值是一個意思、歷時求值是另一個意思。
+///
+/// ## 在**實際 base** 上求值
+///
+/// 承修補10 §11.2:「guard 到 invoke 時才在實際 base 上求值,定義檔即完全
+/// base-independent」。故這裡吃的是當下的 `document`,不是定義時的任何東西。
+///
+/// ## 讀的是 effective sign
+///
+/// 與參數約束一致——約束走 `belongs` 閉包(`category_is_a`),guard 也該看得到繼承
+/// 下來的內容,否則「約束過得了、guard 過不了」會變成兩套可見範圍。
+fn guard_holds(
+    owner: &str,
+    guard: &str,
+    bindings: &BTreeMap<String, String>,
+    document: &LanguageDocument,
+    libraries: &LibrarySpec,
+) -> Result<bool, ReplayError> {
+    let subjects = guard_subjects(guard, bindings);
+    let subject = match subjects.len() {
+        1 => subjects.into_iter().next().expect("len == 1"),
+        0 => {
+            return Err(ReplayError::Parse(format!(
+                "FUNCTION_GUARD_NO_SUBJECT: {owner:?} guard {guard:?} reads no bound parameter"
+            )))
+        }
+        // **明確拒絕而非猜一個**:跨參數的 guard 需要多主體求值,`.lang` 的求值器
+        // 只認一個 `$self`。挑其中一個會靜默給出錯的答案。
+        _ => return Err(ReplayError::Parse(format!(
+            "FUNCTION_GUARD_MULTI_SUBJECT: {owner:?} guard {guard:?} reads more than one parameter"
+        ))),
+    };
+    let value = bindings.get(&subject).expect("subject is bound");
+    let name = sign_argument(value).ok_or_else(|| {
+        ReplayError::Parse(format!(
+            "FUNCTION_GUARD_SUBJECT_NOT_A_SIGN: {owner:?} guard {guard:?} needs sign(\"…\"), got {value:?}"
+        ))
+    })?;
+    let sign = document
+        .language()
+        .signs
+        .iter()
+        .find(|candidate| candidate.name == name)
+        .ok_or_else(|| {
+            ReplayError::Parse(format!(
+                "FUNCTION_GUARD_UNKNOWN_SIGN: {owner:?} guard {guard:?} names unknown sign {name:?}"
+            ))
+        })?;
+    let system = compile_document(document, libraries)?;
+    let effective = system.ontology.effective_sign(sign);
+    let rewritten = rewrite_guard(guard, &subject, bindings);
+    conlang_language::synchronic::guard_matches_sign(&effective, &rewritten, &system.ontology)
+        .map_err(|error| {
+            ReplayError::Parse(format!(
+                "FUNCTION_GUARD_ERROR: {owner:?} guard {guard:?}: {error}"
+            ))
+        })
 }
 
 fn substitute(value: &str, bindings: &BTreeMap<String, String>) -> String {
@@ -662,6 +838,8 @@ struct EvaluationState<'a> {
     edits: Vec<PrimitiveEdit>,
     trace: Vec<FunctionTraceStep>,
     stack: Vec<String>,
+    /// 當下正在求值的 function 屬於哪個套件——決定它看不看得到私有的同套件 function。
+    package: Option<String>,
 }
 
 impl EvaluationState<'_> {
@@ -669,15 +847,33 @@ impl EvaluationState<'_> {
         &mut self,
         invocation: &FunctionCall,
     ) -> Result<Option<FunctionCandidates>, ReplayError> {
-        let definition = self.table.get(&invocation.name)?.clone();
-        if definition.guard.is_some() {
-            return Err(ReplayError::Parse(format!(
-                "FUNCTION_GUARD_UNSUPPORTED: function {:?} has a header guard",
-                definition.name
-            )));
-        }
+        let resolved = self
+            .table
+            .resolve(&invocation.name, self.package.as_deref())?
+            .clone();
+        let definition = resolved.definition;
         let bindings = bind_parameters(&definition, invocation, &self.document, self.libraries)?;
+        // header guard **不成立即錯**,不是靜默不做事。
+        //
+        // 理由是與姊妹機制一致:修補10 §3 明說「參數約束**取代大部分 guard**」,兩者
+        // 是同一個用途的兩種寫法;而參數約束不符時是 `Err`。若 guard 改成「不符就當
+        // 沒呼叫過」,同一個條件寫成約束會擋、寫成 guard 會靜默略過。
+        if let Some(guard) = &definition.guard {
+            if !guard_holds(
+                &definition.name,
+                guard,
+                &bindings,
+                &self.document,
+                self.libraries,
+            )? {
+                return Err(ReplayError::Parse(format!(
+                    "FUNCTION_GUARD_UNSATISFIED: function {:?} guard {guard:?} does not hold",
+                    definition.name
+                )));
+            }
+        }
         self.stack.push(definition.name.clone());
+        let outer_package = self.package.replace(resolved.package.clone());
         let result = match &definition.body {
             FunctionBody::Sequence(calls) => {
                 for call in calls {
@@ -686,32 +882,62 @@ impl EvaluationState<'_> {
                 }
                 None
             }
+            // `case:` = **第一個成立的分支**(first-match)。`guard == None` 是 `else`,
+            // 恆成立,故它一旦出現就終結搜尋——與 `.lang` 的 `case` 同語意。
             FunctionBody::Case(branches) => {
-                let branch = branches
-                    .iter()
-                    .find(|branch| branch.guard.is_none())
-                    .ok_or_else(|| {
-                        ReplayError::Parse(format!(
-                            "FUNCTION_GUARD_UNSUPPORTED: function {:?} has no unguarded case branch",
-                            definition.name
-                        ))
-                    })?;
+                let mut selected = None;
+                for branch in branches {
+                    let matched = match &branch.guard {
+                        None => true,
+                        Some(guard) => guard_holds(
+                            &definition.name,
+                            guard,
+                            &bindings,
+                            &self.document,
+                            self.libraries,
+                        )?,
+                    };
+                    if matched {
+                        selected = Some(branch);
+                        break;
+                    }
+                }
+                // 全部不成立**即錯**,不是安靜跳過:`case:` 的契約是「選一個」,
+                // 選不出來就是作者沒寫兜底,該讓他知道。
+                let branch = selected.ok_or_else(|| {
+                    ReplayError::Parse(format!(
+                        "FUNCTION_CASE_NO_BRANCH: function {:?} has no matching branch and no else",
+                        definition.name
+                    ))
+                })?;
                 self.evaluate_call(&bind_call(&branch.call, &bindings))?;
                 None
             }
+            // `when:` = **所有成立的分支依序合併**(accumulate)。與 `case:` 的差別只在
+            // 「取第一個」vs「全取」;guard 不成立的候選**被排除**,這正是 Goal 的
+            // 候選篩選(缺口 2)。
             FunctionBody::When(branches) => {
-                if branches.iter().any(|branch| branch.guard.is_some()) {
-                    return Err(ReplayError::Parse(format!(
-                        "FUNCTION_GUARD_UNSUPPORTED: function {:?} has guarded candidates",
-                        definition.name
-                    )));
+                let mut candidates = Vec::new();
+                for branch in branches {
+                    let matched = match &branch.guard {
+                        None => true,
+                        Some(guard) => guard_holds(
+                            &definition.name,
+                            guard,
+                            &bindings,
+                            &self.document,
+                            self.libraries,
+                        )?,
+                    };
+                    if matched {
+                        candidates.push(bind_call(&branch.call, &bindings));
+                    }
                 }
-                let candidates = branches
-                    .iter()
-                    .map(|branch| bind_call(&branch.call, &bindings))
-                    .collect::<Vec<_>>();
                 for candidate in &candidates {
-                    let target = self.table.get(&candidate.name)?;
+                    let target = &self
+                        .table
+                        .resolve(&candidate.name, Some(&resolved.package))?
+                        .definition;
                     if matches!(target.body, FunctionBody::When(_)) {
                         return Err(ReplayError::Parse(format!(
                             "FUNCTION_CANDIDATE_LAYER: function {:?} yields candidate {:?}, which is another candidate function",
@@ -726,11 +952,18 @@ impl EvaluationState<'_> {
             }
         };
         self.stack.pop();
+        self.package = outer_package;
         Ok(result)
     }
 
     fn evaluate_call(&mut self, invocation: &FunctionCall) -> Result<(), ReplayError> {
-        if self.table.contains(&invocation.name) {
+        if self
+            .table
+            .resolve(&invocation.name, self.package.as_deref())
+            .is_ok()
+        {
+            // 可見 → 當成 function 呼叫。
+
             if self.evaluate(invocation)?.is_some() {
                 return Err(ReplayError::Parse(format!(
                     "FUNCTION_CANDIDATES_REQUIRE_SELECTION: {:?} cannot execute inside a sequence",
@@ -738,6 +971,15 @@ impl EvaluationState<'_> {
                 )));
             }
             return Ok(());
+        }
+        // 名字存在但這裡看不到 ⇒ 它是別的套件的私有 function。若讓它掉到下面的
+        // rewrite 分派,錯誤會變成「unknown rewrite:12 個原子改寫是封閉內建集」
+        // ——那把使用者導向完全錯的方向。
+        if self.table.defines(&invocation.name) {
+            return Err(ReplayError::Parse(format!(
+                "FUNCTION_NOT_VISIBLE: {:?} is defined but not exported from its package",
+                invocation.name
+            )));
         }
         let call = call::Call {
             name: &invocation.name,
@@ -773,6 +1015,7 @@ pub fn evaluate_function_offline(
         edits: Vec::new(),
         trace: Vec::new(),
         stack: Vec::new(),
+        package: None,
     };
     match state.evaluate(invocation)? {
         Some(candidates) => Ok(FunctionEvaluation::Candidates(candidates)),
@@ -1089,9 +1332,7 @@ pub fn functions_from_packages(packages: &[&LibraryPackage]) -> Result<FunctionT
             }
         }
         for definition in combined.functions {
-            if !exported.contains(definition.name.as_str()) {
-                continue; // 未 export = 套件內部,不進表
-            }
+            let is_exported = exported.contains(definition.name.as_str());
             table
                 .entries
                 .entry(definition.name.clone())
@@ -1099,6 +1340,7 @@ pub fn functions_from_packages(packages: &[&LibraryPackage]) -> Result<FunctionT
                 .push(ResolvedFunction {
                     package: package.id.to_string(),
                     priority: package_priority(package),
+                    exported: is_exported,
                     definition,
                 });
         }

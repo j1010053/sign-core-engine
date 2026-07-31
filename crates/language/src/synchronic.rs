@@ -1152,6 +1152,34 @@ pub(crate) fn evaluate_token_guard(
 /// constraints have been applied.  This is intentionally read-only: it lets
 /// a nominal choose an allomorph such as `she`/`her` without mutating the
 /// lexicon or exposing the rest of the construction token.
+/// Evaluate a `.lang` guard against one sign.
+///
+/// Public so the **diachronic function layer can reuse the same guard language**
+/// (P48: 「body 的執行語意由既有的 `case`/`when` 承載」). Exposing this instead of
+/// letting `changeset` grow its own predicate evaluator keeps a single source of
+/// truth for what a guard means; two evaluators would drift and the drift would be
+/// silent (a guard that means one thing synchronically and another diachronically).
+///
+/// The subject is always `$self`. A function guard such as `verb.syn.category == verb`
+/// is rewritten by the caller to `$self.…` after binding its parameter, so this
+/// function stays ignorant of function parameters.
+///
+/// `Err` carries the evaluator's own diagnostic; an unparseable or ill-typed guard is
+/// **never** reported as "unmatched".
+pub fn guard_matches_sign(
+    sign: &SignDef,
+    guard: &str,
+    registry: &OntologyRegistry,
+) -> Result<bool, String> {
+    match evaluate_sign_guard(sign, guard, registry) {
+        (RuleStatus::Matched, _, _, _) => Ok(true),
+        (RuleStatus::Unmatched, _, _, _) => Ok(false),
+        (RuleStatus::Error, _, _, error) => {
+            Err(error.unwrap_or_else(|| format!("GUARD_ERROR: {guard:?}")))
+        }
+    }
+}
+
 pub(crate) fn evaluate_sign_guard(
     sign: &SignDef,
     source: &str,
