@@ -544,8 +544,8 @@ fn when_guards_all_read_the_document_as_it_was_before_any_branch_ran() {
 
 function Chain(x [Verb]):
     when:
-        reanalyze(x, target: category, to: Aux) / x.syn.category == verb
-        entrench(x, delta: 0.5) / x.syn.category == aux
+        reanalyze(x, target: category, to: Aux) / x == [Verb]
+        entrench(x, delta: 0.5) / x == [Aux]
 "#;
     let package = synthetic(LEAKY, &["Chain"]);
     let table = functions_from_packages(&[&package]).expect("loads");

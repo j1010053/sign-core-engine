@@ -891,7 +891,31 @@ fn sign_argument(value: &str) -> Option<&str> {
 ///
 /// 以識別字為單位掃描而非用 `contains`:參數叫 `verb` 而值裡剛好有 `verb.` 時,
 /// 字串比對會誤判成「這個 guard 讀的是該參數」。
+/// `<param> == [Trait]` —— **範疇成員形式**的主體。
+///
+/// guard 語言用 `$self == [Trait]`(`Guard::SelfIsA`,走 `belongs` 閉包)測範疇,
+/// 而不是讀某個欄位——範疇是本體樹的成員關係,不是 def。函數層寫成
+/// `x == [Verb]`,主體 `x` 是**裸識別字**,不在任何路徑頭上。
+///
+/// 這是 `guard_subjects` 的路徑頭掃描看不到的唯一形狀:先前寫成 `x == [Verb]`
+/// 會得到 `FUNCTION_GUARD_NO_SUBJECT`,於是函數層根本用不了範疇分支——而範疇正是
+/// 歷時分支最常見的依據(`reanalyze` 搬的就是它)。
+fn category_guard_subject<'a>(
+    guard: &'a str,
+    bindings: &BTreeMap<String, String>,
+) -> Option<&'a str> {
+    let (left, right) = guard.split_once("==")?;
+    let left = left.trim();
+    if !right.trim_start().starts_with('[') {
+        return None;
+    }
+    bindings.contains_key(left).then_some(left)
+}
+
 fn guard_subjects(guard: &str, bindings: &BTreeMap<String, String>) -> BTreeSet<String> {
+    if let Some(subject) = category_guard_subject(guard, bindings) {
+        return BTreeSet::from([subject.to_owned()]);
+    }
     let bytes = guard.as_bytes();
     let mut subjects = BTreeSet::new();
     let mut index = 0;
@@ -921,6 +945,12 @@ fn guard_subjects(guard: &str, bindings: &BTreeMap<String, String>) -> BTreeSet<
 /// 兩者都必要:`x.syn.category == y` 裡 `x` 是主體、`y` 是**值**。只換主體的話,
 /// 右端會拿字面上的 `y` 去比,而那**永遠不相等** —— 是靜默的錯答案,不是錯誤。
 fn rewrite_guard(guard: &str, subject: &str, bindings: &BTreeMap<String, String>) -> String {
+    if let Some(found) = category_guard_subject(guard, bindings) {
+        if found == subject {
+            let (_, right) = guard.split_once("==").expect("checked above");
+            return format!("$self == {}", right.trim());
+        }
+    }
     let bytes = guard.as_bytes();
     let mut output = String::with_capacity(guard.len());
     let mut index = 0;
