@@ -10,7 +10,8 @@
    A1–A4 / B5–B9 / C10–C11(執行語意)、I1–I18(實作層,docs/05 §9)、
    **P1–P64、P69–P70(架構修補層;P1–P19 權威=《架構修補彙整 01–04》§1，
    P20–P64 權威=《架構修補彙整 05–11》§1，
-   **P69–P70 權威=`specifications/function分支語意與選擇層_v1.0.md` §6**；
+   **P69–P70 權威=`specifications/function分支語意與選擇層_v1.0.md` §6，
+   P71 權威=`specifications/Def路徑封閉清單與feature分工_v1.0.md` §5（已裁定，實作未開始）**；
    個別修補文件保留詳細理由與落地紀錄，出入處一律以彙整為準；
    P7 已廢止→P14，P19 的 nativization 放置由 P56/P58/P64 局部覆寫，
    **P48 的 body 分支語意由 P69 修訂**；
@@ -37,6 +38,7 @@
 | `specifications/分層結構檔本體論_v0.1.md` | 模組 C(節點內部):sign 統一本體、四維特徵結構、組合=運算、固化=語法化、層作視圖投影(v0.1.1 修補)。**設計層,SYN 欄位待 A/B 驅動** |
 | `architecture/AB模組需求分配_v0.2.md` | A=完整 sign 生產者(含組合造詞、借詞、entrenchment 初值);B=**原語集三層定稿**(L1 資料/L2 語言/L3 理論宏),已回填 06 的 ChangeEntry op=L1∪L2。命名分層規約見本檔 §6 |
 | `specifications/Sign生成引擎本體論_v0.1.md` | 模組 A 核心:Sign 稀疏容器、四維、Need→Generator→Builder→Store 職責契約、五連接關係、兩種構詞、生命週期;附 18 案折磨測試(0 破壞)。**設計層** |
+| `specifications/Def路徑封閉清單與feature分工_v1.0.md` | **P71 權威**:`Def` 路徑限封閉清單、自造欄位一律走 `feature:`、`sem.gloss` 併入 `senses`;含量測(~55 條路徑三分)與 Phase 1 切法。**Phase 2 待 M4** |
 | `specifications/function分支語意與選擇層_v1.0.md` | **P69–P70 權威**:歷時 function body 的四種形狀(序列/`case:`/`when:`/`choose:`)、分支條件三選一、frozen matching;選擇移出引擎層(零候選為合法結果)。與 `case_when與context_fragment_v2.md` 逐條對齊 |
 | `specifications/統計先驗與抽樣引擎_v0.1.md` | 模組 E:唯讀先驗庫(PHOIBLE/Grambank/WALS/CLICS,附網址與授權)+ 無狀態抽樣;有效分佈=手動>導入 provider>投影>E1 先驗,覆寫層住節點。**設計層;01–10 設計鏈至此閉合** |
 | `verification/測試案例集總索引_v0.1.md` | **全專案測試索引**:DSL 範例 8.1–8.6、18 案折磨測試、十實例、Rust 測試、Lexurgy 黑盒的統一映射與狀態;動工任一模組前先查其驗收案例 |
