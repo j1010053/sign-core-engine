@@ -434,6 +434,11 @@ function Offers(x [Verb]):
 ///
 /// 判別性:三個分支,兩個成立一個不成立,而且三者的 delta 互不相同——
 /// 「只跑第一個」「全部都跑」「一個都不跑」會落在三個不同的數字上。
+///
+/// **三個 guard 都走同一條可讀路徑**(`syn.category`,由 `reanalyze` 原子改寫寫入)。
+/// 中間那條先前寫成 `x.sem.senses[core].concept == NOPE`——那條路徑 guard **根本
+/// 讀不到**(義項是一級節點不是 `Def`),於是它的「不成立」與值無關,把中間值改成
+/// 真值也照樣不成立。現在改成同一條路徑的不同值,**改值就會改結果**。
 #[test]
 fn when_runs_every_branch_whose_guard_holds() {
     const ACCUMULATE: &str = r#"package plugin:fixture:
@@ -442,7 +447,7 @@ fn when_runs_every_branch_whose_guard_holds() {
 function Both(x [Verb]):
     when:
         entrench(x, delta: 0.1) / x.syn.category == verb
-        entrench(x, delta: 0.2) / x.sem.senses[core].concept == NOPE
+        entrench(x, delta: 0.2) / x.syn.category == noun
         entrench(x, delta: 0.4) / x.syn.category == verb
 "#;
     let package = synthetic(ACCUMULATE, &["Both"]);
