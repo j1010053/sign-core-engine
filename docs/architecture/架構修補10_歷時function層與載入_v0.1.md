@@ -59,15 +59,23 @@ function layer code,非關鍵字」)。`code/recipes.chg`、`code/goals.chg` 只
 
 **body 的執行語意由既有的 `case`/`when` 承載**,不新增 layer 標記:
 
+> **已由 P69 修訂**(`docs/specifications/function分支語意與選擇層_v1.0.md`)。下表為修訂後的內容;本節原本把 `when:` 借去表達
+> 候選列舉,與 `.lang` 的 `CaseSelection::Accumulate`(所有 Matched **都生效**)同名
+> 反義。原論證「Goal 要回傳**所有**符合的候選,不是第一個」只證明了「取全部而非取
+> 第一個」,未證明「取全部之後不執行」——把 *which* 與 *then what* 混為一談。
+
 | body 形狀 | 語意 | 慣稱 |
 |---|---|---|
-| 純序列(無 case/when) | **依序全跑** | Recipe |
+| 純序列(無 case/when/choose) | **無條件依序全跑** | Recipe |
 | `case:` | **第一個 Matched 的分支**(`CaseSelection::FirstMatch`) | 確定性分支 |
-| `when:` | **所有 Matched 依序合併**(`CaseSelection::Accumulate`) | **Goal 的候選列舉** |
+| `when:` | **所有 Matched 依序執行**(`CaseSelection::Accumulate`,同 `.lang`) | 有條件的全跑 |
+| `choose:` | **列舉所有 Matched,一個都不執行** | **Goal 的候選列舉** |
 
-`when:` 對 Goal 特別貼合:Goal 的純函數半契約是
-`Goal.candidates(…) → Vec<(Recipe, weight)>`——回傳**所有**符合的候選,不是第一個。
-**抽樣是呼叫時的引擎行為,不寫在 body**(《修補05》§9:「Goal 的隨機為隱含語意」)。
+分支條件三選一:`<call> / <guard>` = `Guard`;`else <call>` = **`!any_matched`**
+(對齊 `.lang`);裸 `<call>` = 恆成立且計入 `any_matched`。
+
+**抽樣不是引擎行為**——P12 把 Goal 的型別定到 `Vec<Recipe 候選>` 為止,選擇屬應用層
+(P70,見 `specifications/function分支語意與選擇層_v1.0.md` §4)。
 
 - **function 之間可互相呼叫**(層級靠名字解析,無額外程式碼)。
 - **必須偵測循環呼叫**(A→B→A)並明確報錯——這是**終止性**要求,與分層無關。
@@ -209,7 +217,7 @@ pub fn expand(rewrite, document, services: &ServiceContext) -> Result<Vec<Primit
 | # | 決策 |
 |---|---|
 | **P47** | **層①=語句、層②③④=函數呼叫**:一律 `name(位置參數, key: value)`,**層級由名字解析決定不靠關鍵字**;呼叫是未解析層的糖,resolve 即降成四原語,`ResolvedChangeSet` 維持 primitive-only(P26/步驟14 契約不動);`.lang` sign application 具名參數一併統一為 `key: value`(舊 `=` 接受、printer 排 `:`) |
-| **P48** | **Recipe/Goal 非關鍵字,是 `code/` 檔案分工**;body 語意由既有 `case`(選一)/`when`(收集候選)/純序列(全跑)承載,**不新增 layer 標記**;function 可互相呼叫,**必須偵測循環**;日後若需顯式層標記,`@layer` 為選填、預設 recipe |
+| **P48** | **Recipe/Goal 非關鍵字,是 `code/` 檔案分工**;body 語意由既有 `case`(選一)/`when`(**所有 Matched 都執行**——P69 修訂,原記為「收集候選」)/`choose`(收集候選,P69 新增)/純序列(全跑)承載,**不新增 layer 標記**;function 可互相呼叫,**必須偵測循環**;日後若需顯式層標記,`@layer` 為選填、預設 recipe |
 | **P49** | **定義住套件 `code/*.chg`**,語法 = `function Name(參數 [約束]) [/ guard]:` + 縮排 body;參數約束沿用 slot 寫法並取代大部分 guard;**定義文件模式**(`package` 頭、無 base digest、只收 function 不收 statement) |
 | **P50** | **載入沿用 P29 auto-discovery,明確否決顯式 `import`**;可重現性由既有 `library …@ver sha256:` lock 提供(std 自動入鎖);引用走 export 穩定 ID 不碰內部路徑;MVP 編譯期靜態註冊(P31),crate 維持無檔案 IO;衝突走 priority 四層 + warn 強制消歧。**必補四缺口**:data 路徑複數化、`ExportKind::Function`、`code/` 收 `.chg`、定義文件模式 |
 | **P51** | **Recipe body 接力展開**(逐條展開並套用到暫存文件),**否決快照展開**;仍為純函數,golden 可做 |

@@ -8,9 +8,10 @@
 //!
 //! | body 形狀 | 語意 | 慣稱 |
 //! |---|---|---|
-//! | 純序列 | 依序全跑 | Recipe |
+//! | 純序列 | 無條件依序全跑 | Recipe |
 //! | `case:` | 第一個 Matched | 確定性分支 |
-//! | `when:` | 所有 Matched 依序合併 | Goal 的候選列舉 |
+//! | `when:` | **所有 Matched 依序執行**(同 `.lang` 的 `CaseSelection::Accumulate`) | 有條件的全跑 |
+//! | `choose:` | **列舉所有 Matched,一個都不執行** | Goal 的候選列舉 |
 
 use crate::rewrite::DonorScope;
 use crate::{
@@ -25,6 +26,147 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const FUNCTIONS_SCHEMA_V1: &str = "conlang.functions/v1";
 
+/// rebase 對一個 function runtime 失敗的歸類(P57 的四桶去掉 `Clean`)。
+///
+/// 桶的定義來自 P57 本身:**衝突** = 這筆編輯在新 base 上套不上去;**環境變動** =
+/// 檔案宣告的外部依賴與實際提供的對不上;**輸入錯** = 使用者寫的東西本身壞了。
+/// 每個變體歸哪一桶寫在 [`FunctionError::class`],不散落到 `evolution.rs`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FunctionErrorClass {
+    Conflict,
+    Environment,
+    Broken,
+}
+
+/// Step 17 函數／Goal **runtime** 的分型錯誤(P57 鐵律:分類靠型別變體,絕不靠訊息字串)。
+///
+/// ## 為什麼非分型不可
+///
+/// `.chg` 的語句可以呼叫 function(`UnresolvedChangeSet::resolve` 的語句迴圈),
+/// 而 rebase 依 `ReplayError` 的**變體**分類。這些失敗原本全部是 `ReplayError::Parse`,
+/// 於是 `RebaseOutcome::classify` 一律判成 `Broken`「changeset 本身壞了」。
+/// 具體反例:`.chg` 呼叫一個帶 `/ $sign.syn.category == VERB` guard 的 Recipe,
+/// rebase 到「該 sign 已被 reanalyze 成 AUX」的新 base——這是**最典型的衝突**,
+/// 卻會被告知去修自己的檔案,而且句號一併丟失。
+///
+/// ## 邊界:只收 runtime,不收載入期
+///
+/// 定義文件的解析錯、weight DB 的格式錯留在 `ReplayError::Parse`——它們在任何語句
+/// 開始前就發生,永遠到不了 rebase,而且「檔案格式壞掉」確實就是 `Broken` 的本意。
+/// 這裡只收**求值中**才可能發生的那些。
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum FunctionError {
+    // ── 語言狀態面:新 base 上套不上去 ⇒ Conflict ──
+    #[error("FUNCTION_GUARD_UNSATISFIED: function {function:?} guard {guard:?} does not hold")]
+    GuardUnsatisfied { function: String, guard: String },
+    #[error("FUNCTION_CASE_NO_BRANCH: function {function:?} has no matching branch and no else")]
+    CaseNoBranch { function: String },
+    #[error(
+        "FUNCTION_GUARD_UNKNOWN_SIGN: {function:?} guard {guard:?} names unknown sign {sign:?}"
+    )]
+    GuardUnknownSign {
+        function: String,
+        guard: String,
+        sign: String,
+    },
+    #[error("FUNCTION_GUARD_ERROR: {function:?} guard {guard:?}: {message}")]
+    GuardEvaluation {
+        function: String,
+        guard: String,
+        message: String,
+    },
+    #[error("FUNCTION_ARGUMENT_UNKNOWN_SIGN: {function:?} parameter {parameter:?} names unknown sign {sign:?}")]
+    ConstraintUnknownSign {
+        function: String,
+        parameter: String,
+        sign: String,
+    },
+    #[error("FUNCTION_ARGUMENT_CONSTRAINT: {function:?} parameter {parameter:?} requires [{constraint}], but sign {sign:?} does not belong to it")]
+    ConstraintUnsatisfied {
+        function: String,
+        parameter: String,
+        constraint: String,
+        sign: String,
+    },
+
+    // ── 載入表面:套件／權重表換版就會變 ⇒ Environment ──
+    #[error("FUNCTION_UNKNOWN: unknown function {name:?}")]
+    Unknown { name: String },
+    #[error("FUNCTION_NOT_VISIBLE: {name:?} is defined but not exported from its package")]
+    NotVisible { name: String },
+    #[error("FUNCTION_AMBIGUOUS: ambiguous function {name:?} at equal priority; qualify it as `package::{name}`")]
+    Ambiguous { name: String },
+    #[error("WEIGHT_DB_MISSING: Goal {goal:?} candidate Recipe {recipe:?} has no weight")]
+    WeightMissing { goal: String, recipe: String },
+    #[error("GOAL_SAMPLING: Goal {goal:?} cannot be sampled: {message}")]
+    Sampling { goal: String, message: String },
+
+    // ── 呼叫端寫錯 ⇒ Broken ──
+    #[error(
+        "FUNCTION_CANDIDATES_REQUIRE_SELECTION: {function:?} yields candidates and cannot execute here"
+    )]
+    CandidatesRequireSelection { function: String },
+    #[error("FUNCTION_CANDIDATE_LAYER: {function:?} yields candidate {candidate:?}, which is another candidate function")]
+    CandidateLayer { function: String, candidate: String },
+    #[error("FUNCTION_GUARD_NO_SUBJECT: {function:?} guard {guard:?} reads no bound parameter")]
+    GuardNoSubject { function: String, guard: String },
+    #[error(
+        "FUNCTION_GUARD_MULTI_SUBJECT: {function:?} guard {guard:?} reads more than one parameter"
+    )]
+    GuardMultiSubject { function: String, guard: String },
+    #[error("FUNCTION_GUARD_SUBJECT_NOT_A_SIGN: {function:?} guard {guard:?} needs sign(\"…\"), got {value:?}")]
+    GuardSubjectNotASign {
+        function: String,
+        guard: String,
+        value: String,
+    },
+    #[error("FUNCTION_ARGUMENT_NOT_A_SIGN: {function:?} parameter {parameter:?} [{constraint}] expects sign(\"…\"), got {value:?}")]
+    ConstraintNotASign {
+        function: String,
+        parameter: String,
+        constraint: String,
+        value: String,
+    },
+    #[error("FUNCTION_ARGUMENT: function {function:?} {message}")]
+    Argument { function: String, message: String },
+    #[error("FUNCTION_UNEXPECTED_BLOCK: function {name:?} does not accept an indented block")]
+    UnexpectedBlock { name: String },
+}
+
+impl FunctionError {
+    /// 這個失敗對 rebase 而言屬於哪一桶。**窮盡 match**:日後新增變體時編譯器會
+    /// 強迫在這裡表態,不會有變體悄悄落進預設桶。
+    pub fn class(&self) -> FunctionErrorClass {
+        match self {
+            // guard／參數約束讀的是 Language 當前狀態,換了 base 答案就會變——
+            // 這正是「編輯套不上新 base」,不是使用者寫錯。
+            FunctionError::GuardUnsatisfied { .. }
+            | FunctionError::CaseNoBranch { .. }
+            | FunctionError::GuardUnknownSign { .. }
+            | FunctionError::GuardEvaluation { .. }
+            | FunctionError::ConstraintUnknownSign { .. }
+            | FunctionError::ConstraintUnsatisfied { .. } => FunctionErrorClass::Conflict,
+            // 名字解不開／權重查不到:function 與權重都住套件,換版就沒了。
+            // 與 `LibraryLockMismatch` 同類——不該要求人去改 changeset。
+            FunctionError::Unknown { .. }
+            | FunctionError::NotVisible { .. }
+            | FunctionError::Ambiguous { .. }
+            | FunctionError::WeightMissing { .. }
+            | FunctionError::Sampling { .. } => FunctionErrorClass::Environment,
+            // 呼叫端自己寫的東西壞了:引數對不上簽名、guard 讀不到主體、
+            // 把候選函數直接當語句用。這些換幾個 base 都一樣錯。
+            FunctionError::CandidatesRequireSelection { .. }
+            | FunctionError::CandidateLayer { .. }
+            | FunctionError::GuardNoSubject { .. }
+            | FunctionError::GuardMultiSubject { .. }
+            | FunctionError::GuardSubjectNotASign { .. }
+            | FunctionError::ConstraintNotASign { .. }
+            | FunctionError::Argument { .. }
+            | FunctionError::UnexpectedBlock { .. } => FunctionErrorClass::Broken,
+        }
+    }
+}
+
 /// 一次呼叫(body 的一行)。與 `.chg` 執行區的呼叫同構(P47)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionCall {
@@ -33,21 +175,68 @@ pub struct FunctionCall {
     pub named: Vec<(String, String)>,
 }
 
-/// `case:`/`when:` 的一個分支。`guard == None` 代表 `else`。
+/// 一個分支的成立條件。三種,對齊 `.lang` 的 `CaseCondition`。
+///
+/// ## `Else` 與 `Always` 為什麼要分開
+///
+/// 先前兩者都記成 `guard: None` 並且**都恆成立**,於是 `else` 只是裝飾——parser 分得
+/// 出 `else X` 與 `X`,語意卻塌成同一個。在 `case:`(取第一個)下兩種讀法結果相同,
+/// 在 `when:`/`choose:`(全取)下**不同**:`.lang` 的 `else` 是 `!any_matched`
+/// (`system.rs` 的 Accumulate 分支),只在前面都不成立時才生效。
+///
+/// `Always` 是 `.lang` 沒有的第三種,理由是**結構差異**而非語意分歧:`.lang` 的
+/// `when:` 區塊住在更大的 sign body 裡,無條件的項目寫在區塊外就好;function 的
+/// body **整個就是一個區塊**(`parse_body` 一旦看到 `when:` 就把其餘全部當分支),
+/// 沒有「區塊外」可以放。裸呼叫因此是「這個區塊裡的無條件成員」的唯一寫法。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BranchCondition {
+    /// `<call> / <guard>` —— 依 guard 求值。
+    Guard(String),
+    /// `else <call>` —— **只在前面的分支都不成立時**生效(`.lang` 的
+    /// `CaseCondition::Else`)。`case:` 下因為取第一個,走到它時必然沒人成立,
+    /// 故兩種選擇模式的行為在該處自然一致。
+    Else,
+    /// 裸 `<call>` —— 恆成立,且**計入 `any_matched`**(它成立了,後面的 `else`
+    /// 就不該再補位)。
+    Always,
+}
+
+/// `case:`/`when:`/`choose:` 的一個分支。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionBranch {
-    pub guard: Option<String>,
+    pub condition: BranchCondition,
     pub call: FunctionCall,
 }
 
+/// body 形狀就是執行語意(P48「不新增 layer 標記」)——寫的人不宣告自己是哪一層,
+/// 故不可能宣告與行為不符。
+///
+/// ## 誌誤:`when:` 曾被借去表達候選列舉
+///
+/// `when:` 在 `.lang` 是 `CaseSelection::Accumulate`——**所有成立的分支都生效**
+/// (`system.rs` 把每個成立分支的 fragment `merged_items.extend` 進結果)。
+/// 早期 function 層借用同一個關鍵字來表達「列舉候選、一個都不執行」,兩者
+/// **「取全部」相同、「然後呢」相反**:一個全都生效,一個全都不生效。
+///
+/// 《修補10》§2 的論證只證明了「取全部而非取第一個」,沒有證明「取全部之後不執行」
+/// ——把 *which* 與 *then what* 混為一談。副作用是「**有條件的全跑**」整格空掉:
+/// 純序列不能帶 guard、`case:` 只取一個、`when:` 被徵用,`.lang` 的 `when` 本義在
+/// function 層反而寫不出來。
+///
+/// 現改回:`when:` 回歸 accumulate,候選列舉獨立為 `choose:`。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionBody {
-    /// 純序列 = **依序全跑**(慣稱 Recipe)。
+    /// 純序列 = **無條件依序全跑**(慣稱 Recipe)。
     Sequence(Vec<FunctionCall>),
     /// `case:` = **第一個 Matched 的分支**。
     Case(Vec<FunctionBranch>),
-    /// `when:` = **所有 Matched 依序合併**(慣稱 Goal 的候選列舉)。
+    /// `when:` = **所有 Matched 依序執行**(`.lang` 的 `CaseSelection::Accumulate`)。
+    /// 一個都不成立時**無操作、不報錯**——比照 `.lang` 的 `return Ok(current)`。
     When(Vec<FunctionBranch>),
+    /// `choose:` = **列舉所有 Matched 的候選,一個都不執行**,交給呼叫端選
+    /// (慣稱 Goal)。選擇者可以是使用者,也可以是抽樣器(P12:Weight DB 是
+    /// **自動模式**的權重)——引擎不預設是哪一種。
+    Choose(Vec<FunctionBranch>),
 }
 
 /// 形式參數。`constraint` 是 slot 式範疇約束(`verb [Verb]`),取代大部分 guard。
@@ -101,12 +290,6 @@ pub struct GoalSelectionTrace {
 }
 
 #[derive(Debug, Clone)]
-pub struct GoalExecution {
-    pub selection: GoalSelectionTrace,
-    pub execution: FunctionExecution,
-}
-
-#[derive(Debug, Clone)]
 struct WeightEntry {
     weight: f64,
     package: String,
@@ -125,9 +308,11 @@ impl WeightDb {
             .get(&(goal.to_owned(), recipe.to_owned()))
             .map(|entry| entry.weight)
             .ok_or_else(|| {
-                ReplayError::Parse(format!(
-                    "WEIGHT_DB_MISSING: Goal {goal:?} candidate Recipe {recipe:?} has no weight"
-                ))
+                FunctionError::WeightMissing {
+                    goal: goal.to_owned(),
+                    recipe: recipe.to_owned(),
+                }
+                .into()
             })
     }
 
@@ -335,7 +520,7 @@ fn parse_signature(source: &str) -> Result<(String, Vec<FunctionParam>), ReplayE
 
 fn parse_body(lines: &[&str], owner: &str) -> Result<FunctionBody, ReplayError> {
     let head = lines[0].trim();
-    if head == "case:" || head == "when:" {
+    if head == "case:" || head == "when:" || head == "choose:" {
         let mut branches = Vec::new();
         for raw in &lines[1..] {
             let text = raw.trim();
@@ -353,8 +538,13 @@ fn parse_body(lines: &[&str], owner: &str) -> Result<FunctionBody, ReplayError> 
                     "function {owner:?}: an `else` branch cannot carry a guard"
                 )));
             }
+            let condition = match (is_else, guard) {
+                (true, _) => BranchCondition::Else,
+                (false, Some(guard)) => BranchCondition::Guard(guard),
+                (false, None) => BranchCondition::Always,
+            };
             branches.push(FunctionBranch {
-                guard,
+                condition,
                 call: parse_call(call_text.trim(), owner)?,
             });
         }
@@ -363,10 +553,10 @@ fn parse_body(lines: &[&str], owner: &str) -> Result<FunctionBody, ReplayError> 
                 "function {owner:?}: `{head}` has no branches"
             )));
         }
-        return Ok(if head == "case:" {
-            FunctionBody::Case(branches)
-        } else {
-            FunctionBody::When(branches)
+        return Ok(match head {
+            "case:" => FunctionBody::Case(branches),
+            "when:" => FunctionBody::When(branches),
+            _ => FunctionBody::Choose(branches),
         });
     }
     let mut calls = Vec::new();
@@ -426,7 +616,9 @@ fn check_cycles(package: &FunctionPackage) -> Result<(), ReplayError> {
     for definition in &package.functions {
         let callees = match &definition.body {
             FunctionBody::Sequence(calls) => calls.iter().map(|c| c.name.as_str()).collect(),
-            FunctionBody::Case(branches) | FunctionBody::When(branches) => {
+            FunctionBody::Case(branches)
+            | FunctionBody::When(branches)
+            | FunctionBody::Choose(branches) => {
                 branches.iter().map(|b| b.call.name.as_str()).collect()
             }
         };
@@ -516,7 +708,12 @@ impl FunctionTable {
                         .filter(visible)
                         .find(|entry| entry.package == package)
                 })
-                .ok_or_else(|| ReplayError::Parse(format!("unknown function {name:?}")));
+                .ok_or_else(|| {
+                    FunctionError::Unknown {
+                        name: name.to_owned(),
+                    }
+                    .into()
+                });
         }
         let found: Vec<&ResolvedFunction> = self
             .entries
@@ -533,7 +730,9 @@ impl FunctionTable {
         let top = *found
             .iter()
             .max_by_key(|entry| entry.priority)
-            .ok_or_else(|| ReplayError::Parse(format!("unknown function {name:?}")))?;
+            .ok_or_else(|| FunctionError::Unknown {
+                name: name.to_owned(),
+            })?;
         // 同名同 priority → 強制消歧(P29「warn + 強制消歧」的嚴格面:
         // 呼叫時才不得含糊)。
         if found
@@ -542,9 +741,10 @@ impl FunctionTable {
             .count()
             > 1
         {
-            return Err(ReplayError::Parse(format!(
-                "ambiguous function {name:?} at equal priority; qualify it as `package::{name}`"
-            )));
+            return Err(FunctionError::Ambiguous {
+                name: name.to_owned(),
+            }
+            .into());
         }
         Ok(top)
     }
@@ -583,12 +783,13 @@ fn bind_parameters(
 ) -> Result<BTreeMap<String, String>, ReplayError> {
     let mut bindings = BTreeMap::new();
     if let Some(value) = &invocation.positional {
-        let parameter = definition.params.first().ok_or_else(|| {
-            ReplayError::Parse(format!(
-                "function {:?} does not take a positional argument",
-                definition.name
-            ))
-        })?;
+        let parameter = definition
+            .params
+            .first()
+            .ok_or_else(|| FunctionError::Argument {
+                function: definition.name.clone(),
+                message: "does not take a positional argument".to_owned(),
+            })?;
         bindings.insert(parameter.name.clone(), value.clone());
     }
     for (name, value) in &invocation.named {
@@ -597,25 +798,27 @@ fn bind_parameters(
             .iter()
             .any(|parameter| &parameter.name == name)
         {
-            return Err(ReplayError::Parse(format!(
-                "function {:?} has no parameter {name:?}",
-                definition.name
-            )));
+            return Err(FunctionError::Argument {
+                function: definition.name.clone(),
+                message: format!("has no parameter {name:?}"),
+            }
+            .into());
         }
         if bindings.insert(name.clone(), value.clone()).is_some() {
-            return Err(ReplayError::Parse(format!(
-                "function {:?} receives parameter {name:?} more than once",
-                definition.name
-            )));
+            return Err(FunctionError::Argument {
+                function: definition.name.clone(),
+                message: format!("receives parameter {name:?} more than once"),
+            }
+            .into());
         }
     }
     for parameter in &definition.params {
-        let value = bindings.get(&parameter.name).ok_or_else(|| {
-            ReplayError::Parse(format!(
-                "function {:?} is missing parameter {:?}",
-                definition.name, parameter.name
-            ))
-        })?;
+        let value = bindings
+            .get(&parameter.name)
+            .ok_or_else(|| FunctionError::Argument {
+                function: definition.name.clone(),
+                message: format!("is missing parameter {:?}", parameter.name),
+            })?;
         if let Some(constraint) = &parameter.constraint {
             validate_constraint(
                 &definition.name,
@@ -638,20 +841,21 @@ fn validate_constraint(
     document: &LanguageDocument,
     libraries: &LibrarySpec,
 ) -> Result<(), ReplayError> {
-    let sign = sign_argument(value).ok_or_else(|| {
-        ReplayError::Parse(format!(
-            "function {function:?} parameter {parameter:?} [{constraint}] expects sign(\"…\"), got {value:?}"
-        ))
+    let sign = sign_argument(value).ok_or_else(|| FunctionError::ConstraintNotASign {
+        function: function.to_owned(),
+        parameter: parameter.to_owned(),
+        constraint: constraint.to_owned(),
+        value: value.to_owned(),
     })?;
     let definition = document
         .language()
         .signs
         .iter()
         .find(|candidate| candidate.name == sign)
-        .ok_or_else(|| {
-            ReplayError::Parse(format!(
-                "function {function:?} parameter {parameter:?} names unknown sign {sign:?}"
-            ))
+        .ok_or_else(|| FunctionError::ConstraintUnknownSign {
+            function: function.to_owned(),
+            parameter: parameter.to_owned(),
+            sign: sign.to_owned(),
         })?;
     let system = compile_document(document, libraries)?;
     if !definition.items.iter().any(|item| {
@@ -661,9 +865,13 @@ fn validate_constraint(
                 if name == constraint || system.ontology.category_is_a(name, constraint)
         )
     }) {
-        return Err(ReplayError::Parse(format!(
-            "function {function:?} parameter {parameter:?} requires [{constraint}], but sign {sign:?} does not belong to it"
-        )));
+        return Err(FunctionError::ConstraintUnsatisfied {
+            function: function.to_owned(),
+            parameter: parameter.to_owned(),
+            constraint: constraint.to_owned(),
+            sign: sign.to_owned(),
+        }
+        .into());
     }
     Ok(())
 }
@@ -772,40 +980,49 @@ fn guard_holds(
     let subject = match subjects.len() {
         1 => subjects.into_iter().next().expect("len == 1"),
         0 => {
-            return Err(ReplayError::Parse(format!(
-                "FUNCTION_GUARD_NO_SUBJECT: {owner:?} guard {guard:?} reads no bound parameter"
-            )))
+            return Err(FunctionError::GuardNoSubject {
+                function: owner.to_owned(),
+                guard: guard.to_owned(),
+            }
+            .into())
         }
         // **明確拒絕而非猜一個**:跨參數的 guard 需要多主體求值,`.lang` 的求值器
         // 只認一個 `$self`。挑其中一個會靜默給出錯的答案。
-        _ => return Err(ReplayError::Parse(format!(
-            "FUNCTION_GUARD_MULTI_SUBJECT: {owner:?} guard {guard:?} reads more than one parameter"
-        ))),
+        _ => {
+            return Err(FunctionError::GuardMultiSubject {
+                function: owner.to_owned(),
+                guard: guard.to_owned(),
+            }
+            .into())
+        }
     };
     let value = bindings.get(&subject).expect("subject is bound");
-    let name = sign_argument(value).ok_or_else(|| {
-        ReplayError::Parse(format!(
-            "FUNCTION_GUARD_SUBJECT_NOT_A_SIGN: {owner:?} guard {guard:?} needs sign(\"…\"), got {value:?}"
-        ))
+    let name = sign_argument(value).ok_or_else(|| FunctionError::GuardSubjectNotASign {
+        function: owner.to_owned(),
+        guard: guard.to_owned(),
+        value: value.to_owned(),
     })?;
     let sign = document
         .language()
         .signs
         .iter()
         .find(|candidate| candidate.name == name)
-        .ok_or_else(|| {
-            ReplayError::Parse(format!(
-                "FUNCTION_GUARD_UNKNOWN_SIGN: {owner:?} guard {guard:?} names unknown sign {name:?}"
-            ))
+        .ok_or_else(|| FunctionError::GuardUnknownSign {
+            function: owner.to_owned(),
+            guard: guard.to_owned(),
+            sign: name.to_owned(),
         })?;
     let system = compile_document(document, libraries)?;
     let effective = system.ontology.effective_sign(sign);
     let rewritten = rewrite_guard(guard, &subject, bindings);
     conlang_language::synchronic::guard_matches_sign(&effective, &rewritten, &system.ontology)
         .map_err(|error| {
-            ReplayError::Parse(format!(
-                "FUNCTION_GUARD_ERROR: {owner:?} guard {guard:?}: {error}"
-            ))
+            FunctionError::GuardEvaluation {
+                function: owner.to_owned(),
+                guard: guard.to_owned(),
+                message: error,
+            }
+            .into()
         })
 }
 
@@ -866,10 +1083,11 @@ impl EvaluationState<'_> {
                 &self.document,
                 self.libraries,
             )? {
-                return Err(ReplayError::Parse(format!(
-                    "FUNCTION_GUARD_UNSATISFIED: function {:?} guard {guard:?} does not hold",
-                    definition.name
-                )));
+                return Err(FunctionError::GuardUnsatisfied {
+                    function: definition.name.clone(),
+                    guard: guard.clone(),
+                }
+                .into());
             }
         }
         self.stack.push(definition.name.clone());
@@ -887,9 +1105,11 @@ impl EvaluationState<'_> {
             FunctionBody::Case(branches) => {
                 let mut selected = None;
                 for branch in branches {
-                    let matched = match &branch.guard {
-                        None => true,
-                        Some(guard) => guard_holds(
+                    // 取第一個成立者,故走到 `else` 時必然前面都沒成立
+                    // ——`!any_matched` 恆為真,與 `.lang` 的 `Else => Ok(true)` 一致。
+                    let matched = match &branch.condition {
+                        BranchCondition::Else | BranchCondition::Always => true,
+                        BranchCondition::Guard(guard) => guard_holds(
                             &definition.name,
                             guard,
                             &bindings,
@@ -904,45 +1124,51 @@ impl EvaluationState<'_> {
                 }
                 // 全部不成立**即錯**,不是安靜跳過:`case:` 的契約是「選一個」,
                 // 選不出來就是作者沒寫兜底,該讓他知道。
-                let branch = selected.ok_or_else(|| {
-                    ReplayError::Parse(format!(
-                        "FUNCTION_CASE_NO_BRANCH: function {:?} has no matching branch and no else",
-                        definition.name
-                    ))
+                let branch = selected.ok_or_else(|| FunctionError::CaseNoBranch {
+                    function: definition.name.clone(),
                 })?;
                 self.evaluate_call(&bind_call(&branch.call, &bindings))?;
                 None
             }
-            // `when:` = **所有成立的分支依序合併**(accumulate)。與 `case:` 的差別只在
-            // 「取第一個」vs「全取」;guard 不成立的候選**被排除**,這正是 Goal 的
-            // 候選篩選(缺口 2)。
+            // `when:` = **所有成立的分支依序執行**(`.lang` 的 `CaseSelection::Accumulate`)。
+            // 與 `case:` 的差別只在「取第一個」vs「全取」,兩者都**執行**。
+            //
+            // 一個都不成立時**無操作、不報錯**——比照 `.lang` 的 `!any_matched =>
+            // return Ok(current)`。這與 `case:` 的 `CaseNoBranch` 刻意不同:`case:` 的
+            // 契約是「選一個」,選不出來是作者漏了兜底;`when:` 的契約是「成立的都做」,
+            // 一個都不成立就是「這次沒事要做」,那是合法結果。
             FunctionBody::When(branches) => {
-                let mut candidates = Vec::new();
-                for branch in branches {
-                    let matched = match &branch.guard {
-                        None => true,
-                        Some(guard) => guard_holds(
-                            &definition.name,
-                            guard,
-                            &bindings,
-                            &self.document,
-                            self.libraries,
-                        )?,
-                    };
-                    if matched {
-                        candidates.push(bind_call(&branch.call, &bindings));
+                // **兩階段**:先在凍結的文件上把所有 guard 求完,再依序執行命中的分支
+                // (規格《case、when 與 Context Fragment V2》§`when:` 第 2 條)。
+                let hits = self.match_branches(&definition.name, branches, &bindings)?;
+                for (branch, hit) in branches.iter().zip(hits) {
+                    if hit {
+                        self.evaluate_call(&bind_call(&branch.call, &bindings))?;
                     }
                 }
+                None
+            }
+            // `choose:` = **列舉所有成立的候選,一個都不執行**。guard 不成立的候選
+            // 被排除,這就是 Goal 的候選篩選。
+            FunctionBody::Choose(branches) => {
+                let hits = self.match_branches(&definition.name, branches, &bindings)?;
+                let candidates = branches
+                    .iter()
+                    .zip(hits)
+                    .filter(|(_, hit)| *hit)
+                    .map(|(branch, _)| bind_call(&branch.call, &bindings))
+                    .collect::<Vec<_>>();
                 for candidate in &candidates {
                     let target = &self
                         .table
                         .resolve(&candidate.name, Some(&resolved.package))?
                         .definition;
-                    if matches!(target.body, FunctionBody::When(_)) {
-                        return Err(ReplayError::Parse(format!(
-                            "FUNCTION_CANDIDATE_LAYER: function {:?} yields candidate {:?}, which is another candidate function",
-                            definition.name, candidate.name
-                        )));
+                    if matches!(target.body, FunctionBody::Choose(_)) {
+                        return Err(FunctionError::CandidateLayer {
+                            function: definition.name.clone(),
+                            candidate: candidate.name.clone(),
+                        }
+                        .into());
                     }
                 }
                 Some(FunctionCandidates {
@@ -956,19 +1182,70 @@ impl EvaluationState<'_> {
         Ok(result)
     }
 
+    /// `when:`/`choose:` 的**比對階段**:一次算完哪些分支成立,回傳與 `branches`
+    /// 等長的命中表。
+    ///
+    /// ## 為什麼比對必須與執行分開(frozen matching)
+    ///
+    /// 《`case`、`when` 與 Context Fragment(V2)》§`when:` 第 2 條:
+    ///
+    /// > 所有非 `else` guard 都**只讀同一份 snapshot**;先前命中的 fragment 對後續
+    /// > guard 不可見。
+    ///
+    /// 本函數取 `&self`,`self.document` 在整個迴圈中不會變,**凍結由型別保證**。
+    /// 先前的寫法是邊比對邊執行,於是後面的 guard 讀得到前面分支的結果——實測:
+    /// 「是 verb 就 reanalyze 成 aux」+「是 aux 就 entrench」會**兩條都跑**,
+    /// entrenchment 0.2 → 0.7,而規格要的是 0.2。
+    ///
+    /// 這與 P51「Recipe 逐步接力展開」不衝突:接力是**執行**階段的性質(第 n 步讀
+    /// 第 n−1 步的結果),比對是另一個階段。分開之後兩者都成立,並順帶得到規格
+    /// §`when:` 第 3 條的原子性——guard 出錯時還沒有任何分支被執行。
+    ///
+    /// `else` 的判定與 `.lang` 的迴圈同構(`system.rs` 的 `Else => !any_matched`,
+    /// 在迴圈內累計),故位置相依。實務上 `else` 一律寫在最後,兩種讀法在該處一致。
+    ///
+    /// `case:` 不走這裡:它取第一個成立者,走到 `else` 時 `any_matched` 必然為 false。
+    fn match_branches(
+        &self,
+        owner: &str,
+        branches: &[FunctionBranch],
+        bindings: &BTreeMap<String, String>,
+    ) -> Result<Vec<bool>, ReplayError> {
+        let mut hits = Vec::with_capacity(branches.len());
+        let mut any_matched = false;
+        for branch in branches {
+            let hit = match &branch.condition {
+                BranchCondition::Always => true,
+                BranchCondition::Else => !any_matched,
+                BranchCondition::Guard(guard) => {
+                    guard_holds(owner, guard, bindings, &self.document, self.libraries)?
+                }
+            };
+            any_matched |= hit;
+            hits.push(hit);
+        }
+        Ok(hits)
+    }
+
     fn evaluate_call(&mut self, invocation: &FunctionCall) -> Result<(), ReplayError> {
-        if self
+        if let Ok(entry) = self
             .table
             .resolve(&invocation.name, self.package.as_deref())
-            .is_ok()
         {
             // 可見 → 當成 function 呼叫。
-
+            //
+            // **靜態形狀先看,不先求值**:`when:` 出現在序列裡是**寫錯**,與語言狀態
+            // 無關。先求值的話,body 裡任何一個因狀態而起的錯(guard 不成立、參數
+            // 約束不符)會先冒出來,把真正的問題蓋掉——而那些錯分類為 `Conflict`,
+            // 於是 rebase 會叫人去解一個「換什麼 base 都解不掉」的衝突。
+            if matches!(entry.definition.body, FunctionBody::Choose(_)) {
+                return Err(FunctionError::CandidatesRequireSelection {
+                    function: invocation.name.clone(),
+                }
+                .into());
+            }
             if self.evaluate(invocation)?.is_some() {
-                return Err(ReplayError::Parse(format!(
-                    "FUNCTION_CANDIDATES_REQUIRE_SELECTION: {:?} cannot execute inside a sequence",
-                    invocation.name
-                )));
+                unreachable!("`choose:` 已在上面攔下");
             }
             return Ok(());
         }
@@ -976,10 +1253,10 @@ impl EvaluationState<'_> {
         // rewrite 分派,錯誤會變成「unknown rewrite:12 個原子改寫是封閉內建集」
         // ——那把使用者導向完全錯的方向。
         if self.table.defines(&invocation.name) {
-            return Err(ReplayError::Parse(format!(
-                "FUNCTION_NOT_VISIBLE: {:?} is defined but not exported from its package",
-                invocation.name
-            )));
+            return Err(FunctionError::NotVisible {
+                name: invocation.name.clone(),
+            }
+            .into());
         }
         let call = call::Call {
             name: &invocation.name,
@@ -1001,7 +1278,7 @@ impl EvaluationState<'_> {
 
 /// Evaluate one loaded function without live services, weighting, sampling, or
 /// persistence. A sequence/case returns a committed temporary document and its
-/// primitive trace; `when:` stops at an ordered candidate list.
+/// primitive trace; `choose:` stops at an ordered candidate list.
 pub fn evaluate_function_offline(
     table: &FunctionTable,
     invocation: &FunctionCall,
@@ -1027,11 +1304,32 @@ pub fn evaluate_function_offline(
     }
 }
 
+/// 從候選清單抽一個。**選擇不屬於引擎層**——P12 把 Goal 的型別定到
+/// `Vec<Recipe 候選>` 為止,抽樣器是消費那份清單的下游;本函數是應用層(候選面板 /
+/// 批次迴圈)呼叫的工具,不是 `.chg` 的語法。產物是**具名的 Recipe 呼叫**,由呼叫端
+/// 寫進 `.chg`,故 `.chg` 本文永遠不含隨機操作(P26 逐位元可重現)。
+///
+/// ## 零候選回 `Ok(None)`,不是錯誤
+///
+/// `choose:` 的所有 guard 都不成立時,候選清單是空的——那代表**這個語言目前沒有任何
+/// 適用的演化路徑**(例如對一個沒有動詞的語言跑「動詞語法化」)。那是語言狀態的
+/// 事實,不是失敗。
+///
+/// 先前它會落到 `sample_weighted_index` 的 `Empty`,被包成 `FunctionError::Sampling`
+/// ——而 `Sampling` 分類為 `Environment`「套件/權重表換版了」,方向完全錯。改成
+/// `Option` 而不是換一個錯誤變體,是因為呼叫端**必須**分辨這兩種結局;回 `Ok(None)`
+/// 讓編譯器強迫它表態,回錯誤則可以被一句 `?` 靜默轉手。
+///
+/// 擋掉空清單之後,`Sampling` 只承載 `InvalidWeight`/`AllZero` 兩種**權重資料**問題,
+/// `Environment` 才名副其實。
 pub fn select_goal_candidate(
     candidates: &FunctionCandidates,
     weights: &WeightDb,
     seed: u64,
-) -> Result<GoalSelectionTrace, ReplayError> {
+) -> Result<Option<GoalSelectionTrace>, ReplayError> {
+    if candidates.candidates.is_empty() {
+        return Ok(None);
+    }
     let ordered = candidates
         .candidates
         .iter()
@@ -1047,57 +1345,24 @@ pub fn select_goal_candidate(
         .map(|(_, weight)| *weight)
         .collect::<Vec<_>>();
     let sample = sample_weighted_index(&distribution, seed).map_err(|error| {
-        ReplayError::Parse(format!(
-            "GOAL_SAMPLING: Goal {:?} cannot be sampled: {error}",
-            candidates.source
-        ))
+        ReplayError::from(FunctionError::Sampling {
+            goal: candidates.source.clone(),
+            message: error.to_string(),
+        })
     })?;
     let selected = ordered
         .get(sample.selected_index)
         .expect("sampler returns an in-range index")
         .0
         .clone();
-    Ok(GoalSelectionTrace {
+    Ok(Some(GoalSelectionTrace {
         algorithm: sample.algorithm,
         seed,
         source: candidates.source.clone(),
         ordered,
         selected_index: sample.selected_index,
         selected,
-    })
-}
-
-/// Authoring-time Goal path. The selected concrete Recipe call, rather than
-/// the random operation, is what callers persist into `.chg` for replay.
-pub fn evaluate_goal_offline(
-    table: &FunctionTable,
-    invocation: &FunctionCall,
-    document: &LanguageDocument,
-    libraries: &LibrarySpec,
-    weights: &WeightDb,
-    seed: u64,
-) -> Result<GoalExecution, ReplayError> {
-    let FunctionEvaluation::Candidates(candidates) =
-        evaluate_function_offline(table, invocation, document, libraries)?
-    else {
-        return Err(ReplayError::Parse(format!(
-            "FUNCTION_NOT_GOAL: {:?} executes directly instead of yielding candidates",
-            invocation.name
-        )));
-    };
-    let selection = select_goal_candidate(&candidates, weights, seed)?;
-    let FunctionEvaluation::Executed(execution) =
-        evaluate_function_offline(table, &selection.selected, document, libraries)?
-    else {
-        return Err(ReplayError::Parse(format!(
-            "FUNCTION_CANDIDATE_LAYER: Goal {:?} selected another candidate function",
-            invocation.name
-        )));
-    };
-    Ok(GoalExecution {
-        selection,
-        execution: *execution,
-    })
+    }))
 }
 
 /// priority 四層(P29):未啟用不參與 < std < 已啟用 plugin < 專案本地。
@@ -1360,7 +1625,9 @@ fn check_table_cycles(table: &FunctionTable) -> Result<(), ReplayError> {
                 FunctionBody::Sequence(calls) => {
                     callees.extend(calls.iter().map(|call| call.name.as_str()))
                 }
-                FunctionBody::Case(branches) | FunctionBody::When(branches) => {
+                FunctionBody::Case(branches)
+                | FunctionBody::When(branches)
+                | FunctionBody::Choose(branches) => {
                     callees.extend(branches.iter().map(|branch| branch.call.name.as_str()))
                 }
             }

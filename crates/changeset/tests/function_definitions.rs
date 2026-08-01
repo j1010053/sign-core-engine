@@ -4,7 +4,9 @@
 //! `changeset` 頭區分。**Recipe/Goal 非關鍵字**(P48):body 語意由既有的
 //! `case`(選一)/`when`(收集)/純序列(全跑)承載。
 
-use conlang_changeset::function::{parse_functions, FunctionBody, FUNCTIONS_SCHEMA_V1};
+use conlang_changeset::function::{
+    parse_functions, BranchCondition, FunctionBody, FUNCTIONS_SCHEMA_V1,
+};
 
 fn package(body: &str) -> String {
     format!("package std:grammaticalization:\n    schema = {FUNCTIONS_SCHEMA_V1}\n\n{body}")
@@ -94,8 +96,10 @@ fn a_plain_sequence_means_run_all_in_order() {
 }
 
 #[test]
-fn when_collects_candidates_and_case_selects_one() {
-    // `when:` = 所有 Matched 依序合併(Goal 的候選列舉);`case:` = 第一個 Matched。
+fn branch_forms_parse_into_the_three_conditions() {
+    // 三種條件必須**分得開**:`/ guard`、`else`、裸呼叫。先前 `else` 與裸呼叫都記成
+    // `guard: None`,`else` 因此只是裝飾——在 `when:`/`choose:` 下兩者語意不同
+    // (`else` 是 `!any_matched`),塌成同一個就錯了。
     let when = parse_functions(&package(
         "function Future(target):\n    when:\n        VerbToTense(target, tense: FUTURE) / target.sem.concept == GO\n        else Auxiliary(target)\n",
     ))
@@ -104,11 +108,27 @@ fn when_collects_candidates_and_case_selects_one() {
         FunctionBody::When(branches) => {
             assert_eq!(branches.len(), 2);
             assert_eq!(
-                branches[0].guard.as_deref(),
-                Some("target.sem.concept == GO")
+                branches[0].condition,
+                BranchCondition::Guard("target.sem.concept == GO".to_owned())
             );
-            assert_eq!(branches[1].guard, None, "else 分支無守衛");
+            assert_eq!(
+                branches[1].condition,
+                BranchCondition::Else,
+                "`else` 必須與裸呼叫分得開"
+            );
             assert_eq!(branches[1].call.name, "Auxiliary");
+        }
+        other => panic!("expected `when`, got {other:?}"),
+    }
+
+    // 裸呼叫 = `Always`(恆成立),與 `else` 是不同的東西。
+    let bare = parse_functions(&package(
+        "function Any(target):\n    when:\n        A(target)\n",
+    ))
+    .unwrap();
+    match &bare.functions[0].body {
+        FunctionBody::When(branches) => {
+            assert_eq!(branches[0].condition, BranchCondition::Always);
         }
         other => panic!("expected `when`, got {other:?}"),
     }

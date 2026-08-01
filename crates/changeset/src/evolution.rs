@@ -35,6 +35,7 @@
 //! - **重複提交是冪等的**:內容全同 ⇒ 同一個 id ⇒ 同一個物件(git 語意)。
 //!   故前一版的 `Duplicate` 錯誤消失。
 
+use crate::function::FunctionErrorClass;
 use crate::merge::{materialize, plan_merge, MergeError, MergePlan};
 use crate::{
     identity_manifest_digest, ChangeInterpreter, LanguageDocument, ReplayError, UnresolvedChangeSet,
@@ -770,6 +771,21 @@ impl RebaseOutcome {
             ReplayError::LibraryLockMismatch(_)
             | ReplayError::Library(_)
             | ReplayError::UnknownDonor { .. } => RebaseOutcome::Environment(error),
+            // Step 17 的 function／Goal runtime。三桶都到得了,故**轉問錯誤自己**
+            // (`FunctionError::class`)而不是在這裡再列一次變體——分類理由該和變體
+            // 定義住在一起,兩地各列一份必定會走樣。
+            //
+            // 這一支存在的理由:`.chg` 語句可以呼叫 function,而 guard 讀的是 Language
+            // 當前狀態。「guard 在新 base 上不成立」是最典型的衝突,以前卻因為錯誤是
+            // `Parse` 而被判成 `Broken`——反過來要使用者去修一個沒壞的檔案。
+            ReplayError::Function { ordinal, source } => match source.class() {
+                FunctionErrorClass::Conflict => RebaseOutcome::Conflict {
+                    statement: *ordinal,
+                    error,
+                },
+                FunctionErrorClass::Environment => RebaseOutcome::Environment(error),
+                FunctionErrorClass::Broken => RebaseOutcome::Broken(error),
+            },
             // 輸入本身壞掉。`BaseSourceMismatch`/`BaseIdentitiesMismatch` 落在這裡
             // 代表 prelude 重寫沒生效——那是本模組的 bug,不是使用者的衝突,
             // 歸為 Broken 讓它顯眼而不是被誤報成衝突。

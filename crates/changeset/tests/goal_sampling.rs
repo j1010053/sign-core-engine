@@ -1,9 +1,11 @@
 use conlang_changeset::__lock_content_for_tests;
 use conlang_changeset::function::{
-    evaluate_function_offline, evaluate_goal_offline, functions_from_packages, load_functions,
-    load_weight_db, select_goal_candidate, weight_db_from_packages, FunctionCall,
-    FunctionEvaluation,
+    evaluate_function_offline, functions_from_packages, load_functions, load_weight_db,
+    select_goal_candidate, weight_db_from_packages, FunctionCall, FunctionCandidates,
+    FunctionError, FunctionEvaluation, FunctionExecution, FunctionTable, GoalSelectionTrace,
+    WeightDb,
 };
+use conlang_changeset::ReplayError;
 use conlang_language::{
     LanguageDocument, LibraryCatalog, LibraryDataSource, LibraryExport, LibraryExportKind,
     LibraryId, LibraryKind, LibraryPackage, LibrarySpec, WEIGHTED_SAMPLER_ALGORITHM,
@@ -41,7 +43,7 @@ function Heavy(x [Verb]):
     entrench(x, delta: 0.4)
 
 function Choose(x [Verb]):
-    when:
+    choose:
         Light(x)
         Heavy(x)
 "#;
@@ -102,6 +104,38 @@ fn package(
     }
 }
 
+/// **明寫兩步**:引擎列候選(`when:`)、選擇是**分開的一步**。
+///
+/// 先前這裡有個 `evaluate_goal_offline` 包裝把三步黏成一次呼叫。它與 P12 衝突
+/// (Goal 的型別到 `Vec<Recipe 候選>` 為止,抽樣器是下游),也讓「零候選」沒有地方
+/// 表達——列舉與選擇綁死,唯一出口就只剩抽樣器的錯。選擇屬於應用層,不屬於引擎。
+fn enumerate_then_select(
+    table: &FunctionTable,
+    call: &FunctionCall,
+    document: &LanguageDocument,
+    weights: &WeightDb,
+    seed: u64,
+) -> (GoalSelectionTrace, FunctionExecution) {
+    let FunctionEvaluation::Candidates(candidates) =
+        evaluate_function_offline(table, call, document, &LibrarySpec::default()).unwrap()
+    else {
+        panic!("{:?} 應該產出候選", call.name);
+    };
+    let selection = select_goal_candidate(&candidates, weights, seed)
+        .unwrap()
+        .expect("有候選才選得出來");
+    let FunctionEvaluation::Executed(execution) = evaluate_function_offline(
+        table,
+        &selection.selected,
+        document,
+        &LibrarySpec::default(),
+    )
+    .unwrap() else {
+        panic!("被選中的候選必須是可直接執行的 Recipe");
+    };
+    (selection, *execution)
+}
+
 #[test]
 fn embedded_weight_db_uses_a_dedicated_data_source() {
     let catalog = LibraryCatalog::embedded().unwrap();
@@ -157,8 +191,12 @@ fn goal_weight_sampling_is_reproducible_and_executes_only_the_selected_recipe() 
             .collect::<Vec<_>>(),
         ["Light", "Heavy"]
     );
-    let first = select_goal_candidate(&candidates, &weights, 42).unwrap();
-    let second = select_goal_candidate(&candidates, &weights, 42).unwrap();
+    let first = select_goal_candidate(&candidates, &weights, 42)
+        .unwrap()
+        .unwrap();
+    let second = select_goal_candidate(&candidates, &weights, 42)
+        .unwrap()
+        .unwrap();
     assert_eq!(first, second);
     assert_eq!(first.algorithm, WEIGHTED_SAMPLER_ALGORITHM);
     assert_eq!(first.ordered[0].1, 1.0);
@@ -167,6 +205,7 @@ fn goal_weight_sampling_is_reproducible_and_executes_only_the_selected_recipe() 
     let light_seed = (0..100)
         .find(|seed| {
             select_goal_candidate(&candidates, &weights, *seed)
+                .unwrap()
                 .unwrap()
                 .selected
                 .name
@@ -177,42 +216,124 @@ fn goal_weight_sampling_is_reproducible_and_executes_only_the_selected_recipe() 
         .find(|seed| {
             select_goal_candidate(&candidates, &weights, *seed)
                 .unwrap()
+                .unwrap()
                 .selected
                 .name
                 == "Heavy"
         })
         .unwrap();
-    let light = evaluate_goal_offline(
+    let (light_selection, light) = enumerate_then_select(
         &table,
         &invocation("Choose", "go"),
         &document,
-        &LibrarySpec::default(),
         &weights,
         light_seed,
-    )
-    .unwrap();
-    let heavy = evaluate_goal_offline(
+    );
+    let (heavy_selection, heavy) = enumerate_then_select(
         &table,
         &invocation("Choose", "go"),
         &document,
-        &LibrarySpec::default(),
         &weights,
         heavy_seed,
-    )
-    .unwrap();
-    assert_eq!(light.selection.selected.name, "Light");
-    assert_eq!(heavy.selection.selected.name, "Heavy");
-    assert!(light
-        .execution
-        .document
-        .source()
-        .contains("entrenchment = 0.3"));
-    assert!(heavy
-        .execution
-        .document
-        .source()
-        .contains("entrenchment = 0.6"));
+    );
+    assert_eq!(light_selection.selected.name, "Light");
+    assert_eq!(heavy_selection.selected.name, "Heavy");
+    assert!(light.document.source().contains("entrenchment = 0.3"));
+    assert!(heavy.document.source().contains("entrenchment = 0.6"));
     assert_eq!(document.source(), original, "authoring sampling is pure");
+}
+
+// ── 零候選:語言狀態決定「沒有路可走」,那不是失敗 ──────────────────────────
+
+const GUARDED_FUNCTIONS: &str = r#"package plugin:sampling:
+    schema = conlang.functions/v1
+
+function Never(x):
+    entrench(x, delta: 0.1)
+
+function Always(x):
+    entrench(x, delta: 0.2)
+
+/* 對 verb 而言只有一個分支成立。 */
+function Maybe(x):
+    choose:
+        Never(x) / x.syn.category == noun
+        Always(x) / x.syn.category == verb
+
+/* 對 verb 而言一個都不成立 —— 候選清單是空的。 */
+function NoneApply(x):
+    choose:
+        Never(x) / x.syn.category == noun
+"#;
+
+const GUARDED_WEIGHTS: &str = "goal\trecipe\tweight\nMaybe\tAlways\t1\nNoneApply\tNever\t1\n";
+
+fn guarded_candidates(goal: &str) -> (FunctionCandidates, WeightDb) {
+    let package = package(
+        "sampling",
+        0,
+        GUARDED_FUNCTIONS,
+        GUARDED_WEIGHTS,
+        &["Never", "Always", "Maybe", "NoneApply"],
+    );
+    let table = functions_from_packages(&[&package]).unwrap();
+    let weights = weight_db_from_packages(&[&package]).unwrap();
+    let FunctionEvaluation::Candidates(candidates) = evaluate_function_offline(
+        &table,
+        &invocation(goal, "go"),
+        &base(),
+        &LibrarySpec::default(),
+    )
+    .unwrap() else {
+        panic!("{goal} 是 Goal");
+    };
+    (candidates, weights)
+}
+
+/// `when:` 的所有 guard 都不成立 ⇒ **空候選清單,不是錯誤**。
+///
+/// 「這個語言目前沒有任何適用的演化路徑」是語言狀態的事實(`go` 不是 noun),
+/// 不是失敗。判別性靠 `Maybe`:同一套 guard 機制在 verb 上選得出東西,所以空清單
+/// 不是「guard 全掛」的假象。
+#[test]
+fn a_goal_whose_guards_all_fail_yields_an_empty_candidate_list_not_an_error() {
+    let (none, _) = guarded_candidates("NoneApply");
+    assert!(none.candidates.is_empty(), "{:?}", none.candidates);
+
+    let (some, _) = guarded_candidates("Maybe");
+    assert_eq!(
+        some.candidates
+            .iter()
+            .map(|candidate| candidate.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Always"],
+        "同一套 guard 在 verb 上必須選得出東西"
+    );
+}
+
+/// 從空清單選 ⇒ `Ok(None)`。
+///
+/// ## 誌誤
+///
+/// 先前這裡會落到 `sample_weighted_index` 的 `Empty`,被包成
+/// `FunctionError::Sampling`,而 `Sampling` 分類為 **`Environment`**
+/// 「套件/權重表換版了」——方向完全錯,那明明是語言狀態。
+///
+/// 改成 `Option` 而不是換一個錯誤變體:呼叫端**必須**分辨「沒有路可走」與
+/// 「選出了一條」,回 `Ok(None)` 讓編譯器強迫它表態,回錯誤則可以被一句 `?` 靜默轉手。
+#[test]
+fn selecting_from_an_empty_candidate_list_is_a_legitimate_none() {
+    let (none, weights) = guarded_candidates("NoneApply");
+    assert!(select_goal_candidate(&none, &weights, 7)
+        .expect("零候選不是錯誤")
+        .is_none());
+
+    // 判別性:有候選時照樣選得出來,故 `None` 不是「永遠回 None」。
+    let (some, weights) = guarded_candidates("Maybe");
+    let selection = select_goal_candidate(&some, &weights, 7)
+        .expect("有候選")
+        .expect("選得出來");
+    assert_eq!(selection.selected.name, "Always");
 }
 
 #[test]
@@ -236,7 +357,16 @@ fn weight_db_rejects_missing_zero_invalid_and_ambiguous_weights() {
     };
     let missing_db = weight_db_from_packages(&[&missing]).unwrap();
     let error = select_goal_candidate(&candidates, &missing_db, 0).unwrap_err();
-    assert!(format!("{error}").contains("WEIGHT_DB_MISSING"), "{error}");
+    assert!(
+        matches!(
+            &error,
+            ReplayError::Function {
+                source: FunctionError::WeightMissing { .. },
+                ..
+            }
+        ),
+        "{error:?}"
+    );
 
     let zero = package(
         "sampling",
@@ -247,7 +377,22 @@ fn weight_db_rejects_missing_zero_invalid_and_ambiguous_weights() {
     );
     let zero_db = weight_db_from_packages(&[&zero]).unwrap();
     let error = select_goal_candidate(&candidates, &zero_db, 0).unwrap_err();
-    assert!(format!("{error}").contains("all candidate weights are zero"));
+    // **權重全零仍是錯**,而且仍屬 `Environment`(權重住套件的 data)。這是零候選改成
+    // `Ok(None)` 之後的近似反例:證明我沒有把抽樣器的錯一併吞掉。
+    assert!(
+        matches!(
+            &error,
+            ReplayError::Function {
+                source: FunctionError::Sampling { .. },
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(
+        format!("{error}").contains("all candidate weights are zero"),
+        "{error}"
+    );
 
     let invalid = package(
         "invalid",
@@ -296,41 +441,25 @@ fn embedded_perfect_goal_runs_through_weight_db_and_sampler() {
     let mut call = invocation("Perfect", "finish");
     let document = base();
 
-    let execution = evaluate_goal_offline(
-        &table,
-        &call,
-        &document,
-        &LibrarySpec::default(),
-        &weights,
-        7,
-    )
-    .unwrap();
-    assert_eq!(execution.selection.selected.name, "VerbToTense");
-    assert_eq!(execution.selection.ordered[0].1, 1.0);
-    assert!(execution
-        .execution
-        .document
-        .source()
-        .contains("core = PERFECT"));
-    assert!(execution
-        .execution
-        .document
-        .source()
-        .contains("category = bound"));
+    let (selection, execution) = enumerate_then_select(&table, &call, &document, &weights, 7);
+    assert_eq!(selection.selected.name, "VerbToTense");
+    assert_eq!(selection.ordered[0].1, 1.0);
+    assert!(execution.document.source().contains("core = PERFECT"));
+    assert!(execution.document.source().contains("category = bound"));
 
     call.name = "VerbToTense".to_owned();
     call.named = vec![
         ("tense".to_owned(), "PERFECT".to_owned()),
         ("result_category".to_owned(), "bound".to_owned()),
     ];
-    let error = evaluate_goal_offline(
-        &table,
-        &call,
-        &document,
-        &LibrarySpec::default(),
-        &weights,
-        7,
-    )
-    .unwrap_err();
-    assert!(format!("{error}").contains("FUNCTION_NOT_GOAL"), "{error}");
+    // 對照:同一個表、把 Recipe 直接餵進去,回的是 `Executed` 而不是 `Candidates`。
+    //
+    // 先前這裡斷言的是 `FunctionError::NotGoal`——一個**只因為包裝函數存在而存在**的
+    // 錯誤變體(全庫唯一建構點就在那個包裝裡)。包裝刪掉後,「這不是 Goal」不再是
+    // 一種失敗,而是**回傳形狀本來就看得出來**的事實。斷言形狀比斷言防禦性錯誤誠實:
+    // 前者是契約,後者只是某個呼叫者的期待落空。
+    assert!(matches!(
+        evaluate_function_offline(&table, &call, &document, &LibrarySpec::default()).unwrap(),
+        FunctionEvaluation::Executed(_)
+    ));
 }

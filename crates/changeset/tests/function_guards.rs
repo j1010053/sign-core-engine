@@ -1,7 +1,7 @@
 //! Step 17 缺口 1／2 —— **guarded Recipe／`case:` 求值** 與 **Goal 的 guarded 候選篩選**。
 //!
 //! 兩個缺口在實作上是同一件事:`FunctionBody` 的三形都卡在同一個「guard 不支援」的
-//! 拒絕點,補上 guard 求值就一起通了。差別只在 `case:` 取第一個成立的、`when:` 取
+//! 拒絕點,補上 guard 求值就一起通了。差別只在 `case:` 取第一個成立的、`choose:` 取
 //! 全部成立的。
 //!
 //! ## 求值語意的來源
@@ -17,8 +17,10 @@
 //! 斷言結果不同——那是「讀的是活文件」的唯一直接證據。
 
 use conlang_changeset::function::{
-    evaluate_function_offline, functions_from_packages, FunctionCall, FunctionEvaluation,
+    evaluate_function_offline, functions_from_packages, FunctionCall, FunctionError,
+    FunctionEvaluation,
 };
+use conlang_changeset::ReplayError;
 use conlang_language::{
     LanguageDocument, LibraryExport, LibraryExportKind, LibraryId, LibraryKind, LibraryPackage,
     LibrarySpec,
@@ -175,7 +177,13 @@ fn a_header_guard_that_fails_is_an_error_not_a_silent_no_op() {
     )
     .expect_err("stone 不是動詞");
     assert!(
-        format!("{error}").contains("FUNCTION_GUARD_UNSATISFIED"),
+        matches!(
+            &error,
+            ReplayError::Function {
+                source: FunctionError::GuardUnsatisfied { .. },
+                ..
+            }
+        ),
         "{error}"
     );
 }
@@ -241,18 +249,24 @@ function Small(x):
     let error = run(NO_ELSE, &["Nudge"], &call("Nudge", "stone"), &document)
         .expect_err("沒有分支成立且沒有兜底");
     assert!(
-        format!("{error}").contains("FUNCTION_CASE_NO_BRANCH"),
+        matches!(
+            &error,
+            ReplayError::Function {
+                source: FunctionError::CaseNoBranch { .. },
+                ..
+            }
+        ),
         "{error}"
     );
 }
 
-// ── C. `when:` 篩選候選(缺口 2)────────────────────────────────────────────
+// ── C. `choose:` 篩選候選(缺口 2)──────────────────────────────────────────
 
-const WHEN_FILTER: &str = r#"package plugin:guards:
+const CHOOSE_FILTER: &str = r#"package plugin:guards:
     schema = conlang.functions/v1
 
 function Options(x):
-    when:
+    choose:
         Bleach(x) / x.syn.category == verb
         Harden(x) / x.syn.category == noun
         Always(x)
@@ -268,12 +282,18 @@ function Always(x):
 "#;
 
 #[test]
-fn when_yields_only_the_candidates_whose_guard_holds() {
+fn choose_yields_only_the_candidates_whose_guard_holds() {
     // **這就是缺口 2**。三個候選,`go` 只讓第一個 guard 成立;無 guard 的恆成立。
     // 只驗「回傳非空」測不出篩選有沒有發生 —— 必須指名回傳的是哪些、順序為何。
     let document = base();
     let names = candidates(
-        run(WHEN_FILTER, &["Options"], &call("Options", "go"), &document).expect("evaluates"),
+        run(
+            CHOOSE_FILTER,
+            &["Options"],
+            &call("Options", "go"),
+            &document,
+        )
+        .expect("evaluates"),
     );
     assert_eq!(
         names,
@@ -283,12 +303,12 @@ fn when_yields_only_the_candidates_whose_guard_holds() {
 }
 
 #[test]
-fn when_filters_differently_for_a_different_subject() {
+fn choose_filters_differently_for_a_different_subject() {
     // 對稱案:換一個 sign,成立的是另一個 guard。同一份定義、不同輸入 → 不同候選集。
     let document = base();
     let names = candidates(
         run(
-            WHEN_FILTER,
+            CHOOSE_FILTER,
             &["Options"],
             &call("Options", "stone"),
             &document,
@@ -303,8 +323,13 @@ fn a_goal_never_executes_the_candidates_it_yields() {
     // 層級介入:`when:` **只列舉不執行**。若它偷跑了,文件會被改動。
     let document = base();
     let before = document.source();
-    let evaluation =
-        run(WHEN_FILTER, &["Options"], &call("Options", "go"), &document).expect("evaluates");
+    let evaluation = run(
+        CHOOSE_FILTER,
+        &["Options"],
+        &call("Options", "go"),
+        &document,
+    )
+    .expect("evaluates");
     assert!(matches!(evaluation, FunctionEvaluation::Candidates(_)));
     assert_eq!(document.source(), before, "候選列舉不得動到文件");
 }
@@ -382,7 +407,13 @@ function Odd(x) / [Verb]:
     let document = base();
     let error = run(NO_SUBJECT, &["Odd"], &call("Odd", "go"), &document).expect_err("沒有主體");
     assert!(
-        format!("{error}").contains("FUNCTION_GUARD_NO_SUBJECT"),
+        matches!(
+            &error,
+            ReplayError::Function {
+                source: FunctionError::GuardNoSubject { .. },
+                ..
+            }
+        ),
         "{error}"
     );
 }
@@ -405,7 +436,13 @@ function Pair(x, y) / x.syn.category == y.syn.category:
     };
     let error = run(MULTI, &["Pair"], &invocation, &document).expect_err("兩個主體");
     assert!(
-        format!("{error}").contains("FUNCTION_GUARD_MULTI_SUBJECT"),
+        matches!(
+            &error,
+            ReplayError::Function {
+                source: FunctionError::GuardMultiSubject { .. },
+                ..
+            }
+        ),
         "{error}"
     );
 }
@@ -447,7 +484,13 @@ function Odd(x) / x.syn.category == verb:
     };
     let error = run(NOT_A_SIGN, &["Odd"], &invocation, &document).expect_err("不是 sign");
     assert!(
-        format!("{error}").contains("FUNCTION_GUARD_SUBJECT_NOT_A_SIGN"),
+        matches!(
+            &error,
+            ReplayError::Function {
+                source: FunctionError::GuardSubjectNotASign { .. },
+                ..
+            }
+        ),
         "{error}"
     );
 }
@@ -520,7 +563,13 @@ function Outside(x):
     // 訊息必須說「有定義但不可見」,不是「不是內建 rewrite」—— 後者會把人導向
     // 完全錯的方向(去查 12 個原子改寫,而問題其實在 export 表)。
     assert!(
-        format!("{error}").contains("FUNCTION_NOT_VISIBLE"),
+        matches!(
+            &error,
+            ReplayError::Function {
+                source: FunctionError::NotVisible { .. },
+                ..
+            }
+        ),
         "{error}"
     );
 }

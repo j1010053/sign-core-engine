@@ -1,0 +1,7 @@
+---
+source: crates/changeset/tests/step17_call_trace.rs
+expression: kinds
+---
+update
+update
+update

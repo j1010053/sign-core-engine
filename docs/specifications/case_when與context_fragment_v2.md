@@ -1,5 +1,9 @@
 # `case`、`when` 與 Context Fragment（V2）
 
+> 本檔規範**共時側**（`.lang`）。歷時 function 層（`code/*.chg` 的 body）沿用同一組
+> 關鍵字，其規範見 `function分支語意與選擇層_v1.0.md`（P69）；兩側的逐條對齊表在
+> 該檔 §3.4。歷時側另有 `choose:`（列舉候選、不執行），共時側無對應物。
+
 ## 封閉的 Context 型別
 
 V2 的 fragment context 是編譯器封閉型別，不開放 `.lang` 自行註冊：

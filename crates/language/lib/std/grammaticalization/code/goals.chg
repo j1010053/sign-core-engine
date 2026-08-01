@@ -1,17 +1,17 @@
 /* Standard evolution goals.
 
-   Goal is an authoring-time file grouping only. `when:` supplies candidate
+   Goal is an authoring-time file grouping only. `choose:` supplies candidate
    function calls; it does not select or execute a candidate. */
 
 package std:grammaticalization:
     schema = conlang.functions/v1
 
 function Future(target [Verb]):
-    when:
+    choose:
         VerbToTense(target, tense: FUTURE, result_category: aux)
 
 /* A FINISH verb may supply a perfect function and become a bound marker.
    Goal evaluation only yields the candidate; selection remains explicit. */
 function Perfect(target [Verb]):
-    when:
+    choose:
         VerbToTense(target, tense: PERFECT, result_category: bound)

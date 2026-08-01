@@ -2061,6 +2061,28 @@ pub struct ResolvedStatement {
     pub edits: Vec<PrimitiveEdit>,
 }
 
+/// 一次**已解析**的 function 呼叫(Step 17「resolved call trace」)。
+///
+/// ## 為什麼是獨立欄位,不併進 `ResolvedStatement`
+///
+/// 步驟 14 封板的契約是 `edits` **只含四原語**。trace 是「執行事實」的觀察,不是
+/// 操作;混進 edits 會讓 replay 不再是純原語重放。故並行記錄、以 `statement` 回指。
+///
+/// ## 為什麼要有它
+///
+/// `.chg` 寫的是 `VerbToTense(sign("go"), …)` 一行,展開後是十幾筆原語。沒有 trace
+/// 就只看得到原語,答不出「這筆 update 是誰產生的」——層級介入(docs/12)要的正是
+/// 這個對應。堆疊記錄擁有關係,`call` 是**代換後**的呼叫(參數已綁定成實值)。
+///
+/// `(statement, 同句內的序)` 也正是 P34 給 History 定的鍵形狀。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedCall {
+    pub statement: u64,
+    /// 呼叫堆疊,外到內。空 = 直接寫在 `.chg` 語句裡的那一層。
+    pub stack: Vec<String>,
+    pub call: function::FunctionCall,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedChangeSet {
     pub schema: String,
@@ -2072,6 +2094,9 @@ pub struct ResolvedChangeSet {
     /// 同類),不是操作,故不影響步驟 14「`ResolvedChangeSet` 只含四原語」的封板契約。
     pub donors: Vec<DonorRef>,
     pub statements: Vec<ResolvedStatement>,
+    /// 展開過程的 resolved call trace。**不入 `dump()`**——dump 的契約是排出降階後
+    /// 的原語,trace 進去就變成可 replay 的操作了。
+    pub calls: Vec<ResolvedCall>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2127,12 +2152,36 @@ pub enum ReplayError {
         #[source]
         source: EditError,
     },
+    /// Step 17 function／Goal runtime 失敗。**分型的理由見 [`function::FunctionError`]**
+    /// ——這些失敗以前全是 `Parse`,rebase 因此把「guard 在新 base 上不成立」誤判成
+    /// 「changeset 本身壞了」。
+    ///
+    /// `ordinal` 與 `StatementSelector` 同理:語句歸屬只有 `resolve` 的語句迴圈知道,
+    /// 而授權時直接呼叫 `evaluate_function_offline` 並不在任何語句裡,故是 `Option`。
+    /// 它**不進 `Display`**——分類與定位讀欄位,不讀訊息(P57)。
+    #[error("CHANGESET_FUNCTION: {source}")]
+    Function {
+        ordinal: Option<u64>,
+        #[source]
+        source: function::FunctionError,
+    },
     #[error("CHANGESET_IDENTITY: {0}")]
     Identity(#[from] IdentityError),
     #[error("CHANGESET_LIBRARY: {0}")]
     Library(String),
     #[error("CHANGESET_COMPILE: {0}")]
     Compile(#[from] CompileSystemError),
+}
+
+/// 手寫而非 `#[from]`:`Function` 是結構變體,`ordinal` 由 `resolve` 的語句迴圈
+/// 事後補上,構造點本身不知道自己屬於哪一句。
+impl From<function::FunctionError> for ReplayError {
+    fn from(source: function::FunctionError) -> ReplayError {
+        ReplayError::Function {
+            ordinal: None,
+            source,
+        }
+    }
 }
 
 fn strip_digest(value: &str) -> String {
@@ -2153,15 +2202,29 @@ fn split_last_colon(value: &str) -> Result<(&str, u64), ReplayError> {
     Ok((namespace, ordinal))
 }
 
+/// `.chg` 的 `node(<kind>, @id)` 關鍵字 → `NodeKind`。
+///
+/// 必須是 [`kind_keyword`] 的**反函數**(除了 `FeatureRule` 與 `Rule` 刻意共用
+/// `"rule"`——全庫都把兩者當同一種處理)。兩表對不上就會排出自己讀不回來的 `.chg`,
+/// 見 `kind_keyword` 的誌誤。
 fn parse_kind(value: &str) -> Result<NodeKind, ReplayError> {
     match value.trim() {
         "language" => Ok(NodeKind::Language),
+        "dsl_declaration" => Ok(NodeKind::DslDeclaration),
+        "distribution" => Ok(NodeKind::Distribution),
         "trait" => Ok(NodeKind::Trait),
         "sign" => Ok(NodeKind::Sign),
         "block" => Ok(NodeKind::Block),
+        "trait_use" => Ok(NodeKind::TraitUse),
+        "belongs" => Ok(NodeKind::Belongs),
         "definition" | "def" => Ok(NodeKind::Definition),
         "slot" => Ok(NodeKind::Slot),
+        "slot_map" => Ok(NodeKind::SlotMap),
+        "feature_declaration" => Ok(NodeKind::FeatureDeclaration),
+        "feature_value" => Ok(NodeKind::FeatureValue),
+        "slot_feature_binding" => Ok(NodeKind::SlotFeatureBinding),
         "role" => Ok(NodeKind::RoleDeclaration),
+        "role_binding" => Ok(NodeKind::RoleBinding),
         "rule" => Ok(NodeKind::Rule),
         "then" => Ok(NodeKind::RuleThenBranch),
         "else" => Ok(NodeKind::RuleElseBranch),
@@ -2169,6 +2232,7 @@ fn parse_kind(value: &str) -> Result<NodeKind, ReplayError> {
         "sense" => Ok(NodeKind::Sense),
         "sense_edge" => Ok(NodeKind::SenseEdge),
         "phon_block" => Ok(NodeKind::PhonBlockNode),
+        "realization" => Ok(NodeKind::Realization),
         "realization_branch" => Ok(NodeKind::RealizationBranch),
         "application" => Ok(NodeKind::Application),
         "case" => Ok(NodeKind::Case),
@@ -2178,15 +2242,42 @@ fn parse_kind(value: &str) -> Result<NodeKind, ReplayError> {
     }
 }
 
+/// `NodeKind` → `.chg` 的 `node(<kind>, @id)` 關鍵字。
+///
+/// ## 誌誤:為什麼不能有 `_ =>` 兜底
+///
+/// 這裡原本以 `_ => "node"` 收尾,而 [`parse_kind`] 不認得 `"node"`。後果不是「少一種
+/// 寫法」,是**排出一份自己讀不回來的 `.chg`**:手改 `.lang` 把 `belongs Verby` 改成
+/// `belongs Nouny`,`reconstruct` 正確產出 `Update{ Belongs }`,`dump()` 排成
+/// `update node(node, @evo:root:6).target = Nouny`,再讀就是
+/// `CHANGESET_PARSE: unknown node kind "node"`。
+///
+/// 落進兜底的有 10 種 kind,其中 7 種有可編輯欄位(`TraitUse`/`Belongs`/`SlotMap`/
+/// `FeatureDeclaration`/`FeatureValue`/`SlotFeatureBinding`/`RoleBinding`),
+/// 也就是七種改動都排不出可用的 changeset。
+///
+/// 故此處**刻意窮盡**:新增 `NodeKind` 時編譯器會擋下來,逼人同時在 `parse_kind`
+/// 補上對應的一行。兩表的一致性由 `kind_keyword_round_trips_for_every_node_kind` 釘住。
 fn kind_keyword(kind: NodeKind) -> &'static str {
     match kind {
         NodeKind::Language => "language",
+        NodeKind::DslDeclaration => "dsl_declaration",
+        NodeKind::Distribution => "distribution",
         NodeKind::Trait => "trait",
         NodeKind::Sign => "sign",
         NodeKind::Block => "block",
+        NodeKind::TraitUse => "trait_use",
+        NodeKind::Belongs => "belongs",
         NodeKind::Definition => "definition",
         NodeKind::Slot => "slot",
+        NodeKind::SlotMap => "slot_map",
+        NodeKind::FeatureDeclaration => "feature_declaration",
+        NodeKind::FeatureValue => "feature_value",
+        NodeKind::SlotFeatureBinding => "slot_feature_binding",
         NodeKind::RoleDeclaration => "role",
+        NodeKind::RoleBinding => "role_binding",
+        // 全庫都把 `FeatureRule` 與 `Rule` 當同一種處理(見 `sibling_ranks`、
+        // `resolve_path_child` 的 `"rule"` 支),故**刻意**共用一個關鍵字。
         NodeKind::Rule | NodeKind::FeatureRule => "rule",
         NodeKind::RuleThenBranch => "then",
         NodeKind::RuleElseBranch => "else",
@@ -2194,12 +2285,12 @@ fn kind_keyword(kind: NodeKind) -> &'static str {
         NodeKind::Sense => "sense",
         NodeKind::SenseEdge => "sense_edge",
         NodeKind::PhonBlockNode => "phon_block",
+        NodeKind::Realization => "realization",
         NodeKind::RealizationBranch => "realization_branch",
         NodeKind::Application => "application",
         NodeKind::Case => "case",
         NodeKind::CaseBranch => "case_branch",
         NodeKind::Constraint => "constraint",
-        _ => "node",
     }
 }
 
@@ -2718,6 +2809,7 @@ impl UnresolvedChangeSet {
         let functions = function::load_functions(&catalog, libraries)?;
         let mut working = base.fork(self.namespace.clone())?;
         let mut resolved = Vec::new();
+        let mut calls = Vec::new();
         for statement in &self.statements {
             let mut edits = Vec::new();
             for operation in &statement.operations {
@@ -2734,9 +2826,24 @@ impl UnresolvedChangeSet {
                     {
                         if functions.contains(name) {
                             if block.is_some() {
-                                return Err(ReplayError::Parse(format!(
-                                    "function {name:?} does not accept an indented block"
-                                )));
+                                return Err(function::FunctionError::UnexpectedBlock {
+                                    name: name.clone(),
+                                }
+                                .into());
+                            }
+                            // **靜態形狀先看,不先求值**:產出候選的 function 不能寫進
+                            // `.chg`(選擇不可重現,P26),而那與 base 無關。先求值的話,
+                            // body 裡因狀態而起的錯(guard 不成立、參數約束不符)會先
+                            // 冒出來蓋掉真正的問題——那些錯分類為 `Conflict`,rebase
+                            // 就會叫人去解一個「換什麼 base 都解不掉」的衝突。
+                            if matches!(
+                                functions.get(name).map(|definition| &definition.body),
+                                Ok(function::FunctionBody::Choose(_))
+                            ) {
+                                return Err(function::FunctionError::CandidatesRequireSelection {
+                                    function: name.clone(),
+                                }
+                                .into());
                             }
                             let invocation = function::FunctionCall {
                                 name: name.clone(),
@@ -2750,27 +2857,38 @@ impl UnresolvedChangeSet {
                                 libraries,
                             )? {
                                 function::FunctionEvaluation::Executed(execution) => {
-                                    Ok(execution.edits)
+                                    Ok((execution.edits, execution.trace))
                                 }
-                                function::FunctionEvaluation::Candidates(candidates) => {
-                                    Err(ReplayError::Parse(format!(
-                                        "FUNCTION_CANDIDATES_REQUIRE_SELECTION: {:?} returned {} candidates",
-                                        candidates.source,
-                                        candidates.candidates.len()
-                                    )))
+                                function::FunctionEvaluation::Candidates(_) => {
+                                    unreachable!("`choose:` 已在上面攔下")
                                 }
                             };
                         }
                     }
-                    resolve_operation(operation, &working, &scope)
+                    resolve_operation(operation, &working, &scope).map(|edits| (edits, Vec::new()))
                 })()
                 .map_err(|error| match error {
-                        ReplayError::Selector(message) => ReplayError::StatementSelector {
-                            ordinal: statement.ordinal,
-                            message,
-                        },
-                        other => other,
-                    })?;
+                    ReplayError::Selector(message) => ReplayError::StatementSelector {
+                        ordinal: statement.ordinal,
+                        message,
+                    },
+                    // function 求值也要說得出**是哪一句**——沒有這一步,
+                    // 「guard 在新 base 上不成立」這類衝突就定位不到語句。
+                    ReplayError::Function {
+                        ordinal: None,
+                        source,
+                    } => ReplayError::Function {
+                        ordinal: Some(statement.ordinal),
+                        source,
+                    },
+                    other => other,
+                })?;
+                let (operation_edits, trace) = operation_edits;
+                calls.extend(trace.into_iter().map(|step| ResolvedCall {
+                    statement: statement.ordinal,
+                    stack: step.stack,
+                    call: step.call,
+                }));
                 edits.extend(operation_edits);
             }
             let (candidate, _) =
@@ -2789,6 +2907,7 @@ impl UnresolvedChangeSet {
             libraries: self.libraries.clone(),
             donors: self.donors.clone(),
             statements: resolved,
+            calls,
         })
     }
 }
@@ -3000,6 +3119,31 @@ fn resolve_path_child(
                     Some(SignItem::Def(def)) if def.path == argument
                 )
         }),
+        // `belongs["Verby"]` / `trait_use["Verby"]` —— 依**被引用的名字**定位。
+        //
+        // 這兩種節點沒有自己的名字,身分就是「指向誰」,故鍵用目標名。沒有它們,
+        // 「把 sign 的歸屬改掉」在 `.chg` 裡只能靠 `node(belongs, @id)` 寫死穩定 id
+        // ——那是機器排出來的形式,人手寫不出,rebase 後也讀不出意圖。
+        "belongs" => {
+            let name = keyed_name(argument).unwrap_or(argument);
+            children.iter().copied().find(|entry| {
+                entry.kind == NodeKind::Belongs
+                    && matches!(
+                        item_at_address(document.language(), &entry.address),
+                        Some(SignItem::Belongs(target)) if target == name
+                    )
+            })
+        }
+        "trait_use" => {
+            let name = keyed_name(argument).unwrap_or(argument);
+            children.iter().copied().find(|entry| {
+                entry.kind == NodeKind::TraitUse
+                    && matches!(
+                        item_at_address(document.language(), &entry.address),
+                        Some(SignItem::TraitUse { name: target, .. }) if target == name
+                    )
+            })
+        }
         "slot" => children.iter().copied().find(|entry| {
             entry.kind == NodeKind::Slot
                 && matches!(

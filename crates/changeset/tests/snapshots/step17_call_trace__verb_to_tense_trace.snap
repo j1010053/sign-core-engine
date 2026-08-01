@@ -1,0 +1,7 @@
+---
+source: crates/changeset/tests/step17_call_trace.rs
+expression: trace
+---
+#0 [VerbToTense] drift(sign("go"), sense: core, gloss: FUTURE)
+#0 [VerbToTense] reanalyze(sign("go"), target: category, to: aux)
+#0 [VerbToTense] entrench(sign("go"), delta: 0.3)

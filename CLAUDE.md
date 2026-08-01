@@ -8,10 +8,13 @@
 
 1. **規格已凍結,以編號決策為準。** 全部設計爭議都已裁決並編號:D1–D28(語法/本體論)、
    A1–A4 / B5–B9 / C10–C11(執行語意)、I1–I18(實作層,docs/05 §9)、
-   **P1–P64(架構修補層;P1–P19 權威=《架構修補彙整 01–04》§1，
-   P20–P64 權威=《架構修補彙整 05–11》§1；
+   **P1–P64、P69–P70(架構修補層;P1–P19 權威=《架構修補彙整 01–04》§1，
+   P20–P64 權威=《架構修補彙整 05–11》§1，
+   **P69–P70 權威=`specifications/function分支語意與選擇層_v1.0.md` §6**；
    個別修補文件保留詳細理由與落地紀錄，出入處一律以彙整為準；
-   P7 已廢止→P14，P19 的 nativization 放置由 P56/P58/P64 局部覆寫)**。
+   P7 已廢止→P14，P19 的 nativization 放置由 P56/P58/P64 局部覆寫，
+   **P48 的 body 分支語意由 P69 修訂**；
+   P65–P68 為《架構修補12》的**提案**，未定案，不得引用為決策)**。
    任何實作若與編號決策矛盾,**停下來明確指出衝突**,不要自行變通。規格未覆蓋的新問題:
    實作層提案編 I 系列入 docs/05 §9;架構層變更走 P 系列。
 2. **每個開發階段必須以測試出口收尾。** 不存在「做完但沒有測試綠燈」的階段
@@ -34,6 +37,7 @@
 | `specifications/分層結構檔本體論_v0.1.md` | 模組 C(節點內部):sign 統一本體、四維特徵結構、組合=運算、固化=語法化、層作視圖投影(v0.1.1 修補)。**設計層,SYN 欄位待 A/B 驅動** |
 | `architecture/AB模組需求分配_v0.2.md` | A=完整 sign 生產者(含組合造詞、借詞、entrenchment 初值);B=**原語集三層定稿**(L1 資料/L2 語言/L3 理論宏),已回填 06 的 ChangeEntry op=L1∪L2。命名分層規約見本檔 §6 |
 | `specifications/Sign生成引擎本體論_v0.1.md` | 模組 A 核心:Sign 稀疏容器、四維、Need→Generator→Builder→Store 職責契約、五連接關係、兩種構詞、生命週期;附 18 案折磨測試(0 破壞)。**設計層** |
+| `specifications/function分支語意與選擇層_v1.0.md` | **P69–P70 權威**:歷時 function body 的四種形狀(序列/`case:`/`when:`/`choose:`)、分支條件三選一、frozen matching;選擇移出引擎層(零候選為合法結果)。與 `case_when與context_fragment_v2.md` 逐條對齊 |
 | `specifications/統計先驗與抽樣引擎_v0.1.md` | 模組 E:唯讀先驗庫(PHOIBLE/Grambank/WALS/CLICS,附網址與授權)+ 無狀態抽樣;有效分佈=手動>導入 provider>投影>E1 先驗,覆寫層住節點。**設計層;01–10 設計鏈至此閉合** |
 | `verification/測試案例集總索引_v0.1.md` | **全專案測試索引**:DSL 範例 8.1–8.6、18 案折磨測試、十實例、Rust 測試、Lexurgy 黑盒的統一映射與狀態;動工任一模組前先查其驗收案例 |
 | `architecture/邏輯分層架構_v0.1.md` | 四層架構(展示/應用/引擎/資料);引擎分即時+批次兩子層,DSL core crate 跨兩子層共用;應用層(Command/Query API)為下一個設計空白。**設計層** |
@@ -48,6 +52,7 @@
 | `architecture/架構修補06_插件服務與DSL_API_v0.1.md` | P29–P37 詳細來源:插件 code/data/config、服務生命週期、DSL API；完整插件仍是設計層 |
 | `architecture/架構修補10_歷時function層與載入_v0.1.md` | P47–P55 詳細來源:function surface/load、接力展開、路徑庫、ServiceContext 接點、components、`.chg` canonical |
 | `architecture/架構修補11_演化樹節點模型_v0.1.md` | P56–P64 詳細來源:immutable snapshot、typed rebase、node-v2、全 parent merge、donor、persistence |
+| `architecture/架構修補12_授權面與封裝面分離_v0.1_提案.md` | P65–P68 **提案,未定案**:digest 移至邊、環境鎖分離、授權/封裝二分、bundle |
 | `architecture/架構修補09_phon命名block_v0.md` | P46 詳細來源:phon `name:`、結構化 block、propagate、grouped codegen 與 authoring |
 | `verification/` | 測試索引與封板證據：M1++、Step 13、Step 14、Step 16；只宣告可觀測完成狀態，不取代規範權威 |
 | `specifications/` | 規範性契約：DSL、Language、演化圖、Sign、統計與共時資料語意；02–04 的 D/A/B/C 決策編號保留於檔名。 |
