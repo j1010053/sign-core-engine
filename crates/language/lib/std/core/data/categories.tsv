@@ -7,6 +7,8 @@ Verb	Predicate
 Intransitive	Verb	
 Transitive	Verb	
 Ditransitive	Transitive	
+Aux	Predicate	
+Bound		
 Nominal		
 Noun	Nominal	
 Pronoun	Nominal	

@@ -445,12 +445,12 @@ fn embedded_perfect_goal_runs_through_weight_db_and_sampler() {
     assert_eq!(selection.selected.name, "VerbToTense");
     assert_eq!(selection.ordered[0].1, 1.0);
     assert!(execution.document.source().contains("core = PERFECT"));
-    assert!(execution.document.source().contains("category = bound"));
+    assert!(execution.document.source().contains("belongs Bound"));
 
     call.name = "VerbToTense".to_owned();
     call.named = vec![
         ("tense".to_owned(), "PERFECT".to_owned()),
-        ("result_category".to_owned(), "bound".to_owned()),
+        ("result_category".to_owned(), "Bound".to_owned()),
     ];
     // 對照:同一個表、把 Recipe 直接餵進去,回的是 `Executed` 而不是 `Candidates`。
     //

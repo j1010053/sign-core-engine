@@ -164,7 +164,9 @@ fn packages_exports_and_combined_ontology_are_deterministic() {
         Language::parse(&combined_a.dump()).unwrap().dump(),
         combined_a.dump()
     );
-    assert_eq!(combined_a.traits.len(), 133);
+    // 135 = 133 + 語法化階梯的 `Aux`/`Bound`。兩者是 `reanalyze{target: category}`
+    // 搬動 `belongs` 的目標,必須是本體樹裡真存在的範疇。
+    assert_eq!(combined_a.traits.len(), 135);
     for core_semantic_trait in [
         "Semantic",
         "SemanticFrame",

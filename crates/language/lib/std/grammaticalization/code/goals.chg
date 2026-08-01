@@ -8,10 +8,10 @@ package std:grammaticalization:
 
 function Future(target [Verb]):
     choose:
-        VerbToTense(target, tense: FUTURE, result_category: aux)
+        VerbToTense(target, tense: FUTURE, result_category: Aux)
 
 /* A FINISH verb may supply a perfect function and become a bound marker.
    Goal evaluation only yields the candidate; selection remains explicit. */
 function Perfect(target [Verb]):
     choose:
-        VerbToTense(target, tense: PERFECT, result_category: bound)
+        VerbToTense(target, tense: PERFECT, result_category: Bound)

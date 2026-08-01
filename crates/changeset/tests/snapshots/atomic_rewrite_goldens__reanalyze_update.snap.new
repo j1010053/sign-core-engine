@@ -1,5 +1,6 @@
 ---
 source: crates/changeset/tests/atomic_rewrite_goldens.rs
+assertion_line: 102
 expression: shape(&edits)
 ---
-update Definition.value
+update Belongs.other

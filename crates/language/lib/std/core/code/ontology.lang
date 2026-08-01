@@ -30,6 +30,15 @@ trait Transitive:
     belongs Verb
 trait Ditransitive:
     belongs Transitive
+
+/* 語法化階梯(P14 Life Cycle 軸)的兩級。`reanalyze{target: category}` 搬動的是
+   `belongs`,故階梯上的每一級都必須是本體樹裡真存在的範疇——否則「重新分析成
+   助動詞」寫不出目標。Aux 仍是謂語性的;Bound 已是附著形式,不再獨立作謂語,
+   故不 belongs Predicate。 */
+trait Aux:
+    belongs Predicate
+trait Bound:
+
 trait Nominal:
     belongs AgreementBearer
 trait Noun:

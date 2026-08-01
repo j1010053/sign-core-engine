@@ -80,10 +80,10 @@ fn statement(body: &str) -> String {
 #[test]
 fn a_bare_call_lowers_to_primitives() {
     let lang = apply(
-        &statement("reanalyze(sign(\"book\"), target: category, to: aux)"),
+        &statement("reanalyze(sign(\"book\"), target: category, to: Aux)"),
         "evo:re",
     );
-    assert!(lang.contains("category = aux"), "{lang}");
+    assert!(lang.contains("belongs Aux"), "{lang}");
 }
 
 #[test]
@@ -244,7 +244,7 @@ fn a_rule_home_argument_accepts_trait_and_sign() {
 fn the_resolved_changeset_stays_primitive_only() {
     // 呼叫是**未解析層**的糖:dump 出來只有四原語,沒有 `reanalyze(` 字樣。
     let resolved = resolve(
-        &statement("reanalyze(sign(\"book\"), target: category, to: aux)"),
+        &statement("reanalyze(sign(\"book\"), target: category, to: Aux)"),
         "evo:dump",
     )
     .expect("resolve");
@@ -268,11 +268,11 @@ fn the_resolved_changeset_stays_primitive_only() {
 fn a_call_and_its_hand_written_primitive_agree() {
     // 差分:呼叫降階的結果,必須和直接手寫那條原語一模一樣。
     let via_call = apply(
-        &statement("reanalyze(sign(\"book\"), target: category, to: aux)"),
+        &statement("reanalyze(sign(\"book\"), target: category, to: Aux)"),
         "evo:a",
     );
     let via_primitive = apply(
-        &statement("update sign(\"book\").def[syn.category].value = aux"),
+        &statement("update sign(\"book\").belongs[\"LocalNoun\"].target = Aux"),
         "evo:b",
     );
     assert_eq!(via_call, via_primitive);

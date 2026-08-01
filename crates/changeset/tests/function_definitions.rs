@@ -74,7 +74,7 @@ fn a_header_guard_is_split_outside_the_parentheses() {
 fn a_plain_sequence_means_run_all_in_order() {
     // 慣稱 Recipe。
     let parsed = parse_functions(&package(
-        "function VerbToTense(verb [Verb], tense):\n    drift(verb, sense: core, gloss: tense)\n    reanalyze(verb, target: category, to: aux)\n    entrench(verb, delta: 0.3)\n",
+        "function VerbToTense(verb [Verb], tense):\n    drift(verb, sense: core, gloss: tense)\n    reanalyze(verb, target: category, to: Aux)\n    entrench(verb, delta: 0.3)\n",
     ))
     .unwrap();
     match &parsed.functions[0].body {

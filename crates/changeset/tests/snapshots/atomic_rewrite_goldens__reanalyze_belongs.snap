@@ -2,4 +2,4 @@
 source: crates/changeset/tests/atomic_rewrite_goldens.rs
 expression: shape(&edits)
 ---
-insert Definition into Sign at End
+update Belongs.other

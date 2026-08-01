@@ -33,13 +33,37 @@ pub enum ReanalysisTarget {
 }
 
 impl ReanalysisTarget {
-    /// 重分析寫入的 syn Def 路徑。
-    fn def_path(self) -> Option<&'static str> {
+    /// 這一種重分析**還不能做**時的說明;`None` 代表可以做。
+    ///
+    /// ## 誌誤:三個 target 原本都寫「沒有人認的欄位」
+    ///
+    /// 早期實作把三者一律降階為 `upsert_def(sign, "syn.<target>", to)`。那條路徑
+    /// 走的是 `Def` 驗證裡**唯一不檢查內容**的一支(任意 `<dim>.<field>` 放行),
+    /// 於是:欄位名沒人讀、值沒有值域、寫什麼都算數。
+    ///
+    /// 以 `category` 為例,實測 `reanalyze(sign("go"), target: category, to: aux)`
+    /// 之後 `belongs` 仍是 `MotionVerb`、`category_is_a(MotionVerb, Verb)` 仍為
+    /// `true`——**語法化最核心的動作是空操作**。而 `std/core/code/ontology.lang`
+    /// 開宗明義:「category membership—not a mutable `syn.class`」,可變的範疇欄位
+    /// 正是該設計拒絕的東西。
+    ///
+    /// 現在 `Category` 改為搬動 `belongs`(見 `expand`)。`Valence`/`Slot` 沒有對應
+    /// 的既有承載處——valence 該是宣告過的 feature、slot 該動 `SignItem::Slot`
+    /// ——在裁定前**顯式拒絕**,不再寫死欄位。
+    fn unsupported(self) -> Option<&'static str> {
         match self {
-            ReanalysisTarget::Valence => Some("syn.valence"),
-            ReanalysisTarget::Category => Some("syn.category"),
-            ReanalysisTarget::Slot => Some("syn.slot"),
-            ReanalysisTarget::Boundary => None,
+            ReanalysisTarget::Category => None,
+            ReanalysisTarget::Valence => Some(
+                "reanalyze{target: Valence} needs a declared syn feature; \
+                 writing an unchecked `syn.valence` def was a no-op",
+            ),
+            ReanalysisTarget::Slot => Some(
+                "reanalyze{target: Slot} needs to move the sign's Slot items; \
+                 writing an unchecked `syn.slot` def was a no-op",
+            ),
+            ReanalysisTarget::Boundary => {
+                Some("reanalyze{target: Boundary} needs constituent re-segmentation")
+            }
         }
     }
 }
@@ -326,12 +350,10 @@ pub fn expand(
         }
 
         AtomicRewrite::Reanalyze { sign, target, to } => {
-            let Some(path) = target.def_path() else {
-                return Err(RewriteError::Unsupported(
-                    "reanalyze{target: Boundary} needs constituent re-segmentation".to_owned(),
-                ));
-            };
-            Ok(vec![upsert_def(document, sign, path, to)?])
+            if let Some(reason) = target.unsupported() {
+                return Err(RewriteError::Unsupported(reason.to_owned()));
+            }
+            reanalyze_category(document, sign, to)
         }
 
         AtomicRewrite::Entrench { sign, delta } => entrenchment_edit(document, sign, *delta),
@@ -448,6 +470,55 @@ fn phon_rule(document: &LanguageDocument, body: &str) -> conlang_language::Rule 
     );
     rule.source = SourceLocation::unknown();
     rule
+}
+
+/// `reanalyze{target: Category}` —— **搬動 `belongs`**。
+///
+/// 範疇在本系統是**本體樹的成員關係**(`std/core/code/ontology.lang`:
+/// 「category membership—not a mutable `syn.class`」),而 `category_is_a` 與參數
+/// 約束 `[Verb]` 讀的也是它。所以「重新分析成助動詞」就是把 `belongs` 換掉;
+/// 換完之後 `[Verb]` 約束會**真的**不再成立,這正是語法化該有的可觀測後果。
+///
+/// **恰好一個 `belongs` 才換**。多個時顯式拒絕:哪一個才是被重分析的那一個,
+/// 是呼叫端才知道的事,猜一個會靜默給出錯的結果(比照 guard 多主體的處理)。
+/// 一個都沒有時同樣拒絕——沒有範疇可搬。
+fn reanalyze_category(
+    document: &LanguageDocument,
+    sign: &str,
+    to: &str,
+) -> Result<Vec<PrimitiveEdit>, RewriteError> {
+    // 目標範疇**不在這裡檢查**:`expand` 拿不到 `LibrarySpec`,而範疇多半來自套件
+    // (`Aux`/`Verb` 都住 std:core,文件自身的 `traits` 是空的)。懸空的 `belongs`
+    // 由 compile 層的 `ONTOLOGY_UNKNOWN_TRAIT` 抓,那裡才看得到合併後的本體樹。
+    let definition = document
+        .language()
+        .signs
+        .iter()
+        .find(|candidate| candidate.name == sign)
+        .ok_or_else(|| RewriteError::Target(format!("unknown sign {sign:?}")))?;
+    let existing = definition
+        .items
+        .iter()
+        .filter(|item| matches!(item, SignItem::Belongs(_)))
+        .count();
+    if existing != 1 {
+        return Err(RewriteError::Unsupported(format!(
+            "reanalyze{{target: Category}} needs exactly one `belongs` on sign {sign:?}, found {existing}"
+        )));
+    }
+    let current = definition
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SignItem::Belongs(name) => Some(name.clone()),
+            _ => None,
+        })
+        .expect("counted exactly one above");
+    let target = node(document, &format!("sign({sign:?}).belongs[{current:?}]"))?;
+    Ok(vec![PrimitiveEdit::Update {
+        node: target,
+        change: NodeUpdate::Belongs(to.to_owned()),
+    }])
 }
 
 /// upsert 一個 Def:已存在就 Update,否則 Insert。

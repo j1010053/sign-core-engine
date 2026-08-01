@@ -176,23 +176,19 @@ fn golden_lexicalize_sense() {
     );
 }
 
+/// `reanalyze{Category}` 的展開形狀:**單一 `Update`,目標是 `Belongs` 節點**。
+///
+/// 先前這裡有兩個 golden(update/insert 兩條 upsert 路徑),記的是對裸 `syn.category`
+/// / `syn.valence` def 的 upsert。那兩條路現在都不存在:`Category` 搬 `belongs`
+/// (目標必存在,故恆為 Update),`Valence` 顯式拒絕。
 #[test]
-fn golden_reanalyze_update_and_insert() {
-    // 同一項的兩條路:欄位已存在 → update;不存在 → insert(upsert)。
+fn golden_reanalyze_moves_belongs() {
     golden(
-        "reanalyze_update",
+        "reanalyze_belongs",
         &AtomicRewrite::Reanalyze {
             sign: "book".to_owned(),
             target: ReanalysisTarget::Category,
-            to: "aux".to_owned(),
-        },
-    );
-    golden(
-        "reanalyze_insert",
-        &AtomicRewrite::Reanalyze {
-            sign: "kobo".to_owned(),
-            target: ReanalysisTarget::Valence,
-            to: "intransitive".to_owned(),
+            to: "Aux".to_owned(),
         },
     );
 }

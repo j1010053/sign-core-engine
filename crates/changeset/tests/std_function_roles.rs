@@ -132,7 +132,7 @@ fn std_recipe_executes_in_order_on_a_temporary_language() {
     let mut call = invocation("VerbToTense", "go");
     call.named.push(("tense".to_owned(), "FUTURE".to_owned()));
     call.named
-        .push(("result_category".to_owned(), "aux".to_owned()));
+        .push(("result_category".to_owned(), "Aux".to_owned()));
 
     let FunctionEvaluation::Executed(execution) =
         evaluate_function_offline(&table, &call, &base(), &LibrarySpec::default()).unwrap()
@@ -149,7 +149,7 @@ fn std_recipe_executes_in_order_on_a_temporary_language() {
     );
     let source = execution.document.source();
     assert!(source.contains("core = FUTURE"), "{source}");
-    assert!(source.contains("category = aux"), "{source}");
+    assert!(source.contains("belongs Aux"), "{source}");
     assert!(source.contains("entrenchment = 0.5"), "{source}");
     assert!(!execution.edits.is_empty());
 }
@@ -181,7 +181,7 @@ fn std_goal_returns_candidates_without_executing_them() {
         candidates.candidates[0].named,
         [
             ("tense".to_owned(), "FUTURE".to_owned()),
-            ("result_category".to_owned(), "aux".to_owned())
+            ("result_category".to_owned(), "Aux".to_owned())
         ]
     );
     assert_eq!(document.source(), original);
@@ -229,7 +229,7 @@ fn perfect_goal_can_select_verb_to_bound_tense_marker() {
         candidate.named,
         [
             ("tense".to_owned(), "PERFECT".to_owned()),
-            ("result_category".to_owned(), "bound".to_owned())
+            ("result_category".to_owned(), "Bound".to_owned())
         ]
     );
     assert_eq!(document.source(), original, "a Goal cannot mutate state");
@@ -262,11 +262,18 @@ fn perfect_goal_can_select_verb_to_bound_tense_marker() {
         item,
         SignItem::Sense(sense) if sense.name == "core" && sense.gloss == "PERFECT"
     )));
-    assert!(evolved.items.iter().any(|item| matches!(
-        item,
-        SignItem::Def(definition)
-            if definition.path == "syn.category" && definition.value == "bound"
-    )));
+    // 重分析搬的是 `belongs`(範疇 = 本體樹成員關係),不是一個裸 `syn.category` def。
+    assert!(evolved
+        .items
+        .iter()
+        .any(|item| matches!(item, SignItem::Belongs(name) if name == "Bound")));
+    assert!(
+        !evolved
+            .items
+            .iter()
+            .any(|item| matches!(item, SignItem::Belongs(name) if name == "MotionVerb")),
+        "舊範疇必須被取代,不是並存"
+    );
     assert!(evolved.items.iter().any(|item| matches!(
         item,
         SignItem::Def(definition)
@@ -274,7 +281,7 @@ fn perfect_goal_can_select_verb_to_bound_tense_marker() {
     )));
     let source = execution.document.source();
     assert!(source.contains("core = PERFECT"), "{source}");
-    assert!(source.contains("category = bound"), "{source}");
+    assert!(source.contains("belongs Bound"), "{source}");
     assert!(source.contains("entrenchment = 0.5"), "{source}");
 }
 
@@ -322,7 +329,7 @@ function Reinforce(x [Verb]):
 
 function Broken(x [Verb]):
     entrench(x, delta: 0.2)
-    reanalyze(sign("missing"), target: category, to: aux)
+    reanalyze(sign("missing"), target: category, to: Aux)
 "#;
     let package = synthetic(FUNCTIONS, &["Reinforce", "Broken"]);
     let table = functions_from_packages(&[&package]).unwrap();
@@ -537,7 +544,7 @@ fn when_guards_all_read_the_document_as_it_was_before_any_branch_ran() {
 
 function Chain(x [Verb]):
     when:
-        reanalyze(x, target: category, to: aux) / x.syn.category == verb
+        reanalyze(x, target: category, to: Aux) / x.syn.category == verb
         entrench(x, delta: 0.5) / x.syn.category == aux
 "#;
     let package = synthetic(LEAKY, &["Chain"]);
@@ -554,7 +561,7 @@ function Chain(x [Verb]):
     };
     let rendered = execution.document.source();
     // 第一個分支確實跑了(category 變成 aux),證明 fixture 不是空轉。
-    assert!(rendered.contains("category = aux"), "{rendered}");
+    assert!(rendered.contains("belongs Aux"), "{rendered}");
     // 第二個分支不得跑:它的 guard 讀的是比對前的 verb。
     assert!(
         rendered.contains("entrenchment = 0.2"),
@@ -713,7 +720,7 @@ fn calling_a_goal_from_a_changeset_is_broken_input_not_a_conflict() {
     // 近似反例:非 Goal 的**真正**引數錯誤不得被靜態檢查吞掉,仍須報約束不符。
     let mut source = change_set_prelude(&document, &libraries, "evo:recipe-bad-arg").unwrap();
     source.push_str(
-        "\n    #0:\n        VerbToTense(sign(\"stone\"), tense: FUTURE, result_category: aux)\n",
+        "\n    #0:\n        VerbToTense(sign(\"stone\"), tense: FUTURE, result_category: Aux)\n",
     );
     let error = UnresolvedChangeSet::parse(&source)
         .unwrap()
@@ -737,7 +744,7 @@ fn changeset_dispatches_recipe_and_stops_at_goal_candidates() {
     let libraries = LibrarySpec::default();
     let mut recipe_source = change_set_prelude(&document, &libraries, "evo:std-recipe").unwrap();
     recipe_source.push_str(
-        "\n    #0:\n        VerbToTense(sign(\"go\"), tense: FUTURE, result_category: aux)\n",
+        "\n    #0:\n        VerbToTense(sign(\"go\"), tense: FUTURE, result_category: Aux)\n",
     );
     let recipe = UnresolvedChangeSet::parse(&recipe_source)
         .unwrap()
@@ -748,7 +755,7 @@ fn changeset_dispatches_recipe_and_stops_at_goal_candidates() {
         .run(&recipe)
         .unwrap();
     assert!(outcome.document.source().contains("core = FUTURE"));
-    assert!(outcome.document.source().contains("category = aux"));
+    assert!(outcome.document.source().contains("belongs Aux"));
 
     let mut goal_source = change_set_prelude(&document, &libraries, "evo:std-goal").unwrap();
     goal_source.push_str("\n    #0:\n        Future(sign(\"go\"))\n");

@@ -171,30 +171,112 @@ fn lexicalize_sense_makes_a_derivation_opaque() {
 
 // ── ③ syn ─────────────────────────────────────────────────────────────────
 
+/// 重分析**搬動 `belongs`**——範疇在本系統是本體樹的成員關係
+/// (`std/core/code/ontology.lang`:「category membership—not a mutable `syn.class`」)。
+///
+/// ## 誌誤
+///
+/// 這裡原本斷言 `category = aux`,也就是一個裸 `syn.category` def。那條路徑走的是
+/// `Def` 驗證裡唯一不檢查內容的一支,**沒有任何語意層讀它**:實測 reanalyze 之後
+/// `belongs` 原封不動、`category_is_a(…, Verb)` 仍為真,參數約束 `[Verb]` 照樣通過
+/// ——語法化最核心的動作是空操作,而測試因為只看那個 def 而全綠。
 #[test]
-fn reanalyze_updates_an_existing_category() {
+fn reanalyze_moves_the_sign_into_another_category() {
     let lang = run(&AtomicRewrite::Reanalyze {
         sign: "book".to_owned(),
         target: ReanalysisTarget::Category,
-        to: "aux".to_owned(),
+        to: "Aux".to_owned(),
     });
-    assert!(lang.contains("category = aux"), "{lang}");
-    assert!(!lang.contains("category = noun"), "{lang}");
+    // 逐 sign 檢查:`kobo` 也 belongs LocalNoun,全文比對會被它騙過。
+    let book = lang
+        .split("sign book:")
+        .nth(1)
+        .and_then(|rest| rest.split("\nsign ").next())
+        .expect("book block");
+    assert!(book.contains("belongs Aux"), "{lang}");
+    assert!(!book.contains("belongs LocalNoun"), "{lang}");
+    // 來源不動:`kobo` 的歸屬不得被波及。
+    assert!(lang.contains("belongs LocalNoun"), "{lang}");
 }
 
+/// 目標範疇不存在 ⇒ 由 compile 層的 `ONTOLOGY_UNKNOWN_TRAIT` 擋下。
+///
+/// 展開層**刻意不檢查**:`expand` 拿不到 `LibrarySpec`,而範疇多半來自套件
+/// (`Aux` 住 std:core,文件自身的 `traits` 是空的)。在展開層檢查會把合法的
+/// 套件範疇也一起拒絕。
 #[test]
-fn reanalyze_inserts_a_missing_field() {
-    // upsert:kobo 沒有 syn.valence,展開成 Insert 而非 Update。
-    let rewrite = AtomicRewrite::Reanalyze {
-        sign: "kobo".to_owned(),
-        target: ReanalysisTarget::Valence,
-        to: "intransitive".to_owned(),
-    };
-    assert!(matches!(
-        expand_only(&rewrite).as_slice(),
-        [PrimitiveEdit::Insert { .. }]
-    ));
-    assert!(run(&rewrite).contains("valence = intransitive"));
+fn reanalyze_into_an_unknown_category_is_rejected_at_compile() {
+    let mut document = base();
+    let spec = LibrarySpec::default();
+    let edits = expand_off(
+        &AtomicRewrite::Reanalyze {
+            sign: "book".to_owned(),
+            target: ReanalysisTarget::Category,
+            to: "no_such_category".to_owned(),
+        },
+        &document,
+    )
+    .expect("展開本身不查本體樹");
+    let mut failed = false;
+    for edit in edits {
+        match apply_edit(&document, edit, &spec) {
+            Ok(outcome) => document = outcome.document,
+            Err(_) => failed = true,
+        }
+    }
+    assert!(failed, "懸空的 belongs 必須被擋下:\n{}", document.source());
+}
+
+/// `Valence`/`Slot` 兩個 target **顯式拒絕**。
+///
+/// 它們原本也寫裸 def(`syn.valence`/`syn.slot`),與 `category` 同樣無人讀取。
+/// valence 該是宣告過的 syn feature、slot 該動 `SignItem::Slot`,兩者都還沒裁定
+/// ——**寧可硬錯,不留一個看起來會動其實不動的操作**(同 `Boundary` 的處理)。
+#[test]
+fn reanalyze_valence_and_slot_are_explicitly_unsupported() {
+    for target in [ReanalysisTarget::Valence, ReanalysisTarget::Slot] {
+        let err = expand_off(
+            &AtomicRewrite::Reanalyze {
+                sign: "kobo".to_owned(),
+                target,
+                to: "intransitive".to_owned(),
+            },
+            &base(),
+        )
+        .expect_err("must be rejected");
+        assert!(
+            format!("{err}").contains("UNSUPPORTED"),
+            "{target:?}: {err}"
+        );
+    }
+}
+
+/// 近似反例:多個 `belongs` 時**拒絕而非猜一個**——哪一個是被重分析的那個,
+/// 只有呼叫端知道,猜錯會靜默給出錯的範疇。
+#[test]
+fn reanalyze_refuses_a_sign_with_more_than_one_belongs() {
+    let document = LanguageDocument::import_new_root(
+        "trait A:
+
+trait B:
+
+sign both:
+    belongs A
+    belongs B
+",
+        "evo:multi",
+    )
+    .expect("fixture parses");
+    let err = expand_off(
+        &AtomicRewrite::Reanalyze {
+            sign: "both".to_owned(),
+            target: ReanalysisTarget::Category,
+            to: "Aux".to_owned(),
+        },
+        &document,
+    )
+    .expect_err("ambiguous");
+    assert!(format!("{err}").contains("UNSUPPORTED"), "{err}");
 }
 
 #[test]
