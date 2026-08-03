@@ -420,10 +420,23 @@ impl LanguageDocument {
     }
 
     pub fn node(&self, reference: &NodeRef) -> Option<&NodeEntryV1> {
-        self.identities
-            .nodes
-            .iter()
-            .find(|entry| entry.id == reference.id && entry.kind == reference.expected)
+        self.identities.nodes.iter().find(|entry| {
+            entry.id == reference.id && Self::kinds_interchangeable(entry.kind, reference.expected)
+        })
+    }
+
+    /// `Rule` 與 `FeatureRule` 在定址上是**同一種**。
+    ///
+    /// `.chg` 的 `kind_keyword`/`parse_kind` 兩表刻意讓兩者共用關鍵字 `"rule"`,
+    /// `rule[…]` selector 也同時接受兩者。若此處仍用嚴格相等,一個 `FeatureRule`
+    /// 節點印成 `rule` 後就**讀不回自己**(印得出、解不開)。P71 §4.3 把自造欄位
+    /// 遷入 `feature:` 後,大量既有規則變成 `FeatureRule`,這個不一致才顯形。
+    fn kinds_interchangeable(actual: NodeKind, expected: NodeKind) -> bool {
+        actual == expected
+            || matches!(
+                (actual, expected),
+                (NodeKind::Rule, NodeKind::FeatureRule) | (NodeKind::FeatureRule, NodeKind::Rule)
+            )
     }
 
     pub fn node_at(&self, address: &NodeAddress) -> Option<&NodeEntryV1> {

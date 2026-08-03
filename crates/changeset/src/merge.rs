@@ -181,7 +181,7 @@ pub fn plan_merge(
         .iter()
         .map(|document| signs_by_id(document))
         .collect::<Result<Vec<_>, _>>()?;
-    let merged = merge_keyed(&base_signs, &side_signs);
+    let merged = merge_keyed(&base_signs, &side_signs, |a, b| a.content_eq(b));
     let signs = label(
         MergeCollection::Signs,
         merged,
@@ -203,7 +203,7 @@ pub fn plan_merge(
         .iter()
         .map(|document| traits_by_id(document))
         .collect::<Result<Vec<_>, _>>()?;
-    let merged = merge_keyed(&base_traits, &side_traits);
+    let merged = merge_keyed(&base_traits, &side_traits, |a, b| a.content_eq(b));
     let traits = label(
         MergeCollection::Traits,
         merged,
@@ -222,7 +222,7 @@ pub fn plan_merge(
     // ── distribution(逐項;鍵字串即身分,故不可能有「不同鍵同名」)──
     let base_distribution = base.map(distribution_by_key).unwrap_or_default();
     let side_distribution: Vec<_> = sides.iter().map(|d| distribution_by_key(d)).collect();
-    let merged = merge_keyed(&base_distribution, &side_distribution);
+    let merged = merge_keyed(&base_distribution, &side_distribution, |a, b| a == b);
     let distribution = label(
         MergeCollection::Distribution,
         merged,
@@ -556,9 +556,13 @@ struct KeyedMerge<K> {
 ///
 /// 它不需要知道自己在合併什麼,只需要:每個項目有個**鍵**,兩個項目能比**相等**。
 /// 寫三份幾乎一樣的程式會走鐘(補一個角落只改到其中一份),故泛型化。
-fn merge_keyed<K: Ord + Clone, V: PartialEq>(
+/// `eq` 是**內容**相等,不是 `PartialEq`——帶 `SourceLocation` 的項目會因為
+/// 別處插刪造成的行號位移而不等,那會讓沒動過的東西被判成衝突
+/// (見 `SignItem::without_source_location`)。
+fn merge_keyed<K: Ord + Clone, V>(
     base: &BTreeMap<K, V>,
     sides: &[BTreeMap<K, V>],
+    eq: impl Fn(&V, &V) -> bool,
 ) -> KeyedMerge<K> {
     let mut universe: BTreeSet<&K> = base.keys().collect();
     for map in sides {
@@ -592,7 +596,7 @@ fn merge_keyed<K: Ord + Clone, V: PartialEq>(
                 let changed: Vec<usize> = present
                     .iter()
                     .copied()
-                    .filter(|index| sides[*index][key] != *inherited)
+                    .filter(|index| !eq(&sides[*index][key], inherited))
                     .collect();
                 if !deleted.is_empty() && !changed.is_empty() {
                     result.delete_modify.push((key.clone(), deleted, changed));
@@ -602,7 +606,7 @@ fn merge_keyed<K: Ord + Clone, V: PartialEq>(
                     result.picks.push((key.clone(), None));
                 } else {
                     let first = &sides[changed[0]][key];
-                    if changed.iter().all(|index| &sides[*index][key] == first) {
+                    if changed.iter().all(|index| eq(&sides[*index][key], first)) {
                         result.picks.push((key.clone(), Some(changed[0])));
                     } else {
                         result.content.push((key.clone(), changed));
@@ -843,7 +847,7 @@ mod tests {
         let base: BTreeMap<u8, &str> = [(1, "a"), (2, "b")].into_iter().collect();
         let left: BTreeMap<u8, &str> = [(1, "A"), (2, "b")].into_iter().collect();
         let right: BTreeMap<u8, &str> = [(1, "a"), (2, "b")].into_iter().collect();
-        let merged = merge_keyed(&base, &[left, right]);
+        let merged = merge_keyed(&base, &[left, right], |a, b| a == b);
         assert_eq!(merged.picks, vec![(1, Some(0)), (2, None)]);
         assert!(merged.content.is_empty());
     }
@@ -858,7 +862,7 @@ mod tests {
         // 空間。此測試只能證明正常路徑不會誤擋;拒絕分支是對 `language` 側日後變動的
         // 防線,目前無法以突變測試觀測。
         let document = LanguageDocument::import_new_root(
-            "sign a:\n    syn:\n        category = noun\n",
+            "sign a:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n",
             "evo:probe",
         )
         .unwrap();

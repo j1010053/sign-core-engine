@@ -326,6 +326,12 @@ pub struct Sense {
 }
 
 /// 衍生邊的種類(P16 `derive_sense{kind: metaphor|metonymy|narrow|broaden}`)。
+///
+/// **目前無消費者**(已知延後,非缺陷):全庫沒有任何語意分支讀取本值——
+/// parser/printer/DTO/diff/Primitive Edit 都只是原樣搬運,四個 variant 之間
+/// 的差異不影響任何行為。語意效果待《測試案例集總索引》實例 7「語用隱喻固化」
+/// (現況 ⚪ 未開始)落地,屆時 kind 與 [`SenseTransparency`] 一併成為
+/// 語意漂移引擎(B)的輸入。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum DerivationKind {
     Metaphor,
@@ -355,6 +361,20 @@ impl DerivationKind {
 }
 
 /// 衍生邊是否仍透明。`Opaque` = 已 `lexicalize_sense`(語源關係固化、不再透明)。
+///
+/// **目前無消費者**(已知延後,非缺陷):`Transparent`/`Opaque` 之間全庫零語意
+/// 分支。唯二觸及本值的地方都不是消費者——[`crate::printer`] 省略預設值
+/// `Transparent`(純序列化),`lexicalize_sense` 寫入 `Opaque`(純寫入)。
+/// 亦即目前 `lexicalize_sense` 的效果僅止於「被記錄下來」。
+///
+/// 語意效果待《測試案例集總索引》實例 7「語用隱喻固化」(現況 ⚪ 未開始)落地。
+/// 該索引 §「透明度一個欄位」列明本欄位為**四案共測、高優先**的共用欄位:
+/// 折磨 6(火車)的 component transparency、實例 7(隱喻固化)、實例 1(複合)、
+/// 實例 5(緊密度)——屆時四案共用同一欄位,不另開新欄位。
+///
+/// 註:15a 造出了表面語法(`sem: edges:` 的 `opaque` 尾綴)卻尚無消費者,
+/// 這一點繞過了《共時lang語法與資料貼合度》「不先造無消費者語法」的原則;
+/// 保留現狀是為了讓實例 7 落地時四案有共同著力點。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub enum SenseTransparency {
     #[default]
@@ -646,6 +666,40 @@ pub struct TraitDef {
     pub blocks: Vec<Block>,
 }
 
+impl SignItem {
+    /// 抹平 `SourceLocation` 的複本,供**內容**比較用(diff 分量、3-way merge)。
+    ///
+    /// 行號是來源註記,不是內容。多數項目型別(`FeatureDecl`/`FeatureValue`/
+    /// `Sense`/`SenseEdge`/`RoleDecl`/…)帶 `SourceLocation` 且參與 `PartialEq`,
+    /// 於是**在別處插入或刪除一行**就會位移其後所有項目的位置,使內容未變的
+    /// sign 被判成改過——diff 會多算一個維度分量,3-way merge 會無中生有一個
+    /// Content 衝突。
+    ///
+    /// 這個坑長期被掩蓋,因為 [`Def`] 是少數**不帶位置**的項目型別,而舊 fixture
+    /// 的自造欄位幾乎都寫成 `Def`;P71 把它們遷入 `feature:` 後才浮現。
+    pub fn without_source_location(&self) -> SignItem {
+        let mut item = self.clone();
+        let blank = SourceLocation::unknown();
+        match &mut item {
+            SignItem::FeatureDecl(value) => value.source = blank,
+            SignItem::FeatureValue(value) => value.source = blank,
+            SignItem::FeatureExpression(value) => value.source = blank,
+            SignItem::SlotFeatureBinding(value) => value.source = blank,
+            SignItem::RoleDecl(value) => value.source = blank,
+            SignItem::RoleBinding(value) => value.source = blank,
+            SignItem::RoleExpression(value) => value.source = blank,
+            SignItem::Sense(value) => value.source = blank,
+            SignItem::SenseEdge(value) => value.source = blank,
+            SignItem::Rule(rule) | SignItem::FeatureRule(rule) => {
+                rule.source = blank;
+                rule.branch_sources = Vec::new();
+            }
+            _ => {}
+        }
+        item
+    }
+}
+
 /// sign 內項目:trait 引用位置有語意(P5),故與 Def/Rule 同列保序。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SignItem {
@@ -750,6 +804,35 @@ pub struct SignDef {
     pub id: SignId,
     pub name: String,
     pub items: Vec<SignItem>,
+}
+
+impl SignDef {
+    /// 內容相等:**忽略 `SourceLocation`**。見 [`SignItem::without_source_location`]。
+    pub fn content_eq(&self, other: &SignDef) -> bool {
+        self.name == other.name && items_content_eq(&self.items, &other.items)
+    }
+}
+
+impl TraitDef {
+    /// 內容相等:**忽略 `SourceLocation`**。見 [`SignItem::without_source_location`]。
+    pub fn content_eq(&self, other: &TraitDef) -> bool {
+        self.name == other.name
+            && self.global == other.global
+            && self.blocks.len() == other.blocks.len()
+            && self
+                .blocks
+                .iter()
+                .zip(&other.blocks)
+                .all(|(a, b)| items_content_eq(&a.items, &b.items))
+    }
+}
+
+fn items_content_eq(left: &[SignItem], right: &[SignItem]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(a, b)| a.without_source_location() == b.without_source_location())
 }
 
 // ── 根(P28 canonical empty)──
