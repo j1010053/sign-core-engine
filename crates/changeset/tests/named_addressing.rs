@@ -12,7 +12,9 @@ trait LocalNoun:
 sign dog:
     belongs LocalNoun
     syn:
-        class => transitive / [Verb] @name classify
+        feature:
+            class = enum(transitive, other)
+            class => transitive / [Verb] @name classify
     phon:
         /dog/
 "#;

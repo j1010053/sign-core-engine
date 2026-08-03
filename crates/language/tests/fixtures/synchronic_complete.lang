@@ -1,5 +1,6 @@
 /* 共時 `.lang` 完整表面 fixture。
-   construction type 與共時狀態在此；歷史 attestation/evidence 不在 Language。 */
+   construction type 與共時狀態在此；歷史 attestation/evidence 不在 Language。
+   P71 §4.3 + A3:`senses[key].*` 與裸 sem/syn Def 一律改走 `feature:` / `roles:`。 */
 
 Symbol a
 Symbol d
@@ -13,15 +14,20 @@ sign article:
     phon:
         /a/
     sem:
-        senses[core].concept = DEFINITE
+        feature:
+            concept = enum(DEFINITE, DOG, DEFINITE_NP)
+            concept = DEFINITE
 
 sign dog:
     belongs CommonNoun
     phon:
         /d/
     sem:
-        senses[core].concept = DOG
-        senses[core].gloss = dog
+        senses:
+            core = dog
+        feature:
+            concept = enum(DEFINITE, DOG, DEFINITE_NP)
+            concept = DOG
 
 sign proto_np:
     belongs CommonNoun
@@ -45,9 +51,15 @@ sign NP:
         map head rename nucleus
         map head optional false
         map tail preserve
-        licensing.register = general
+        feature:
+            licensing_register = enum(general)
+            licensing_register = general
     phon:
         /{det}{head}{tail}/
     sem:
-        senses[core].concept = DEFINITE_NP
-        profile = {head}
+        roles:
+            profile [Semantic]
+            profile = {head}
+        feature:
+            concept = enum(DEFINITE, DOG, DEFINITE_NP)
+            concept = DEFINITE_NP

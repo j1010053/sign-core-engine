@@ -1,29 +1,40 @@
 /* 步驟 12d 驗收:四維同步規則 + Lexurgy 式 Else 三分。
    prag 敬語交替(register formal/neutral,依 [Honorific]);syn 維度隔離 + 順序求值
-   (b 依賴 a 的先前 patch);identity(已 formal 仍 Matched 不落 else);Error(畸形規則)。 */
+   (b 依賴 a 的先前 patch);identity(已 formal 仍 Matched 不落 else);Error(畸形規則)。
+   P71 §4.3 + §7 A1:規則目標亦受封閉清單約束,故自造欄位一律先宣告值域再寫規則;
+   `else`/`then` 鏈在 `feature:` 區塊內語意不變。 */
 
 trait Honorific:
 
 sign teacher:
     belongs Honorific
     prag:
-        register => formal / [Honorific]
-            else register => neutral
+        feature:
+            register = enum(formal, neutral)
+            register => formal / [Honorific]
+                else register => neutral
 sign dog:
     prag:
-        register => formal / [Honorific]
-            else register => neutral
+        feature:
+            register = enum(formal, neutral)
+            register => formal / [Honorific]
+                else register => neutral
 sign king:
     belongs Honorific
     prag:
-        register = formal
-        register => formal / [Honorific]
-            else register => neutral
+        feature:
+            register = enum(formal, neutral)
+            register = formal
+            register => formal / [Honorific]
+                else register => neutral
 
 sign chain:
     syn:
-        a => 1
-        b => 2 / a == 1
+        feature:
+            a = enum(1)
+            b = enum(2)
+            a => 1
+            b => 2 / a == 1
 
 sign broken:
     syn:
@@ -32,23 +43,36 @@ sign broken:
 /* Else vs Then 一致性:同兩分支,Else 只跑第一、Then 兩者依序皆跑 */
 sign else_same:
     syn:
-        x => a
-            else x => b
+        feature:
+            x = enum(a, b)
+            x => a
+                else x => b
 sign then_same:
     syn:
-        x => a
-            then x => b
+        feature:
+            x = enum(a, b)
+            x => a
+                then x => b
 
 sign else_feed:
     syn:
-        x => 1
-            else y => 2 / x == 1
+        feature:
+            x = enum(1)
+            y = enum(2)
+            x => 1
+                else y => 2 / x == 1
 sign then_feed:
     syn:
-        x => 1
-            then y => 2 / x == 1
+        feature:
+            x = enum(1)
+            y = enum(2)
+            x => 1
+                then y => 2 / x == 1
 
 sign then_noop_first:
     syn:
-        x => 1 / [Noun]
-            then y => 2
+        feature:
+            x = enum(1)
+            y = enum(2)
+            x => 1 / [Noun]
+                then y => 2

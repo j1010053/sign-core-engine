@@ -316,6 +316,79 @@ fn path_dimension(path: &str) -> Option<Dim> {
     Dim::parse(head)
 }
 
+/// 引擎自有的 `Def` 路徑(P71 §4.2)——引擎自己讀的那幾條。
+const ENGINE_DEF_PATHS: &[&str] = &["phon", "phon.realization"];
+
+/// 套件座標的合法**前綴**(P71 §4.2:Phase 1 硬編;Phase 2 改為套件自行宣告,見 §5 ④)。
+///
+/// 命中規則:路徑等於該字串,或以 `<字串>.` 起頭。內容取自 `crates/language/lib`
+/// 下 std/natural 套件**實際使用**的座標(A4 重新量測,見規格 §7.5),
+/// 不是憑印象列的——漏一條就會讓套件自己編不過。
+const PACKAGE_DEF_PREFIXES: &[&str] = &[
+    "prag.clause-type",
+    "prag.evidence",
+    "prag.identifiability",
+    "prag.illocution",
+    "prag.information-structure",
+    "prag.perspective",
+    "prag.reference",
+    "sem.aspect",
+    "sem.causation",
+    "sem.event",
+    "sem.number",
+    "sem.person",
+    "sem.polarity",
+    "sem.possession",
+    "sem.predication",
+    "sem.quantification",
+    "sem.reference",
+    // `sem.roles` 同時是引擎自有(內部 context 標籤)與套件座標(`sem.roles.beneficiary`)。
+    "sem.roles",
+    "sem.time",
+    "syn.adposition",
+    "syn.alignment",
+    "syn.argument",
+    "syn.complex-predicate",
+    "syn.determination",
+    "syn.evidential",
+    "syn.interrogative",
+    "syn.negation",
+    "syn.number",
+    "syn.numeral",
+    "syn.possession",
+    "syn.predication",
+    "syn.pronoun",
+    "syn.tam",
+    "syn.typology",
+    "syn.valency",
+    "syn.voice",
+    "syn.word-order",
+];
+
+/// P71 R1 + §7 A1:路徑是否在封閉清單上。**`Def` 與 synchronic rule 目標共用**
+/// ——否則關了前門(Def)還留著側門(規則目標),而規則寫的是同一個路徑空間。
+pub(crate) fn def_path_allowed(path: &str) -> bool {
+    ENGINE_DEF_PATHS.contains(&path)
+        || PACKAGE_DEF_PREFIXES.iter().any(|prefix| {
+            path == *prefix
+                || path
+                    .strip_prefix(prefix)
+                    .is_some_and(|rest| rest.starts_with('.'))
+        })
+}
+
+/// 不在清單上時給作者的指路訊息(§4.2:訊息**必須指向 `feature:`**,
+/// 否則只看到一句 invalid Definition 而不知正解)。
+pub(crate) fn closed_list_hint(path: &str) -> String {
+    let dim = path_dimension(path)
+        .map(|dim| dim.keyword())
+        .unwrap_or("syn");
+    format!(
+        "path {path:?} is not on the closed list (P71); \
+         author-defined fields must be declared under `{dim}: feature:` with an enum domain"
+    )
+}
+
 fn validate_defs_and_rules(
     language: &Language,
     registry: &OntologyRegistry,
@@ -359,22 +432,29 @@ fn validate_defs_and_rules(
                             "source_package" => LibraryId::from_str(&def.value).is_ok(),
                             _ => false,
                         };
+                    // P71 §4.2:此處**曾是**開放逃生口——只檢查「長得像 `<dim>.<field>`」,
+                    // 欄位名不查、值不查。現改為封閉清單,比照上面的 `valid_meta`。
                     let valid_dim = path_dimension(&def.path).is_some()
                         && (def.path == "phon"
                             || def
                                 .path
                                 .split_once('.')
                                 .is_some_and(|(_, field)| !field.is_empty()))
-                        && parse_path(&def.path).is_ok();
+                        && parse_path(&def.path).is_ok()
+                        && def_path_allowed(&def.path);
                     if !valid_meta && !valid_dim {
+                        let detail = if path_dimension(&def.path).is_some()
+                            && !def_path_allowed(&def.path)
+                        {
+                            closed_list_hint(&def.path)
+                        } else {
+                            format!("invalid Definition {} = {}", def.path, def.value)
+                        };
                         report.push(
                             Diagnostic::new(
                                 Severity::Error,
                                 "DEF_INVALID_PATH_OR_VALUE",
-                                format!(
-                                    "{owner:?} has invalid Definition {} = {}",
-                                    def.path, def.value
-                                ),
+                                format!("{owner:?} has {detail}"),
                             )
                             .with_sources(vec![DiagnosticSource {
                                 owner: owner.to_owned(),
@@ -385,6 +465,13 @@ fn validate_defs_and_rules(
                     }
                 }
                 SignItem::Rule(rule) | SignItem::FeatureRule(rule) if rule.dim != Dim::Phon => {
+                    let source = || {
+                        vec![DiagnosticSource {
+                            owner: owner.to_owned(),
+                            path: Some(format!("rule {}", rule.id)),
+                            location: rule.source,
+                        }]
+                    };
                     for error in synchronic::validate_rule(rule, registry, slots) {
                         report.push(
                             Diagnostic::new(
@@ -392,12 +479,22 @@ fn validate_defs_and_rules(
                                 "RULE_INVALID",
                                 format!("{owner:?}: {error}"),
                             )
-                            .with_sources(vec![DiagnosticSource {
-                                owner: owner.to_owned(),
-                                path: Some(format!("rule {}", rule.id)),
-                                location: rule.source,
-                            }]),
+                            .with_sources(source()),
                         );
+                    }
+                    // P71 §7 A1:目標路徑亦受封閉清單約束。只查**普通規則**——
+                    // `FeatureRule` 的出口是 `feature:`,自有兩道既存檢查。
+                    if matches!(item, SignItem::Rule(_)) {
+                        for error in synchronic::rule_target_violations(rule) {
+                            report.push(
+                                Diagnostic::new(
+                                    Severity::Error,
+                                    "RULE_TARGET_NOT_ALLOWED",
+                                    format!("{owner:?}: {error}"),
+                                )
+                                .with_sources(source()),
+                            );
+                        }
                     }
                 }
                 SignItem::SlotFeatureBinding(binding)
@@ -707,7 +804,9 @@ fn validate_typed_schemas(
                 SignItem::FeatureExpression(feature) => Some(feature.dim),
                 _ => None,
             };
-            if let Some(dim @ (Dim::Phon | Dim::Prag)) = dim {
+            // P71-C:`prag` 已納入 typed feature 支援(R2 需要一個宣告值域的出口)。
+            // `phon` 仍不支援:其內容是 UR/模板與 DSL 音變規則,不是 enum 值域欄位。
+            if let Some(dim @ Dim::Phon) = dim {
                 report.push(
                     Diagnostic::new(
                         Severity::Error,

@@ -184,10 +184,10 @@ fn generic_item_insert_covers_feature_and_def_items() {
         .contains("transitivity = enum(transitive, intransitive)"));
 
     let def = resolve_and_run(
-        "\n    statement 0:\n        insert into sign(\"dog\") at end:\n            sem:\n                senses[core].concept = DOG\n",
+        "\n    statement 0:\n        insert into sign(\"dog\") at end:\n            sem:\n                time.present = 1\n",
         "evo:def",
     );
-    assert!(def.source().contains("senses[core].concept = DOG"));
+    assert!(def.source().contains("time.present = 1"));
 }
 
 #[test]

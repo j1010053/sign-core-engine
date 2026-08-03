@@ -30,11 +30,15 @@ sign x:
     phon:
         /a/
     syn:
-        category = noun
+        feature:
+            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)
+            category = noun
 
 sign y:
     syn:
-        category = noun
+        feature:
+            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)
+            category = noun
 "#;
 
 fn root() -> LanguageDocument {
@@ -67,7 +71,7 @@ fn set_category(base: &LanguageDocument, namespace: &str, value: &str) -> String
     changeset_for(
         base,
         namespace,
-        &format!("\n    #0:\n        update sign(\"x\").def[syn.category].value = {value}\n"),
+        &format!("\n    #0:\n        update sign(\"x\").feature[syn.category].value = {value}\n"),
     )
 }
 
@@ -75,8 +79,11 @@ fn category_of(document: &LanguageDocument) -> Option<String> {
     let language = Language::parse(&document.source()).expect("re-parses");
     let sign = language.signs.iter().find(|s| s.name == "x")?;
     sign.items.iter().find_map(|item| match item {
-        conlang_language::SignItem::Def(def) if def.path == "syn.category" => {
-            Some(def.value.clone())
+        // P71 §4.3:category 已遷入 `syn: feature:`,節點是 FeatureValue 而非 Def。
+        conlang_language::SignItem::FeatureValue(value)
+            if value.dim == conlang_language::Dim::Syn && value.name == "category" =>
+        {
+            Some(value.value.clone())
         }
         _ => None,
     })
@@ -226,8 +233,8 @@ fn two_routes_to_the_same_state_are_two_nodes() {
     let detour = changeset_for(
         &root_doc,
         "evo:n1",
-        "\n    #0:\n        update sign(\"x\").def[syn.category].value = adj\
-         \n\n    #1:\n        update sign(\"x\").def[syn.category].value = verb\n",
+        "\n    #0:\n        update sign(\"x\").feature[syn.category].value = adj\
+         \n\n    #1:\n        update sign(\"x\").feature[syn.category].value = verb\n",
     );
     assert_ne!(direct, detour, "兩份 changeset 本身不同");
 
@@ -481,7 +488,7 @@ fn a_multi_parent_node_inherits_from_every_parent() {
                 changeset_for(
                     &root_doc,
                     "evo:l",
-                    "\n    #0:\n        update sign(\"x\").def[syn.category].value = adj\n",
+                    "\n    #0:\n        update sign(\"x\").feature[syn.category].value = adj\n",
                 ),
             )],
             Nativization::None,
@@ -495,7 +502,7 @@ fn a_multi_parent_node_inherits_from_every_parent() {
                 changeset_for(
                     &root_doc,
                     "evo:r",
-                    "\n    #0:\n        update sign(\"y\").def[syn.category].value = aux\n",
+                    "\n    #0:\n        update sign(\"y\").feature[syn.category].value = aux\n",
                 ),
             )],
             Nativization::None,
@@ -709,7 +716,7 @@ fn a_conflicting_rebase_names_the_failing_statement() {
                 changeset_for(
                     &n1_doc,
                     "evo:n2",
-                    "\n    #0:\n        update sign(\"x\").def[syn.category].value = aux\
+                    "\n    #0:\n        update sign(\"x\").feature[syn.category].value = aux\
                      \n\n    #1:\n        clone sign(\"x\") as w\n",
                 ),
             )],
@@ -771,8 +778,8 @@ fn a_missing_target_conflict_names_its_statement() {
                 changeset_for(
                     &n1_doc,
                     "evo:n2",
-                    "\n    #0:\n        update sign(\"x\").def[syn.category].value = aux\
-                     \n\n    #1:\n        update sign(\"y\").def[syn.category].value = aux\n",
+                    "\n    #0:\n        update sign(\"x\").feature[syn.category].value = aux\
+                     \n\n    #1:\n        update sign(\"y\").feature[syn.category].value = aux\n",
                 ),
             )],
             Nativization::None,
@@ -828,7 +835,7 @@ fn a_conflicting_rebase_creates_no_node() {
                 changeset_for(
                     &n1_doc,
                     "evo:n2",
-                    "\n    #0:\n        update sign(\"y\").def[syn.category].value = aux\n",
+                    "\n    #0:\n        update sign(\"y\").feature[syn.category].value = aux\n",
                 ),
             )],
             Nativization::None,
@@ -933,7 +940,7 @@ fn second_root() -> LanguageDocument {
     LanguageDocument::import_new_root(
         // 音韻宣告刻意與 `root()` 一致:`dsl_decls` 無對齊鍵,只能整塊比,
         // 不一致就必然衝突(§6.2)——那會讓「無關 root 的融合」連節點都建不出來。
-        "Symbol a\nSymbol b\nSymbol k\n\nsign wolof:\n    syn:\n        category = noun\n",
+        "Symbol a\nSymbol b\nSymbol k\n\nsign wolof:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n",
         "evo:wolof",
     )
     .expect("second root parses")
@@ -982,7 +989,7 @@ fn descendants_of_unrelated_roots_share_no_ancestor() {
                 changeset_for(
                     &b_doc,
                     "evo:b1",
-                    "\n    #0:\n        update sign(\"wolof\").def[syn.category].value = verb\n",
+                    "\n    #0:\n        update sign(\"wolof\").feature[syn.category].value = verb\n",
                 ),
             )],
             Nativization::None,
@@ -1020,7 +1027,7 @@ fn a_second_root_reusing_a_namespace_is_rejected() {
     let mut graph = EvolutionGraph::new(LibrarySpec::default());
     graph.add_root(root()).unwrap();
     let clash = LanguageDocument::import_new_root(
-        "Symbol p\n\nsign wolof:\n    syn:\n        category = noun\n",
+        "Symbol p\n\nsign wolof:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n",
         "evo:root", // ← 與第一個 root 相同
     )
     .unwrap();
@@ -1192,7 +1199,7 @@ fn a_merge_plan_uses_the_fork_point_as_its_base() {
                 changeset_for(
                     &fork_doc,
                     "evo:l",
-                    "\n    #0:\n        update sign(\"x\").def[syn.category].value = adj\n",
+                    "\n    #0:\n        update sign(\"x\").feature[syn.category].value = adj\n",
                 ),
             )],
             Nativization::None,
@@ -1206,7 +1213,7 @@ fn a_merge_plan_uses_the_fork_point_as_its_base() {
                 changeset_for(
                     &fork_doc,
                     "evo:r",
-                    "\n    #0:\n        update sign(\"y\").def[syn.category].value = aux\n",
+                    "\n    #0:\n        update sign(\"y\").feature[syn.category].value = aux\n",
                 ),
             )],
             Nativization::None,
@@ -1245,7 +1252,7 @@ fn a_declared_donor_must_be_a_node_in_the_graph() {
                     &root_doc,
                     "evo:n1",
                     &ghost,
-                    "\n    #0:\n        update sign(\"x\").def[syn.category].value = verb\n",
+                    "\n    #0:\n        update sign(\"x\").feature[syn.category].value = verb\n",
                 ),
             )],
             Nativization::None,
@@ -1278,7 +1285,7 @@ fn a_donor_that_exists_in_the_graph_is_accepted() {
                     &root_doc,
                     "evo:borrow",
                     n1.as_str(),
-                    "\n    #0:\n        update sign(\"x\").def[syn.category].value = verb\n",
+                    "\n    #0:\n        update sign(\"x\").feature[syn.category].value = verb\n",
                 ),
             )],
             Nativization::None,
@@ -1300,7 +1307,7 @@ fn a_donor_declaration_is_part_of_the_node_identity() {
     let root_id = only_root(&graph);
     let root_doc = graph.snapshot(&root_id).unwrap().clone();
     let (n1, n2) = chain(&mut graph);
-    let body = "\n    #0:\n        update sign(\"x\").def[syn.category].value = verb\n";
+    let body = "\n    #0:\n        update sign(\"x\").feature[syn.category].value = verb\n";
 
     let borrowing_from_n1 = graph
         .commit(

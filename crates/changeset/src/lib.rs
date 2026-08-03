@@ -114,6 +114,12 @@ pub enum NodeUpdate {
     Belongs(String),
     FeatureDeclaration(FeatureDecl),
     FeatureValue(FeatureValue),
+    /// P71-B:只改 `feature:` 賦值的**值**(`feature[syn.category].value = verb`)。
+    ///
+    /// 與整節點替換的 [`NodeUpdate::FeatureValue`] 分開,是因為只有值可寫的形式
+    /// 才進得了 `.chg` 的 `field = value` 語法(整個 `FeatureValue` 結構無法
+    /// 以一個字串表達,`dump_update` 對它回 `None`)。
+    FeatureAssignment(String),
     SlotFeatureBinding(SlotFeatureBinding),
     SlotMap(SlotMapOp),
     RoleDeclaration(RoleDecl),
@@ -1395,6 +1401,18 @@ fn update_payload(
         }
         (NodeKind::FeatureValue, NodeUpdate::FeatureValue(value)) => {
             *item_at_address_mut(language, &node.address)? = SignItem::FeatureValue(value);
+            Ok(None)
+        }
+        (NodeKind::FeatureValue, NodeUpdate::FeatureAssignment(value)) => {
+            // 只動值:維度與特徵名是這個節點的身分,改名要走 rename 通道。
+            match item_at_address_mut(language, &node.address)? {
+                SignItem::FeatureValue(existing) => existing.value = value,
+                _ => {
+                    return Err(EditError::FieldMismatch(
+                        "node is not a feature assignment".to_owned(),
+                    ))
+                }
+            }
             Ok(None)
         }
         (NodeKind::SlotFeatureBinding, NodeUpdate::SlotFeatureBinding(value)) => {
@@ -3119,6 +3137,21 @@ fn resolve_path_child(
                     Some(SignItem::Def(def)) if def.path == argument
                 )
         }),
+        // `feature["syn.category"]`(P71-B):`feature:` 下的賦值是
+        // `SignItem::FeatureValue` 而非 `Def`,沒有這個入口就只能靠
+        // `node(feature_value, @id)` 寫死穩定 id——見下方 `belongs` 註解所述之弊。
+        //
+        // 鍵**維度限定**(B2):同名特徵可分屬不同維度,裸 name 有歧義;且與
+        // `feature[syn.category]` 同形,使自造欄位遷入 `feature:` 時 `.chg` 側
+        // 僅是 `def` → `feature` 的字面替換。
+        "feature" => children.iter().copied().find(|entry| {
+            entry.kind == NodeKind::FeatureValue
+                && matches!(
+                    item_at_address(document.language(), &entry.address),
+                    Some(SignItem::FeatureValue(value))
+                        if format!("{}.{}", value.dim.keyword(), value.name) == argument
+                )
+        }),
         // `belongs["Verby"]` / `trait_use["Verby"]` —— 依**被引用的名字**定位。
         //
         // 這兩種節點沒有自己的名字,身分就是「指向誰」,故鍵用目標名。沒有它們,
@@ -3204,6 +3237,7 @@ fn update_for(reference: &NodeRef, field: &str, value: &str) -> Result<NodeUpdat
         (NodeKind::Sign | NodeKind::Trait, "name") => Ok(NodeUpdate::Rename(value.to_owned())),
         (NodeKind::Definition, "path") => Ok(NodeUpdate::DefinitionPath(value.to_owned())),
         (NodeKind::Definition, "value") => Ok(NodeUpdate::DefinitionValue(value.to_owned())),
+        (NodeKind::FeatureValue, "value") => Ok(NodeUpdate::FeatureAssignment(value.to_owned())),
         (NodeKind::Rule | NodeKind::FeatureRule, "body") => {
             Ok(NodeUpdate::RuleBody(value.to_owned()))
         }
@@ -3836,6 +3870,7 @@ fn dump_update(change: &NodeUpdate) -> Option<(&'static str, String)> {
         )),
         NodeUpdate::TraitGlobal(value) => Some(("global", value.to_string())),
         NodeUpdate::Propagate(value) => Some(("propagate", value.to_string())),
+        NodeUpdate::FeatureAssignment(value) => Some(("value", value.clone())),
         NodeUpdate::SenseGloss(value) => Some(("gloss", value.clone())),
         NodeUpdate::SenseEdgeKind(value) => Some(("kind", value.keyword().to_owned())),
         NodeUpdate::SenseEdgeTransparency(value) => {

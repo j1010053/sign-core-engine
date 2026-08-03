@@ -29,7 +29,9 @@ sign book:
     phon:
         /bo/
     syn:
-        category = noun
+        feature:
+            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)
+            category = noun
     sem:
         senses:
             core = BOOK

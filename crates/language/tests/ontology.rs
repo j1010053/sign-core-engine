@@ -123,7 +123,7 @@ fn duplicate_trait_is_diagnosed() {
 #[test]
 fn projection_inherits_category_defaults_and_local_overrides() {
     let user = parse(
-        "trait LocalNominalStatus:\n    syn:\n        feature:\n            nominal_status = enum(common, proper)\nsign give:\n    belongs Transitive\n    belongs Transfer\n    phon:\n        /give/\n    sem:\n        gloss = GIVE\nsign proper:\n    belongs Noun\n    belongs LocalNominalStatus\n    syn:\n        feature:\n            nominal_status = proper\n",
+        "trait LocalNominalStatus:\n    syn:\n        feature:\n            nominal_status = enum(common, proper)\nsign give:\n    belongs Transitive\n    belongs Transfer\n    phon:\n        /give/\n    sem:\n        senses:\n            core = GIVE\nsign proper:\n    belongs Noun\n    belongs LocalNominalStatus\n    syn:\n        feature:\n            nominal_status = proper\n",
     );
     let (reg, diags) = ontology::with_std(&user);
     assert!(diags.is_empty(), "with_std 建構不得有診斷:{diags:?}");
@@ -164,9 +164,15 @@ fn projection_inherits_category_defaults_and_local_overrides() {
         "category identity is in belongs closure, not a mutable syn.class default"
     );
 
-    // sem 維:本地 sem.gloss;分類同上(中立)
+    // sem 維:本地義項;分類同上(中立)
     let sem = give.project(Dim::Sem, &reg);
-    assert_eq!(sem.get("sem.gloss"), Some("GIVE"));
+    // P71 §4.1:gloss 住 `senses:`,不再是 Def 路徑——投影層已無此鍵
+    assert_eq!(sem.get("sem.gloss"), None, "gloss 已非 Def 路徑");
+    assert_eq!(
+        conlang_language::sem::SemNode::of_sign(give, &reg).field("gloss"),
+        Some("GIVE"),
+        "本地義項仍隨 sign 投影可見"
+    );
     assert_eq!(sem.categories, syn.categories, "分類跨維相同(單一樹)");
 
     // phon 維:本地 UR
@@ -182,22 +188,26 @@ fn projection_inherits_category_defaults_and_local_overrides() {
 #[test]
 fn generic_and_typed_feature_values_share_one_precedence_stream() {
     let language = parse(
+        // P71 §4.2:此例需要**同一路徑**同時能是裸 Def 與宣告過的 feature,
+        // 故用封閉清單上的單段座標 `prag.illocution`(自造的 `syn.state` 已不合法)。
         r#"trait BaseState:
-    syn:
+    prag:
         feature:
-            state = enum(base, local)
-            state = base
+            illocution = enum(base, local)
+            illocution = base
 sign item:
     belongs BaseState
-    syn:
-        state = local
+    prag:
+        illocution = local
 "#,
     );
     let (registry, diagnostics) = ontology::with_std(&language);
     assert!(diagnostics.is_empty());
     let effective = registry.effective_sign(language.sign_named("item").unwrap());
     assert_eq!(
-        effective.project(Dim::Syn, &registry).get("syn.state"),
+        effective
+            .project(Dim::Prag, &registry)
+            .get("prag.illocution"),
         Some("local"),
         "a local generic Def must beat an inherited typed FeatureValue"
     );
@@ -207,7 +217,7 @@ sign item:
 #[test]
 fn projection_defs_are_dimension_orthogonal() {
     let user = parse(
-        "sign w:\n    belongs Verb\n    phon:\n        /w/\n    sem:\n        gloss = W\n    prag:\n        register = formal\n",
+        "sign w:\n    belongs Verb\n    phon:\n        /w/\n    sem:\n        senses:\n            core = W\n    prag:\n        feature:\n            register = enum(formal, neutral)\n            register = formal\n",
     );
     let (reg, _) = ontology::with_std(&user);
     let w = user.sign_named("w").unwrap();

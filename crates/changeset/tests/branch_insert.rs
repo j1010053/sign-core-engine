@@ -13,7 +13,9 @@ trait LocalNoun:
 sign dog:
     belongs LocalNoun
     syn:
-        class => transitive / [Verb]
+        feature:
+            class = enum(transitive, other, special, third)
+            class => transitive / [Verb]
     phon:
         /dog/
 "#;
@@ -112,8 +114,10 @@ fn else_branches_keep_insertion_order_via_sibling_anchor() {
         .unwrap()
         .document;
     let rendered = doc.source();
+    // 比對**分支本文**而非裸字串:`class = enum(…, other, special, …)` 的宣告行
+    // 也含這兩個詞,拿裸字串會比到宣告而不是分支。
     assert!(
-        rendered.find("special").unwrap() < rendered.find("other").unwrap(),
+        rendered.find("class => special").unwrap() < rendered.find("class => other").unwrap(),
         "special 應在 other 之前:\n{rendered}"
     );
 }

@@ -11,19 +11,27 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const ROOT: &str = r#"
 global trait Core:
     syn:
-        category = lexical
+        feature:
+            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)
+            category = lexical
 
 trait Affix:
     syn:
-        category = bound
+        feature:
+            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)
+            category = bound
 
 sign x:
     syn:
-        category = noun
+        feature:
+            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)
+            category = noun
 
 sign y:
     syn:
-        category = noun
+        feature:
+            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)
+            category = noun
 "#;
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
@@ -61,7 +69,7 @@ fn fixture() -> (EvolutionGraph, NodeId, NodeId) {
     graph.set_label(&root_id, Some("Proto".to_owned())).unwrap();
     let base = graph.snapshot(&root_id).unwrap().clone();
     let mut changeset = change_set_prelude(&base, &libraries, "store:child").unwrap();
-    changeset.push_str("\n    #0:\n        update sign(\"x\").def[syn.category].value = verb\n");
+    changeset.push_str("\n    #0:\n        update sign(\"x\").feature[syn.category].value = verb\n");
     let child_id = graph
         .commit(
             vec![Edge::trunk(root_id.clone(), changeset)],
@@ -247,7 +255,7 @@ fn multi_root_donor_merge_and_nativization_survive_persistence() {
     let root_a = graph
         .add_root(
             LanguageDocument::import_new_root(
-                "sign a:\n    syn:\n        category = noun\n",
+                "sign a:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n",
                 "store:a",
             )
             .unwrap(),
@@ -256,7 +264,7 @@ fn multi_root_donor_merge_and_nativization_survive_persistence() {
     let root_b = graph
         .add_root(
             LanguageDocument::import_new_root(
-                "sign b:\n    syn:\n        category = noun\n",
+                "sign b:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n",
                 "store:b",
             )
             .unwrap(),
@@ -266,7 +274,7 @@ fn multi_root_donor_merge_and_nativization_survive_persistence() {
     let base_a = graph.snapshot(&root_a).unwrap().clone();
     let mut donor_change = change_set_prelude(&base_a, &libraries, "store:borrow").unwrap();
     donor_change.push_str(&format!("    donor other {}\n", root_b.as_str()));
-    donor_change.push_str("\n    #0:\n        update sign(\"a\").def[syn.category].value = verb\n");
+    donor_change.push_str("\n    #0:\n        update sign(\"a\").feature[syn.category].value = verb\n");
     let borrowed = graph
         .commit(
             vec![Edge::trunk(root_a, donor_change)],

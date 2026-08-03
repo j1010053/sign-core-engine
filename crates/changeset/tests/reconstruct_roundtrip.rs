@@ -42,7 +42,8 @@ const ROOT: &str = "Symbol a\nSymbol b\nSymbol k\n\n\
                     \x20       feature:\n\
                     \x20           mark = enum(off, on)\n\
                     \x20           mark => on\n\
-                    \x20       category = noun\n\
+                    \x20           category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n\
+                    \x20           category = noun\n\
                     \x20   sem:\n\
                     \x20       senses:\n\
                     \x20           core = BOOK\n\
@@ -51,7 +52,9 @@ const ROOT: &str = "Symbol a\nSymbol b\nSymbol k\n\n\
                     \x20           log from core metonymy\n\n\
                     sign kobo:\n\
                     \x20   syn:\n\
-                    \x20       category = noun\n";
+                    \x20       feature:\n\
+                    \x20           category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n\
+                    \x20           category = noun\n";
 
 fn base() -> LanguageDocument {
     LanguageDocument::import_new_root(ROOT, "evo:root").expect("root parses")
@@ -138,7 +141,7 @@ fn reconstruct_and_replay(
 fn a_definition_value_round_trips() {
     round_trip(
         "def value",
-        &statement("update sign(\"book\").def[syn.category].value = verb"),
+        &statement("update sign(\"book\").feature[syn.category].value = verb"),
     );
 }
 
@@ -588,7 +591,7 @@ fn several_changes_in_one_step_round_trip() {
         "mixed",
         concat!(
             "\n    #0:\n",
-            "        update sign(\"book\").def[syn.category].value = verb\n",
+            "        update sign(\"book\").feature[syn.category].value = verb\n",
             "        clone sign(\"book\") as tome\n",
             "\n    #1:\n",
             "        delete sign(\"kobo\")\n",

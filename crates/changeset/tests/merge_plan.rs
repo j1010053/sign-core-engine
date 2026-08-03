@@ -13,8 +13,8 @@ use conlang_changeset::merge::{
 use conlang_changeset::{change_set_prelude, ChangeInterpreter, UnresolvedChangeSet};
 use conlang_language::{LanguageDocument, LibrarySpec, NodeId};
 
-const ROOT: &str = "sign x:\n    syn:\n        category = noun\n\n\
-                    sign y:\n    syn:\n        category = noun\n";
+const ROOT: &str = "sign x:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n\n\
+                    sign y:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n";
 
 fn root() -> LanguageDocument {
     LanguageDocument::import_new_root(ROOT, "evo:root").expect("root parses")
@@ -43,7 +43,7 @@ fn set_category(
     apply(
         base,
         namespace,
-        &format!("\n    #0:\n        update sign(\"{sign}\").def[syn.category].value = {value}\n"),
+        &format!("\n    #0:\n        update sign(\"{sign}\").feature[syn.category].value = {value}\n"),
     )
 }
 
@@ -62,8 +62,11 @@ fn id_of(document: &LanguageDocument, name: &str) -> NodeId {
 fn category_of(document: &LanguageDocument, id: &NodeId) -> Option<String> {
     let sign = document.language().signs.iter().find(|s| &s.id.0 == id)?;
     sign.items.iter().find_map(|item| match item {
-        conlang_language::SignItem::Def(def) if def.path == "syn.category" => {
-            Some(def.value.clone())
+        // P71 §4.3:category 已遷入 `syn: feature:`,節點是 FeatureValue 而非 Def。
+        conlang_language::SignItem::FeatureValue(value)
+            if value.dim == conlang_language::Dim::Syn && value.name == "category" =>
+        {
+            Some(value.value.clone())
         }
         _ => None,
     })
@@ -238,12 +241,12 @@ fn unrelated_documents_merge_as_a_union() {
     // 沒有共同祖先 ⇒ 基準為空 ⇒ 每個 sign 都是「只有一方有」⇒ 全部納入。
     // **與有基準走同一段程式**,不是另一條路徑。
     let french = LanguageDocument::import_new_root(
-        "sign eau:\n    syn:\n        category = noun\n",
+        "sign eau:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n",
         "evo:fr",
     )
     .unwrap();
     let wolof = LanguageDocument::import_new_root(
-        "sign ndox:\n    syn:\n        category = noun\n",
+        "sign ndox:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n",
         "evo:wo",
     )
     .unwrap();
@@ -261,12 +264,12 @@ fn an_id_shared_without_a_common_base_is_a_collision() {
     // 不是同一個 sign。這正是 `add_root` 的 namespace 守門擋不住的那一半
     // (跨家族的 fork 撞號),故必須在合併當下攔下。
     let left = LanguageDocument::import_new_root(
-        "sign eau:\n    syn:\n        category = noun\n",
+        "sign eau:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n",
         "evo:same",
     )
     .unwrap();
     let right = LanguageDocument::import_new_root(
-        "sign ndox:\n    syn:\n        category = noun\n",
+        "sign ndox:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n",
         "evo:same", // ← 同一個 namespace
     )
     .unwrap();
@@ -290,12 +293,12 @@ fn an_id_shared_without_a_common_base_is_a_collision() {
 fn two_signs_sharing_a_name_collide() {
     // `.lang` 名字唯一。融合不同源語言時這是主要工作量,而非語意分歧(§6.2)。
     let left = LanguageDocument::import_new_root(
-        "sign water:\n    syn:\n        category = noun\n",
+        "sign water:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n",
         "evo:l",
     )
     .unwrap();
     let right = LanguageDocument::import_new_root(
-        "sign water:\n    syn:\n        category = verb\n",
+        "sign water:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = verb\n",
         "evo:r",
     )
     .unwrap();
@@ -322,12 +325,12 @@ fn unrelated_documents_with_different_declarations_conflict_per_block() {
     // 空基準下,無對齊鍵的區段只要不一致就是衝突——它們沒有「聯集」語意,
     // 也不可解析(`dsl_decls` 是不透明 verbatim,I15-a),機械上無從合併。
     let left = LanguageDocument::import_new_root(
-        "Symbol a\n\nsign one:\n    syn:\n        category = noun\n",
+        "Symbol a\n\nsign one:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n",
         "evo:l",
     )
     .unwrap();
     let right = LanguageDocument::import_new_root(
-        "Symbol b\n\nsign two:\n    syn:\n        category = noun\n",
+        "Symbol b\n\nsign two:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n",
         "evo:r",
     )
     .unwrap();
@@ -344,12 +347,12 @@ fn unrelated_documents_with_different_declarations_conflict_per_block() {
 #[test]
 fn identical_declarations_merge_without_a_conflict() {
     let left = LanguageDocument::import_new_root(
-        "Symbol a\n\nsign one:\n    syn:\n        category = noun\n",
+        "Symbol a\n\nsign one:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n",
         "evo:l",
     )
     .unwrap();
     let right = LanguageDocument::import_new_root(
-        "Symbol a\n\nsign two:\n    syn:\n        category = noun\n",
+        "Symbol a\n\nsign two:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n",
         "evo:r",
     )
     .unwrap();
@@ -390,7 +393,7 @@ fn the_plan_is_deterministic() {
 // ── 逐項合併也套用在 traits 與 distribution(§6.2 修訂)────────────────────
 
 const WITH_TRAITS: &str = "trait LocalNoun:\n\ntrait LocalVerb:\n\n\
-                           sign x:\n    syn:\n        category = noun\n";
+                           sign x:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n";
 
 fn traited_root() -> LanguageDocument {
     LanguageDocument::import_new_root(WITH_TRAITS, "evo:root").expect("root parses")
@@ -615,12 +618,12 @@ fn merged_signs_keep_the_ids_they_inherited() {
 fn an_unrelated_merge_carries_both_lexicons_with_their_ids() {
     // 空基準 + 兩個不同命名空間:這是真克里奧爾的形狀。
     let french = LanguageDocument::import_new_root(
-        "sign eau:\n    syn:\n        category = noun\n",
+        "sign eau:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n",
         "evo:fr",
     )
     .unwrap();
     let wolof = LanguageDocument::import_new_root(
-        "sign ndox:\n    syn:\n        category = noun\n",
+        "sign ndox:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n",
         "evo:wo",
     )
     .unwrap();

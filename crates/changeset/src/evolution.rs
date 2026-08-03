@@ -897,7 +897,7 @@ mod tests {
     use super::*;
     use crate::change_set_prelude;
 
-    const ROOT: &str = "sign x:\n    syn:\n        category = noun\n";
+    const ROOT: &str = "sign x:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n";
 
     fn fixture() -> (EvolutionGraph, NodeId) {
         let root = LanguageDocument::import_new_root(ROOT, "evo:root").expect("root parses");
@@ -907,7 +907,7 @@ mod tests {
         let mut changeset =
             change_set_prelude(&base, &LibrarySpec::default(), "evo:n1").expect("prelude");
         changeset
-            .push_str("\n    #0:\n        update sign(\"x\").def[syn.category].value = verb\n");
+            .push_str("\n    #0:\n        update sign(\"x\").feature[syn.category].value = verb\n");
         let id = graph
             .commit(
                 vec![Edge::trunk(root_id, changeset)],
@@ -925,7 +925,7 @@ mod tests {
         let (mut graph, id) = fixture();
         let mut node = graph.nodes.remove(&id).expect("node exists");
         node.snapshot = LanguageDocument::import_new_root(
-            "sign x:\n    syn:\n        category = adj\n",
+            "sign x:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = adj\n",
             "evo:forged",
         )
         .expect("forged parses");

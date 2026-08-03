@@ -94,13 +94,13 @@ fn then_records_every_branch_else_records_first_match() {
 #[test]
 fn mixing_then_and_else_is_a_located_error() {
     let e = Language::parse(
-        "sign m:\n    syn:\n        x => a\n            else x => b\n            then x => c\n",
+        "sign m:\n    syn:\n        feature:\n            x = enum(a, b, c)\n            x => a\n                else x => b\n                then x => c\n",
     )
     .unwrap_err();
     assert!(e.msg.contains("mix"), "{e}");
     // 反向亦然
     let e2 = Language::parse(
-        "sign m:\n    syn:\n        x => a\n            then x => b\n            else x => c\n",
+        "sign m:\n    syn:\n        feature:\n            x = enum(a, b, c)\n            x => a\n                then x => b\n                else x => c\n",
     )
     .unwrap_err();
     assert!(e2.msg.contains("mix"), "{e2}");
@@ -109,7 +109,7 @@ fn mixing_then_and_else_is_a_located_error() {
 /// round-trip:then 鏈正規化為不動點,印於維度區塊。
 #[test]
 fn then_chain_round_trips() {
-    let src = "sign s:\n    syn:\n        x => a\n            then x => b\n";
+    let src = "sign s:\n    syn:\n        feature:\n            x = enum(a, b)\n            x => a\n                then x => b\n";
     let d1 = Language::parse(src).unwrap().dump();
     assert!(d1.contains("then x => b"), "then 鏈保留:\n{d1}");
     assert_eq!(Language::parse(&d1).unwrap().dump(), d1, "不動點");

@@ -217,7 +217,9 @@ sign InnerNominal:
                     else:
                         {{stem}}
     prag:
-        discourse_case => $self.sem.interpreted_case
+        feature:
+            discourse_case = enum(nominative, accusative)
+            discourse_case => $self.sem.interpreted_case
     phon:
         /{{stem}}/
         realization:

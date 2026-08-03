@@ -26,23 +26,31 @@ sign run:
         feature:
             valence => intransitive / [Verb]
     sem:
-        gloss = RUN
+        senses:
+            core = RUN
+        feature:
+            manner = enum(neutral, rapid)
+            manner = neutral
     phon:
         /run/
 sign dog:
     belongs Noun
     sem:
-        gloss = DOG
+        senses:
+            core = DOG
     phon:
         /dog/
 sign lord:
     belongs Noun
     belongs Honorific
     sem:
-        gloss = LORD
+        senses:
+            core = LORD
     prag:
-        register => formal / [Honorific]
-            else register => neutral
+        feature:
+            register = enum(formal, neutral)
+            register => formal / [Honorific]
+                else register => neutral
     phon:
         /god/
 
@@ -53,8 +61,13 @@ sign Clause:
             subject [Noun]
             predicate [Verb]
     sem:
-        frame = event
-        actor = {subject}
-        action = {predicate}
+        roles:
+            actor [Semantic]
+            action [Semantic]
+            actor = {subject}
+            action = {predicate}
+        feature:
+            frame = enum(event)
+            frame = event
     phon:
         /{subject}{predicate}/

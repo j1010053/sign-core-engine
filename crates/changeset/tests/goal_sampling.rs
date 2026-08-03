@@ -18,7 +18,9 @@ sign go:
     belongs MotionVerb
     entrenchment = 0.2
     syn:
-        category = verb
+        feature:
+            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)
+            category = verb
     sem:
         senses:
             core = GO
@@ -27,7 +29,9 @@ sign finish:
     belongs MotionVerb
     entrenchment = 0.2
     syn:
-        category = verb
+        feature:
+            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)
+            category = verb
     sem:
         senses:
             core = FINISH

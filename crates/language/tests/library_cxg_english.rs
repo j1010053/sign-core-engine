@@ -75,19 +75,25 @@ Class vowel {a}
 sign alice:
     belongs Noun
     sem:
-        ref = ALICE
+        feature:
+            ref = enum(ALICE, BAKER)
+            ref = ALICE
     phon:
         /a/
 sign baker:
     belongs Noun
     sem:
-        ref = BAKER
+        feature:
+            ref = enum(ALICE, BAKER)
+            ref = BAKER
     phon:
         /b/
 sign cop:
     belongs Copula
     sem:
-        relation = EQUATIVE
+        feature:
+            relation = enum(EQUATIVE)
+            relation = EQUATIVE
     phon:
         /c/
 
@@ -767,9 +773,13 @@ Class vowel {x, y}
 
 sign filler:
     syn:
-        number = singular
+        feature:
+            number = enum(singular, plural)
+            number = singular
     sem:
-        ref = X
+        feature:
+            ref = enum(X)
+            ref = X
     phon:
         /x/
 
@@ -778,12 +788,18 @@ sign CopyConstruction:
         slots:
             head [*]
             optional [*]?
-        copied => $slot.head.syn.number
-            then fed => yes / copied == singular
-        optional-value => $slot.optional.syn.number
-            else optional-value => absent
+        feature:
+            copied = enum(singular, plural)
+            fed = enum(yes, no)
+            optional-value = enum(singular, plural, absent)
+            copied => $slot.head.syn.number
+                then fed => yes / copied == singular
+            optional-value => $slot.optional.syn.number
+                else optional-value => absent
     sem:
-        referent = {head}
+        roles:
+            referent [Semantic]
+            referent = {head}
     phon:
         /{head}{optional}/
 "#;
@@ -817,9 +833,13 @@ sign CopyConstruction:
     syn:
         slots:
             head [*]
-        copied => $slot.typo.syn.number
+        feature:
+            copied = enum(singular, plural)
+            copied => $slot.typo.syn.number
     sem:
-        referent = {head}
+        roles:
+            referent [Semantic]
+            referent = {head}
     phon:
         /{head}/
 "#;
@@ -847,47 +867,63 @@ Class vowel {a, i}
 sign marker:
     belongs Adposition
     sem:
-        relation = AT
+        feature:
+            relation = enum(AT)
+            relation = AT
     phon:
         /pa/
 sign nominal:
     belongs Noun
     sem:
-        ref = N
+        feature:
+            ref = enum(N, S, O)
+            ref = N
     phon:
         /na/
 sign subject:
     belongs Noun
     sem:
-        ref = S
+        feature:
+            ref = enum(N, S, O)
+            ref = S
     phon:
         /sa/
 sign object:
     belongs Noun
     sem:
-        ref = O
+        feature:
+            ref = enum(N, S, O)
+            ref = O
     phon:
         /ma/
 sign transitive:
     belongs Transitive
     sem:
-        event = V
+        feature:
+            event = enum(V, I)
+            event = V
     phon:
         /vi/
 sign predicate:
     belongs Intransitive
     sem:
-        event = I
+        feature:
+            event = enum(V, I)
+            event = I
     phon:
         /i/
 sign negator:
     sem:
-        polarity = negative
+        feature:
+            polarity = enum(negative)
+            polarity = negative
     phon:
         /m/
 sign particle:
     prag:
-        illocution = polar-question
+        feature:
+            illocution = enum(polar-question)
+            illocution = polar-question
     phon:
         /qa/
 
@@ -989,7 +1025,9 @@ sign Unused:
         slots:
             head [*]
     sem:
-        constant = X
+        feature:
+            constant = enum(X)
+            constant = X
     phon:
         /a/
 sign VerbMedialOnly:
@@ -1023,7 +1061,9 @@ sign VerbMedialOnly:
         slots:
             head [*]
     sem:
-        referent = {head}
+        roles:
+            referent [Semantic]
+            referent = {head}
 "#;
     let error = compile_system(Language::parse(missing_form).unwrap()).unwrap_err();
     let conlang_language::CompileSystemError::Validation(report) = error else {

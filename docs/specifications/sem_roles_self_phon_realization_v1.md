@@ -4,7 +4,7 @@
 
 ## 1. 已宣告的 enum feature
 
-`feature:` 只可出現在 `syn:` 或 `sem:`。欄位先宣告 enum domain，之後才可有固定值或 rule 寫入。
+`feature:` 可出現在 `syn:`、`sem:` 或 `prag:`(`prag` 由 P71-C 於 2026-08-01 納入;`phon` 仍不支援,其內容是 UR/模板與 DSL 音變規則)。欄位先宣告 enum domain，之後才可有固定值或 rule 寫入。
 
 ```lang
 trait EnglishAgreementBearer:

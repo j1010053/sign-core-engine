@@ -1,7 +1,9 @@
 /* 步驟 12c 驗收:construction semantics(form-meaning pair)。
    GiveEvent 的 sem 是 frame,role giver/gift 綁 filler 的**語意節點**(非字串);
-   polysemy(book 多義)、synonymy(sofa/couch 同義)合法;BadSem 的 sem role
-   引用不存在 slot → 診斷。分類節點擴充 stdlib。 */
+   polysemy(book 多義 = core/log 兩個一級義項)、synonymy(sofa/couch 同義)合法;
+   BadSem 的 sem role 引用不存在 slot → 診斷。分類節點擴充 stdlib。
+   P71 §4.1:義項內容住 `senses:`,不再用 `gloss =` / 自造的 `sense2 =`;
+   §4.3:role 綁定住 `roles:`,純量走 `feature:`,不再有裸 sem Def。 */
 
 Symbol j
 Symbol o
@@ -22,28 +24,36 @@ sign john:
     phon:
         /jo/
     sem:
-        gloss = JOHN
-        ref = individual
+        senses:
+            core = JOHN
+        feature:
+            ref = enum(individual, artifact)
+            ref = individual
 sign book:
     belongs Noun
     phon:
         /bo/
     sem:
-        gloss = BOOK
-        ref = artifact
-        sense2 = LOGBOOK
+        senses:
+            core = BOOK
+            log = LOGBOOK
+        feature:
+            ref = enum(individual, artifact)
+            ref = artifact
 sign sofa:
     belongs Noun
     phon:
         /so/
     sem:
-        gloss = SEAT
+        senses:
+            core = SEAT
 sign couch:
     belongs Noun
     phon:
         /ko/
     sem:
-        gloss = SEAT
+        senses:
+            core = SEAT
 
 sign GiveEvent:
     belongs Transitive
@@ -52,9 +62,14 @@ sign GiveEvent:
             agent [Nominal]
             theme [Nominal]
     sem:
-        frame = giving
-        giver = {agent}
-        gift = {theme}
+        roles:
+            giver [Semantic]
+            gift [Semantic]
+            giver = {agent}
+            gift = {theme}
+        feature:
+            frame = enum(giving)
+            frame = giving
     phon:
         /gi{agent}{theme}/
 
@@ -64,6 +79,8 @@ sign BadSem:
         slots:
             agent [Nominal]
     sem:
-        agent-role = {nonexistent}
+        roles:
+            agent-role [Semantic]
+            agent-role = {nonexistent}
     phon:
         /x{agent}/

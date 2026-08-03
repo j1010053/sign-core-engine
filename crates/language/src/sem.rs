@@ -46,8 +46,11 @@ pub struct SemNode {
     /// Values of declared `sem: feature:` enums.
     pub features: BTreeMap<String, String>,
     pub source: SemanticSource,
-    /// 純量語意欄位(`sem.*` Def:concept/gloss/ref/frame…)。保插入序,同名後者勝
-    /// (projection 已解析)。**多義(polysemy)= 多個 sense 欄位**合法、不去重。
+    /// 純量語意欄位(`sem.*` Def)。保插入序,同名後者勝(projection 已解析)。
+    ///
+    /// P71 §4.1 後**不含 `gloss`**:義項內容住 [`SemNode::senses`],
+    /// `field("gloss")` 自主義項投影。**多義(polysemy)= 多個義項節點**,
+    /// 不再是「多個 sense 欄位」。
     pub fields: Vec<(String, String)>,
     /// role → 子語意節點(construction 的 `{slot}` 引用解析;**持節點非字串**)。
     /// 遞迴組合:filler 為 derived token 時其 `SemNode` 亦於此。
@@ -62,10 +65,29 @@ pub struct SemNode {
 }
 
 impl SemNode {
+    /// 義項網絡的**主義項**:名為 `core` 者優先,否則取宣告序首項。
+    ///
+    /// P71 §4.1:`gloss` 退出 `Def`,義項內容一律住 [`SemNode::senses`]。`core` 優先
+    /// 而非單純取首項,是因為 Atomic Rewrite `drift(sign, sense: core, …)` 以名字定址;
+    /// 若 `derive_sense` 之後義項序有變,主義項仍須穩定指向 `core`。
+    pub fn primary_sense(&self) -> Option<&SenseView> {
+        self.senses
+            .iter()
+            .find(|sense| sense.name == "core")
+            .or_else(|| self.senses.first())
+    }
+
     /// 純量欄位查值(便利)。
+    ///
+    /// `"gloss"` 是**唯讀投影**而非真實欄位:P71 §4.1 已把 `gloss` 移出 `Def` 路徑
+    /// 封閉清單,內容住 [`SemNode::senses`]。此處自主義項投影,使既有讀者
+    /// (含 guard 的 `$self.sem.gloss`)不必全體改寫,且 `drift` 改義項後立即可見。
     pub fn field(&self, name: &str) -> Option<&str> {
         if let Some(value) = self.features.get(name) {
             return Some(value);
+        }
+        if name == "gloss" {
+            return self.primary_sense().map(|sense| sense.gloss.as_str());
         }
         self.fields
             .iter()
@@ -112,7 +134,9 @@ impl SemNode {
             .iter()
             .filter(|(path, _)| {
                 let name = path.strip_prefix("sem.").unwrap_or(path);
-                !features.contains_key(name)
+                // P71 §4.1:`gloss` 不再是 Def 欄位,`field("gloss")` 改投影自
+                // `senses`。此處排除是為了讓兩者不會並存出兩份真相。
+                !features.contains_key(name) && name != "gloss"
             })
             .map(|(p, v)| (p.strip_prefix("sem.").unwrap_or(p).to_owned(), v.clone()))
             .collect();
