@@ -1256,9 +1256,7 @@ fn token_case_condition_matches(
                             "unknown case category {expected:?}"
                         )));
                     }
-                    return Ok(filler.categories.iter().any(|category| {
-                        category == expected || reg.category_is_a(category, expected)
-                    }));
+                    return Ok(reg.categories_satisfy(&filler.categories, expected));
                 }
             }
             Ok(token_scalar(token, scrutinee) == Some(expected))
@@ -1438,12 +1436,7 @@ fn evaluate_token_role_case(
                     continue;
                 };
                 if let Some(required) = constraint {
-                    if !filler
-                        .sem
-                        .types
-                        .iter()
-                        .any(|category| reg.category_is_a(category, required))
-                    {
+                    if !reg.categories_satisfy(&filler.sem.types, required) {
                         return Err(CxgError::RoleCategoryMismatch {
                             role: role.to_owned(),
                             required: required.to_owned(),
@@ -1975,18 +1968,12 @@ fn resolve_sem(
             });
         }
         if let Some((_, filler)) = filler_nodes.iter().find(|(slot, _)| slot == &binding.slot) {
-            let has = filler.types.clone();
-            if let Some(required) = declaration.constraint.category() {
-                if !has
-                    .iter()
-                    .any(|category| reg.category_is_a(category, required))
-                {
-                    return Err(CxgError::RoleCategoryMismatch {
-                        role: binding.name.clone(),
-                        required: required.to_owned(),
-                        has,
-                    });
-                }
+            if !declaration.constraint.is_satisfied_by(&filler.types, reg) {
+                return Err(CxgError::RoleCategoryMismatch {
+                    role: binding.name.clone(),
+                    required: declaration.constraint.display_name().to_owned(),
+                    has: filler.types.clone(),
+                });
             }
             node.roles.retain(|(name, _)| name != &binding.name);
             node.roles.push((binding.name.clone(), filler.clone()));
@@ -2180,14 +2167,11 @@ fn apply_with_committed<'a>(
             .iter()
             .find(|candidate| candidate.internal.name == *slot_name)
             .expect("mapped slot checked");
-        let authorized = match &slot.internal.constraint {
-            SlotConstraint::AnySign => true,
-            SlotConstraint::Category(required) => filler
-                .categories
-                .iter()
-                .any(|category| category == required),
-        };
-        if !authorized {
+        if !slot
+            .internal
+            .constraint
+            .is_satisfied_by(&filler.categories, reg)
+        {
             return Err(CxgError::CategoryMismatch {
                 slot: slot
                     .external

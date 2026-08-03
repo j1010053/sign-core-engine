@@ -15,7 +15,7 @@ use crate::semantic_dto::{SemanticDocumentError, SemanticDocumentV1, SemanticNod
 use crate::synchronic::{self, RuleRecord, RuleStatus, SelfRead, SlotRead};
 use crate::{
     CaseCondition, CaseSelection, Dim, Expression, Language, LanguageDocument, SignApplication,
-    SignArgumentValue, SignDef, SignId, SignItem, SignLifecycle, SignProvenance, SlotConstraint,
+    SignArgumentValue, SignDef, SignId, SignItem, SignLifecycle, SignProvenance,
     TypedCase,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -2152,13 +2152,7 @@ fn validate_constructions_and_local_phon(
                 };
                 let effective_filler = registry.effective_sign(filler_sign);
                 let categories = registry.sign_categories(&effective_filler);
-                let authorized = match constraint {
-                    SlotConstraint::AnySign => true,
-                    SlotConstraint::Category(required) => {
-                        categories.iter().any(|category| category == required)
-                    }
-                };
-                if !authorized {
+                if !constraint.is_satisfied_by(&categories, registry) {
                     report.push(Diagnostic::new(
                         Severity::Error,
                         "SLOT_MAP_FILLER_CATEGORY",
@@ -2605,13 +2599,11 @@ impl CompiledSystem {
                         "unknown semantic trait {category:?}"
                     )));
                 }
-                if system.ontology.has("Semantic")
-                    && !system.ontology.category_is_a(category, "Semantic")
-                {
-                    return Err(SemanticDocumentError::Invalid(format!(
-                        "trait {category:?} is not a Semantic type"
-                    )));
-                }
+                // P71-S:此處曾要求每個型別都在 `Semantic` 之下。`Semantic` 只是
+                // `std:core` 的一個 trait,引擎不得據以設限;且 R14 之後 `types`
+                // 是**完整閉包**,合法 sign 的閉包本就含非 Semantic 範疇
+                // (如 `AgreementBearer`),該檢查會讓正常的 round-trip 失敗。
+                // 上面的 `has(category)` 已足以擋掉不存在的範疇。
             }
             let schema_sign = SignDef {
                 id: crate::SignId::synthetic(),
@@ -2667,16 +2659,14 @@ impl CompiledSystem {
             }
             for (name, child) in &node.roles {
                 let declaration = roles[name.as_str()];
-                if let Some(required) = declaration.constraint.category() {
-                    if !child
-                        .types
-                        .iter()
-                        .any(|category| system.ontology.category_is_a(category, required))
-                    {
-                        return Err(SemanticDocumentError::Invalid(format!(
-                            "role {name:?} requires [{required}]"
-                        )));
-                    }
+                if !declaration
+                    .constraint
+                    .is_satisfied_by(&child.types, &system.ontology)
+                {
+                    return Err(SemanticDocumentError::Invalid(format!(
+                        "role {name:?} requires [{}]",
+                        declaration.constraint.display_name()
+                    )));
                 }
                 validate_node(system, child)?;
             }
@@ -3027,9 +3017,7 @@ impl CompiledSystem {
                             "unknown case category {expected:?}"
                         )));
                     }
-                    return Ok(filler.categories.iter().any(|category| {
-                        category == expected || self.ontology.category_is_a(category, expected)
-                    }));
+                    return Ok(self.ontology.categories_satisfy(&filler.categories, expected));
                 }
             }
         }
@@ -4106,9 +4094,7 @@ impl CompiledSystem {
             if !construction::is_construction(&effective)
                 || !self
                     .ontology
-                    .sign_categories(&effective)
-                    .iter()
-                    .any(|item| item == category || self.ontology.category_is_a(item, category))
+                    .categories_satisfy(&self.ontology.sign_categories(&effective), category)
             {
                 continue;
             }

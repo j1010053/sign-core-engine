@@ -154,6 +154,21 @@ impl OntologyRegistry {
             && self.closure(category).iter().any(|item| item == ancestor)
     }
 
+    /// 一組範疇是否滿足「必須是 `required`(或其後裔)」——**約束判定的唯一出處**。
+    ///
+    /// 此前 slot 與 role 各寫一套(前者字串相等、後者 `category_is_a`),
+    /// 還有兩處寫成 `c == required || category_is_a(..)` 的雙保險。三種寫法對
+    /// 「已知範疇的閉包」等價,但那要靠手推才知道——而手推是會錯的。集中在此,
+    /// 讓「slot 與 role 的判定是否一致」不再是需要推導的問題。
+    ///
+    /// 採 `category_is_a` 而非字串相等:對閉包輸入兩者同義,但輸入未必總是閉包
+    /// ——`SemanticDocumentV1` 由外部文件反序列化,可能只給葉範疇。
+    pub fn categories_satisfy(&self, categories: &[String], required: &str) -> bool {
+        categories
+            .iter()
+            .any(|category| self.category_is_a(category, required))
+    }
+
     pub fn node(&self, name: &str) -> Option<&OntoNode> {
         self.tree.get(name)
     }

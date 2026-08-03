@@ -10,6 +10,7 @@
 //! Semantic 子樹)雙雙存活所暴露的缺口。
 
 use conlang_language::construction::{SlotFiller, SlotMap};
+use conlang_language::semantic_dto::SemanticDocumentV1;
 use conlang_language::sem::SemNode;
 use conlang_language::system::SystemError;
 use conlang_language::{compile_system, construction::CxgError, ontology, Language};
@@ -42,6 +43,12 @@ sign NeedsEntity:
             referent = {x}
     phon:
         /{x}/
+
+/* DTO 驗證從 `types` 指名的 trait 解析 role 宣告,故同一份約束也放一個 trait 上。 */
+trait EntityHolder:
+    sem:
+        roles:
+            referent [Entity]
 
 sign NeedsAnything:
     syn:
@@ -133,4 +140,67 @@ fn sem_types_is_the_full_category_closure() {
     closure.sort();
     closure.dedup();
     assert_eq!(types, closure, "types 必須等於整個閉包,不得是任何子集");
+}
+
+// ── 非閉包輸入:`category_is_a` 嚴格優於字串相等 ──────────────────────────
+
+/// 外部 DTO 的 `types` **未必是閉包**——LLM 交換界面可能只給葉範疇。
+///
+/// 這是約束判定採 `category_is_a` 而非字串精確相等的**唯一**理由:對閉包輸入
+/// 兩者同義,故若無本測試,把判定退回字串相等不會有任何一條紅
+/// (實測突變存活)。此處只給 `Human`,不給它到 `Entity` 的祖先鏈。
+#[test]
+fn a_non_closed_document_still_satisfies_an_ancestor_constraint() {
+    let system = system();
+    let json = r#"{"schema":"conlang.semantic/v1","root":{
+        "source":{"sign":"holder"},"types":["EntityHolder"],"features":{},
+        "roles":{"referent":{"source":{"sign":"x"},
+                             "types":["Human"],"features":{},"roles":{}}}}}"#;
+    let document = SemanticDocumentV1::from_json(json).expect("v1 文件解析");
+
+    // 前提:`Human` 確實不是 `Entity` 本身,而是經 Physical → Entity 的後裔;
+    // 且文件只列了葉節點,沒有祖先鏈。
+    assert_eq!(document.root.roles["referent"].types, vec!["Human"]);
+
+    system
+        .validate_semantic_document(&document)
+        .expect("Human 經 Physical → Entity 滿足 [Entity]");
+}
+
+/// 判別性:同一條路徑上,真正不相干的範疇仍須被擋。
+#[test]
+fn a_non_closed_document_with_an_unrelated_type_is_rejected() {
+    let system = system();
+    let json = r#"{"schema":"conlang.semantic/v1","root":{
+        "source":{"sign":"holder"},"types":["EntityHolder"],"features":{},
+        "roles":{"referent":{"source":{"sign":"x"},
+                             "types":["Motion"],"features":{},"roles":{}}}}}"#;
+    let document = SemanticDocumentV1::from_json(json).expect("v1 文件解析");
+    system
+        .validate_semantic_document(&document)
+        .expect_err("Motion 走 Event 分支,不是 Entity");
+}
+
+/// 迴歸:合法 sign 的 `SemNode` 必須能通過 DTO 驗證。
+///
+/// R14 把 `types` 改成完整閉包之後,合法 sign 的閉包本就含非 `Semantic` 範疇
+/// (`Noun` 的閉包含 `AgreementBearer`),而驗證器當時仍要求每個型別都在
+/// `Semantic` 之下 → **正常 round-trip 直接失敗**,且既有測試無一抓到。
+#[test]
+fn a_real_sign_round_trips_through_the_semantic_document() {
+    let language = Language::parse(SRC).unwrap();
+    let (registry, _) = ontology::with_std(&language);
+    let node = SemNode::of_sign(language.sign_named("nouny").unwrap(), &registry);
+
+    // 前提:閉包確實含非 Semantic 範疇,否則本測試測不到那個檢查
+    assert!(
+        node.types.contains(&"AgreementBearer".to_string()),
+        "{:?}",
+        node.types
+    );
+
+    let document = SemanticDocumentV1::from_sem_node(&node);
+    system()
+        .validate_semantic_document(&document)
+        .expect("合法 sign 必須能往返");
 }

@@ -787,6 +787,22 @@ impl SlotConstraint {
         }
     }
 
+    /// filler 的範疇集合是否獲授權。`[*]` 一律通過;具名約束委派
+    /// [`crate::ontology::OntologyRegistry::categories_satisfy`]——**slot 與 role
+    /// 共用同一判定**,不再各寫一套。
+    pub fn is_satisfied_by(
+        &self,
+        categories: &[String],
+        registry: &crate::ontology::OntologyRegistry,
+    ) -> bool {
+        match self {
+            SlotConstraint::AnySign => true,
+            SlotConstraint::Category(required) => {
+                registry.categories_satisfy(categories, required)
+            }
+        }
+    }
+
     pub fn display_name(&self) -> &str {
         self.category().unwrap_or("*")
     }
