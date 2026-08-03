@@ -5909,7 +5909,13 @@ fn rewrite_trait_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
                     }
                 }
             }
-            SignItem::RoleDecl(role) if role.constraint == old => role.constraint = new.to_owned(),
+            SignItem::RoleDecl(role) => {
+                if let SlotConstraint::Category(name) = &mut role.constraint {
+                    if name == old {
+                        *name = new.to_owned();
+                    }
+                }
+            }
             SignItem::SignExpression(expression) => {
                 rewrite_trait_refs_in_expression(&mut expression.expression, old, new)
             }

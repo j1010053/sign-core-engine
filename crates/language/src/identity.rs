@@ -1786,10 +1786,13 @@ fn collect_refs(language: &Language, entries: &[NodeEntryV1]) -> Vec<RefBindingV
                 "slot_map.autofill".to_owned(),
                 reference_target(filler, NodeKind::Sign, &signs),
             )),
-            SignItem::RoleDecl(role) => Some((
-                "role.constraint".to_owned(),
-                reference_target(&role.constraint, NodeKind::Trait, &traits),
-            )),
+            // `[*]` 不指名 trait,無引用可綁。
+            SignItem::RoleDecl(role) => role.constraint.category().map(|category| {
+                (
+                    "role.constraint".to_owned(),
+                    reference_target(category, NodeKind::Trait, &traits),
+                )
+            }),
             SignItem::Def(def) if def.path == "origin" => {
                 metadata::parse_origin(&def.value).map(|origin| {
                     (

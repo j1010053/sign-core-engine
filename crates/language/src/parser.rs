@@ -1362,8 +1362,12 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                         "role declaration must close its `[Trait]` constraint",
                     ));
                 };
-                if !ident_ok(name.trim()) || !ident_ok(constraint.trim()) {
-                    return Err(err(no, "role name and constraint must be identifiers"));
+                let constraint = constraint.trim();
+                if !ident_ok(name.trim()) || (constraint != "*" && !ident_ok(constraint)) {
+                    return Err(err(
+                        no,
+                        "role name and constraint must be identifiers, or use `[*]`",
+                    ));
                 }
                 blocks
                     .last_mut()
@@ -1371,7 +1375,11 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                     .items
                     .push(SignItem::RoleDecl(RoleDecl {
                         name: name.trim().to_owned(),
-                        constraint: constraint.trim().to_owned(),
+                        constraint: if constraint == "*" {
+                            SlotConstraint::AnySign
+                        } else {
+                            SlotConstraint::Category(constraint.to_owned())
+                        },
                         optional,
                         source: SourceLocation::line(no),
                     }));

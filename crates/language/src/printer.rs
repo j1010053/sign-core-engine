@@ -404,7 +404,7 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                         SignItem::RoleDecl(role) => out.push_str(&format!(
                             "            {} [{}]{}\n",
                             role.name,
-                            role.constraint,
+                            role.constraint.display_name(),
                             if role.optional { "?" } else { "" }
                         )),
                         SignItem::RoleBinding(role) => out

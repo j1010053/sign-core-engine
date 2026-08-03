@@ -141,32 +141,16 @@ impl SemNode {
             .map(|(p, v)| (p.strip_prefix("sem.").unwrap_or(p).to_owned(), v.clone()))
             .collect();
         let categories = reg.sign_categories(&effective);
-        let mut types = categories
-            .iter()
-            .filter(|category| reg.has("Semantic") && reg.category_is_a(category, "Semantic"))
-            .cloned()
-            .collect::<Vec<_>>();
-        // The core ontology deliberately keeps syntactic categories out of
-        // the semantic inheritance tree.  These conventional bridges give
-        // ordinary Nominal/Predicate/Adposition fillers semantic node types
-        // without making `belongs Verb` mutate the public syn category
-        // closure.
-        let bridge = |syn_category: &str, semantic_type: &str, types: &mut Vec<String>| {
-            if reg.has(semantic_type) && categories.iter().any(|item| item == syn_category) {
-                types.push(semantic_type.to_owned());
-            }
-        };
-        bridge("Nominal", "Entity", &mut types);
-        bridge("Predicate", "Event", &mut types);
-        bridge("Adposition", "Relation", &mut types);
-        // Every executable sign contributes a semantic node.  The base
-        // `Semantic` type makes an intentionally unconstrained `[*]` filler
-        // usable for schema roles that only demand a meaning-bearing node;
-        // stricter Entity/Event/Animate requirements still validate against
-        // ontology membership below it.
-        if reg.has("Semantic") {
-            types.push("Semantic".to_owned());
-        }
+        // P71-S:`types` 就是**完整範疇閉包**。此處曾以 `reg.has("Semantic")` 過濾出
+        // 「語意型別」,但 `Semantic` 只是 `std:core` 定義的一個 trait——由引擎硬寫它,
+        // 與已移除的 bridge 是同一類越界。單一中立樹(P38 v0.2)下只有一組範疇。
+        let mut types = categories.to_vec();
+        // P71-S:此處**曾經**硬寫三條語言學推論(Nominal→Entity、Predicate→Event、
+        // Adposition→Relation)。那是語言學分析不是引擎功能,已搬進 `std:core` 寫成
+        // 一般的 `belongs`;換一個 std 就換一套推論。原註解稱 bridge 是為了避免污染
+        // syn 閉包,但單一中立樹(P38 v0.2)下那件事本來就在發生,並經 `tests/ontology.rs`
+        // 明確承認,故該理由不成立。`Adposition→Relation` 依裁定不重建——
+        // 格標記類介系詞未必表達 Relation,應由作者顯式 `belongs Relation`。
         types.sort();
         types.dedup();
         // 義項/衍生邊取自 effective items(隨 belongs 繼承,與其他內容一致)。

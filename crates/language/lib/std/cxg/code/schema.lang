@@ -37,7 +37,7 @@ trait DeterminationConstruction:
             nominal [Nominal]
     sem:
         roles:
-            specifier [Semantic]
+            specifier [*]
             referent [Entity]
             specifier = {determiner}
             referent = {nominal}
@@ -63,7 +63,7 @@ trait AttributionConstruction:
             nominal [Nominal]
     sem:
         roles:
-            property [Semantic]
+            property [*]
             referent [Entity]
             property = {attribute}
             referent = {nominal}
@@ -135,7 +135,7 @@ trait CopularPredicationConstruction:
     sem:
         roles:
             topic [Entity]
-            predication [Semantic]
+            predication [*]
             topic = {subject}
             predication = {predicate}
 

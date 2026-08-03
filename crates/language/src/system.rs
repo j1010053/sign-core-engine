@@ -718,9 +718,9 @@ fn validate_typed_schemas(
                                     format!(
                                         "{owner:?} gives role {:?} incompatible contracts [{}]{} and [{}]{}",
                                         role.name,
-                                        previous.constraint,
+                                        previous.constraint.display_name(),
                                         if previous.optional { "?" } else { "" },
-                                        role.constraint,
+                                        role.constraint.display_name(),
                                         if role.optional { "?" } else { "" },
                                     ),
                                 )
@@ -1242,14 +1242,16 @@ fn validate_typed_schemas(
             }
         }
         for role in role_declarations.values() {
-            if !registry.has(&role.constraint) {
+            // `[*]` 不指名任何 trait,無存在性可驗。
+            if let Some(category) = role.constraint.category() {
+                if !registry.has(category) {
                 report.push(
                     Diagnostic::new(
                         Severity::Error,
                         "ROLE_UNKNOWN_CONSTRAINT",
                         format!(
                             "{owner:?} role {:?} requires unknown trait {:?}",
-                            role.name, role.constraint
+                            role.name, category
                         ),
                     )
                     .with_sources(vec![DiagnosticSource {
@@ -1258,6 +1260,7 @@ fn validate_typed_schemas(
                         location: role.source,
                     }]),
                 );
+                }
             }
         }
         for binding in effective.items.iter().filter_map(|item| match item {
@@ -2664,15 +2667,16 @@ impl CompiledSystem {
             }
             for (name, child) in &node.roles {
                 let declaration = roles[name.as_str()];
-                if !child.types.iter().any(|category| {
-                    system
-                        .ontology
-                        .category_is_a(category, &declaration.constraint)
-                }) {
-                    return Err(SemanticDocumentError::Invalid(format!(
-                        "role {name:?} requires [{}]",
-                        declaration.constraint
-                    )));
+                if let Some(required) = declaration.constraint.category() {
+                    if !child
+                        .types
+                        .iter()
+                        .any(|category| system.ontology.category_is_a(category, required))
+                    {
+                        return Err(SemanticDocumentError::Invalid(format!(
+                            "role {name:?} requires [{required}]"
+                        )));
+                    }
                 }
                 validate_node(system, child)?;
             }

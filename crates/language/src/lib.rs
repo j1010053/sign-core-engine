@@ -299,7 +299,12 @@ pub struct SlotFeatureBinding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoleDecl {
     pub name: String,
-    pub constraint: String,
+    /// Typed filler authorization, **與 slot 同型**(`[*]` = `AnySign`)。
+    ///
+    /// P71-S:此處曾是裸 `String`,而「任何有意義的節點」只能寫成 `[Semantic]`
+    /// ——靠引擎無條件把 `Semantic` 塞進每個 sign 的型別來成立。那是引擎硬寫
+    /// std 詞彙;`[*]` 才是該表達的東西。
+    pub constraint: SlotConstraint,
     pub optional: bool,
     pub source: SourceLocation,
 }

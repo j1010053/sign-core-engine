@@ -34,7 +34,18 @@ fn belongs_closure_is_nearest_first() {
     let (reg, _) = OntologyRegistry::build(&[&ontology::std_ontology()]);
     assert_eq!(
         reg.closure("Ditransitive"),
-        vec!["Ditransitive", "Transitive", "Verb", "Predicate"]
+        // P71-S:`Verb belongs Event` 之後,語意型別真的在閉包裡
+        //(單一中立樹的直接後果,與既有的 `belongs Transfer` 同形)。
+        vec![
+            "Ditransitive",
+            "Transitive",
+            "Verb",
+            "Predicate",
+            "Event",
+            "EventFrame",
+            "SemanticFrame",
+            "Semantic"
+        ]
     );
     assert_eq!(reg.closure("Predicate"), vec!["Predicate"]);
     assert_eq!(
@@ -57,7 +68,11 @@ fn user_can_extend_ontology() {
             "Ditransitive",
             "Transitive",
             "Verb",
-            "Predicate"
+            "Predicate",
+            "Event",
+            "EventFrame",
+            "SemanticFrame",
+            "Semantic"
         ]
     );
 }
@@ -123,7 +138,7 @@ fn duplicate_trait_is_diagnosed() {
 #[test]
 fn projection_inherits_category_defaults_and_local_overrides() {
     let user = parse(
-        "trait LocalNominalStatus:\n    syn:\n        feature:\n            nominal_status = enum(common, proper)\nsign give:\n    belongs Transitive\n    belongs Transfer\n    phon:\n        /give/\n    sem:\n        senses:\n            core = GIVE\nsign proper:\n    belongs Noun\n    belongs LocalNominalStatus\n    syn:\n        feature:\n            nominal_status = proper\n",
+        "trait LocalNominalStatus:\n    syn:\n        feature:\n            nominal_status = enum(common, proper)\nsign give:\n    belongs Transitive\n    belongs Transfer\n    phon:\n        /give/\n    sem:\n        senses:\n            core = GIVE\nsign frame_only:\n    belongs Transfer\nsign proper:\n    belongs Noun\n    belongs LocalNominalStatus\n    syn:\n        feature:\n            nominal_status = proper\n",
     );
     let (reg, diags) = ontology::with_std(&user);
     assert!(diags.is_empty(), "with_std 建構不得有診斷:{diags:?}");
@@ -133,15 +148,18 @@ fn projection_inherits_category_defaults_and_local_overrides() {
     // 分類閉包**維度中立**:Transitive→Verb→Predicate 併 Transfer→Event
     assert_eq!(
         syn.categories,
+        // P71-S:`Verb belongs Event` 使 Event/EventFrame 由 Verb 這條路徑
+        // 更早進入閉包(nearest-first),Transfer 分支隨後併入。
         vec![
             "Transitive",
             "Verb",
             "Predicate",
-            "Transfer",
-            "TransferFrame",
+            "Event",
             "EventFrame",
             "SemanticFrame",
             "Semantic",
+            "Transfer",
+            "TransferFrame",
         ]
     );
     assert!(
@@ -152,9 +170,15 @@ fn projection_inherits_category_defaults_and_local_overrides() {
             && syn.is_a("SemanticFrame")
             && syn.is_a("Semantic")
     );
+    // `give` 現在**是** Event —— 但那是經 Transitive→Verb→Event(P71-S 的裁定),
+    // 不是經 Transfer。原不變式(Transfer 是 frame 契約,不蘊含 Event 範疇)因此
+    // 改在一個不是 Verb 的 Transfer sign 上觀察,否則被 Verb 那條路徑遮蔽。
+    assert!(syn.is_a("Event"), "give 經 Verb 取得 Event");
+    let frame_only = user.sign_named("frame_only").unwrap().project(Dim::Syn, &reg);
+    assert!(frame_only.is_a("TransferFrame") && frame_only.is_a("EventFrame"));
     assert!(
-        !syn.is_a("Event"),
-        "Transfer is a frame contract here; it does not silently assert the Event category"
+        !frame_only.is_a("Event"),
+        "Transfer is a frame contract; it does not silently assert the Event category"
     );
     // Ontology membership is carried by `belongs`; it no longer writes a
     // mutable `syn.class` default.

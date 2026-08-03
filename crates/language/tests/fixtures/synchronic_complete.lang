@@ -58,7 +58,7 @@ sign NP:
         /{det}{head}{tail}/
     sem:
         roles:
-            profile [Semantic]
+            profile [*]
             profile = {head}
         feature:
             concept = enum(DEFINITE, DOG, DEFINITE_NP)

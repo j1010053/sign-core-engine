@@ -47,8 +47,8 @@ sign Clause:
             state => ready
     sem:
         roles:
-            actor [Semantic]
-            action [Semantic]?
+            actor [*]
+            action [*]?
             actor = {subject}
             action = {predicate}
         feature:
@@ -70,7 +70,7 @@ sign Wrapper:
             clause [Verb]
     sem:
         roles:
-            content [Semantic]
+            content [*]
             content = {clause}
     phon:
         /x{clause}/

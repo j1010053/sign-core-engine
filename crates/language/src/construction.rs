@@ -1403,7 +1403,7 @@ fn evaluate_token_role_case(
     token: &DerivedToken,
     case: &TypedCase,
     role: &str,
-    constraint: &str,
+    constraint: Option<&str>,
     base: Option<SemNode>,
     target: &str,
     reg: &OntologyRegistry,
@@ -1437,19 +1437,20 @@ fn evaluate_token_role_case(
                     });
                     continue;
                 };
-                if reg.has(constraint)
-                    && !filler
+                if let Some(required) = constraint {
+                    if !filler
                         .sem
                         .types
                         .iter()
-                        .any(|category| reg.category_is_a(category, constraint))
-                {
-                    return Err(CxgError::RoleCategoryMismatch {
-                        role: role.to_owned(),
-                        required: constraint.to_owned(),
-                        has: filler.sem.types,
+                        .any(|category| reg.category_is_a(category, required))
+                    {
+                        return Err(CxgError::RoleCategoryMismatch {
+                            role: role.to_owned(),
+                            required: required.to_owned(),
+                            has: filler.sem.types,
+                        }
+                        .into());
                     }
-                    .into());
                 }
                 Some(filler.sem)
             }
@@ -1525,7 +1526,7 @@ fn apply_token_role_expressions(
             &token,
             case,
             &expression.name,
-            &constraint,
+            constraint.category(),
             base,
             &target,
             reg,
@@ -1975,16 +1976,17 @@ fn resolve_sem(
         }
         if let Some((_, filler)) = filler_nodes.iter().find(|(slot, _)| slot == &binding.slot) {
             let has = filler.types.clone();
-            if reg.has(&declaration.constraint)
-                && !has
+            if let Some(required) = declaration.constraint.category() {
+                if !has
                     .iter()
-                    .any(|category| reg.category_is_a(category, &declaration.constraint))
-            {
-                return Err(CxgError::RoleCategoryMismatch {
-                    role: binding.name.clone(),
-                    required: declaration.constraint.clone(),
-                    has,
-                });
+                    .any(|category| reg.category_is_a(category, required))
+                {
+                    return Err(CxgError::RoleCategoryMismatch {
+                        role: binding.name.clone(),
+                        required: required.to_owned(),
+                        has,
+                    });
+                }
             }
             node.roles.retain(|(name, _)| name != &binding.name);
             node.roles.push((binding.name.clone(), filler.clone()));

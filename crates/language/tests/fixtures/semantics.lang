@@ -63,8 +63,8 @@ sign GiveEvent:
             theme [Nominal]
     sem:
         roles:
-            giver [Semantic]
-            gift [Semantic]
+            giver [*]
+            gift [*]
             giver = {agent}
             gift = {theme}
         feature:
@@ -80,7 +80,7 @@ sign BadSem:
             agent [Nominal]
     sem:
         roles:
-            agent-role [Semantic]
+            agent-role [*]
             agent-role = {nonexistent}
     phon:
         /x{agent}/

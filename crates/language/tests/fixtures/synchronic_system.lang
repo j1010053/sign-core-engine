@@ -62,8 +62,8 @@ sign Clause:
             predicate [Verb]
     sem:
         roles:
-            actor [Semantic]
-            action [Semantic]
+            actor [*]
+            action [*]
             actor = {subject}
             action = {predicate}
         feature:

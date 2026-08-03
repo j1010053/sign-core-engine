@@ -798,7 +798,7 @@ sign CopyConstruction:
                 else optional-value => absent
     sem:
         roles:
-            referent [Semantic]
+            referent [*]
             referent = {head}
     phon:
         /{head}{optional}/
@@ -838,7 +838,7 @@ sign CopyConstruction:
             copied => $slot.typo.syn.number
     sem:
         roles:
-            referent [Semantic]
+            referent [*]
             referent = {head}
     phon:
         /{head}/
@@ -866,6 +866,7 @@ Class vowel {a, i}
 
 sign marker:
     belongs Adposition
+    belongs Relation
     sem:
         feature:
             relation = enum(AT)
@@ -1062,7 +1063,7 @@ sign VerbMedialOnly:
             head [*]
     sem:
         roles:
-            referent [Semantic]
+            referent [*]
             referent = {head}
 "#;
     let error = compile_system(Language::parse(missing_form).unwrap()).unwrap_err();
