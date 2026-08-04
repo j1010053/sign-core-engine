@@ -166,11 +166,63 @@ fn the_projection_counts_underlying_forms() {
         "sign a:\n    phon:\n        /kat/\nsign b:\n    phon:\n        /ka/\n",
     )
     .expect("parse");
-    let report = project_phoneme_freq(&language);
+    let report = project_phoneme_freq(&language, &["k", "a", "t"]);
     assert_eq!(report.get("k"), Some(2.0), "kat + ka");
     assert_eq!(report.get("a"), Some(2.0));
     assert_eq!(report.get("t"), Some(1.0));
     assert_eq!(report.get("/"), None, "斜線是界定符,不是音素");
+}
+
+/// 🔑 **多字元音段整段算**——塞擦音不得被拆成三個「音素」。
+///
+/// 這是切分改依 inventory 的理由。少了這條,退回逐字元切分不會有任何一條紅。
+#[test]
+fn a_multi_character_segment_is_counted_whole() {
+    // `t͡ʃ` = t + U+0361 結合弧 + ʃ,共三個 Unicode 字元
+    let language =
+        Language::parse("sign a:\n    phon:\n        /t\u{361}\u{283}t\u{361}\u{283}/\n").expect("parse");
+
+    let report = project_phoneme_freq(&language, &["t\u{361}\u{283}"]);
+    assert_eq!(report.get("t\u{361}\u{283}"), Some(2.0), "整段算兩次");
+    assert_eq!(report.get("t"), None, "不得被拆出裸 t");
+    assert_eq!(report.len(), 1);
+
+    // 判別性:清單為空時退回逐字元,同一份輸入會被拆開
+    let by_char = project_phoneme_freq(&language, &[]);
+    assert_eq!(by_char.get("t"), Some(2.0), "逐字元切分會拆出裸 t");
+    assert!(by_char.len() > 1);
+}
+
+/// **最長匹配**:`t͡ʃ` 與 `t` 同時在清單裡時,取長的。
+#[test]
+fn segmentation_prefers_the_longest_match() {
+    let language = Language::parse("sign a:\n    phon:\n        /t\u{361}\u{283}/\n").expect("parse");
+    let report = project_phoneme_freq(&language, &["t", "t\u{361}\u{283}"]);
+    assert_eq!(report.get("t\u{361}\u{283}"), Some(1.0));
+    assert_eq!(report.get("t"), None, "不得被短的先吃掉");
+}
+
+/// 清單外的音段**現形**,不被吞掉——那是撰寫錯誤的訊號。
+#[test]
+fn a_segment_outside_the_inventory_still_shows_up() {
+    let language = Language::parse("sign a:\n    phon:\n        /kaq/\n").expect("parse");
+    let report = project_phoneme_freq(&language, &["k", "a"]);
+    assert_eq!(report.get("q"), Some(1.0), "不在清單裡但仍計入,使問題可見");
+    assert_eq!(report.get("k"), Some(1.0));
+}
+
+/// 用**有效分佈的鍵集**當清單 → 報表與抽樣同一組鍵,兩邊對得起來。
+#[test]
+fn the_effective_distribution_keys_make_a_natural_inventory() {
+    let language = Language::parse("sign a:\n    phon:\n        /kat/\n").expect("parse");
+    let distribution = EffectiveDistribution::from_prior(table(&[("k", 0.9), ("a", 0.8)])).resolve();
+    let inventory: Vec<&str> = distribution.keys().collect();
+
+    let report = project_phoneme_freq(&language, &inventory);
+    assert_eq!(report.get("k"), Some(1.0));
+    // 先驗沒有 t,但語言用了 → 報表照樣顯示,使落差可見
+    assert_eq!(report.get("t"), Some(1.0));
+    assert_eq!(distribution.get("t"), None, "抽樣那邊沒有這個鍵");
 }
 
 /// **投影不進抽樣棧**(§6.1)——它與 `EffectiveDistribution` 沒有任何連結。
@@ -179,7 +231,7 @@ fn the_projection_counts_underlying_forms() {
 #[test]
 fn the_projection_does_not_feed_the_effective_distribution() {
     let language = Language::parse("sign a:\n    phon:\n        /zzz/\n").expect("parse");
-    let report = project_phoneme_freq(&language);
+    let report = project_phoneme_freq(&language, &["z"]);
     assert_eq!(report.get("z"), Some(3.0), "前提:投影確實數到了 z");
 
     // 有效分佈只由三層構成,語言裡的 z 不會自己跑進來

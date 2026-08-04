@@ -277,13 +277,30 @@ fn parse_prior(table: &mut WeightTable, path: &str, source: &str) -> Result<(), 
 /// **這是報表**——接 `query::phoneme_stats`(邏輯分層 §3.2),供使用者參考
 /// 「這個語言目前實際長什麼樣」。**抽樣器不看它**(§6.1)。
 ///
-/// 口徑刻意選最直白的一種:數 UR、不以 `entrenchment` 加權、type 而非 token。
-/// 因為沒有東西依賴它,日後要別的口徑就多一個函數,不會有既有行為被改壞。
+/// # 切分依 `inventory`,**最長匹配**
 ///
-/// **已知限制**:以 Unicode 字元切分,故多字元 IPA 音段
-/// (塞擦音 `t͡ʃ`、附加符號)會被拆開。這個限制**可見**——它是報表,
-/// 使用者看得到結果不對;若它是抽樣依據,錯誤會靜默進到造出來的詞裡。
-pub fn project_phoneme_freq(language: &Language) -> WeightTable {
+/// 多字元 IPA 音段(塞擦音 `t͡ʃ`、帶附加符號者)必須整段算,否則 `t͡ʃa` 會被
+/// 拆成三個「音素」。清單由**呼叫端提供**:`Language` 的 dsl 域宣告是
+/// **不透明 verbatim 行**(I15-a / 裁決 1),`language` 刻意不解析,`stats`
+/// 更不該越界去 parse `Symbol` 行。與 `PhonotacticFilter`、
+/// `DistributionProvider` 同一個注入模式。
+///
+/// 最有用的清單是**有效分佈的鍵集**——那樣報表與抽樣用同一組鍵,
+/// 「我的語言實際用多少 / 先驗說該用多少」才對得起來。
+///
+/// # 兩個刻意的行為
+///
+/// - `inventory` 為空 → 退回**逐字元**切分(沒有宣告清單時的報表仍可用);
+/// - 匹配不到任何音素的字元 → **以該字元自成一鍵計入**,不是丟掉。
+///   這樣「本語言用了不在清單裡的音段」會在報表上現形,那是撰寫錯誤的訊號。
+///
+/// 口徑其餘部分取最直白的一種:數 UR、不以 `entrenchment` 加權、type 非 token。
+/// 因為沒有東西依賴它,日後要別的口徑就多一個函數,不會有既有行為被改壞。
+pub fn project_phoneme_freq(language: &Language, inventory: &[&str]) -> WeightTable {
+    // 最長匹配:長的排前面,先試長的。
+    let mut ordered: Vec<&str> = inventory.iter().copied().filter(|s| !s.is_empty()).collect();
+    ordered.sort_by_key(|segment| std::cmp::Reverse(segment.chars().count()));
+
     let mut table = WeightTable::new();
     for sign in &language.signs {
         for item in &sign.items {
@@ -292,12 +309,22 @@ pub fn project_phoneme_freq(language: &Language) -> WeightTable {
                 continue;
             }
             let form = def.value.trim().trim_matches('/');
-            for character in form.chars() {
-                if character.is_whitespace() {
+            let mut rest = form;
+            while !rest.is_empty() {
+                let matched = ordered.iter().find(|segment| rest.starts_with(**segment));
+                let key = match matched {
+                    Some(segment) => *segment,
+                    // 匹配不到 → 取一個字元自成一鍵(現形,不吞掉)
+                    None => {
+                        let first = rest.chars().next().expect("rest is not empty");
+                        &rest[..first.len_utf8()]
+                    }
+                };
+                rest = &rest[key.len()..];
+                if key.chars().all(char::is_whitespace) {
                     continue;
                 }
-                let key = character.to_string();
-                let next = table.get(&key).unwrap_or(0.0) + 1.0;
+                let next = table.get(key).unwrap_or(0.0) + 1.0;
                 table.set(key, next);
             }
         }
