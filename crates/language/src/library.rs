@@ -163,18 +163,52 @@ pub struct LibraryPackage {
     pub data: &'static str,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LibrarySpec {
+    /// 要載入的 std package(R12)。
+    ///
+    /// 此前 `select()` 憑 `kind == Std` **自動**把它們當作解析起點——沒有任何人
+    /// 宣告,`natural`/`plugin` 卻要點名。裁定 S 之下三種 kind 一視同仁,全部
+    /// 由此宣告;[`LibrarySpec::default`] 仍填入隨引擎發布的那一組,故行為不變。
+    ///
+    /// 差別在於**特權從程式邏輯降級為一份可覆寫的預設值**:現在才可能
+    /// 「不載入 `std:grambank`」或「用自己的 core 取代 `std:core`」。
+    /// 對映 C++:`libstdc++` 隨編譯器發布、預設連結,但它只是個 library。
+    pub std: Vec<LibraryId>,
     pub natural: Option<LibraryId>,
     pub plugins: Vec<LibraryId>,
+}
+
+/// 隨引擎發布的預設 std 組合。**是預設值,不是特權**——可被 spec 覆寫或清空。
+pub fn default_std_packages() -> Vec<LibraryId> {
+    ["core", "cxg", "grambank", "grammaticalization"]
+        .into_iter()
+        .map(|name| LibraryId::new(LibraryKind::Std, name))
+        .collect()
+}
+
+impl Default for LibrarySpec {
+    fn default() -> Self {
+        Self {
+            std: default_std_packages(),
+            natural: None,
+            plugins: Vec::new(),
+        }
+    }
 }
 
 impl LibrarySpec {
     pub fn natural(id: LibraryId) -> Self {
         Self {
             natural: Some(id),
-            plugins: Vec::new(),
+            ..Self::default()
         }
+    }
+
+    /// 完全不載入任何 std——`belongs Noun` 之類會得到未知範疇診斷(附 R13 指路)。
+    pub fn without_std(mut self) -> Self {
+        self.std.clear();
+        self
     }
 
     pub fn with_plugin(mut self, id: LibraryId) -> Self {
@@ -1066,12 +1100,19 @@ impl LibraryCatalog {
     }
 
     pub fn select(&self, spec: &LibrarySpec) -> Result<LibrarySelection, LibraryLoadError> {
-        let mut roots = self
-            .packages
-            .iter()
-            .filter(|package| package.enabled && package.id.kind == LibraryKind::Std)
-            .map(|package| package.id.clone())
-            .collect::<Vec<_>>();
+        // R12:std 與 natural/plugin 走同一套——一律由 spec 點名,不再憑 kind 自動入列。
+        let mut roots = spec.std.clone();
+        roots.sort();
+        roots.dedup();
+        for id in &roots {
+            if id.kind != LibraryKind::Std {
+                return Err(LibraryLoadError::WrongKind {
+                    id: id.clone(),
+                    expected: LibraryKind::Std,
+                    actual: id.kind,
+                });
+            }
+        }
         self.sort_same_layer(&mut roots)?;
         if let Some(natural) = &spec.natural {
             if natural.kind != LibraryKind::Natural {
