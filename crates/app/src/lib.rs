@@ -42,6 +42,10 @@
 #![forbid(unsafe_code)]
 #![deny(missing_debug_implementations)]
 
+pub mod cache;
+
+pub use cache::{ContentDigest, DiffKey, LexiconKey, QueryCache};
+
 use conlang_changeset::evolution::{Edge, EvolutionError, EvolutionGraph, Nativization, NodeId};
 use conlang_changeset::{
     change_set_prelude, ChangeInterpreter, PrimitiveEdit, ReplayError, ResolvedChangeSet,

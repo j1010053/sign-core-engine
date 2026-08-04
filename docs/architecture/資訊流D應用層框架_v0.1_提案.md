@@ -498,6 +498,12 @@ GroupKey   = (graph_digest, measure_id, threshold, override_digest)
 | **Cache identity** | 正確性。完整 input digest tuple 為鍵 |
 | **Dependency invalidation** | **只**用於 UI subscription(該重畫哪個面板),不負責正確性 |
 
+**已實作 2026-08-04**(`conlang-app::cache`)。實作時對鍵做了一處調整:
+**大輸入取 digest、小輸入直接存值**。文件很大且比較昂貴 → 取
+`source()` 的 sha256;`LexiconFilter`/`ViewConfig` 很小且已可排序 → 存值。
+理由是安全——替每個設定型別手寫 canonical 字串再雜湊,等於多開一個
+「兩份不同設定算出同一個鍵」的洞,而那種錯誤是**靜默回傳別人的結果**。
+
 ### 6.3 `search` 不得偷偷成為第二個有狀態的東西
 
 線性掃描是純函數;索引不是(有狀態、需失效、可能持久化、wasm 下不宜全量重建)。

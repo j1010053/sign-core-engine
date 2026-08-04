@@ -8,6 +8,7 @@ conlang-language = { path = "../language" }
 conlang-changeset = { path = "../changeset" }
 conlang-persistence = { path = "../persistence" }
 conlang-command = { path = "../command" }
+conlang-query = { path = "../query" }
 thiserror = "2"
 
 [dev-dependencies]
