@@ -379,6 +379,21 @@ content-addressed objects、node folder、hash-external annotation/config；細�
 驗證矩陣見 `docs/verification/Step16_文件契約與驗收矩陣_v1.0.md`。
 下一個歷時層是 Step 17。
 
+**已完成(鳥瞰步驟 18,C1)= M3 開跑**:`crates/generate`——模組 A 的造詞流水線
+`Need → Generator(唯讀)→ Vec<Proposal>(帶評分)→ 選擇 → Builder → Vec<PrimitiveEdit>`。
+**C1 增修**(`Sign生成引擎本體論` §12):規格原文的 `Store` 在 2.0 不存在
+(P2/P10 語言知識只住 Language、Grammar Store 計畫作廢),身分改由
+`LanguageDocument`、fork 由 `EvolutionGraph`、持久化由 `conlang-persistence`;
+**Builder 不改 Language**,構造 `AtomicRewrite::Create` 交既有
+`rewrite::expand` 降階——造出來的詞因此自動可 replay、進得了演化圖、
+受三道 digest 保護。選擇層複用 P70(列舉/選擇分離、零候選 `Ok(None)`)。
+validate/blocking/resolve 三個 Strategy **委派不內建**(§0 紅線)。
+出口 `generate/tests/coining.rs`(8 案):端到端造詞 → 四原語 → replay → `.lang`′;
+折磨 **11**(thief 擋 stealer,且換掉策略即通過——證明未內建)、
+**12**(20 候選、排序在提議側);Proposal 是幻影不改文件;origin/provenance 記錄。
+突變 4/4 首輪全紅。**尚未做**:逆構詞 Generator(折磨 4)、真正的 donor 借入
+(沿用既有 `Adopt`,需 `DonorScope`)、E1 抽樣接線(步驟 19)。
+
 **v1 路徑已硬移除(2026-07-24)**:v2 為唯一模型。移除 `LanguageSchema` V1/V2 分野
 (FP `case`/`when`/`constraints` 永遠可用,無需標頭;舊 `schema conlang.lang/v2` 行被
 接受並忽略,printer 不再輸出)、identity manifest v1(`IdentityManifestV1`/

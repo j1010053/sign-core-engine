@@ -1,0 +1,9 @@
+[package]
+name = "conlang-generate"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+conlang-language = { path = "../language" }
+conlang-changeset = { path = "../changeset" }
+thiserror = "2"

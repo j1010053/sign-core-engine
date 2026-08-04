@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/language", "crates/changeset", "crates/persistence"]
+members = ["crates/language", "crates/changeset", "crates/persistence", "crates/generate"]
 # Tshiatūn 引擎(submodule)自有 workspace 與測試(P20 獨立產品);
 # 不併入本 workspace,否則 --workspace 會外跑其測試且 insta 快照路徑錯位。
 exclude = ["tshiatun"]
