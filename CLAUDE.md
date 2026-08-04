@@ -411,11 +411,13 @@ phonotactics 過濾 = **注入式 `PhonotacticFilter`**(§6.3),`generate` 零引
 且**事後過濾**不藏進 Generator——「提了幾個、擋掉幾個」是自動模式要審計的數字。
 `DistributionGenerator` 即流 C 圖上「Generator + E 抽樣」的最小實作,
 複用既有 `sample_weighted_index`。評分合成公式依 §6.4 **永久擱置**。
-出口:`stats/tests/effective_distribution.rs`(9 案)、
-`generate/tests/distribution_driven.rs`(6 案);突變 5/5 首輪全紅。
+投影切分依**給定音素清單**最長匹配(§6.6)——清單由呼叫端提供,因 dsl 域宣告
+是不透明區塊(I15-a),`stats` 不得越界解析;清單外的音段仍計入使問題現形。
+出口:`stats/tests/effective_distribution.rs`(13 案)、
+`generate/tests/distribution_driven.rs`(6 案);突變 8/8 首輪全紅。
 **尚未做**:E1 實際資料(PHOIBLE/Grambank 子集需離線匯入,§1 標明
-Index Diachronica 授權不明、SSWL 覆蓋不均)、`NaturalLanguage` provider、
-投影快取、 provider。投影切分已依**給定音素清單**最長匹配(§6.6),清單由呼叫端提供(dsl 域宣告是不透明區塊,不得越界解析)。
+Index Diachronica 授權不明、SSWL 覆蓋 2%–100% 極不均)、
+`NaturalLanguage` provider、投影快取。
 
 **v1 路徑已硬移除(2026-07-24)**:v2 為唯一模型。移除 `LanguageSchema` V1/V2 分野
 (FP `case`/`when`/`constraints` 永遠可用,無需標頭;舊 `schema conlang.lang/v2` 行被
