@@ -388,41 +388,54 @@ immutable node 仍然帶來真正的紅利:**undo 不需要複製 Language 快�
 (節點本來就是 snapshot,演化是新增而非就地改)。但那不等於不需要一個小型
 history stack——原案把「不需複製快照」誤推成「不需要歷史」。
 
-### 5.4 (B) 的 undo:store 端只剩兩個可行選項
+### 5.4 (B) 的 undo:葉節點是真的刪得掉的
 
-已 commit 的節點被 undo 後怎麼辦?四個直覺選項,兩個**結構上不可行**:
-
-| 選項 | 可行 |
-|---|---|
-| 在 `manifest` 標記「未採用」 | ❌ id = `node_id(snapshot, parents, nativization)`,加欄位即成另一個節點 |
-| 從 store 刪除節點 | ❌ `persistence` 無 delete API;且子節點 id 含父 id,**有子節點即永久釘住** |
-| 只移 app 的 active 指標 | ⚠️ 可行,但**跨 save/load 不生效**,見下 |
-| `NodeConfig.preferences` 雜湊外標記 | ✅ 唯一結構上可行的標記位置 |
-
-#### ⚠ 現存陷阱:`save` 是 append-only
-
-```rust
-/// Append every graph node to the content-addressed store.
-pub fn save(&self, graph: &EvolutionGraph) -> Result<(), StoreError>   // persistence:111
-```
-
-`save` 只走 `graph.ids()`,**從不刪除 store 裡有、graph 裡沒有的節點**;
-而 `load` 是 `fs::read_dir(nodes/)`(`persistence:160`)。
-
-故「undo 就把節點從記憶體圖拿掉」→ `save` → `load` → **節點無聲復活**。
-**這個行為目前沒有任何測試釘住**,不論 D-c1 怎麼裁都該補一條。
-
-#### 唯一乾淨的 undo 窗口
+> **v0.2 草擬期曾把這裡寫成「只能雜湊外標記 + 顯示層過濾」,那是把一個
+> 缺陷當成前提。缺陷已修(2026-08-04),見 §5.4.1。**
 
 | | 情形 | undo |
 |---|---|---|
-| **(a)** | 尚未 `save` | 丟棄即可,**什麼都不必標** |
-| **(b)** | 已 `save`,無子節點 | 想刪沒 API;不刪就在樹視圖裡 |
-| **(c)** | 已 `save`,有子節點 | 永久釘住,只能標記 |
+| **(a)** | 尚未 `save` | 丟棄記憶體中的節點即可 |
+| **(b)** | 已 `save`,**無子節點** | `graph.remove_node` + `store.remove_node`——**真的刪掉** |
+| **(c)** | 已 `save`,**有子節點** | 結構上不可能刪:子節點 id 由 parents 的 id 算出。得先處理子節點 |
 
-**(a) 是唯一乾淨的窗口。** 這反過來說明 §3.3 的「多步操作合併成一次歷史節點」
-不只是 UI 便利——**它是 undo 可行的前提**。commit 一旦立即落盤,undo 就從
-「丟棄」降級成「標記 + 過濾」,而且不可逆。
+(c) 不是政策而是結構事實,兩側都硬擋(`EvolutionError::NodeHasDependents` /
+`StoreError::NodeHasDependents`)。
+
+**`manifest` 標記「未採用」永遠不可行**:id = `node_id(snapshot, parents,
+nativization)`,加欄位就成了另一個節點。這條與缺陷無關,是內容定址的直接後果。
+
+#### 5.4.1 修掉的缺陷:`save` 是 append-only 且**靜默**
+
+原本:
+
+```rust
+/// Append every graph node to the content-addressed store.
+pub fn save(&self, graph: &EvolutionGraph) -> Result<(), StoreError>
+```
+
+`save` 只走 `graph.ids()`,**從不刪除 store 裡有、graph 裡沒有的節點**;
+而 `load` 以 `fs::read_dir(nodes/)` 為準。故「從圖裡移除節點 → `save`」
+會 `Ok(())` 然後下一次 `load` 把它**無聲讀回來**——使用者以為撤銷了一次演化,
+重開檔案又看到它。
+
+修法**不是**讓 `save` 自動剪除:那樣一個只持有部分圖的呼叫端就能不可逆地清空
+store。破壞性操作要顯式:
+
+| | 行為 |
+|---|---|
+| `save` 遇到 store 有、圖沒有的節點 | `StoreError::StaleNode`,訊息指向 `remove_node`;**檢查在寫入前**,擋下時 store 未被動過 |
+| `EvolutionGraph::remove_node(id)` | 只准葉節點;移除 root 時**釋放其 identity namespace**(否則同一份 `.lang` 加不回來) |
+| `GraphStore::remove_node(id)` | 只准葉節點;刪整個 `nodes/<id>/`;**不動 `objects/`**(內容定址跨節點共用,孤兒 object 無害,回收另計) |
+
+出口:`persistence/tests/store_roundtrip.rs` 5 案,突變 5/5 首輪全紅。
+
+#### 對 (A)/(B) 分工的影響
+
+(a) 仍是最省事的窗口,故 §3.3 的「多步操作合併成一次歷史節點」依然有價值;
+但它**不再是 undo 可行的前提**——已落盤的葉節點現在也撤得乾淨。
+真正撤不掉的只有 (c),而那是使用者已經在它之上繼續演化的節點,
+本來就不該無聲消失。
 
 ### 5.5 三條 undo 線
 
@@ -511,8 +524,8 @@ v0.1 把兩者寫成同一列(「抽樣相關」)。錯得不只是分類:
 | **D-a2** | 立即物理拆 `query`/`app` 兩 crate,還是先 module 邊界? | **立即拆**——§2.1:§4 是 crate 粒度閘門,module 內的「純」無法驗證 |
 | **D-b** | Command 是否只產生 `edits/preview`,ChangeSet 由 commit 建立(而非「一 Command = 一 ChangeSet」)? | **是**;§3.3 顯示三層已實作,只需別再等同 |
 | **D-c0** | (A) 專案編輯的 pending 狀態是否就是**一份使用者可見、可命名的 `.chg`**(而非 app 內部緩衝、更非新的 `working/` 格式)? | **是**——§5.2:`.chg` 已表達「基底 + statements」,另立格式違反單一資訊源 |
-| **D-c1a** | commit(產生節點)與 persist(寫入 store)是否分離,UI 延後 `save` 到顯式「儲存」? | **是**——§5.4:(a) 是唯一乾淨的 undo 窗口 |
-| **D-c1b** | 已落盤的節點被 undo 後,標記記在 `NodeConfig.preferences` 還是專案級清單? | **`NodeConfig.preferences`**——「這條分支被放棄」是專案事實,不是視角判斷,不該一套 view 一份。代價:是**顯示層過濾,不是刪除** |
+| **D-c1a** | commit(產生節點)與 persist(寫入 store)是否分離,UI 延後 `save` 到顯式「儲存」? | **是**,但只為省事,不再是 undo 的前提(§5.4) |
+| ~~D-c1b~~ | ~~已落盤的節點被 undo 後,標記記在哪?~~ | **問題取消 2026-08-04**:它預設了「刪不掉」,而那是 `save` 的缺陷不是設計前提。缺陷已修——葉節點真的刪得掉(§5.4.1),不需要「已放棄」標記 |
 | **D-c2** | (B) 的 undo 由 app history stack 承擔(而非 graph parent 遍歷)? | **是**——§5.1:children 在現行結構中不可查 |
 | **D-c3** | `views/` 與 `data/` 編輯是否走**獨立**的第三條 undo 線? | **是**;不進引擎 undo 線 |
 | **D-d** | 派生視圖快取是否以完整 input digest tuple 為鍵,事件失效只用於 UI 通知? | **是**(§6.2) |
@@ -535,7 +548,7 @@ v0.1 把兩者寫成同一列(「抽樣相關」)。錯得不只是分類:
 2. **CommandResult / statement / commit 邊界**——三類 Command 分型,
    `LanguageCommand` 降階四原語;出口:每個 `LanguageCommand` 留下可 replay 的 `.chg`;
 3. **(A) 的 `.chg` 工作副本 + (B) 的 active-node history**(§5.2–5.5 三條 undo 線);
-   **同時補上 §5.4 那條缺測**:節點從記憶體圖移除後 `save`→`load` 會無聲復活;
+   節點移除的兩側 API 已於 2026-08-04 補上(§5.4.1),此步只需接線;
 4. **內容定址 query cache**(§6.2);
 5. **互通度接口**(§4.1,含 `measure_id` 與 authoring 失效歸屬);
 6. **分群 strategy + Override**(§4.2,MVP `TreeEdgeCut`);
@@ -552,7 +565,6 @@ v0.1 把兩者寫成同一列(「抽樣相關」)。錯得不只是分類:
 | 1 | 「State 變了 → **什麼都不必重算**」 | 與本檔 §1 表自相矛盾:候選詞面板 = `generate::ranked()`,其權重經 `ContactInfluence` 讀 State。「只影響下一次生成」**正是**生成面板必須重算的理由 |
 | 2 | 「undo = 移動當前節點指標到 parent;redo = 指標移回」 | `EvolutionGraph` **無 children 索引**(`evolution.rs:139`),節點 id 由 parents 算出;redo **不可實作**。且 `parents` 是 `Vec`,undo 本身已多選一 |
 | 3 | 「每個 command 都留下可 replay 的 `.chg`」 | 與同節的 `set_view_config`/`set_override` 直接衝突——那兩個不產生 `PrimitiveEdit`。Command 必須先分類 |
-
 | 4 | 三條 undo 線按**機制**分(commit / pending edit / views·data) | 應按**使用者活動**分。原分法漏掉 (A) 專案編輯——設計期加 50 個詞不該變成 50 個演化節點,而原文沒有它的位置(§5.2) |
 
 另有兩處**不足**(非錯,但寫得像已解決):
@@ -562,7 +574,20 @@ v0.1 把兩者寫成同一列(「抽樣相關」)。錯得不只是分類:
 共同成因:**把「已有零件」誤當成「已有設計」**。零件確實都在(diff、origin、
 SenseEdge、immutable node),但接合處的語意沒定就寫成了現況表。
 
-### 9.1 修訂過程中的一次過度推論(v0.2 草擬期,未進文件)
+### 9.1 兩次「把缺陷當成前提」(v0.2 草擬期)
+
+**① 「已落盤的節點刪不掉,只能雜湊外標記 + 顯示層過濾」。**
+我查到 `persistence` 沒有 delete API、`save` 是 append-only,就把現況當成設計前提,
+還替它想好了標記要記在 `NodeConfig.preferences`(原 D-c1b)。
+
+擁有者一句「這很明顯就是個 bug 要改」點破:**沒有 delete API 不是約束,是缺口**。
+`save` 明明收整張圖卻對移除視而不見,`load` 又以目錄內容為準——兩者合起來讓
+「撤銷一次演化」靜默失效。修掉之後 D-c1b 這個問題本身就消失了(§5.4.1)。
+
+毛病與 `演化專案結構與套件載入_v0.1.md` §6 記的三次同型:**先替現狀構造理由**。
+差別是這次現狀本身就是錯的,於是理由構造得越周全,離正解越遠。
+
+**② 從需求直接跳到新機制。**
 
 發現 (A) 專案編輯無位置後,曾主張「pending buffer 要跨階段存活 ⇒ R1–R6 缺一個
 `working/` 槽」。**錯**——`.chg` 已經表達「基底 + statements」,且零條 statement

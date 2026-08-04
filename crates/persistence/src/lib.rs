@@ -46,6 +46,20 @@ pub enum StoreError {
     ObjectCorrupt { expected: String, actual: String },
     #[error("PERSISTENCE_NODE_IMMUTABLE: {node} already stores different {field}")]
     ImmutableNode { node: String, field: &'static str },
+    /// store 裡有這個節點,但傳進 `save` 的圖沒有它。
+    ///
+    /// `save` 是 append-only,**不替呼叫端刪東西**——若它會,一個只持有部分圖的
+    /// 呼叫端就能不可逆地清空 store。但也不能默默忽略:那會讓「從圖裡移除節點
+    /// → `save`」看起來成功,而下一次 `load` 又把它讀回來。故硬擋,並指向
+    /// [`GraphStore::remove_node`]。
+    #[error(
+        "PERSISTENCE_STALE_NODE: {node} exists in the store but not in the graph; \
+         call remove_node to delete it explicitly"
+    )]
+    StaleNode { node: String },
+    /// 節點被 store 裡別的節點引用為 parent,不得移除(同 `EvolutionGraph` 側)。
+    #[error("PERSISTENCE_NODE_HAS_DEPENDENTS: {node} is a parent of {dependent}")]
+    NodeHasDependents { node: String, dependent: String },
     #[error("PERSISTENCE_PATH_INVALID: annotation path {0:?} is not relative and traversal-free")]
     InvalidAnnotationPath(PathBuf),
     #[error(transparent)]
@@ -103,13 +117,80 @@ impl GraphStore {
         &self.root
     }
 
+    /// 已存節點的目錄清單(排序後,跳過 `.` 開頭的暫存目錄)。
+    ///
+    /// `save` 的過期檢查與 `load` 共用同一份列舉——兩邊若各寫一套,
+    /// 「store 裡有什麼」就有兩個答案。
+    fn stored_node_dirs(&self) -> Result<Vec<PathBuf>, StoreError> {
+        let mut entries = fs::read_dir(self.nodes_dir()).map_err(|source| StoreError::Io {
+            path: self.nodes_dir(),
+            source,
+        })?;
+        let mut directories = Vec::new();
+        while let Some(entry) = entries
+            .next()
+            .transpose()
+            .map_err(|source| StoreError::Io {
+                path: self.nodes_dir(),
+                source,
+            })?
+        {
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with('.') {
+                continue;
+            }
+            let file_type = entry.file_type().map_err(|source| StoreError::Io {
+                path: entry.path(),
+                source,
+            })?;
+            if !file_type.is_dir() {
+                return Err(StoreError::Format(format!(
+                    "unexpected non-directory under nodes/: {:?}",
+                    name
+                )));
+            }
+            directories.push(entry.path());
+        }
+        directories.sort();
+        Ok(directories)
+    }
+
+    /// 已存節點的 id 清單。
+    fn stored_node_ids(&self) -> Result<Vec<String>, StoreError> {
+        self.stored_node_dirs()?
+            .into_iter()
+            .map(|directory| {
+                directory
+                    .file_name()
+                    .and_then(OsStr::to_str)
+                    .map(str::to_owned)
+                    .ok_or_else(|| StoreError::Format("node directory is not UTF-8".to_owned()))
+            })
+            .collect()
+    }
+
     /// Append every graph node to the content-addressed store.
     ///
     /// Existing immutable node files must match byte-for-byte. Config is the
     /// only file updated; arbitrary existing preferences and annotations are
     /// preserved while the graph's current label is synchronized.
+    ///
+    /// # append-only,但**不靜默**
+    ///
+    /// 本方法只新增,不刪除。若 store 裡有節點而傳進來的圖沒有,回
+    /// [`StoreError::StaleNode`] 而非默默略過——後者會讓「從圖裡移除節點 →
+    /// `save`」看起來成功,而 `load`(以 `nodes/` 的目錄內容為準)又把它讀回來。
+    /// 要真的刪,呼叫 [`remove_node`](Self::remove_node)。
+    ///
+    /// 檢查在寫入**之前**做,故被擋下時 store 未被動過。
     pub fn save(&self, graph: &EvolutionGraph) -> Result<(), StoreError> {
         graph.verify_all()?;
+        let known: std::collections::BTreeSet<&str> = graph.ids().map(NodeId::as_str).collect();
+        for stored in self.stored_node_ids()? {
+            if !known.contains(stored.as_str()) {
+                return Err(StoreError::StaleNode { node: stored });
+            }
+        }
         for id in graph.ids() {
             let node = graph
                 .node(id)
@@ -157,36 +238,7 @@ impl GraphStore {
     /// `.chg` remain the authority for replay compatibility; no state-changing
     /// dependency is smuggled through hash-external P64 config.
     pub fn load(&self, libraries: LibrarySpec) -> Result<EvolutionGraph, StoreError> {
-        let mut entries = fs::read_dir(self.nodes_dir()).map_err(|source| StoreError::Io {
-            path: self.nodes_dir(),
-            source,
-        })?;
-        let mut directories = Vec::new();
-        while let Some(entry) = entries
-            .next()
-            .transpose()
-            .map_err(|source| StoreError::Io {
-                path: self.nodes_dir(),
-                source,
-            })?
-        {
-            let name = entry.file_name();
-            if name.to_string_lossy().starts_with('.') {
-                continue;
-            }
-            let file_type = entry.file_type().map_err(|source| StoreError::Io {
-                path: entry.path(),
-                source,
-            })?;
-            if !file_type.is_dir() {
-                return Err(StoreError::Format(format!(
-                    "unexpected non-directory under nodes/: {:?}",
-                    name
-                )));
-            }
-            directories.push(entry.path());
-        }
-        directories.sort();
+        let directories = self.stored_node_dirs()?;
 
         let mut records = Vec::with_capacity(directories.len());
         for directory in directories {
@@ -221,6 +273,45 @@ impl GraphStore {
             });
         }
         Ok(EvolutionGraph::restore(libraries, records)?)
+    }
+
+    /// 從 store 刪掉一個節點的整個資料夾。**只有葉節點可刪**。
+    ///
+    /// 這是唯一的破壞性操作,故刻意做成顯式呼叫而非 `save` 的副作用
+    /// (見 [`StoreError::StaleNode`])。
+    ///
+    /// - 若 store 裡還有節點以它為 parent(含引用邊),回
+    ///   [`StoreError::NodeHasDependents`]——子節點的 id 由 parents 的 id 算出,
+    ///   父節點消失後 `load` 會直接拒收(`PersistedParentMissing`);
+    /// - `manifest`/`edges`/`config`/`state`/`annotation/` 一併刪除;
+    /// - **`objects/` 不動**:它是內容定址且跨節點共用,刪掉會破壞別的節點。
+    ///   孤兒 object 是無害的空間佔用,回收另計。
+    ///
+    /// 呼叫端通常要與 `EvolutionGraph::remove_node` 成對使用,否則下一次
+    /// `save` 會把它寫回去。
+    pub fn remove_node(&self, id: &NodeId) -> Result<(), StoreError> {
+        let node_dir = self.node_dir(id);
+        if !node_dir.exists() {
+            return Err(StoreError::Format(format!("unknown node {id}")));
+        }
+        for directory in self.stored_node_dirs()? {
+            if directory == node_dir {
+                continue;
+            }
+            let edges: EdgeManifest = read_json(&directory.join("edges"))?;
+            if edges.edges.iter().any(|edge| edge.from == id.as_str()) {
+                let dependent = directory
+                    .file_name()
+                    .and_then(OsStr::to_str)
+                    .unwrap_or("<non-utf8>")
+                    .to_owned();
+                return Err(StoreError::NodeHasDependents {
+                    node: id.as_str().to_owned(),
+                    dependent,
+                });
+            }
+        }
+        remove_dir_all(&node_dir)
     }
 
     /// 讀節點的 State(外部環境)。**雜湊外**,不存在時回預設空值。
