@@ -117,13 +117,13 @@ pub struct LibraryExport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LibraryFunctionSource {
     pub path: String,
-    pub source: &'static str,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LibraryDataSource {
     pub path: String,
-    pub source: &'static str,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,10 +157,14 @@ pub struct LibraryPackage {
     /// provide one synthetic document.
     pub function_sources: Vec<LibraryFunctionSource>,
     pub exports: Vec<LibraryExport>,
-    pub code: &'static str,
+    /// R9-a:這些**曾是 `&'static str`**,型別層面把 package 鎖死在編譯期常數上
+    /// ——沒有任何執行期來源進得來,`plugin` kind 因此不可達、E1 先驗庫
+    /// (PHOIBLE/Grambank 全集)也無處可去。改為 owned 之後,隨引擎發布的那組
+    /// 仍走 `include_str!`(它們是**預設**),但 package 不再**必須**是常數。
+    pub code: String,
     /// 歷時 function 原始碼(`.chg`),**verbatim**;`language` 不解析(P20)。
-    pub functions: &'static str,
-    pub data: &'static str,
+    pub functions: String,
+    pub data: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -317,6 +321,33 @@ impl LibraryLoadError {
             Self::DuplicateSign(_) => "LIBRARY_SIGN_DUPLICATE",
         }
     }
+}
+
+/// 一個 package 的原始檔內容,**對映磁碟上的 `config/` + `code/` + `data/` 佈局**。
+///
+/// R9-a:host(`persistence` / 未來的 `app`)讀檔後以此注入;`language` 仍不碰
+/// `std::fs`(§4、wasm 綠)。wasm 前端無 fs,由 app shell 供給,走同一介面。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PackageSources {
+    /// `config/package.conf`
+    pub config: String,
+    /// `config/exports.tsv`
+    pub exports: String,
+    /// 依 manifest 序合併的 `code/*.lang`
+    pub code: String,
+    /// `code/*.chg`(P50 ③,verbatim 不解析)
+    pub functions: Vec<PackageFile>,
+    /// 依 manifest 序合併的 `data/*`
+    pub data: String,
+    /// 逐檔的 `data/*`,配上 manifest 路徑
+    pub data_files: Vec<PackageFile>,
+}
+
+/// 一個帶 manifest 路徑的來源檔。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageFile {
+    pub path: String,
+    pub source: String,
 }
 
 #[derive(Debug)]
@@ -759,7 +790,7 @@ fn parse_exports(id: &LibraryId, source: &str) -> Result<Vec<LibraryExport>, Lib
 
 fn validate_package_code(package: &LibraryPackage) -> Result<Language, LibraryLoadError> {
     let mut language =
-        Language::parse(package.code).map_err(|error| LibraryLoadError::PackageLanguage {
+        Language::parse(&package.code).map_err(|error| LibraryLoadError::PackageLanguage {
             package: package.id.to_string(),
             line: error.line,
             message: error.msg,
@@ -812,7 +843,59 @@ fn validate_package_code(package: &LibraryPackage) -> Result<Language, LibraryLo
     Ok(language)
 }
 
+/// 由 owned 來源建 package。與 [`load_embedded`] **共用同一套解析與驗證**
+/// ——內嵌與注入不得有兩套規則,否則「外部 package 為什麼過不了」會變成
+/// 需要對照兩份實作才答得出的問題。
+fn load_sources(sources: &PackageSources) -> Result<LibraryPackage, LibraryLoadError> {
+    let embedded = OwnedPackageView {
+        config: &sources.config,
+        exports: &sources.exports,
+        code: &sources.code,
+        functions: &sources.functions,
+        data: &sources.data,
+        data_files: &sources.data_files,
+    };
+    load_package(embedded)
+}
+
+/// 借用視圖,讓內嵌(`&'static str`)與注入(`String`)走同一條路。
+struct OwnedPackageView<'a> {
+    config: &'a str,
+    exports: &'a str,
+    code: &'a str,
+    functions: &'a [PackageFile],
+    data: &'a str,
+    data_files: &'a [PackageFile],
+}
+
 fn load_embedded(source: &EmbeddedPackage) -> Result<LibraryPackage, LibraryLoadError> {
+    let functions = source
+        .functions
+        .iter()
+        .map(|f| PackageFile {
+            path: f.path.to_owned(),
+            source: f.source.to_owned(),
+        })
+        .collect::<Vec<_>>();
+    let data_files = source
+        .data_sources
+        .iter()
+        .map(|d| PackageFile {
+            path: d.path.to_owned(),
+            source: d.source.to_owned(),
+        })
+        .collect::<Vec<_>>();
+    load_package(OwnedPackageView {
+        config: source.config,
+        exports: source.exports,
+        code: source.code,
+        functions: &functions,
+        data: source.data,
+        data_files: &data_files,
+    })
+}
+
+fn load_package(source: OwnedPackageView<'_>) -> Result<LibraryPackage, LibraryLoadError> {
     let manifest = parse_manifest(source.config)?;
     let name = required(manifest.name, "<unknown>", "name")?;
     let kind = required(manifest.kind, &name, "kind")?;
@@ -847,9 +930,9 @@ fn load_embedded(source: &EmbeddedPackage) -> Result<LibraryPackage, LibraryLoad
         data_paths: {
             let paths = required(manifest.data_paths, "<unknown>", "data")?;
             let embedded_paths = source
-                .data_sources
+                .data_files
                 .iter()
-                .map(|data| data.path)
+                .map(|data| data.path.as_str())
                 .collect::<Vec<_>>();
             if paths.iter().map(String::as_str).collect::<Vec<_>>() != embedded_paths {
                 return Err(config_error(
@@ -863,11 +946,11 @@ fn load_embedded(source: &EmbeddedPackage) -> Result<LibraryPackage, LibraryLoad
             paths
         },
         data_sources: source
-            .data_sources
+            .data_files
             .iter()
             .map(|data| LibraryDataSource {
                 path: data.path.to_owned(),
-                source: data.source,
+                source: data.source.to_owned(),
             })
             .collect(),
         function_paths: {
@@ -882,7 +965,7 @@ fn load_embedded(source: &EmbeddedPackage) -> Result<LibraryPackage, LibraryLoad
             let embedded_paths = source
                 .functions
                 .iter()
-                .map(|function| function.path)
+                .map(|function| function.path.as_str())
                 .collect::<Vec<_>>();
             if functions.iter().map(String::as_str).collect::<Vec<_>>() != embedded_paths {
                 return Err(config_error(
@@ -900,12 +983,12 @@ fn load_embedded(source: &EmbeddedPackage) -> Result<LibraryPackage, LibraryLoad
             .iter()
             .map(|function| LibraryFunctionSource {
                 path: function.path.to_owned(),
-                source: function.source,
+                source: function.source.to_owned(),
             })
             .collect(),
-        code: source.code,
-        functions: "",
-        data: source.data,
+        code: source.code.to_owned(),
+        functions: String::new(),
+        data: source.data.to_owned(),
     };
     let language = validate_package_code(&package)?;
     for export in &package.exports {
@@ -990,6 +1073,37 @@ impl LibraryCatalog {
             .iter()
             .map(load_embedded)
             .collect::<Result<Vec<_>, _>>()?;
+        packages.sort_by(|left, right| {
+            left.id
+                .kind
+                .rank()
+                .cmp(&right.id.kind.rank())
+                .then(left.priority.cmp(&right.priority))
+                .then(left.id.name.cmp(&right.id.name))
+        });
+        validate_catalog(&packages)?;
+        Ok(Self { packages })
+    }
+
+    /// 在隨引擎發布的那組之外,**再注入** host 提供的 package(R9-a)。
+    ///
+    /// 此前 `embedded()` 是唯一入口,吃編譯期常數陣列——`plugin` kind 因此
+    /// **在任何執行路徑上都不可達**,E1 先驗庫(PHOIBLE/Grambank 全集)也無處可去
+    /// (它們差好幾個數量級,不可能 `include_str!`)。
+    ///
+    /// 注入者仍受同一套把關:kind/dependency/priority/exports/rule namespace
+    /// 由 `validate_catalog` 檢查,内容雜湊由 `.chg` 的第三道 digest 釘住
+    /// ——**內嵌對可重現性從來沒有貢獻**,那是 lock 的職責。
+    pub fn with_packages(
+        extra: impl IntoIterator<Item = PackageSources>,
+    ) -> Result<Self, LibraryLoadError> {
+        let mut packages = EMBEDDED_PACKAGES
+            .iter()
+            .map(load_embedded)
+            .collect::<Result<Vec<_>, _>>()?;
+        for sources in extra {
+            packages.push(load_sources(&sources)?);
+        }
         packages.sort_by(|left, right| {
             left.id
                 .kind
@@ -1200,9 +1314,9 @@ mod tests {
             function_paths: Vec::new(),
             function_sources: Vec::new(),
             exports: Vec::new(),
-            code: "",
-            functions: "",
-            data: "",
+            code: String::new(),
+            functions: String::new(),
+            data: String::new(),
         }
     }
 
@@ -1365,9 +1479,9 @@ mod tests {
             function_paths: Vec::new(),
             function_sources: Vec::new(),
             exports: Vec::new(),
-            code: "trait Schema:\n    syn:\n        slots:\n            head [Noun]\n        map head rename nucleus\n",
-            functions: "",
-            data: "",
+            code: "trait Schema:\n    syn:\n        slots:\n            head [Noun]\n        map head rename nucleus\n".to_owned(),
+            functions: String::new(),
+            data: String::new(),
         };
 
         let error = validate_package_code(&package)

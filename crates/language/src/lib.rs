@@ -53,7 +53,8 @@ pub use identity::{
 };
 pub use library::{
     LibraryCatalog, LibraryDataSource, LibraryExport, LibraryExportKind, LibraryFunctionSource,
-    LibraryId, LibraryKind, LibraryLoadError, LibraryPackage, LibrarySpec,
+    LibraryId, LibraryKind, LibraryLoadError, LibraryPackage, LibrarySpec, PackageFile,
+    PackageSources,
 };
 pub use metadata::{SignLifecycle, SignProvenance};
 pub use sampling::{

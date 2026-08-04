@@ -4088,29 +4088,29 @@ fn package_lock_content(package: &conlang_language::LibraryPackage) -> String {
             export.stable_id, export.kind, export.alias
         ));
     }
-    content.push_str(package.code);
+    content.push_str(&package.code);
     content.push('\n');
     // P50 ③:function 路徑與逐檔原始碼都必須進 digest。路徑也是 ordered
     // package contract；只 hash 合併後文字會漏掉檔案邊界與重排。
     if package.function_sources.is_empty() {
-        content.push_str(package.functions);
+        content.push_str(&package.functions);
     } else {
         for source in &package.function_sources {
             content.push_str("\nfunction-source ");
             content.push_str(&source.path);
             content.push('\n');
-            content.push_str(source.source);
+            content.push_str(&source.source);
         }
     }
     content.push('\n');
     if package.data_sources.len() <= 1 {
-        content.push_str(package.data);
+        content.push_str(&package.data);
     } else {
         for source in &package.data_sources {
             content.push_str("\ndata-source ");
             content.push_str(&source.path);
             content.push('\n');
-            content.push_str(source.source);
+            content.push_str(&source.source);
         }
     }
     content

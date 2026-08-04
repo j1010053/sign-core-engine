@@ -191,7 +191,7 @@ fn catalog_has_25_binary_parameters_and_three_resolvable_knowledge_states() {
         .iter()
         .find(|package| package.name == "grambank")
         .unwrap();
-    let rows = feature_rows(package.data);
+    let rows = feature_rows(&package.data);
     assert_eq!(rows.len(), 25);
     let ids: BTreeSet<_> = rows.iter().map(|row| row.id).collect();
     assert_eq!(ids.len(), 25);

@@ -113,11 +113,11 @@ function CandidatesInRecipes(x):
     package.function_sources = vec![
         LibraryFunctionSource {
             path: "code/goals.chg".to_owned(),
-            source: SEQUENCE,
+            source: SEQUENCE.to_owned(),
         },
         LibraryFunctionSource {
             path: "code/recipes.chg".to_owned(),
-            source: CANDIDATES,
+            source: CANDIDATES.to_owned(),
         },
     ];
     let table = functions_from_packages(&[&package]).unwrap();
@@ -318,9 +318,9 @@ fn synthetic(functions: &'static str, exported: &[&str]) -> LibraryPackage {
             })
             .collect(),
         id,
-        code: "",
-        functions,
-        data: "",
+        code: String::new(),
+        functions: functions.to_owned(),
+        data: String::new(),
     }
 }
 

@@ -87,7 +87,7 @@ fn package(
         data_paths: vec!["data/weights.tsv".to_owned()],
         data_sources: vec![LibraryDataSource {
             path: "data/weights.tsv".to_owned(),
-            source: weights,
+            source: weights.to_owned(),
         }],
         function_paths: vec!["code/functions.chg".to_owned()],
         function_sources: Vec::new(),
@@ -102,9 +102,9 @@ fn package(
             })
             .collect(),
         id,
-        code: "",
-        functions,
-        data: weights,
+        code: String::new(),
+        functions: functions.to_owned(),
+        data: weights.to_owned(),
     }
 }
 

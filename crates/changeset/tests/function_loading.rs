@@ -136,9 +136,9 @@ fn synthetic(functions: &'static str, exported: &[&str]) -> LibraryPackage {
             })
             .collect(),
         id,
-        code: "",
-        functions,
-        data: "",
+        code: String::new(),
+        functions: functions.to_owned(),
+        data: String::new(),
     }
 }
 

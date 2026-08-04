@@ -1461,7 +1461,7 @@ pub fn weight_db_from_packages(packages: &[&LibraryPackage]) -> Result<WeightDb,
                 package,
                 priority,
                 &source.path,
-                source.source,
+                &source.source,
             )?;
         }
     }
@@ -1559,7 +1559,7 @@ pub fn functions_from_packages(packages: &[&LibraryPackage]) -> Result<FunctionT
         }
         let mut definitions = Vec::new();
         if package.function_sources.is_empty() {
-            let parsed = parse_functions(package.functions)?;
+            let parsed = parse_functions(&package.functions)?;
             if parsed.namespace != package.id.to_string() {
                 return Err(ReplayError::Parse(format!(
                     "package {} function document declares namespace {:?}",
@@ -1585,7 +1585,7 @@ pub fn functions_from_packages(packages: &[&LibraryPackage]) -> Result<FunctionT
                         package.id, source.path
                     )));
                 }
-                let parsed = parse_functions(source.source).map_err(|error| {
+                let parsed = parse_functions(&source.source).map_err(|error| {
                     ReplayError::Parse(format!(
                         "package {} function source {:?}: {error}",
                         package.id, source.path
