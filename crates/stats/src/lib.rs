@@ -30,7 +30,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_debug_implementations)]
 
-use conlang_language::{Language, LibraryPackage, SignItem};
+use conlang_language::{Language, LibraryPackage};
 use std::collections::BTreeMap;
 
 /// **IPA 字串 → 權重**。三個來源共用同一組鍵(§6.2)。
@@ -303,30 +303,26 @@ pub fn project_phoneme_freq(language: &Language, inventory: &[&str]) -> WeightTa
 
     let mut table = WeightTable::new();
     for sign in &language.signs {
-        for item in &sign.items {
-            let SignItem::Def(def) = item else { continue };
-            if def.path != "phon" {
+        // 「UR 住哪」只有 `SignDef::underlying_form` 知道(單一資訊源)。
+        let Some(mut rest) = sign.underlying_form() else {
+            continue;
+        };
+        while !rest.is_empty() {
+            let matched = ordered.iter().find(|segment| rest.starts_with(**segment));
+            let key = match matched {
+                Some(segment) => *segment,
+                // 匹配不到 → 取一個字元自成一鍵(現形,不吞掉)
+                None => {
+                    let first = rest.chars().next().expect("rest is not empty");
+                    &rest[..first.len_utf8()]
+                }
+            };
+            rest = &rest[key.len()..];
+            if key.chars().all(char::is_whitespace) {
                 continue;
             }
-            let form = def.value.trim().trim_matches('/');
-            let mut rest = form;
-            while !rest.is_empty() {
-                let matched = ordered.iter().find(|segment| rest.starts_with(**segment));
-                let key = match matched {
-                    Some(segment) => *segment,
-                    // 匹配不到 → 取一個字元自成一鍵(現形,不吞掉)
-                    None => {
-                        let first = rest.chars().next().expect("rest is not empty");
-                        &rest[..first.len_utf8()]
-                    }
-                };
-                rest = &rest[key.len()..];
-                if key.chars().all(char::is_whitespace) {
-                    continue;
-                }
-                let next = table.get(key).unwrap_or(0.0) + 1.0;
-                table.set(key, next);
-            }
+            let next = table.get(key).unwrap_or(0.0) + 1.0;
+            table.set(key, next);
         }
     }
     table

@@ -833,6 +833,23 @@ impl SignDef {
     pub fn content_eq(&self, other: &SignDef) -> bool {
         self.name == other.name && items_content_eq(&self.items, &other.items)
     }
+
+    /// **底層形 UR**(P1):`phon:` 區塊的 `/…/`,已去界定斜線與前後空白。
+    ///
+    /// 表層形永不儲存,由共時規則按需導出——故這裡回的一定是 UR。
+    ///
+    /// 只看**本地**項目,不走繼承投影:繼承來的 phon 是 construction 的模板
+    /// (`ge{stem}t` 這類),與「這個 sign 的底層形」是兩件事。
+    ///
+    /// 存放處是路徑為 `phon` 的 `Def`(P71 `ENGINE_DEF_PATHS` 之一)。
+    /// 這件事**只在這裡知道**——`stats` 的音素投影與 `query` 的詞典視圖都經此,
+    /// 免得「UR 住哪」散成三份。
+    pub fn underlying_form(&self) -> Option<&str> {
+        self.items.iter().find_map(|item| match item {
+            SignItem::Def(def) if def.path == "phon" => Some(def.value.trim().trim_matches('/')),
+            _ => None,
+        })
+    }
 }
 
 impl TraitDef {

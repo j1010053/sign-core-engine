@@ -93,6 +93,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "conlang-query"
+version = "0.1.0"
+dependencies = [
+ "conlang-changeset",
+ "conlang-language",
+ "conlang-stats",
+]
+
+[[package]]
 name = "conlang-stats"
 version = "0.1.0"
 dependencies = [
