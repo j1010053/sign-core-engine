@@ -1,8 +1,13 @@
 # 架構修補 06:插件、服務與 DSL API(v0.1)
 
 > **依賴(一律以此二者為準)**:《架構 2.0 總鳥瞰 v1.0》、《架構修補彙整 01–04 v1.0》(P1–P19 權威表);另依賴《架構修補 05》(P20–P28)。
-> **本修補提出**:P29–P37(見 §8)。現行權威為《架構修補彙整 05–11》§1；
+> **本修補提出**:P29–P37(見 §6;舊版此處誤植為 §8)。現行權威為《架構修補彙整 05–11》§1；
 > 本檔保留插件／服務生命週期與 DSL API 的詳細理由。
+> **增修 A(擁有者 2026-08-04,見 §8)**:P29「std 與 plugin 同構」的落地修正
+> ——std 特權自程式邏輯降級為可覆寫的預設值;package 不再必須是編譯期常數。
+> **§8.5 補訂 P29/P50「無顯式 import」的適用範圍 = `.lang`／`.chg` 兩種資料層檔案,
+> 不及於專案層宣告**(故 `project.toml` 的 import 表合法)。
+> 明細與理由見 `演化專案結構與套件載入_v0.1.md`。
 > **範圍**:三個彼此扣合的擴充面——(一)插件系統(資料層與程式碼層),(二)外部服務的生命週期(ServiceRef → resolve → 執行 → 驗證 → History),(三)音變 DSL 的最小對外 API(經 Lexurgy 對照修訂)。
 
 ---
@@ -326,3 +331,128 @@ pub fn brackets(word: &Word) -> &[Bracket];
 ### 修補 05
 - §10.2 ChangeSet 格式:服務引用寫法 `drift(backend: "llm-v2")` 的 resolve 語意指向本檔 §3。
 - §13 實作插入點追加:步驟 8 同時定 export 表格式與穩定 ID(P29);步驟 14 直譯器含暫停恢復骨架(P33)與 History 側表(P34)。
+
+---
+
+## 8. 增修 A:P29 的落地修正(擁有者 2026-08-04)
+
+> **不新增 P 編號。** 本節收錄的四條(R7′/R9-a/R12/R13)都在**兌現 P29 已有的
+> 「std 與 plugin 同構」**,不推翻 P29–P37 任一條。詳細推導、實測數據與誌誤留在
+> `架構/演化專案結構與套件載入_v0.1.md`;**該檔的 R 編號以本節為權威掛載點**。
+>
+> 適用範圍僅限「套件載入來源與 std 的地位」。同檔的專案結構部分(R1/R2/R4/R5/R6)
+> **不在本節內**——那些尚未實作,見該檔 §3。
+
+### 8.1 前置裁定
+
+| | 裁定 |
+|---|---|
+| **W** | 權重表是 **data**,不屬於 `.lang` 或 `.chg`(2026-08-02) |
+| **E** | **編譯期內嵌 package 是錯誤實作**;package 應被宣告、被找尋(2026-08-03) |
+| **S** | `std:*` 如同 C++ 的 std:**只是隨附的 package**,它提供的是某種**語言學分析**,不是引擎功能(2026-08-04) |
+
+裁定 S 是 P29「**std 與 plugin 同構**」的自然延伸——同構這件事寫在 P29 裡,
+但實作沒做到:引擎碼裡有三處硬寫 std 詞彙、`select()` 憑 `kind == Std` 自動入 root。
+
+### 8.2 R7′ / R11 / R14 — 引擎不得內含語言學
+
+`sem.rs` 曾以字串字面值引用 `std:core`:三條 bridge(`Nominal→Entity`、
+`Predicate→Event`、`Adposition→Relation`)+ 兩處 `"Semantic"` 過濾。
+
+**實測**(完全不給 std、只用自訂 trait 樹):建構診斷 `[]`、closure 正常、
+`check_language` 零錯誤。**沒有 std 時失去的是共通詞彙,不是執行能力。**
+
+裁定:bridge 搬進 `std:core` 寫成一般 `belongs`(零新語法);`Adposition → Relation`
+**拿掉**(格標記類介系詞未必表達 `Relation`,應由作者顯式宣告);role 約束比照 slot
+typed 化並補 `[*]`,`types` 即完整閉包。
+
+### 8.3 R9-a — package 不必是編譯期常數
+
+真正的鎖不在 `include_str!`,而在**型別**:`LibraryPackage` 的
+`code`/`functions`/`data` 全是 `&'static str`,**只有編譯期常數能當 package**。
+故 `LibraryKind::Plugin` 從未可達,E1 先驗庫無處可去。
+
+改為 owned + 新增 `LibraryCatalog::with_packages(…)` 注入入口。
+**`language` 仍不碰 `std::fs`**——讀檔是 host(`persistence`/未來 `app`)的事,
+wasm 前端由 app shell 供給,走同一介面。內嵌與注入**共用同一套 `load_package`
+解析與驗證**,不得有兩套規則。
+
+**與 P31 的關係**:P31 訂「MVP 為編譯期靜態註冊;動態能力走 **host 端橋接**
+(邏輯跑 host、經介面呼叫核心),**非 dlopen**」。R9-a 走的正是那條 host 橋接路,
+只是提早到達;隨引擎發布的那組仍走 `include_str!`(它們是**預設**)。**不衝突。**
+
+### 8.4 R12 / R13 — std 特權降級為預設值
+
+**R13(先做)**:**不**為 `std:*` 設專用診斷碼——那等於把剛拆掉的特權裝回去。
+改為把 catalog 已知的**出處**附上,對所有套件一視同仁:
+
+```
+"s" refers to unknown trait "EnglishCaseBearer"
+    ; exported by natural:en-standard, add it to your import table
+```
+
+對映 C++ 的 `did you forget to #include <vector>?`——編譯器不因為是 `std::vector`
+就給特別待遇,它只是知道哪個 header 提供那個名字。
+
+**R12**:`select()` 的 roots 一律取自 `spec.std`,不再憑 `kind == Std` 自動入列;
+`LibrarySpec::default()` 填入 `default_std_packages()`,故**預設行為逐位元不變**。
+特權從程式邏輯降級為一份可覆寫的預設值——現在才可能「不載入 `std:grambank`」
+或「用自己的 core 取代 `std:core`」。
+
+先 R13 再 R12,是為了讓拆掉自動 root 的第一個體驗不是一串無從下手的 `unknown trait`。
+
+**與 P50 的關係**:P50 的論據之一是「**std 套件自動全載自動入鎖**」。R12 之後
+「自動全載」變成 `LibrarySpec::default()` 的預設值而非機制。**lock 內容在預設下
+不變**,故 P50 的可重現性結論仍成立;但其論據基礎已由「機制」變為「預設」,
+一旦有人改 `spec.std`,鎖的內容就隨之改變(這是正確行為——載入什麼就鎖什麼)。
+
+### 8.5 P29/P50「無顯式 import」的**適用範圍界線**(R15,擁有者 2026-08-04)
+
+P29 的「auto-discovery 無顯式 import」與 P50 的「明確否決顯式 `import`」
+**原文未標明適用範圍**,曾被讀成「專案層也不得有 import 表」,與裁定 E 撞車。
+
+**裁定:P29/P50 的禁令適用於 `.lang` / `.chg` 這兩種資料層檔案,不及於專案層宣告。**
+
+| | 歸屬 | 判定 |
+|---|---|---|
+| `.chg` prelude 加 `import <ns> sha256:` | **P50** | ❌ 仍禁(P50 原文明列已捨棄) |
+| `.lang` 加 `import` / `use` 語句 | **P29** | ❌ 仍禁 |
+| 跨套件引用寫套件**內部檔案路徑** | **P29** | ❌ 仍禁——export 表的穩定 ID 是唯一契約 |
+| 一份 `.lang`/`.chg` 內部,靠 auto-discovery 找到別的套件的符號 | **P29** | ✅ 不變 |
+| `project.toml` 宣告本專案的直接依賴 | **R3** | ✅ **准** |
+
+#### 界線的判準
+
+**P29/P50 管的是「一份資料層檔案怎麼引用它以外的東西」;R3 管的是
+「哪些套件進入這個專案」。** 兩者不是同一個問題:
+
+- P29/P50 要防的是**檔案內部長出第二套名稱解析路徑**——若 `.chg` 能自己寫
+  `import`,則同一份 `.chg` 的意義取決於那行 import,而非 prelude 的 lock。
+  auto-discovery + export 穩定 ID 保證:**檔案只說名字,不說去哪裡找**。
+- R3 要答的是**去哪裡找**——那個問題 P29/P50 從未回答,`LibraryCatalog` 也
+  一直是靠 `EMBEDDED_PACKAGES` 這個編譯期常數暗中回答的(裁定 E 判定為錯誤實作)。
+
+#### 為什麼這條界線在可重現性上是安全的
+
+P50 否決顯式 import 的理由是可重現性(P26)。該理由對 `.chg` 成立、對 `project.toml`
+不成立,因為兩者**在 replay 中的地位不同**:
+
+- `project.toml` **雜湊外、不進 replay**;它只影響「解析時載入了什麼」;
+- 解析結果照樣經 `sha256_hex(package_lock_content(..))` 進 `.chg` prelude 的
+  **第三道 digest**;
+- 故改了 import 表 → lock 內容改變 → 舊 `.chg` 在 replay 前**被既有機制擋下**,
+  不是靜默產生不同結果。
+
+**R3 不引進任何新的可重現性風險:lock 仍是唯一權威。**
+反過來說,若哪天有人讓 `project.toml` 的內容繞過 lock 直接影響 replay,
+那才是踩線,與本裁定無關。
+
+> **誌**:曾主張此處為 §0.1 級衝突、應凍結 R3。範圍區分成立後不構成衝突;
+> 但 P29/P50 原文確實沒寫適用範圍,故本節不是解釋而是**補訂**——
+> 下一個讀 P29 的人應讀到這裡。
+
+### 8.6 出口
+
+`tests/std_is_just_a_package.rs`(5 案)、`tests/missing_name_hint.rs`(5 案)、
+`tests/role_constraints.rs`;R11/R14 的連帶更動(閉包變長、`Transfer ≠ Event`
+不變式改觀察對象)逐條理由見 commit。

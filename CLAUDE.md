@@ -19,6 +19,14 @@
    P65–P68 為《架構修補12》的**提案**，未定案，不得引用為決策)**。
    任何實作若與編號決策矛盾,**停下來明確指出衝突**,不要自行變通。規格未覆蓋的新問題:
    實作層提案編 I 系列入 docs/05 §9;架構層變更走 P 系列。
+   **R 系列**(`architecture/演化專案結構與套件載入_v0.1.md`)是**已裁定但刻意不編 P 號**
+   的第三類(R10,2026-08-04):套件載入那組(W/E/S、R7′、R9-a、R11–R14)已實作,
+   權威掛在《修補06》§8 增修 A;專案結構那組(R1/R2/R4/R5/R6)尚未實作,僅本檔為準。
+   **R15(2026-08-04)**:P29/P50 的「auto-discovery,**無顯式 import**」
+   **適用範圍限 `.lang` / `.chg` 兩種資料層檔案**,不及於專案層宣告
+   ——故 `project.toml` 的 import 表合法。仍禁:`.chg` prelude 的
+   `import <ns> sha256:`、`.lang` 的 `import`/`use`、跨套件引用內部檔案路徑。
+   界線判準與可重現性論證見《修補06》§8.5(權威)。
 2. **每個開發階段必須以測試出口收尾。** 不存在「做完但沒有測試綠燈」的階段
    (M0 實作參照 §8:每步以哪個範例綠燈為出口)。
 3. **哨兵規則:** 若你發現自己在逐檔/逐函式翻譯 Lexurgy(Kotlin, GPL-3.0)的原始碼,
@@ -52,7 +60,9 @@
 | `architecture/架構修補彙整_05-11_v1.0.md` | **P20–P64 權威總表** + 覆寫／相容性清冊 + 契約到證據 + Step 17 缺口 |
 | `architecture/架構2.0總鳥瞰_v1.0.md` | **2.0 單一入口**:Language/ChangeSet 雙軌全圖、四條資訊流、Debug 模塊化、**新實作順序(步驟 8–22,M1–M4)** |
 | `architecture/架構修補05_Primitive與檔案格式_v0.1.md` | P20–P28 詳細來源:DSL 獨立性、IR dump/canonical printer、條件語法、四原語、Ref、檔案格式 |
-| `architecture/架構修補06_插件服務與DSL_API_v0.1.md` | P29–P37 詳細來源:插件 code/data/config、服務生命週期、DSL API；完整插件仍是設計層 |
+| `architecture/架構修補06_插件服務與DSL_API_v0.1.md` | P29–P37 詳細來源:插件 code/data/config、服務生命週期、DSL API；完整插件仍是設計層。**§8 增修 A(2026-08-04)= 裁定 W/E/S 與 R7′/R9-a/R11–R15 的權威掛載點**:std 特權降為可覆寫預設、package 不必是編譯期常數；**§8.5 = P29/P50「無顯式 import」的適用範圍界線**(限 `.lang`／`.chg`) |
+| `architecture/資訊流D應用層框架_v0.1_提案.md` | **提案,未定案,不得引用為決策**(D-a–D-f 待裁)。應用層(步驟 21–22)參考框架:Query 純投影、Command 三分類(Language/View/ProjectData)、內容定址快取、互通度／分群只定接口。**Undo 按使用者活動分三條**:(A) 專案編輯=編輯一份寫到一半的 `.chg`(不落節點,**不需新格式或 `working/` 槽**)、(B) 演化 commit=app history stack(**非** graph parent 遍歷,children 在現行結構不可查)、views/data=文件編輯歷史。**§9 誌誤**記 v0.1 的四處錯 |
+| `architecture/演化專案結構與套件載入_v0.1.md` | **R 系列裁定的詳細推導**(程式碼註解引用 `裁定 W/E/S`、`R7′`、`R9-a`、`R11`–`R14` 者查此檔)。**權威分兩半**:套件載入組(W/E/S、R7′、R9-a、R11–R15)以《修補06》§8 為準,**已實作**;專案結構組(R1–R6:`project.toml`／`packages.lock.json`／`views/`／`data/`／`packages/`)**僅本檔、尚未實作、未編 P 號**(R10 裁定 2026-08-04),隨 M4 落地 |
 | `architecture/架構修補10_歷時function層與載入_v0.1.md` | P47–P55 詳細來源:function surface/load、接力展開、路徑庫、ServiceContext 接點、components、`.chg` canonical |
 | `architecture/架構修補11_演化樹節點模型_v0.1.md` | P56–P64 詳細來源:immutable snapshot、typed rebase、node-v2、全 parent merge、donor、persistence |
 | `architecture/架構修補12_授權面與封裝面分離_v0.1_提案.md` | P65–P68 **提案,未定案**:digest 移至邊、環境鎖分離、授權/封裝二分、bundle |
