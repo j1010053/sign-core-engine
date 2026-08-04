@@ -51,6 +51,11 @@ pub struct TraitProvenance {
 #[derive(Debug, Clone, Default)]
 pub struct OntologyRegistry {
     tree: BTreeMap<String, OntoNode>,
+    /// 名字 → **匯出它但未被載入**的 package(R13)。
+    ///
+    /// 只在「名字查無」時才用得上,故凡命中必然是尚未宣告的套件。空的時候
+    /// 一切照舊——不強制呼叫端提供 catalog。
+    available: BTreeMap<String, crate::LibraryId>,
 }
 
 fn trait_belongs(t: &TraitDef) -> Vec<String> {
@@ -167,6 +172,27 @@ impl OntologyRegistry {
         categories
             .iter()
             .any(|category| self.category_is_a(category, required))
+    }
+
+    /// 掛上「可解析但未宣告」的匯出索引,供 R13 的指路訊息使用。
+    pub fn with_available(mut self, available: BTreeMap<String, crate::LibraryId>) -> Self {
+        self.available = available;
+        self
+    }
+
+    /// 名字查無時的指路後綴。找不到出處就回空字串。
+    ///
+    /// **不為 `std:*` 設專用診斷碼**——裁定 S 之下,「沒宣告 `std:core` 卻用了
+    /// `Noun`」與「沒宣告任何定義 `Noun` 的套件」是同一個錯誤。此處只是把
+    /// catalog 已知的出處附上,對使用者自己的 plugin 一視同仁
+    /// (對映 C++ 的 `did you forget to #include <vector>?`)。
+    pub fn missing_name_hint(&self, name: &str) -> String {
+        match self.available.get(name) {
+            Some(package) => {
+                format!("; exported by {package}, add it to your import table")
+            }
+            None => String::new(),
+        }
     }
 
     pub fn node(&self, name: &str) -> Option<&OntoNode> {
@@ -573,7 +599,10 @@ impl OntologyRegistry {
                     Diagnostic::new(
                         Severity::Error,
                         "ONTOLOGY_UNKNOWN_TRAIT",
-                        format!("{referrer:?} refers to unknown trait {target:?}"),
+                        format!(
+                            "{referrer:?} refers to unknown trait {target:?}{}",
+                            self.missing_name_hint(target)
+                        ),
                     )
                     .with_sources(vec![DiagnosticSource {
                         owner: referrer.clone(),
@@ -721,8 +750,9 @@ impl OntologyRegistry {
                                     Severity::Error,
                                     "SLOT_UNKNOWN_CATEGORY",
                                     format!(
-                                        "slot {name:?} in {owner:?} requires unknown category {:?}",
-                                        required
+                                        "slot {name:?} in {owner:?} requires unknown category {:?}{}",
+                                        required,
+                                        self.missing_name_hint(required)
                                     ),
                                 )
                                 .with_sources(vec![

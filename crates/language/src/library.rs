@@ -972,6 +972,22 @@ impl LibraryCatalog {
         &self.packages
     }
 
+    /// 名字 → 匯出它的 package(**全 catalog**,不限已選取者)。
+    ///
+    /// 供 R13 的指路訊息使用:只在名字查無時查詢,故命中必然是尚未宣告的套件。
+    /// 同名由多個 package 匯出時取排序後第一個(catalog 已是決定性排序)。
+    pub fn export_index(&self) -> std::collections::BTreeMap<String, LibraryId> {
+        let mut index = std::collections::BTreeMap::new();
+        for package in &self.packages {
+            for export in &package.exports {
+                index
+                    .entry(export.alias.clone())
+                    .or_insert_with(|| package.id.clone());
+            }
+        }
+        index
+    }
+
     pub fn resolve_export(
         &self,
         kind: LibraryKind,

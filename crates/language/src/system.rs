@@ -1250,8 +1250,10 @@ fn validate_typed_schemas(
                         Severity::Error,
                         "ROLE_UNKNOWN_CONSTRAINT",
                         format!(
-                            "{owner:?} role {:?} requires unknown trait {:?}",
-                            role.name, category
+                            "{owner:?} role {:?} requires unknown trait {:?}{}",
+                            role.name,
+                            category,
+                            registry.missing_name_hint(category)
                         ),
                     )
                     .with_sources(vec![DiagnosticSource {
@@ -2383,6 +2385,11 @@ fn validate_constructions_and_local_phon(
 
 fn validate_source_language(std: &Language, effective_source: &Language) -> ValidationReport {
     let (registry, ontology_diags) = OntologyRegistry::build(&[std, effective_source]);
+    // R13:掛上「可解析但未宣告」的匯出索引,使名字查無時能指路。
+    let registry = match library::embedded_catalog() {
+        Ok(catalog) => registry.with_available(catalog.export_index()),
+        Err(_) => registry,
+    };
     let mut report = registry.validation_report(&[std, effective_source], &ontology_diags);
     validate_duplicate_signs(effective_source, &mut report);
     validate_defs_and_rules(std, &registry, &mut report);
@@ -2504,6 +2511,10 @@ pub fn compile_with_libraries_ref(
     let artifacts = codegen::compile_full(&effective_source)?;
     let ordered = artifacts.pipeline.ordered.clone();
     let (registry, ontology_diags) = OntologyRegistry::build(&[&std, &ordered]);
+    let registry = match library::embedded_catalog() {
+        Ok(catalog) => registry.with_available(catalog.export_index()),
+        Err(_) => registry,
+    };
     let mut validation = registry.validation_report(&[&std, &ordered], &ontology_diags);
     validate_duplicate_signs(&ordered, &mut validation);
     validate_defs_and_rules(&ordered, &registry, &mut validation);
