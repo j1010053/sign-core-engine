@@ -58,6 +58,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "conlang-command"
+version = "0.1.0"
+dependencies = [
+ "conlang-changeset",
+ "conlang-generate",
+ "conlang-language",
+ "thiserror",
+]
+
+[[package]]
 name = "conlang-generate"
 version = "0.1.0"
 dependencies = [
