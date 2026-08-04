@@ -257,17 +257,56 @@ pub trait DialectGroupingStrategy {
 它最貼合 EvolutionGraph 的樹狀本體,且**天然迴避一般圖的非傳遞分群問題**。
 `ConnectedComponents` / `HierarchicalClustering` 之後再加。
 
-#### Override:現在只須定兩條
+#### Override 是**分類指派**,不是 merge/split(擁有者 2026-08-04)
 
-R4 的一套一檔已讓「政治視角」與「語言學視角」互不污染,故多數細節可隨實作定。
-但**這兩條決定結果是否唯一**,必須先裁:
+先前草案把 Override 設計成「強制合併 / 強制分割」,並因此得先裁兩條規則
+(merge 是否取傳遞閉包、split 是否優先於 merge)。**那兩個問題是設計選錯而
+自造的**——merge/split 是**關係**運算,關係之間才會互相矛盾:
 
-1. **merge 是否取傳遞閉包?**(`A+B` 與 `B+C` 是否蘊含 `A+C`)
-2. **split 是否優先於 merge?**(`A+B`、`B+C`、`A|C` 同時存在時)
+```
+A+B、B+C、A|C  同時存在 → 結果取決於套用順序,可能無解
+```
 
-其餘(自訂標籤是群組 ID 還是純顯示名、selector 指向不存在節點時報錯或忽略)
-隨實作定即可。但**結構性 override(強制合併/分割)與展示性 override(改標籤)
-應分成兩類**,不要混成同一個 `Override` 型別——前者影響群組身分,後者不影響。
+改用**分類指派**語意後,問題不是被回答,而是**不存在**:
+
+```rust
+pub struct GroupingOverride {
+    /// node → group。**sparse**:未列者一律用 strategy 算出的結果。
+    assignments: BTreeMap<NodeId, GroupId>,
+    /// group → 顯示名。**純展示**,不影響群組身分。
+    labels: BTreeMap<GroupId, String>,
+}
+```
+
+指派是**函數**不是關係,故:
+
+| 原問題 | 分類指派下 |
+|---|---|
+| merge 傳遞閉包? | 不適用——沒有 merge |
+| split 優先於 merge? | 不適用——沒有 split |
+| 一個節點能否同屬多群? | 否,型別上就不可能(一個 `NodeId` 一個 `GroupId`) |
+| 衝突怎麼辦? | **不可能衝突**,結果由建構保證唯一 |
+
+也因此管線少一段——原案需要的 `validate consistency` 只是為了收拾 merge/split
+的矛盾:
+
+```
+1. strategy 算出基礎分群
+2. 套用 assignments(sparse 覆寫)
+3. 套用 labels(純顯示)
+```
+
+**這也是本專案既有的慣用語意**:`belongs` 就是分類指派——一個 trait 宣告自己
+屬於哪個分類,引擎從來沒有「把兩個分類合併」這種運算。而且它更貼合領域:
+語言學家不說「把馬其頓語和保加利亞語合併」,而說「馬其頓語**歸入**某個群」——
+`邏輯分層` §1.2 舉的正是這個例子。
+
+**唯一的取捨(誠實記下)**:「合併 G1 與 G2」在指派語意下要逐一寫入成員,
+而非一個動作;且日後新增的節點若本該落入 G2,**不會**被舊的合併自動吸收。
+後者其實是優點(覆寫不該靜默捕獲未來的節點),前者是 UI 的事——
+**介面仍可提供「合併」按鈕,它寫下的是 N 筆指派**。儲存語意與操作語意分離。
+
+D-f3(結構 vs 展示分兩類)因此更自然:`assignments` 管身分、`labels` 管顯示。
 
 ---
 
@@ -481,8 +520,8 @@ v0.1 把兩者寫成同一列(「抽樣相關」)。錯得不只是分類:
 | **D-e2** | 官方是否提供**具名** heuristic profile(公式走 Registry、係數走 package data)? | **是**,依 P30 切開 |
 | **D-e3** | 結果是否必須攜帶 `measure_id`? | **是**(同 `provenance()` 之例) |
 | **D-f1** | 分群是否為可替換 strategy,MVP = `TreeEdgeCut`? | **是** |
-| **D-f2** | Override:merge 取傳遞閉包嗎?split 優先於 merge 嗎? | 待議——這兩條決定結果是否唯一 |
-| **D-f3** | 結構性 override 與展示性 override 是否分成兩類型別? | **是** |
+| ~~D-f2~~ | ~~merge 取傳遞閉包嗎?split 優先於 merge 嗎?~~ | **已裁定 2026-08-04:改用分類指派語意,問題消失**(§4.2)。merge/split 是關係運算故會互相矛盾;指派是函數,結果由建構保證唯一 |
+| **D-f3** | `assignments`(身分)與 `labels`(顯示)是否分成兩類? | **是**;指派語意下更自然 |
 
 ---
 
