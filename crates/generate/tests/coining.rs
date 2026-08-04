@@ -15,8 +15,8 @@ use conlang_changeset::{
     change_set_prelude, ChangeInterpreter, PrimitiveEdit, ResolvedStatement, UnresolvedChangeSet,
 };
 use conlang_generate::{
-    build, select_proposal, BlockingStrategy, Generator, Need, NeedOrigin, Proposal, Strategies,
-    StrategyError,
+    build, highest_scoring, ranked, sample_proposal, BlockingStrategy, Generator, Need, NeedOrigin,
+    Proposal, Strategies, StrategyError,
 };
 use conlang_language::{compile_system, LanguageDocument, LibrarySpec, SignDef};
 
@@ -90,7 +90,7 @@ fn a_need_becomes_a_stored_sign_through_the_four_primitives() {
 
     let need = need("stealer");
     let proposals = generator.propose(&need, &system);
-    let chosen = select_proposal(&proposals).expect("有候選");
+    let chosen = highest_scoring(&proposals).expect("有候選");
     assert_eq!(chosen.phon, "/tu/", "取最高分,不是列舉序第一個");
 
     let edits = build(&need, chosen, &document, &Strategies::default()).expect("build");
@@ -126,8 +126,12 @@ fn no_candidates_is_a_legal_outcome() {
     let document = document();
     let system = compile_system(document.language().clone()).expect("compiles");
     let generator = SyllableGenerator { shapes: Vec::new() };
-    let proposals = generator.propose(&need("stealer"), &system);
-    assert!(select_proposal(&proposals).is_none());
+    let need = need("stealer");
+    let proposals = generator.propose(&need, &system);
+    // 兩個模式都必須把「零候選」當合法結果
+    assert!(ranked(&proposals).is_empty());
+    assert!(sample_proposal(&need, &proposals, 7).expect("不是錯誤").is_none());
+    assert!(highest_scoring(&proposals).is_none());
 }
 
 // ── 折磨 12:20 個候選,排序在提議側 ──────────────────────────────────────
@@ -146,13 +150,69 @@ fn many_candidates_are_ranked_by_the_proposer() {
         .collect();
     let generator = SyllableGenerator { shapes };
 
-    let proposals = generator.propose(&need("river"), &system);
+    let need = need("river");
+    let proposals = generator.propose(&need, &system);
     assert_eq!(proposals.len(), 20);
-    let chosen = select_proposal(&proposals).expect("有候選");
-    assert_eq!(chosen.score, 0.99);
-    // 決定性:同輸入兩次挑到同一個(P26)
-    let again = select_proposal(&proposals).expect("有候選");
-    assert_eq!(chosen, again);
+
+    // ── 手動 / 輔助模式:引擎只排序,不選 ──
+    let ordered = ranked(&proposals);
+    assert_eq!(ordered.len(), 20, "全部候選都交出去,不預先篩掉");
+    assert_eq!(ordered[0].score, 0.99, "最高分排最前");
+    // 同分保列舉序(穩定排序)→ 同輸入同輸出
+    assert_eq!(ranked(&proposals), ordered);
+
+    // ── 自動模式:seeded 加權抽樣,不是 argmax ──
+    let trace = sample_proposal(&need, &proposals, 42)
+        .expect("抽樣")
+        .expect("有候選");
+    assert_eq!(trace.algorithm, "rand_chacha/ChaCha20Rng@0.3", "演算法進 trace");
+    assert_eq!(trace.ordered.len(), 20, "全部候選與權重都留在 trace 裡");
+    assert_eq!(trace.selected, proposals[trace.selected_index]);
+    // 同 seed 逐位元可重現(P26)
+    assert_eq!(
+        sample_proposal(&need, &proposals, 42).unwrap().unwrap(),
+        trace
+    );
+}
+
+/// **自動模式不是 argmax**——這是兩個模式真正的分野。
+///
+/// 少了這條,把 `sample_proposal` 實作成「取最高分」不會有任何一條紅,
+/// 而那正是我初版寫錯的東西:同一個 Need 永遠得到同一個詞,
+/// 自動造 200 個詞時拿不到變化。
+#[test]
+fn automatic_mode_samples_rather_than_taking_the_maximum() {
+    let need = need("river");
+    // 權重相近的兩個候選:argmax 恆選同一個,抽樣會隨 seed 換
+    let proposals = vec![
+        Proposal { phon: "/ka/".into(), score: 1.0, rationale: String::new() },
+        Proposal { phon: "/tu/".into(), score: 1.0, rationale: String::new() },
+    ];
+    assert_eq!(highest_scoring(&proposals).unwrap().phon, "/ka/", "argmax 恆取前者");
+
+    let picks: std::collections::BTreeSet<String> = (0..40)
+        .map(|seed| {
+            sample_proposal(&need, &proposals, seed)
+                .unwrap()
+                .unwrap()
+                .selected
+                .phon
+        })
+        .collect();
+    assert_eq!(picks.len(), 2, "不同 seed 應抽到不同候選,而非恆取 argmax:{picks:?}");
+}
+
+/// 有候選但**權重全為零** → 自動模式無從抽起,回錯誤而非默默挑一個。
+#[test]
+fn all_zero_weights_is_an_error_not_a_silent_pick() {
+    let need = need("river");
+    let proposals = vec![
+        Proposal { phon: "/ka/".into(), score: 0.0, rationale: String::new() },
+        Proposal { phon: "/tu/".into(), score: 0.0, rationale: String::new() },
+    ];
+    assert!(sample_proposal(&need, &proposals, 1).is_err());
+    // 判別性:手動模式照樣排得出來(零候選與零權重是兩回事)
+    assert_eq!(ranked(&proposals).len(), 2);
 }
 
 // ── 折磨 11:thief 擋 stealer,而且是**委派**的判斷 ──────────────────────

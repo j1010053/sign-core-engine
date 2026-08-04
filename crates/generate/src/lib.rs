@@ -36,7 +36,8 @@
 use conlang_changeset::rewrite::{expand, AtomicRewrite, DonorScope, RewriteError, ServiceContext};
 use conlang_changeset::PrimitiveEdit;
 use conlang_language::{
-    CompiledSystem, LanguageDocument, SignDef, SignItem, SignRef, SourceLocation,
+    sample_weighted_index, CompiledSystem, LanguageDocument, SignDef, SignItem, SignRef,
+    SourceLocation, WeightedSampleError,
 };
 
 pub mod strategy;
@@ -94,18 +95,94 @@ pub trait Generator: std::fmt::Debug {
     fn propose(&self, need: &Need, system: &CompiledSystem) -> Vec<Proposal>;
 }
 
-/// 選擇層——**與列舉分離**(P70)。
+// ── 選擇層:**兩個模式,不是一個** ────────────────────────────────────────
+//
+// 架構書 §0 的核心賣點是「可調式人為干涉程度」——每個模組可獨立選手動/輔助/自動。
+// P12 把抽樣器的角色寫死在括號裡:「Weight DB 決定機率(**自動模式**的抽樣權重)
+// → 抽樣器選擇」,而 `function分支語意與選擇層_v1.0` §221 補充:
+// 「互動模式是使用者從候選面板挑,**全程不碰抽樣器**」。
+//
+// 故此處提供兩個入口,對應兩個模式;**沒有一個「預設選擇層」**:
+//
+// | 模式 | 入口 | 抽樣器 |
+// |---|---|---|
+// | 手動 / 輔助 | [`ranked`] —— 引擎只排序,選擇權交出去 | 不碰 |
+// | 自動 | [`sample_proposal`] —— seeded 加權抽樣 | 走 `sample_weighted_index` |
+//
+// 兩者共通:候選**列舉**與**選擇**分離,**零候選是合法結果**(P70)。
+
+/// 一次自動模式選擇的完整軌跡。比照步驟 17 的 `GoalSelectionTrace`
+/// ——自動造出來的詞必須能回答「為什麼是這個」。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProposalSelectionTrace {
+    /// 抽樣演算法名。升版必須顯式改 golden。
+    pub algorithm: &'static str,
+    pub seed: u64,
+    /// 觸發這次生成的 Need 名。
+    pub need: String,
+    /// 候選與**實際餵給抽樣器的權重**。今日權重即 `Proposal::score`;
+    /// 日後若疊上有效分佈(步驟 19),兩者才會分歧。
+    pub ordered: Vec<(Proposal, f64)>,
+    pub selected_index: usize,
+    pub selected: Proposal,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SelectionError {
+    #[error("GENERATE_SAMPLING: {0}")]
+    Sampling(#[from] WeightedSampleError),
+}
+
+/// **手動 / 輔助模式**:引擎只把候選排好,**不做選擇**。
 ///
-/// 零候選回 `None` 而非錯誤:「提不出東西」是合法結果,由呼叫端決定怎麼辦。
-/// 同分時取**列舉序**最前者,保決定性(P26)。
-pub fn select_proposal(proposals: &[Proposal]) -> Option<&Proposal> {
-    proposals.iter().reduce(|best, candidate| {
-        if candidate.score > best.score {
-            candidate
-        } else {
-            best
-        }
-    })
+/// 依評分由高到低;同分保**列舉序**(穩定排序),故同輸入同輸出(P26)。
+/// 回傳借用,呼叫端(候選面板)自己挑。
+pub fn ranked(proposals: &[Proposal]) -> Vec<&Proposal> {
+    let mut ordered: Vec<&Proposal> = proposals.iter().collect();
+    ordered.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    ordered
+}
+
+/// **自動模式**:依 `score` 作權重 seeded 加權抽樣。
+///
+/// 走與步驟 17 Goal 選擇**同一個** `sample_weighted_index`(注入式
+/// `ChaCha20Rng`,§4 禁環境隨機源),同 seed 同輸入逐位元可重現。
+///
+/// 零候選回 `Ok(None)`——「提不出東西」是合法結果(P70),不是錯誤。
+/// 但**有候選卻全部零權重**是提議者的問題,回 `Err`:自動模式無從抽起。
+pub fn sample_proposal(
+    need: &Need,
+    proposals: &[Proposal],
+    seed: u64,
+) -> Result<Option<ProposalSelectionTrace>, SelectionError> {
+    if proposals.is_empty() {
+        return Ok(None);
+    }
+    let weights = proposals.iter().map(|p| p.score).collect::<Vec<_>>();
+    let sample = sample_weighted_index(&weights, seed)?;
+    let selected = proposals[sample.selected_index].clone();
+    Ok(Some(ProposalSelectionTrace {
+        algorithm: sample.algorithm,
+        seed,
+        need: need.name.clone(),
+        ordered: proposals.iter().cloned().zip(weights).collect(),
+        selected_index: sample.selected_index,
+        selected,
+    }))
+}
+
+/// 便利函數:取評分最高者。
+///
+/// **不服務任何一個模式**——自動模式該抽樣(否則同一個 Need 永遠得到同一個詞,
+/// 而自動造 200 個詞要的是可重現的**變化**),手動模式該把選擇權交出去。
+/// 保留它只為了測試與「我就是要最好的那個」這種一次性查詢。
+pub fn highest_scoring(proposals: &[Proposal]) -> Option<&Proposal> {
+    ranked(proposals).first().copied()
 }
 
 #[derive(Debug, thiserror::Error)]

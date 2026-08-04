@@ -386,7 +386,11 @@ content-addressed objects、node folder、hash-external annotation/config；細�
 `LanguageDocument`、fork 由 `EvolutionGraph`、持久化由 `conlang-persistence`;
 **Builder 不改 Language**,構造 `AtomicRewrite::Create` 交既有
 `rewrite::expand` 降階——造出來的詞因此自動可 replay、進得了演化圖、
-受三道 digest 保護。選擇層複用 P70(列舉/選擇分離、零候選 `Ok(None)`)。
+受三道 digest 保護。選擇層**兩個模式對應干涉光譜**(架構書 §0;P12 明訂抽樣器只服務自動模式):
+`ranked()`=手動/輔助(引擎只排序,選擇權交出去,全程不碰抽樣器)、
+`sample_proposal(seed)`=自動(走與步驟 17 Goal 選擇**同一個**
+`sample_weighted_index`,注入式 ChaCha20Rng,trace 記 algorithm/seed/ordered)。
+兩者共通:列舉與選擇分離、零候選 `Ok(None)`(P70);有候選卻全零權重回 Err。
 validate/blocking/resolve 三個 Strategy **委派不內建**(§0 紅線)。
 出口 `generate/tests/coining.rs`(8 案):端到端造詞 → 四原語 → replay → `.lang`′;
 折磨 **11**(thief 擋 stealer,且換掉策略即通過——證明未內建)、
