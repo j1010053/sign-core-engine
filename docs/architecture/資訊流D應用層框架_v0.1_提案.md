@@ -253,9 +253,16 @@ pub trait DialectGroupingStrategy {
 }
 ```
 
-**MVP = `TreeEdgeCut`**:只在演化樹的 parent–child 邊上按閾值切斷。
-它最貼合 EvolutionGraph 的樹狀本體,且**天然迴避一般圖的非傳遞分群問題**。
-`ConnectedComponents` / `HierarchicalClustering` 之後再加。
+**MVP = `TreeEdgeCut`(已實作 2026-08-04)**:只在演化樹的 parent–child
+**主幹邊**上按閾值切斷;引用邊(donor / 合併)不算世系鄰接。
+
+這**不是取捨,是規格明文**——`演化圖本體論` §6.2:「方言連續體 = **樹上**一組
+互通度高於某閾值的**鄰近點**」。
+
+先前一度以為要用 `ConnectedComponents` 才抓得到語言聯盟。查證後那是假問題:
+**語言聯盟全 repo 未建模**,抓不到的原因不是算法選錯,是證據沒被記錄——
+見 `接觸痕跡與語言聯盟_v0.1.md`。`ConnectedComponents` / `HierarchicalClustering`
+之後再加(strategy 可替換,不需改既有程式碼)。
 
 #### Override 是**分類指派**,不是 merge/split(擁有者 2026-08-04)
 

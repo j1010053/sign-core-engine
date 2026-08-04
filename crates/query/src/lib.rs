@@ -29,9 +29,18 @@
 #![deny(missing_debug_implementations)]
 
 pub mod derivation;
+pub mod grouping;
+pub mod intelligibility;
 pub mod lexicon;
 
 pub use derivation::{derivation_family, DerivationDag, DerivationNode, SenseLink};
+pub use grouping::{
+    dialect_groups, DialectGroupingStrategy, GroupId, Grouping, GroupingOverride, TreeEdgeCut,
+};
+pub use intelligibility::{
+    intelligibility, DimensionWeights, ExploratoryHeuristicV1, IntelligibilityInput,
+    IntelligibilityMeasure, IntelligibilityScore,
+};
 pub use lexicon::{lexicon, Lexicon, LexiconEntry, LexiconFilter, SortKey, ViewConfig};
 
 // 既有能力原樣轉出,使 Query 的門面是一處而非四處。**不重新實作**。

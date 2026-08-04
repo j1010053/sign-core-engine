@@ -61,6 +61,7 @@
 | `architecture/架構2.0總鳥瞰_v1.0.md` | **2.0 單一入口**:Language/ChangeSet 雙軌全圖、四條資訊流、Debug 模塊化、**新實作順序(步驟 8–22,M1–M4)** |
 | `architecture/架構修補05_Primitive與檔案格式_v0.1.md` | P20–P28 詳細來源:DSL 獨立性、IR dump/canonical printer、條件語法、四原語、Ref、檔案格式 |
 | `architecture/架構修補06_插件服務與DSL_API_v0.1.md` | P29–P37 詳細來源:插件 code/data/config、服務生命週期、DSL API；完整插件仍是設計層。**§8 增修 A(2026-08-04)= 裁定 W/E/S 與 R7′/R9-a/R11–R15 的權威掛載點**:std 特權降為可覆寫預設、package 不必是編譯期常數；**§8.5 = P29/P50「無顯式 import」的適用範圍界線**(限 `.lang`／`.chg`) |
+| `architecture/接觸痕跡與語言聯盟_v0.1.md` | **問題陳述,未裁定**(S-a/S-b/S-c)。接觸痕跡**只記在節點層**(`.chg` 的 `donor`、`Edge::reference`),沒記在內容層:`Adopt` 不設 `origin`(而 `validate_origin_graph` 的 `::` 豁免因此無生產者)、`SoundChange` 不帶 donor。**語言聯盟(Sprachbund)全 repo 未建模**;§6.2 已把趨同動力學推到【N】multi-agent。附語言聯盟定義與其與借入/克里奧爾的對照 |
 | `architecture/資訊流D應用層框架_v0.1_提案.md` | **提案,未定案,不得引用為決策**(D-a–D-f 待裁)。應用層(步驟 21–22)參考框架:Query 純投影、Command 三分類(Language/View/ProjectData)、內容定址快取、互通度／分群只定接口。**Undo 按使用者活動分三條**:(A) 專案編輯=編輯一份寫到一半的 `.chg`(不落節點,**不需新格式或 `working/` 槽**)、(B) 演化 commit=app history stack(**非** graph parent 遍歷,children 在現行結構不可查)、views/data=文件編輯歷史。**§9 誌誤**記 v0.1 的四處錯 |
 | `architecture/演化專案結構與套件載入_v0.1.md` | **R 系列裁定的詳細推導**(程式碼註解引用 `裁定 W/E/S`、`R7′`、`R9-a`、`R11`–`R14` 者查此檔)。**權威分兩半**:套件載入組(W/E/S、R7′、R9-a、R11–R15)以《修補06》§8 為準,**已實作**;專案結構組(R1–R6:`project.toml`／`packages.lock.json`／`views/`／`data/`／`packages/`)**僅本檔、尚未實作、未編 P 號**(R10 裁定 2026-08-04),隨 M4 落地 |
 | `architecture/架構修補10_歷時function層與載入_v0.1.md` | P47–P55 詳細來源:function surface/load、接力展開、路徑庫、ServiceContext 接點、components、`.chg` canonical |
