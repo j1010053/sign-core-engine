@@ -69,6 +69,7 @@ pub use system::{
     compile_system, compile_system_ref, compile_with_libraries, compile_with_libraries_ref,
     CandidateSelectionTrace, CandidateSelector, CandidateSet, CaseBranchStatus, CaseRecord,
     CompileSystemError, CompiledSystem, ConstructionCandidate, DerivationContext, PhonRealization,
+    COMPILER_SEMANTICS_VERSION,
     RealizedPhonInput, SignExpressionEvaluation, SignValue, SystemDerivation, SystemError,
 };
 pub use tshiatun_dsl::lower::Stage;

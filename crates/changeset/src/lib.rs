@@ -4123,6 +4123,25 @@ pub fn __lock_content_for_tests(package: &conlang_language::LibraryPackage) -> S
     package_lock_content(package)
 }
 
+/// 一份 `LibrarySpec` 所選套件的**整體**鎖指紋。
+///
+/// 這是 `.chg` prelude 那組 `library <pkg>@<ver> sha256:<digest>` 的摘要形式:
+/// 同一組套件內容 ⇒ 同一個字串。**選了哪些、各是什麼內容,兩者任一改變就改變。**
+///
+/// 提供它是為了讓呼叫端(如 `conlang-app` 的編譯快取)把「載了哪些套件」
+/// 納入鍵,而**不必自己重寫一份鎖計算**——那會讓「鎖怎麼算」有兩個答案。
+pub fn library_lock_digest(spec: &LibrarySpec) -> Result<String, ReplayError> {
+    let locks = package_locks(spec)?;
+    let mut content = String::new();
+    for lock in &locks {
+        content.push_str(&format!(
+            "{}@{} sha256:{}\n",
+            lock.package, lock.version, lock.digest
+        ));
+    }
+    Ok(sha256_hex(content.as_bytes()))
+}
+
 fn package_locks(spec: &LibrarySpec) -> Result<Vec<LibraryLock>, ReplayError> {
     let catalog = conlang_language::library::embedded_catalog()
         .map_err(|error| ReplayError::Library(error.to_string()))?;

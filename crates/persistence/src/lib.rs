@@ -60,6 +60,8 @@ pub enum StoreError {
     /// 節點被 store 裡別的節點引用為 parent,不得移除(同 `EvolutionGraph` 側)。
     #[error("PERSISTENCE_NODE_HAS_DEPENDENTS: {node} is a parent of {dependent}")]
     NodeHasDependents { node: String, dependent: String },
+    #[error("PERSISTENCE_VIEW_NAME_INVALID: {0:?} must be a single path segment")]
+    InvalidViewName(String),
     #[error("PERSISTENCE_PATH_INVALID: annotation path {0:?} is not relative and traversal-free")]
     InvalidAnnotationPath(PathBuf),
     #[error(transparent)]
@@ -78,6 +80,27 @@ pub struct NodeConfig {
     /// values while replaying or reconstructing a snapshot.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub preferences: BTreeMap<String, Value>,
+}
+
+/// 一個視角檔的**資料層**表示(`views/<name>.json`,R4 一套一檔)。
+///
+/// 本型別刻意只有**資料**,沒有任何應用層語意:它不知道 `GroupingOverride`
+/// 是什麼,也不知道 `ViewCommand`。翻譯是 app 的事(裁定 2026-08-04)。
+///
+/// 欄位對應流 D 框架 §4.2 的三段管線:
+/// - `sort` → 呈現設定(不影響入選集合);
+/// - `assignments` → **分類指派**(D-f2:不是 merge/split,故不可能衝突);
+/// - `labels` → 顯示名(不影響群組身分)。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewDocument {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<String>,
+    /// node id → group id。**sparse**:未列者用 strategy 算出的結果。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub assignments: BTreeMap<String, String>,
+    /// group id → 顯示名。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub labels: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -329,6 +352,81 @@ impl GraphStore {
 
     pub fn write_state(&self, id: &NodeId, state: &EvolutionState) -> Result<(), StoreError> {
         atomic_write(&self.node_dir(id).join("state"), &json_bytes(state)?)
+    }
+
+    // ── views/(R4:一套一檔)────────────────────────────────────────────
+    //
+    // **這是資料層 API,不是 UI 的。** 本 crate 刻意**不認得** `ViewCommand`
+    // ——那是應用層的意圖型別;persistence 只擁有「檔案裡放什麼、怎麼讀寫」。
+    // 由 app 負責把意圖翻成對 [`ViewDocument`] 的修改再交回來寫。
+    //
+    // 若反過來讓 persistence 直接吃 command,格式層就會隨 UI 的意圖集合一起長,
+    // 而那正是 §2.2「app 不得自行定義第二套格式」想避免的鏡像錯誤。
+
+    /// 一個視角檔的內容。`views/<name>.json`。
+    ///
+    /// 專案根 == store 根(R1),故它與 `objects/`、`nodes/` 同層。
+    pub fn read_view(&self, name: &str) -> Result<ViewDocument, StoreError> {
+        let path = self.view_path(name)?;
+        if !path.exists() {
+            return Ok(ViewDocument::default());
+        }
+        read_json(&path)
+    }
+
+    pub fn write_view(&self, name: &str, view: &ViewDocument) -> Result<(), StoreError> {
+        let path = self.view_path(name)?;
+        create_dir_all(&self.views_dir())?;
+        atomic_write(&path, &json_bytes(view)?)
+    }
+
+    /// 已存在的視角名,排序後。
+    pub fn list_views(&self) -> Result<Vec<String>, StoreError> {
+        let dir = self.views_dir();
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut names = Vec::new();
+        let entries = fs::read_dir(&dir).map_err(|source| StoreError::Io {
+            path: dir.clone(),
+            source,
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|source| StoreError::Io {
+                path: dir.clone(),
+                source,
+            })?;
+            let file = entry.file_name();
+            let Some(name) = file.to_str().and_then(|n| n.strip_suffix(".json")) else {
+                continue;
+            };
+            names.push(name.to_owned());
+        }
+        names.sort();
+        Ok(names)
+    }
+
+    pub fn remove_view(&self, name: &str) -> Result<(), StoreError> {
+        let path = self.view_path(name)?;
+        if path.exists() {
+            remove_file(&path)?;
+        }
+        Ok(())
+    }
+
+    fn views_dir(&self) -> PathBuf {
+        self.root.join("views")
+    }
+
+    /// 視角名必須是單一路徑段——`../` 之類會逃出專案根。
+    fn view_path(&self, name: &str) -> Result<PathBuf, StoreError> {
+        let candidate = Path::new(name);
+        let mut parts = candidate.components();
+        match (parts.next(), parts.next()) {
+            (Some(Component::Normal(_)), None) if !name.is_empty() => {}
+            _ => return Err(StoreError::InvalidViewName(name.to_owned())),
+        }
+        Ok(self.views_dir().join(format!("{name}.json")))
     }
 
     pub fn read_config(&self, id: &NodeId) -> Result<NodeConfig, StoreError> {

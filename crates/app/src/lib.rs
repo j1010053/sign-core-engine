@@ -43,8 +43,12 @@
 #![deny(missing_debug_implementations)]
 
 pub mod cache;
+pub mod compile;
+pub mod view;
 
 pub use cache::{ContentDigest, DiffKey, LexiconKey, QueryCache};
+pub use compile::{CompileKey, CompileService, CompileServiceError};
+pub use view::apply_view_command;
 
 use conlang_changeset::evolution::{Edge, EvolutionError, EvolutionGraph, Nativization, NodeId};
 use conlang_changeset::{

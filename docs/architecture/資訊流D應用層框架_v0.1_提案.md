@@ -551,6 +551,21 @@ v0.1 把兩者寫成同一列(「抽樣相關」)。錯得不只是分類:
 
 ---
 
+## 7.1 步驟 22 前置四裁定(擁有者 2026-08-04,**已實作**)
+
+| # | 裁定 |
+|---|---|
+| **① NodeMetadataCommand** | per-node 的雜湊外中繼資料自成**第四類** Command。與 `ProjectDataCommand` 的差別是**範圍**(per-node vs 專案級);三個成員對上 P64 的三個雜湊外槽位:`state` / `config` / `annotation/`。同 `ViewCommand`,刻意無 `lower()` |
+| **② views/ 由 persistence 提供資料層 API** | 但 **`conlang-persistence` 不得認得 `ViewCommand`**——它擁有「檔案裡放什麼」(`ViewDocument` + `read_view`/`write_view`/`list_views`),不該隨 UI 的意圖集合一起長。翻譯(意圖 → 資料)住 `conlang-app::view`。這是 §2.2 的**鏡像**:app 不定義格式,格式層也不吃應用層語意 |
+| **③ UI = Tauri** | 桌面優先。`conlang-app` 持 fs,直接可用。純 WASM 瀏覽器版日後再拆(R3 ③ 的注入介面已為此備妥) |
+| **④ CompileService** | `CompiledSystem` 由 `language` **純函數**產生;生命週期與**記憶體**快取由 `conlang-app` 管理。**lazy / memory-only / 可丟棄**(同 P8)。鍵必須涵蓋**全部**編譯輸入:document 內容 + identity manifest + library lock + **compiler semantics version**。`query` 不編譯不快取;`persistence` 在 MVP **不落盤** compiled cache |
+
+④ 的第四項需要一個新常數 `conlang_language::COMPILER_SEMANTICS_VERSION`。
+它是**約定不是機制**——沒有東西強制 bump;唯一旁證是 compile 的 dump golden
+(每 pass 一份),編譯語意一變它們就 churn,審查時看得到。該常數的文件已記明。
+
+---
+
 ## 8. 建議順序(v0.2 調整)
 
 原案把互通度/方言群組排在 Command API 之前。**改為先封應用層主幹**——

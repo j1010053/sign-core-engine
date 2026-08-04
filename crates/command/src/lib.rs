@@ -12,6 +12,7 @@
 //! |---|---|---|---|
 //! | [`LanguageCommand`] | `PrimitiveEdit` → `.chg` → 節點 | ✅ | ✅ |
 //! | [`ViewCommand`] | `views/<name>.json` | ❌ | ❌ |
+//! | [`NodeMetadataCommand`] | `nodes/<id>/` 的 state / config / annotation | ❌ | ❌ |
 //! | [`ProjectDataCommand`] | `data/`、`project.toml` | ❌ | ❌ |
 //!
 //! **② 每個 `LanguageCommand` 都降階為四原語(C1)。**
@@ -52,6 +53,7 @@
 #![deny(missing_debug_implementations)]
 
 use conlang_changeset::rewrite::{expand, AtomicRewrite, DonorScope, RewriteError, ServiceContext};
+use conlang_changeset::state::EvolutionState;
 use conlang_changeset::{PrimitiveEdit, ResolvedChangeSet, ResolvedStatement};
 use conlang_generate::{build, BuildError, Need, Proposal, Strategies};
 use conlang_language::LanguageDocument;
@@ -91,6 +93,35 @@ pub enum ViewCommand {
     AssignGroup { view: String, node: String, group: String },
     /// 群組**顯示名**。純展示,不影響群組身分。
     LabelGroup { view: String, group: String, label: String },
+}
+
+/// 只改**單一節點的雜湊外中繼資料**的意圖。**不產生 `PrimitiveEdit`,不進 replay。**
+///
+/// 這一類與 [`ProjectDataCommand`] 的差別是**範圍**:那個是專案級
+/// (`data/`、`project.toml`),這個是 per-node。三個成員剛好對上 P64 訂的
+/// 三個雜湊外槽位:
+///
+/// | 成員 | 槽位 | 依據 |
+/// |---|---|---|
+/// | [`SetState`](Self::SetState) | `nodes/<id>/state` | 裁定 (A):State 是撰寫時輸入,replay 永不讀它 |
+/// | [`SetLabel`](Self::SetLabel) / [`SetPreference`](Self::SetPreference) | `nodes/<id>/config` | P64:`NodeConfig` 雜湊外 |
+/// | [`WriteAnnotation`](Self::WriteAnnotation) | `nodes/<id>/annotation/` | 07 §5c:旁註層正交於本體,不參與 replay、不被 diff、不約束生成 |
+///
+/// **改這些不會讓任何既有節點的 replay 產物改變**,故也不需要重算任何
+/// replay-derived 視圖——但 State 例外地會使 **authoring-derived** 的候選面板
+/// 失效(流 D 框架 §6.1),因為 `generate::ContactInfluence` 讀它。
+///
+/// 同 [`ViewCommand`],**刻意沒有** `lower()`。
+#[derive(Debug, Clone, PartialEq)]
+pub enum NodeMetadataCommand {
+    /// 該節點的外部環境(年代 / 地理 / 社會 / 語言接觸)。
+    SetState(EvolutionState),
+    /// 人看的標籤。不進 node-v2 雜湊,故改名不改身分。
+    SetLabel(Option<String>),
+    /// host 偏好。**引擎在 replay/reconstruct 時永不讀取**(`NodeConfig` 的契約)。
+    SetPreference { key: String, value: String },
+    /// 旁註:文化說明、隱喻傾向、使用者語料。
+    WriteAnnotation { path: String, content: String },
 }
 
 /// 只改專案級資料的意圖。**不產生 `PrimitiveEdit`,不進 replay。**

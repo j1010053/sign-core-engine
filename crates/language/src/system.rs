@@ -2476,6 +2476,23 @@ pub fn check_document(document: &crate::LanguageDocument, spec: &LibrarySpec) ->
     report
 }
 
+/// **編譯語意版本**——同一份輸入在不同版本下可能編出不同的 `CompiledSystem`。
+///
+/// 用途:呼叫端的記憶體快取必須把它納入鍵,否則引擎升級後會沿用舊的編譯結果
+/// (見 `conlang-app::compile::CompileKey`)。
+///
+/// # 什麼時候要 bump
+///
+/// **compile 的任何可觀測輸出改變時**——五個 pass 的產物、ontology 閉包語意、
+/// projection 內容、診斷碼與嚴重度。純效能改動與註解不算。
+///
+/// # 誠實說明:沒有東西強制你 bump
+///
+/// 這是個約定,不是機制。唯一的旁證是 compile 的 **dump golden**(每 pass 一份)
+/// ——編譯語意一變它們就會 churn,審查時看得到。若某次改動讓那些 golden 動了
+/// 而此處沒動,那就是漏了。
+pub const COMPILER_SEMANTICS_VERSION: &str = "conlang-compile/1";
+
 /// Exact owned entry point requested by P38–P44. Use `compile_system_ref` when
 /// the caller wants to retain its original `Language` without cloning first.
 pub fn compile_system(language: Language) -> Result<CompiledSystem, CompileSystemError> {
