@@ -22,6 +22,7 @@ pub mod merge;
 pub mod reconcile;
 pub mod reconstruct;
 pub mod rewrite;
+pub mod state;
 
 use crate::rewrite::DonorScope;
 use conlang_language::{

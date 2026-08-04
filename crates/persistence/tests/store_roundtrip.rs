@@ -339,3 +339,47 @@ fn a_node_folder_cannot_outlive_its_persisted_parent() {
         ))
     ));
 }
+
+/// 步驟 20:State 往返,且**雜湊外**。
+///
+/// 裁定 (A):State 只在撰寫時被讀,replay 不看它——故它必須與
+/// `manifest`/`edges` 分檔,寫入不改變 node-v2 的 immutable 內容。
+#[test]
+fn state_round_trips_and_stays_outside_the_hash() {
+    use conlang_changeset::state::{Contact, ContactIntensity, EvolutionState};
+
+    let temp = TestDirectory::new("state");
+    let store = GraphStore::init(&temp.0).unwrap();
+    let (graph, root_id, _child) = fixture();
+    store.save(&graph).unwrap();
+
+    // 前提:沒寫過時是空的,不是錯誤
+    assert!(store.read_state(&root_id).unwrap().is_empty());
+    let before = manifest(&temp.0, &root_id);
+
+    let state = EvolutionState {
+        time: Some("約 800".to_owned()),
+        region: Some("河谷".to_owned()),
+        society: vec!["農耕".to_owned()],
+        contacts: vec![Contact {
+            counterpart: "neighbour".to_owned(),
+            period: Some("800–1100".to_owned()),
+            intensity: ContactIntensity::Bilingual,
+        }],
+    };
+    store.write_state(&root_id, &state).unwrap();
+
+    // 往返
+    assert_eq!(store.read_state(&root_id).unwrap(), state);
+
+    // 🔑 雜湊外:寫 State 不得改動 immutable node 內容
+    assert_eq!(
+        manifest(&temp.0, &root_id),
+        before,
+        "State 不進 node-v2 雜湊——它不是語言內容"
+    );
+
+    // 且 save 可重跑(immutable 檔逐位元比對不得因 State 而失敗)
+    store.save(&graph).unwrap();
+    assert_eq!(store.read_state(&root_id).unwrap(), state, "save 不覆寫 State");
+}

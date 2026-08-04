@@ -419,6 +419,19 @@ phonotactics 過濾 = **注入式 `PhonotacticFilter`**(§6.3),`generate` 零引
 Index Diachronica 授權不明、SSWL 覆蓋 2%–100% 極不均)、
 `NaturalLanguage` provider、投影快取。
 
+**已完成(鳥瞰步驟 20)= M3 收工**:`changeset::state::EvolutionState`
+(time / region / society / contacts)。**定位收斂為 (A)**(修補04 增修 A):
+State 是**撰寫時**的環境輸入,**replay 永不讀它**,故雜湊外
+(`nodes/<id>/state`)。規格原句「使相同的 ChangeSet 在不同環境產生不同結果」
+與 P26/三道 digest 衝突,已修訂為「影響**產生什麼** ChangeSet」。
+`nativization` 不在 State——P19 已被 P56/P58/P64 覆寫為 immutable node content
+(早已實作);`contact_history` 則仍屬 State。
+接抽樣權重走**既有 provider 接點**(`generate::ContactInfluence`),不另立一層
+——獨立一層等於宣稱它是抽樣棧常駐成員,會誘使日後在 replay 路徑上讀它。
+出口 = **判別對**:正(記下接觸 → 鄰語音素進候選)+ 負(同一份 `.chg` 在不同
+State 下 replay 產物逐位元相同);另有 persistence 往返 + 雜湊外驗證。
+突變 3/3 全紅。**尚未做**:UI 顯示(M4 步驟 22)。
+
 **v1 路徑已硬移除(2026-07-24)**:v2 為唯一模型。移除 `LanguageSchema` V1/V2 分野
 (FP `case`/`when`/`constraints` 永遠可用,無需標頭;舊 `schema conlang.lang/v2` 行被
 接受並忽略,printer 不再輸出)、identity manifest v1(`IdentityManifestV1`/

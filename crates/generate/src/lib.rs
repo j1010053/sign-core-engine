@@ -40,7 +40,10 @@ use conlang_language::{
     SourceLocation, WeightedSampleError,
 };
 
-pub use conlang_stats::WeightTable;
+use conlang_changeset::state::EvolutionState;
+pub use conlang_changeset::state::{Contact, ContactIntensity};
+pub use conlang_stats::{DistributionProvider, WeightTable};
+use std::collections::BTreeMap;
 
 pub mod strategy;
 
@@ -364,5 +367,57 @@ impl Generator for DistributionGenerator<'_> {
                 })
             })
             .collect()
+    }
+}
+
+// ── State → 抽樣權重(裁定 A:只在撰寫時)────────────────────────────────
+
+/// 由 **State 的語言接觸事實**推導出一份抽樣權重,餵給有效分佈的 provider 層。
+///
+/// 裁定 (A):State 只在**撰寫時**被讀。此型別即那個接點——它產出的權重會
+/// 影響**新造的詞**,但選定結果寫死進 `.chg`,**replay 永不讀 State**。
+///
+/// # 為什麼是 provider 而不是第四層
+///
+/// `DistributionProvider` 是既有接點(統計先驗 §3),接上去零新機制;
+/// 而把 State 做成有效分佈的獨立一層,等於宣稱它是抽樣棧的常駐成員
+/// ——那會誘使日後有人在 replay 路徑上讀它。走 provider 則語意清楚:
+/// **這是撰寫時注入的一份 snapshot**(§3:「導入 = 複製 snapshot 進覆寫層,
+/// 非外部活連結」)。
+///
+/// # 對方語言的分佈由呼叫端給
+///
+/// 引擎不知道「古諾斯語」長什麼樣。`counterpart_distributions` 由呼叫端提供
+/// ——可能來自另一個演化節點(`OtherNode`)、E1 的某個真實語言,或使用者手填。
+#[derive(Debug)]
+pub struct ContactInfluence<'a> {
+    pub state: &'a EvolutionState,
+    /// 對方語言名 → 其音素分佈。名字對應 [`Contact::counterpart`]。
+    pub counterpart_distributions: &'a BTreeMap<String, WeightTable>,
+}
+
+impl DistributionProvider for ContactInfluence<'_> {
+    /// 各接觸語言的分佈 × 強度係數,逐鍵累加。
+    ///
+    /// 係數取 [`ContactIntensity::default_factor`]——那是**預設**,
+    /// 「接觸多密切 ⇒ 借詞音素該加權多少」是語言學判斷不是引擎事實。
+    /// 要換一套,寫自己的 `DistributionProvider` 即可(同 §6.4 不定義評分公式)。
+    ///
+    /// 名字在 `counterpart_distributions` 裡查無的接觸**靜靜略過**——
+    /// 那表示呼叫端還沒提供那個語言的分佈,不是錯誤;State 是環境標註,
+    /// 記了一段接觸不代表一定要拿它來抽樣。
+    fn distribution(&self) -> WeightTable {
+        let mut table = WeightTable::new();
+        for contact in &self.state.contacts {
+            let Some(source) = self.counterpart_distributions.get(&contact.counterpart) else {
+                continue;
+            };
+            let factor = contact.intensity.default_factor();
+            for (segment, weight) in source.iter() {
+                let next = table.get(segment).unwrap_or(0.0) + weight * factor;
+                table.set(segment, next);
+            }
+        }
+        table
     }
 }

@@ -15,6 +15,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_debug_implementations)]
 
+use conlang_changeset::state::EvolutionState;
 use conlang_changeset::evolution::{
     Edge, EvolutionError, EvolutionGraph, Nativization, NodeId, PersistedNode,
 };
@@ -220,6 +221,23 @@ impl GraphStore {
             });
         }
         Ok(EvolutionGraph::restore(libraries, records)?)
+    }
+
+    /// 讀節點的 State(外部環境)。**雜湊外**,不存在時回預設空值。
+    ///
+    /// 裁定 (A):State 只在撰寫時被讀,**replay 不看它**——故它與
+    /// `manifest`/`edges` 分檔、不進 node-v2 雜湊,可自由編輯而不影響
+    /// 任何既有節點的重放產物。
+    pub fn read_state(&self, id: &NodeId) -> Result<EvolutionState, StoreError> {
+        let path = self.node_dir(id).join("state");
+        if !path.exists() {
+            return Ok(EvolutionState::default());
+        }
+        read_json(&path)
+    }
+
+    pub fn write_state(&self, id: &NodeId, state: &EvolutionState) -> Result<(), StoreError> {
+        atomic_write(&self.node_dir(id).join("state"), &json_bytes(state)?)
     }
 
     pub fn read_config(&self, id: &NodeId) -> Result<NodeConfig, StoreError> {
