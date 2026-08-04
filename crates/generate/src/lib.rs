@@ -40,6 +40,8 @@ use conlang_language::{
     SourceLocation, WeightedSampleError,
 };
 
+pub use conlang_stats::WeightTable;
+
 pub mod strategy;
 
 pub use strategy::{
@@ -268,5 +270,99 @@ fn materialize(need: &Need, chosen: &Proposal) -> SignDef {
         id: conlang_language::SignId::synthetic(),
         name: need.name.clone(),
         items,
+    }
+}
+
+// ── phonotactics 過濾:**注入式**(統計先驗 §6.3)────────────────────────
+
+/// 硬約束把關者。**由呼叫端注入**,`generate` 不依賴音變引擎。
+///
+/// 統計先驗 §4 的分工:**E 只管加權抽樣;硬約束(音位配列)由既有 phonotactics
+/// 驗證器過濾抽樣結果**。兩職責分立——E 不碰約束、驗證器不碰頻率。
+///
+/// 之所以是 trait 而非直接依賴:驗證器住 tshiatun submodule,而本 crate
+/// **不依賴引擎**。注入式另有兩個好處——「不同語言不同 phonotactics」天然成立
+/// (換一個實作即可),測試可塞兩行假實作而不必備妥完整 `Artifacts`。
+///
+/// 與 crate 內既有形狀一致([`Strategies`]、`DistributionProvider`、DSL 的 D28),
+/// 不是新機制。
+pub trait PhonotacticFilter: std::fmt::Debug {
+    /// 這個候選形式在本語言合不合法。
+    fn admits(&self, phon: &str) -> bool;
+}
+
+/// 全部放行。用於「還沒宣告 phonotactics」的語言。
+#[derive(Debug)]
+pub struct AdmitAll;
+
+impl PhonotacticFilter for AdmitAll {
+    fn admits(&self, _phon: &str) -> bool {
+        true
+    }
+}
+
+/// 列舉後**事後過濾**(§4:E 抽樣在前,硬約束在後)。
+///
+/// 刻意不在 `Generator` 內部過濾:提議與把關是兩個職責,混在一起就無法
+/// 回答「提了幾個、被擋掉幾個」——那是自動模式要能審計的數字。
+pub fn admissible(proposals: Vec<Proposal>, filter: &dyn PhonotacticFilter) -> Vec<Proposal> {
+    proposals
+        .into_iter()
+        .filter(|proposal| filter.admits(&proposal.phon))
+        .collect()
+}
+
+// ── 依有效分佈造形式的 Generator(流 C 圖上的「Generator + E 抽樣」)──────
+
+/// 依**有效分佈**抽音素、依模板組形式的提議者。
+///
+/// 流 C 的圖上那格寫的是「Generator(唯讀 Language **+ E 抽樣**)」
+/// ——抽樣在提議側,不是事後對候選加權。本型別即該接點的最小實作。
+///
+/// 決定性(P26):同 `seed`、同分佈、同模板 ⇒ 逐位元同結果。每個候選以
+/// `seed + 候選序號` 派生子種子,故候選之間互不相同而整體可重現。
+#[derive(Debug)]
+pub struct DistributionGenerator<'a> {
+    /// 疊完的三層有效分佈(手動 > provider > E1)。
+    pub distribution: &'a WeightTable,
+    /// 音節模板:`C` = 取一個分佈中的音素,其餘字元原樣輸出。
+    pub template: &'a str,
+    /// 要提幾個候選。
+    pub count: usize,
+    pub seed: u64,
+}
+
+impl Generator for DistributionGenerator<'_> {
+    fn propose(&self, _need: &Need, _system: &CompiledSystem) -> Vec<Proposal> {
+        let (segments, weights) = self.distribution.to_sampler_input();
+        if segments.is_empty() {
+            return Vec::new();
+        }
+        (0..self.count)
+            .filter_map(|index| {
+                let mut form = String::new();
+                for (position, slot) in self.template.chars().enumerate() {
+                    if slot != 'C' {
+                        form.push(slot);
+                        continue;
+                    }
+                    // 每個位置派生一個子種子:同 seed 可重現,位置間不相關。
+                    let derived = self
+                        .seed
+                        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                        .wrapping_add((index as u64) << 32)
+                        .wrapping_add(position as u64);
+                    let sample = sample_weighted_index(&weights, derived).ok()?;
+                    form.push_str(segments[sample.selected_index]);
+                }
+                Some(Proposal {
+                    // 評分:引擎不定義怎麼算(統計先驗 §6.4)。此實作給等權
+                    // ——它已依分佈抽樣,候選之間無進一步高下可言。
+                    score: 1.0,
+                    rationale: format!("模板 {} 依有效分佈抽樣", self.template),
+                    phon: format!("/{form}/"),
+                })
+            })
+            .collect()
     }
 }

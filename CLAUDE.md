@@ -398,6 +398,25 @@ validate/blocking/resolve 三個 Strategy **委派不內建**(§0 紅線)。
 突變 4/4 首輪全紅。**尚未做**:逆構詞 Generator(折磨 4)、真正的 donor 借入
 (沿用既有 `Adopt`,需 `DonorScope`)、E1 抽樣接線(步驟 19)。
 
+**已完成(鳥瞰步驟 19)**:`crates/stats`(模組 E)+ 流 C 接點。權威=
+`統計先驗與抽樣引擎_v0.1` §1–§4 + **§6 增修 A**(擁有者 2026-08-04)。
+**有效分佈是三層**(手動 > 導入 provider > E1),§2 原訂的第三層「統計投影」
+**已移出抽樣棧**——投影照做但接 Query 當**唯讀報表**(`project_phoneme_freq`),
+抽樣器不看。代價:分佈不隨演化自動更新,出口「造詞像這個語言」弱化為
+「像**使用者宣告的分佈**」;可逆(日後在 provider 與 E1 間插回即可)。
+鍵 = **IPA 字串**(不用 SymId,免得把 E 綁進引擎)。E1 自 package
+`data/*/segments.tsv` 載入(裁定 W:先驗是 data;R9-a 後可外部注入)。
+`EffectiveDistribution` 逐項覆寫 + `provenance()` 可審計每項來自哪層。
+phonotactics 過濾 = **注入式 `PhonotacticFilter`**(§6.3),`generate` 零引擎依賴,
+且**事後過濾**不藏進 Generator——「提了幾個、擋掉幾個」是自動模式要審計的數字。
+`DistributionGenerator` 即流 C 圖上「Generator + E 抽樣」的最小實作,
+複用既有 `sample_weighted_index`。評分合成公式依 §6.4 **永久擱置**。
+出口:`stats/tests/effective_distribution.rs`(9 案)、
+`generate/tests/distribution_driven.rs`(6 案);突變 5/5 首輪全紅。
+**尚未做**:E1 實際資料(PHOIBLE/Grambank 子集需離線匯入,§1 標明
+Index Diachronica 授權不明、SSWL 覆蓋不均)、`NaturalLanguage` provider、
+投影快取、多字元 IPA 音段切分。
+
 **v1 路徑已硬移除(2026-07-24)**:v2 為唯一模型。移除 `LanguageSchema` V1/V2 分野
 (FP `case`/`when`/`constraints` 永遠可用,無需標頭;舊 `schema conlang.lang/v2` 行被
 接受並忽略,printer 不再輸出)、identity manifest v1(`IdentityManifestV1`/

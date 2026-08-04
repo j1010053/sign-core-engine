@@ -62,6 +62,7 @@ version = "0.1.0"
 dependencies = [
  "conlang-changeset",
  "conlang-language",
+ "conlang-stats",
  "thiserror",
 ]
 
@@ -87,6 +88,14 @@ dependencies = [
  "conlang-language",
  "serde",
  "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "conlang-stats"
+version = "0.1.0"
+dependencies = [
+ "conlang-language",
  "thiserror",
 ]
 
