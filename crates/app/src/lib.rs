@@ -45,12 +45,14 @@
 pub mod cache;
 pub mod compile;
 pub mod view;
+pub mod ipc;
 pub mod wire;
 pub mod workspace;
 
 pub use cache::{ContentDigest, DiffKey, LexiconKey, QueryCache};
 pub use compile::{CompileKey, CompileService, CompileServiceError};
 pub use view::apply_view_command;
+pub use ipc::{LexiconQuery, UiError, UiSession};
 pub use wire::{
     EvolutionTreeV1, GroupingViewV1, LexiconViewV1, NodeDetailV1, TreeEdgeV1, TreeNodeV1,
     UI_SCHEMA_V1,
@@ -158,6 +160,12 @@ impl Session {
 
     pub fn graph(&self) -> &EvolutionGraph {
         &self.graph
+    }
+
+    /// 可變的圖。**只給雜湊外的改動用**(目前唯一消費者是改標籤)——
+    /// 語言內容一律走 `LanguageCommand` → 四原語 → `commit`(C1)。
+    pub fn graph_mut(&mut self) -> &mut EvolutionGraph {
+        &mut self.graph
     }
 
     pub fn active(&self) -> Option<&NodeId> {
