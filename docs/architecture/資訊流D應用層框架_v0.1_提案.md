@@ -566,6 +566,25 @@ v0.1 把兩者寫成同一列(「抽樣相關」)。錯得不只是分類:
 
 ---
 
+## 7.2 步驟 22 的三個 UI 裁定(擁有者 2026-08-06,**Rust 側已實作**)
+
+| # | 裁定 |
+|---|---|
+| **② 出境契約 = 丙案** | query 型別加 `Serialize`,但**出境視圖帶 schema 標記**(`UI_SCHEMA_V1`)。理由:repo 已有 `SemanticDocumentV1` 的先例;版本欄位讓「形狀變了」在**資料上看得見**,那正是「直接出境」缺的一半。四個視圖:`EvolutionTreeV1` / `LexiconViewV1` / `NodeDetailV1` / `GroupingViewV1`,全部 `deny_unknown_fields` |
+| **③ 單一 session** | Tauri 的 `State<Mutex<Workspace>>`。`Workspace` 持 `Session` + `CompileService` + `QueryCache` |
+| **MVP 面板** | **演化樹 + 辭典**;演化樹的節點可點進**節點編輯頁**(`NodeDetailV1`:label / State / annotation ——**全部雜湊外**,改它們不動任何 replay 產物) |
+
+兩個實作時的判斷:
+
+- **樹只給 `parents`,不給 `children`**。`EvolutionGraph` 本身就沒有 children
+  索引(節點 id 由 parents 的 id 算出),出境形狀不該宣稱一個資料層沒有的關係;
+  前端反轉一次即可。邊帶 `kind`(`trunk`/`reference`)——引用邊不是世系鄰接,
+  該畫得不一樣。
+- **`UI_SCHEMA_V1` 是約定不是機制**,同 `COMPILER_SEMANTICS_VERSION`。旁證是
+  出境形狀的 golden 測試:形狀一變 JSON 的鍵就 churn,審查時看得見。
+
+---
+
 ## 8. 建議順序(v0.2 調整)
 
 原案把互通度/方言群組排在 Command API 之前。**改為先封應用層主幹**——

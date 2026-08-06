@@ -7,3 +7,4 @@ edition = "2021"
 conlang-language = { path = "../language" }
 conlang-changeset = { path = "../changeset" }
 conlang-stats = { path = "../stats" }
+serde = { version = "1", features = ["derive"] }

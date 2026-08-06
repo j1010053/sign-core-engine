@@ -57,6 +57,8 @@ dependencies = [
  "conlang-language",
  "conlang-persistence",
  "conlang-query",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 
@@ -138,6 +140,7 @@ dependencies = [
  "conlang-changeset",
  "conlang-language",
  "conlang-stats",
+ "serde",
 ]
 
 [[package]]

@@ -14,12 +14,13 @@
 //! 故本模組明確分兩層:[`DerivationNode`] 是跨 sign 的世系節點,
 //! 其 `senses` 才掛該 sign 內部的義項邊。
 
+use serde::{Deserialize, Serialize};
 use conlang_language::sem::SemNode;
 use conlang_language::{CompiledSystem, DerivationKind, SenseTransparency, SignDef};
 use std::collections::BTreeSet;
 
 /// 一條**義項內部**的衍生邊(同一個 sign 之內)。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SenseLink {
     pub to: String,
     pub from: String,
@@ -29,7 +30,7 @@ pub struct SenseLink {
 }
 
 /// 世系上的一個 sign。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DerivationNode {
     pub name: String,
     /// 這個 sign 衍生自誰(`origin`)。root 為 `None`。
@@ -41,7 +42,7 @@ pub struct DerivationNode {
 }
 
 /// 一個 sign 的衍生家族。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DerivationDag {
     /// 查詢的起點。
     pub root: String,

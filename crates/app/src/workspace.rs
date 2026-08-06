@@ -97,3 +97,105 @@ impl Workspace {
         self.lexicons.clear();
     }
 }
+
+// ── 出境視圖(裁定 ② 丙:帶 schema 標記)────────────────────────────────
+
+use crate::wire::{
+    EvolutionTreeV1, GroupingViewV1, LexiconViewV1, NodeDetailV1, TreeEdgeV1, TreeNodeV1,
+    UI_SCHEMA_V1,
+};
+
+impl Workspace {
+    /// 演化樹。依 id 排序,故決定性。
+    pub fn tree(&self) -> EvolutionTreeV1 {
+        let graph = self.session.graph();
+        let nodes = graph
+            .ids()
+            .map(|id| {
+                let node = graph.node(id).expect("ids() 只給存在的節點");
+                TreeNodeV1 {
+                    id: id.as_str().to_owned(),
+                    label: node.label().map(str::to_owned),
+                    parents: node
+                        .parents()
+                        .iter()
+                        .enumerate()
+                        .map(|(index, edge)| TreeEdgeV1 {
+                            from: edge.from.as_str().to_owned(),
+                            // parents[0] 是主幹(帶 changeset);其餘是引用邊
+                            kind: if index == 0 { "trunk" } else { "reference" }.to_owned(),
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
+        EvolutionTreeV1 {
+            schema: UI_SCHEMA_V1.to_owned(),
+            nodes,
+            active: self.session.active().map(|id| id.as_str().to_owned()),
+        }
+    }
+
+    /// 目前節點的詞典視圖。
+    pub fn lexicon_view(
+        &mut self,
+        filter: &conlang_query::LexiconFilter,
+        view: &conlang_query::ViewConfig,
+    ) -> Result<LexiconViewV1, AppError> {
+        let node = self
+            .session
+            .active()
+            .ok_or(AppError::NoActiveNode)?
+            .as_str()
+            .to_owned();
+        Ok(LexiconViewV1 {
+            schema: UI_SCHEMA_V1.to_owned(),
+            node,
+            lexicon: self.lexicon(filter, view)?,
+        })
+    }
+
+    /// 節點編輯頁:**全部雜湊外**,改它們不動任何 replay 產物。
+    ///
+    /// 需要 store 是因為 state 與 annotation 住在檔案系統那側(P64),
+    /// 不在圖裡。
+    pub fn node_detail(&self, store: &GraphStore) -> Result<NodeDetailV1, AppError> {
+        let id = self.session.active().ok_or(AppError::NoActiveNode)?;
+        let node = self
+            .session
+            .graph()
+            .node(id)
+            .ok_or_else(|| conlang_changeset::evolution::EvolutionError::UnknownNode(id.clone()))?;
+        Ok(NodeDetailV1 {
+            schema: UI_SCHEMA_V1.to_owned(),
+            id: id.as_str().to_owned(),
+            label: node.label().map(str::to_owned),
+            state: store.read_state(id)?,
+            annotations: store
+                .list_annotations(id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|path| path.display().to_string())
+                .collect(),
+            sign_count: node.snapshot().language().signs.len(),
+        })
+    }
+
+    /// 方言分群視圖。
+    pub fn grouping_view(
+        &self,
+        strategy: &dyn conlang_query::DialectGroupingStrategy,
+        measure: &dyn conlang_query::IntelligibilityMeasure,
+        override_: &conlang_query::GroupingOverride,
+    ) -> GroupingViewV1 {
+        GroupingViewV1 {
+            schema: UI_SCHEMA_V1.to_owned(),
+            grouping: conlang_query::dialect_groups(
+                self.session.graph(),
+                strategy,
+                measure,
+                override_,
+            ),
+        }
+    }
+}

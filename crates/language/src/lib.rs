@@ -74,11 +74,16 @@ pub use system::{
 };
 pub use tshiatun_dsl::lower::Stage;
 
+use serde::{Deserialize, Serialize};
+
 // ── 共時四維(修補07 P38 v0.2;單一分類樹、四個內容面向)──
 
 /// 四個內容彼此獨立的共時維度。分類只有一棵維度中立的 ontology；
 /// 正交性由 projection、validation、patch、diff 與 rule write-set 保證。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// 出境時序列化為小寫關鍵詞(`"phon"`…),與 [`Dim::keyword`] 一致
+/// ——UI 看到的字面與 `.lang` 的維度區塊同名。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Dim {
     Phon,
     Syn,
@@ -339,7 +344,8 @@ pub struct Sense {
 /// 的差異不影響任何行為。語意效果待《測試案例集總索引》實例 7「語用隱喻固化」
 /// (現況 ⚪ 未開始)落地,屆時 kind 與 [`SenseTransparency`] 一併成為
 /// 語意漂移引擎(B)的輸入。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum DerivationKind {
     Metaphor,
     Metonymy,
@@ -382,7 +388,8 @@ impl DerivationKind {
 /// 註:15a 造出了表面語法(`sem: edges:` 的 `opaque` 尾綴)卻尚無消費者,
 /// 這一點繞過了《共時lang語法與資料貼合度》「不先造無消費者語法」的原則;
 /// 保留現狀是為了讓實例 7 落地時四案有共同著力點。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum SenseTransparency {
     #[default]
     Transparent,

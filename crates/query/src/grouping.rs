@@ -28,6 +28,7 @@
 //! 3. 套用 labels(純顯示,不影響身分)
 //! ```
 
+use serde::{Deserialize, Serialize};
 use crate::intelligibility::{intelligibility, IntelligibilityMeasure};
 use conlang_changeset::evolution::{EvolutionGraph, NodeId};
 use std::collections::BTreeMap;
@@ -39,7 +40,7 @@ pub type GroupId = String;
 ///
 /// 語言/方言界線本質是社會政治判斷(馬其頓語 vs 保加利亞語),不是語言距離
 /// 能回答的。故資料層只存連續的差異向量,這裡是詮釋。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GroupingOverride {
     /// node → group。**sparse**:未列者一律用 strategy 算出的結果。
     ///
@@ -51,7 +52,7 @@ pub struct GroupingOverride {
 }
 
 /// 分群結果。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Grouping {
     /// node → group,全部節點都在。
     pub members: BTreeMap<String, GroupId>,

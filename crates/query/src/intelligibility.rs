@@ -25,6 +25,7 @@
 //! **不叫 `Default`**——名字要說出它是什麼:一組可探索用的權宜係數,
 //! 不是引擎對「互通度」的主張。係數是**建構參數**,不是藏起來的常數。
 
+use serde::{Deserialize, Serialize};
 use conlang_changeset::diff::{diff_vector, DiffVector};
 use conlang_language::{Dim, LanguageDocument};
 
@@ -39,7 +40,7 @@ pub struct IntelligibilityInput<'a> {
 }
 
 /// 一個互通度分數。**永遠帶著它是誰算的。**
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IntelligibilityScore {
     /// 0.0(完全不通)–1.0(完全相通)。
     pub value: f64,
@@ -72,7 +73,7 @@ pub fn intelligibility(
 /// `演化圖本體論` §6.1 提過「詞彙差異最傷互通,規則性音變其次」,
 /// [`ExploratoryHeuristicV1::suggested`] 依此給一組**建議值**;但那是引用,
 /// 不是引擎的主張,換掉不需要改任何程式碼。
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct DimensionWeights {
     pub phon: f64,
     pub syn: f64,

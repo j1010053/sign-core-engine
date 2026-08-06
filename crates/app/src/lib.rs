@@ -45,11 +45,16 @@
 pub mod cache;
 pub mod compile;
 pub mod view;
+pub mod wire;
 pub mod workspace;
 
 pub use cache::{ContentDigest, DiffKey, LexiconKey, QueryCache};
 pub use compile::{CompileKey, CompileService, CompileServiceError};
 pub use view::apply_view_command;
+pub use wire::{
+    EvolutionTreeV1, GroupingViewV1, LexiconViewV1, NodeDetailV1, TreeEdgeV1, TreeNodeV1,
+    UI_SCHEMA_V1,
+};
 pub use workspace::Workspace;
 
 use conlang_changeset::evolution::{Edge, EvolutionError, EvolutionGraph, Nativization, NodeId};

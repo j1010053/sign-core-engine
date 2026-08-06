@@ -22,11 +22,12 @@
 //! 的同一條線在讀取側的體現:換一個視角不該讓詞典少掉幾個詞,否則使用者會以為
 //! 詞不見了。故 [`LexiconFilter`] 決定「有哪些」、[`ViewConfig`] 只決定「怎麼排」。
 
+use serde::{Deserialize, Serialize};
 use conlang_language::sem::SemNode;
 use conlang_language::{CompiledSystem, Dim, SignDef};
 
 /// 「有哪些詞」——只有這裡能改變入選集合。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LexiconFilter {
     /// 範疇約束。**走 belongs 閉包**,不是字串相等。
     pub category: Option<String>,
@@ -58,7 +59,7 @@ impl LexiconFilter {
 }
 
 /// 排序鍵。**只影響順序,不影響入選集合。**
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum SortKey {
     /// sign 名(= `.lang` 的宣告名)。
     #[default]
@@ -70,13 +71,13 @@ pub enum SortKey {
 }
 
 /// 「怎麼呈現」——不得改變入選集合(見模組文件 ③)。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ViewConfig {
     pub sort: SortKey,
 }
 
 /// 一個詞條。四維摘要都是**投影**,不是另存的副本(P39)。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LexiconEntry {
     pub name: String,
     /// belongs 閉包(維度中立,P38 v0.2)。
@@ -91,7 +92,7 @@ pub struct LexiconEntry {
     pub dimensions: Vec<(Dim, Vec<(String, String)>)>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Lexicon {
     pub entries: Vec<LexiconEntry>,
     /// 過濾前的 sign 總數——「篩掉了幾個」是使用者要看得見的數字,
