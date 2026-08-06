@@ -45,10 +45,12 @@
 pub mod cache;
 pub mod compile;
 pub mod view;
+pub mod workspace;
 
 pub use cache::{ContentDigest, DiffKey, LexiconKey, QueryCache};
 pub use compile::{CompileKey, CompileService, CompileServiceError};
 pub use view::apply_view_command;
+pub use workspace::Workspace;
 
 use conlang_changeset::evolution::{Edge, EvolutionError, EvolutionGraph, Nativization, NodeId};
 use conlang_changeset::{
@@ -67,6 +69,11 @@ pub enum AppError {
     Evolution(#[from] EvolutionError),
     #[error(transparent)]
     Replay(#[from] ReplayError),
+    #[error(transparent)]
+    Compile(#[from] crate::compile::CompileServiceError),
+    /// `project.toml` 宣告的套件解析不開。
+    #[error("APP_LIBRARY: {0}")]
+    Library(conlang_language::LibraryLoadError),
     #[error("APP_IO: {path}: {source}")]
     Io {
         path: String,
@@ -118,6 +125,12 @@ impl Session {
             Some(declared) => declared.to_spec()?,
             None => fallback,
         };
+        // **宣告必須當場解析得開。** 只有一個 root 的專案沒有任何 changeset 要
+        // replay,`load` 因此完全不碰套件組合——打錯一個套件名會一路安靜到使用者
+        // 去查詢時才炸在一個看不懂的地方。錯誤要報在使用者能處理的位置。
+        conlang_language::library::embedded_catalog()
+            .and_then(|catalog| catalog.select(&libraries))
+            .map_err(AppError::Library)?;
         let graph = store.load(libraries.clone())?;
         let first_root = graph.roots().next().cloned();
         let mut session = Session::new(graph, libraries);

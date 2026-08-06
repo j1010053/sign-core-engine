@@ -1,0 +1,314 @@
+//! **步驟 22 的測試出口**(§0.2:不存在沒有測試綠燈的階段)。
+//!
+//! UI 沒有天然的綠燈,故出口定在這裡:整條路端到端跑得通且**輸出決定性**。
+//! UI 之後呼叫的是同一組 `conlang-command`,這組測試因此也守著它。
+//!
+//! 覆蓋:專案開啟 → 編譯 → 查詢 → 命令 → 提交 → 落盤 → 重開仍在。
+
+use conlang_changeset::evolution::EvolutionGraph;
+use conlang_cli::{run, CliError};
+use conlang_language::{LanguageDocument, LibraryId, LibraryKind, LibrarySpec};
+use conlang_persistence::{GraphStore, ProjectDocument};
+use std::fs;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+const SOURCE: &str = "Symbol k\nSymbol a\nSymbol t\nSymbol u\n\nClass vowel {a, u}\n\n\
+global trait Core:\n\n\
+sign dog:\n    belongs Noun\n    phon:\n        /tuk/\n    sem:\n        senses:\n            core = DOG\n\
+sign run:\n    belongs Verb\n    phon:\n        /kat/\n    sem:\n        senses:\n            core = RUN\n";
+
+static NEXT: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug)]
+struct Project(PathBuf);
+
+impl Project {
+    /// 造一個真的專案目錄:store + 一個 root + `project.toml`。
+    fn new(name: &str) -> Project {
+        let ordinal = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "conlang-cli-{name}-{}-{ordinal}",
+            std::process::id()
+        ));
+        if path.exists() {
+            fs::remove_dir_all(&path).unwrap();
+        }
+        let store = GraphStore::init(&path).expect("init");
+        let libraries = LibrarySpec::default();
+        let mut graph = EvolutionGraph::new(libraries.clone());
+        graph
+            .add_root(LanguageDocument::import_new_root(SOURCE, "cli:root").expect("root"))
+            .expect("add_root");
+        store.save(&graph).expect("save");
+        let mut project = ProjectDocument::from_spec(&libraries);
+        project.name = Some(name.to_owned());
+        store.write_project(&project).expect("project");
+        Project(path)
+    }
+
+    fn arg(&self) -> String {
+        self.0.display().to_string()
+    }
+}
+
+impl Drop for Project {
+    fn drop(&mut self) {
+        if self.0.exists() {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+}
+
+fn cli(args: &[&str]) -> Result<String, CliError> {
+    let owned: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
+    let mut out = String::new();
+    run(&owned, &mut out)?;
+    Ok(out)
+}
+
+// ── 開啟 ─────────────────────────────────────────────────────────────────
+
+/// 🔑 **`open` 讀得到 `project.toml`,而不是猜預設。**
+#[test]
+fn open_reports_the_declared_project() {
+    let project = Project::new("tshiatun");
+    let out = cli(&["open", &project.arg()]).expect("open");
+    assert!(out.contains("project: tshiatun"), "{out}");
+    assert!(out.contains("declaration: project.toml"), "{out}");
+    assert!(out.contains("nodes: 1"), "{out}");
+    assert!(out.contains("active: "), "{out}");
+}
+
+/// 沒有宣告檔的舊 store 照樣開得起來,且**說得出來**它在用預設。
+#[test]
+fn open_says_so_when_there_is_no_declaration() {
+    let project = Project::new("legacy");
+    fs::remove_file(project.0.join("project.toml")).expect("remove");
+    let out = cli(&["open", &project.arg()]).expect("open");
+    assert!(out.contains("使用預設套件組合"), "{out}");
+}
+
+// ── 查詢 ─────────────────────────────────────────────────────────────────
+
+/// 🔑 **端到端:專案 → 編譯 → 詞典。**
+#[test]
+fn lexicon_lists_the_words_with_forms_and_glosses() {
+    let project = Project::new("lex");
+    let out = cli(&["lexicon", &project.arg()]).expect("lexicon");
+    assert!(out.contains("2 / 2 entries"), "{out}");
+    assert!(out.contains("dog"), "{out}");
+    assert!(out.contains("kat"), "底層形:{out}");
+    assert!(out.contains("DOG"), "gloss:{out}");
+    assert!(out.contains("run"), "{out}");
+}
+
+/// 過濾走 ontology 閉包——`Nominal` 選得到 `belongs Noun`。
+#[test]
+fn lexicon_filters_by_category_through_the_ontology() {
+    let project = Project::new("filter");
+    let out = cli(&["lexicon", &project.arg(), "--category", "Nominal"]).expect("lexicon");
+    assert!(out.contains("1 / 2 entries"), "分母是過濾前:{out}");
+    assert!(out.contains("dog"), "{out}");
+    assert!(!out.contains("run"), "動詞不該入選:{out}");
+}
+
+/// 依輸出順序取出詞條名。
+fn order(out: &str) -> Vec<String> {
+    out.lines()
+        .filter(|line| line.starts_with("  "))
+        .filter_map(|line| line.split_whitespace().next().map(str::to_owned))
+        .collect()
+}
+
+/// 🔑 **`--sort` 真的改變順序,而入選集合不變。**
+///
+/// fixture 刻意讓三種排序給出**不同**答案:`dog` 的底層形是 `/tuk/`、
+/// `run` 是 `/kat/`,故名字序(dog, run)與底層形序(run, dog)相反。
+///
+/// 判別性:先前的 fixture 讓三種排序碰巧同序,於是「忽略 `--sort`」這個突變
+/// **活了下來**——測試寫了,但任何斷言都分不開。
+#[test]
+fn lexicon_sorting_actually_reorders_without_changing_the_set() {
+    let project = Project::new("sort");
+    let by_name = cli(&["lexicon", &project.arg(), "--sort", "name"]).expect("name");
+    let by_form = cli(&["lexicon", &project.arg(), "--sort", "form"]).expect("form");
+    let by_gloss = cli(&["lexicon", &project.arg(), "--sort", "gloss"]).expect("gloss");
+
+    assert_eq!(order(&by_name), vec!["dog", "run"], "名字序");
+    assert_eq!(order(&by_form), vec!["run", "dog"], "底層形序 kat < tuk");
+    assert_eq!(order(&by_gloss), vec!["dog", "run"], "gloss 序 DOG < RUN");
+
+    // 入選集合不變——只是順序不同
+    let mut sorted = order(&by_form);
+    sorted.sort();
+    assert_eq!(sorted, order(&by_name));
+    for out in [&by_name, &by_form, &by_gloss] {
+        assert!(out.contains("2 / 2 entries"), "{out}");
+    }
+}
+
+/// 決定性:同一個命令跑兩次逐字元相同。
+#[test]
+fn the_same_command_produces_byte_identical_output() {
+    let project = Project::new("determinism");
+    assert_eq!(
+        cli(&["lexicon", &project.arg()]).expect("a"),
+        cli(&["lexicon", &project.arg()]).expect("b")
+    );
+}
+
+// ── State(步驟 20 欠的「UI 顯示」,先在 CLI 還)──────────────────────────
+
+/// 🔑 **讀得到、寫得進、再讀回來還在。**
+#[test]
+fn state_can_be_shown_and_edited() {
+    let project = Project::new("state");
+
+    let empty = cli(&["state", &project.arg()]).expect("state");
+    assert!(empty.contains("time: -"), "{empty}");
+    assert!(empty.contains("contacts: 0"), "{empty}");
+
+    let written = cli(&[
+        "state",
+        &project.arg(),
+        "--set-time",
+        "約 800–1100",
+        "--set-region",
+        "河谷北岸",
+    ])
+    .expect("write");
+    assert!(written.contains("time: 約 800–1100"), "{written}");
+    assert!(written.contains("region: 河谷北岸"), "{written}");
+
+    // 落盤了——重讀仍在
+    let reread = cli(&["state", &project.arg()]).expect("reread");
+    assert!(reread.contains("河谷北岸"), "{reread}");
+}
+
+// ── 命令 + 提交 + 落盤 ───────────────────────────────────────────────────
+
+/// 🔑 **`evolve` 走完整條路:降階四原語 → statement → 提交 → 落盤。**
+///
+/// 判別性:重開專案時新節點必須還在(證明真的寫進去了,不是只在記憶體)。
+#[test]
+fn evolve_commits_a_node_that_survives_reopening() {
+    let project = Project::new("evolve");
+    assert!(cli(&["open", &project.arg()]).expect("before").contains("nodes: 1"));
+
+    let out = cli(&["evolve", &project.arg(), "--rule", "t => k"]).expect("evolve");
+    assert!(out.contains("committed: "), "{out}");
+    assert!(out.contains("nodes: 2"), "{out}");
+
+    // **重開**——這是「有沒有真的落盤」的唯一證明
+    let after = cli(&["open", &project.arg()]).expect("after");
+    assert!(after.contains("nodes: 2"), "重開後應仍是兩個節點:{after}");
+}
+
+/// 連續兩次演化各自成節點。
+#[test]
+fn two_evolutions_produce_two_nodes() {
+    let project = Project::new("twice");
+    cli(&["evolve", &project.arg(), "--rule", "t => k"]).expect("first");
+    cli(&["evolve", &project.arg(), "--rule", "a => u"]).expect("second");
+    assert!(cli(&["open", &project.arg()]).expect("open").contains("nodes: 3"));
+}
+
+// ── 分群 ─────────────────────────────────────────────────────────────────
+
+/// 🔑 **分群結果帶得出是哪套互通度算的。**
+#[test]
+fn groups_reports_the_measure_and_threshold() {
+    let project = Project::new("groups");
+    cli(&["evolve", &project.arg(), "--rule", "t => k"]).expect("evolve");
+
+    let out = cli(&["groups", &project.arg()]).expect("groups");
+    assert!(out.contains("measure: exploratory_heuristic_v1"), "{out}");
+    assert!(out.contains("threshold: 0.6"), "{out}");
+    // 只改一條規則 ⇒ 高度相通 ⇒ 同一群
+    assert_eq!(out.lines().filter(|l| l.starts_with("  ")).count(), 1, "{out}");
+}
+
+/// 閾值調到 1 以上 ⇒ 每個節點自成一群。
+#[test]
+fn a_high_threshold_splits_every_node_into_its_own_group() {
+    let project = Project::new("threshold");
+    cli(&["evolve", &project.arg(), "--rule", "t => k"]).expect("evolve");
+    let out = cli(&["groups", &project.arg(), "--threshold", "1.1"]).expect("groups");
+    assert_eq!(out.lines().filter(|l| l.starts_with("  ")).count(), 2, "{out}");
+}
+
+// ── 錯誤路徑 ─────────────────────────────────────────────────────────────
+
+/// 用法錯誤說得出哪裡錯,並附上用法。
+#[test]
+fn usage_errors_explain_themselves() {
+    for (args, needle) in [
+        (vec![], "缺少子命令"),
+        (vec!["nonsense"], "不認得的子命令"),
+        (vec!["open"], "缺少專案路徑"),
+        (vec!["lexicon", "/tmp", "--sort"], "缺少值"),
+        (vec!["lexicon", "/tmp", "oops"], "預期旗標"),
+    ] {
+        let error = cli(&args).expect_err("應為錯誤");
+        let text = format!("{error}");
+        assert!(text.contains(needle), "{needle:?} 不在 {text:?}");
+        assert!(text.contains("conlang <command>"), "要附用法:{text}");
+    }
+}
+
+/// `evolve` 沒給規則 ⇒ 明確錯誤,不是靜默什麼都不做。
+#[test]
+fn evolve_without_a_rule_is_refused() {
+    let project = Project::new("no-rule");
+    let error = cli(&["evolve", &project.arg()]).expect_err("應拒絕");
+    assert!(format!("{error}").contains("需要 --rule"));
+    // 而且**沒有留下節點**
+    assert!(cli(&["open", &project.arg()]).expect("open").contains("nodes: 1"));
+}
+
+/// 指向不存在的節點 ⇒ 明確錯誤。
+#[test]
+fn an_unknown_node_is_refused() {
+    let project = Project::new("bad-node");
+    let error = cli(&["lexicon", &project.arg(), "--node", "not-a-digest"]).expect_err("應拒絕");
+    assert!(format!("{error}").contains("CLI_UNKNOWN_NODE"), "{error}");
+}
+
+/// 不是專案的目錄 ⇒ 明確錯誤。
+#[test]
+fn a_directory_that_is_not_a_project_is_refused() {
+    let temp = std::env::temp_dir().join(format!("conlang-cli-notaproject-{}", std::process::id()));
+    fs::create_dir_all(&temp).expect("mkdir");
+    let error = cli(&["open", &temp.display().to_string()]).expect_err("應拒絕");
+    assert!(format!("{error}").starts_with("PERSISTENCE_"), "{error}");
+    fs::remove_dir_all(&temp).ok();
+}
+
+/// 🔑 **宣告了載不到的套件 ⇒ 開啟時就報錯,不是等到查詢才炸。**
+///
+/// 這條抓到一個真缺陷:只有一個 root 的專案**沒有任何 changeset 要 replay**,
+/// 而 `open` 也不編譯——所以套件宣告在載入時完全不被碰到,打錯一個名字會一路
+/// 安靜到使用者去查詢時才炸在看不懂的地方。`Session::open_project` 因此改為
+/// 當場解析一次。
+#[test]
+fn a_project_declaring_an_unknown_package_fails_at_open() {
+    let project = Project::new("bad-package");
+    let store = GraphStore::open(&project.0).expect("open");
+    let mut declaration = ProjectDocument::from_spec(&LibrarySpec {
+        natural: Some(LibraryId::new(LibraryKind::Natural, "no-such-language")),
+        ..LibrarySpec::default()
+    });
+    declaration.name = Some("bad".to_owned());
+    store.write_project(&declaration).expect("write");
+
+    let error = cli(&["open", &project.arg()]).expect_err("載不到就該報錯");
+    let text = format!("{error}");
+    assert!(text.contains("no-such-language"), "要指名是哪個套件:{text}");
+
+    // 正向控制組:換回載得到的宣告就開得起來,否則這條可能只是「什麼都失敗」
+    store
+        .write_project(&ProjectDocument::from_spec(&LibrarySpec::default()))
+        .expect("write");
+    cli(&["open", &project.arg()]).expect("正常宣告要開得起來");
+}

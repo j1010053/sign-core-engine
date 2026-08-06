@@ -71,6 +71,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "conlang-cli"
+version = "0.1.0"
+dependencies = [
+ "conlang-app",
+ "conlang-changeset",
+ "conlang-command",
+ "conlang-generate",
+ "conlang-language",
+ "conlang-persistence",
+ "conlang-query",
+ "thiserror",
+]
+
+[[package]]
 name = "conlang-command"
 version = "0.1.0"
 dependencies = [

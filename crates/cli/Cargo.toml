@@ -1,0 +1,22 @@
+[package]
+name = "conlang-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Command-line front end over conlang-app (step 22 前置:UI 之前先讓整條路可端到端執行且可測)"
+
+[[bin]]
+name = "conlang"
+path = "src/main.rs"
+
+[dependencies]
+conlang-app = { path = "../app" }
+conlang-changeset = { path = "../changeset" }
+conlang-command = { path = "../command" }
+conlang-generate = { path = "../generate" }
+conlang-language = { path = "../language" }
+conlang-persistence = { path = "../persistence" }
+conlang-query = { path = "../query" }
+thiserror = "2"
+
+[dev-dependencies]
+conlang-changeset = { path = "../changeset" }
