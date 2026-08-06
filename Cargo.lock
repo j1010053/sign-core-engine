@@ -81,6 +81,7 @@ dependencies = [
  "conlang-language",
  "conlang-persistence",
  "conlang-query",
+ "conlang-stats",
  "thiserror",
 ]
 

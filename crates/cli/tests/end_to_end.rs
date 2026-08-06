@@ -312,3 +312,196 @@ fn a_project_declaring_an_unknown_package_fails_at_open() {
         .expect("write");
     cli(&["open", &project.arg()]).expect("正常宣告要開得起來");
 }
+
+// ── 候選詞 / 統計 / 旁註 ─────────────────────────────────────────────────
+
+fn weights_file(project: &Project, rows: &str) -> String {
+    let path = project.0.join("weights.tsv");
+    fs::write(&path, format!("segment\tweight\n{rows}")).expect("write weights");
+    path.display().to_string()
+}
+
+/// 🔑 **沒有 `--weights` 就報錯,而且說得出為什麼。**
+///
+/// 分佈只有三層,而 E1 目前**沒有實際資料**(步驟 19 記明)。
+/// 判別性:若哪天有人把 `stats` 的投影偷偷接成抽樣來源,這條會綠掉——
+/// 而那正是 §6.1「統計投影已移出抽樣棧」禁止的。
+#[test]
+fn propose_refuses_to_guess_a_distribution() {
+    let project = Project::new("propose-nodist");
+    let error = cli(&[
+        "propose", &project.arg(), "--name", "x", "--gloss", "X",
+    ])
+    .expect_err("應拒絕");
+    let text = format!("{error}");
+    assert!(text.contains("--weights"), "{text}");
+    assert!(text.contains("§6.1"), "要說明為什麼不能拿投影頂:{text}");
+}
+
+/// **手動層分佈 → 候選;手動模式下引擎只排序,不替使用者選。**
+///
+/// 誠實記下:把 `ranked()` 換成不排序,本測試**不會紅**。
+/// `DistributionGenerator` 刻意給每個候選 `score: 1.0`
+/// (§6.4:引擎不定義評分合成公式——「它已依分佈抽樣,候選之間無進一步高下
+/// 可言」),等權排序即恆等。那是**等價突變**,不是測試缺口。
+///
+/// `ranked()` 的排序行為在有分數差異的情境下另有判別測試:
+/// `generate/tests/coining.rs` 斷言 `ordered[0].score == 0.99`(最高分排最前)。
+#[test]
+fn propose_lists_ranked_candidates_from_the_manual_layer() {
+    let project = Project::new("propose");
+    let path = weights_file(&project, "k\t3.0\na\t2.0\nt\t1.0\n");
+
+    let out = cli(&[
+        "propose", &project.arg(), "--name", "coined", "--gloss", "THING",
+        "--weights", &path, "--template", "CV", "--count", "4",
+    ])
+    .expect("propose");
+
+    assert!(out.contains("candidates for \"coined\""), "{out}");
+    let scores: Vec<f64> = out
+        .lines()
+        .filter_map(|line| line.split("score=").nth(1))
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    assert!(!scores.is_empty(), "要列出候選:{out}");
+    assert!(
+        scores.windows(2).all(|w| w[0] >= w[1]),
+        "必須依分數遞減:{scores:?}"
+    );
+    // 候選只由分佈的鍵組成
+    for line in out.lines().filter(|l| l.starts_with("  [")) {
+        let form: String = line.chars().filter(|c| "kat".contains(*c)).collect();
+        assert!(!form.is_empty(), "{line}");
+    }
+}
+
+/// 🔑 **`--adopt` 走完整條路:候選 → Builder → 四原語 → 節點 → 落盤。**
+#[test]
+fn adopting_a_candidate_commits_a_node_that_survives_reopening() {
+    let project = Project::new("adopt");
+    let path = weights_file(&project, "k\t1.0\na\t1.0\n");
+    assert!(cli(&["open", &project.arg()]).expect("before").contains("nodes: 1"));
+
+    let out = cli(&[
+        "propose", &project.arg(), "--name", "coined", "--gloss", "THING",
+        "--category", "Noun", "--weights", &path, "--template", "CV",
+        "--count", "3", "--adopt", "0",
+    ])
+    .expect("adopt");
+    assert!(out.contains("adopted [0]"), "{out}");
+
+    let after = cli(&["open", &project.arg()]).expect("after");
+    assert!(after.contains("nodes: 2"), "{after}");
+
+    // **`open` 一律停在第一個 root**,故要看新詞得指名那個節點。
+    // (adopt 的輸出就帶著它——UI 之後也是這樣拿。)
+    let new_node = out
+        .lines()
+        .find_map(|line| line.rsplit_once(" -> "))
+        .map(|(_, id)| id.trim().to_owned())
+        .expect("adopt 要回報新節點 id");
+    let lexicon = cli(&["lexicon", &project.arg(), "--node", &new_node]).expect("lexicon");
+    assert!(lexicon.contains("coined"), "新詞應在新節點的詞典裡:{lexicon}");
+
+    // 對照:root 的詞典**沒有**它——證明造詞真的落在子節點上
+    let root_lexicon = cli(&["lexicon", &project.arg()]).expect("root lexicon");
+    assert!(!root_lexicon.contains("coined"), "root 不該有:{root_lexicon}");
+}
+
+/// 序號超出範圍 ⇒ 明確錯誤,且不留下節點。
+#[test]
+fn adopting_a_candidate_that_does_not_exist_is_refused() {
+    let project = Project::new("adopt-oob");
+    let path = weights_file(&project, "k\t1.0\n");
+    let error = cli(&[
+        "propose", &project.arg(), "--name", "x", "--gloss", "X",
+        "--weights", &path, "--count", "2", "--adopt", "99",
+    ])
+    .expect_err("應拒絕");
+    assert!(format!("{error}").contains("沒有第 99 個候選"));
+    assert!(cli(&["open", &project.arg()]).expect("open").contains("nodes: 1"));
+}
+
+/// 🔑 **統計是報表,而且說得出自己的切分口徑。**
+///
+/// 判別性:給了 `--weights` 就用最長匹配,沒給就逐字元——輸出必須不同,
+/// 否則使用者無從得知多字元音段有沒有被拆開(§6.6)。
+#[test]
+fn stats_reports_its_segmentation_basis() {
+    let project = Project::new("stats");
+
+    let bare = cli(&["stats", &project.arg()]).expect("stats");
+    assert!(bare.contains("per-character"), "{bare}");
+    assert!(bare.contains("非抽樣來源"), "要標明它不是先驗:{bare}");
+    // /tuk/ + /kat/ 逐字元:t,u,k,k,a,t
+    assert!(bare.contains("k        2"), "{bare}");
+
+    let path = weights_file(&project, "k\t1.0\na\t1.0\nt\t1.0\nu\t1.0\n");
+    let matched = cli(&["stats", &project.arg(), "--weights", &path]).expect("stats");
+    assert!(matched.contains("longest-match"), "{matched}");
+    assert_ne!(
+        bare.lines().next(),
+        matched.lines().next(),
+        "兩種口徑必須說得出差別"
+    );
+}
+
+/// 多字元音段:給了清單就整段算,沒給就被拆開——這正是 §6.6 的理由。
+#[test]
+fn a_multi_character_segment_needs_the_inventory_to_stay_whole() {
+    let project = Project::new("affricate");
+    let store = GraphStore::open(&project.0).expect("open");
+    let libraries = LibrarySpec::default();
+    let mut graph = EvolutionGraph::new(libraries.clone());
+    graph
+        .add_root(
+            LanguageDocument::import_new_root(
+                "global trait Core:\n\nsign c:\n    belongs Noun\n    phon:\n        /t\u{361}\u{283}/\n",
+                "affr:root",
+            )
+            .expect("root"),
+        )
+        .expect("add_root");
+    // 換掉整個 store 的內容:重新 init 一個乾淨的
+    fs::remove_dir_all(project.0.join("nodes")).expect("clear");
+    fs::create_dir_all(project.0.join("nodes")).expect("mk");
+    store.save(&graph).expect("save");
+
+    let path = weights_file(&project, "t\u{361}\u{283}\t1.0\n");
+    let whole = cli(&["stats", &project.arg(), "--weights", &path]).expect("stats");
+    assert!(whole.contains("1 distinct"), "整段算一個:{whole}");
+
+    let split = cli(&["stats", &project.arg()]).expect("stats");
+    assert!(split.contains("3 distinct"), "逐字元拆成三個:{split}");
+}
+
+/// 🔑 **旁註可寫可讀可列,且不進 replay。**
+#[test]
+fn annotations_round_trip_and_stay_outside_the_language() {
+    let project = Project::new("annotate");
+
+    let empty = cli(&["annotate", &project.arg()]).expect("list");
+    assert!(empty.contains("annotations: 0"), "{empty}");
+
+    cli(&[
+        "annotate", &project.arg(), "--path", "culture.md", "--set", "牧民用語,忌諱直呼",
+    ])
+    .expect("write");
+
+    let listed = cli(&["annotate", &project.arg()]).expect("list");
+    assert!(listed.contains("annotations: 1"), "{listed}");
+    assert!(listed.contains("culture.md"), "{listed}");
+
+    let read = cli(&["annotate", &project.arg(), "--path", "culture.md"]).expect("read");
+    assert!(read.contains("忌諱直呼"), "{read}");
+
+    // **不進語言**:詞典與統計完全不受影響(07 §5c 旁註層正交於本體)
+    assert_eq!(
+        cli(&["lexicon", &project.arg()]).expect("lexicon"),
+        cli(&["lexicon", &project.arg()]).expect("lexicon 再一次")
+    );
+    assert!(!cli(&["lexicon", &project.arg()])
+        .expect("lexicon")
+        .contains("忌諱"));
+}

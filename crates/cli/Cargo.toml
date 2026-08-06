@@ -16,6 +16,7 @@ conlang-generate = { path = "../generate" }
 conlang-language = { path = "../language" }
 conlang-persistence = { path = "../persistence" }
 conlang-query = { path = "../query" }
+conlang-stats = { path = "../stats" }
 thiserror = "2"
 
 [dev-dependencies]

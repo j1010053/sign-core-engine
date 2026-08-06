@@ -236,6 +236,16 @@ pub fn load_prior_from_packages(packages: &[&LibraryPackage]) -> Result<WeightTa
     Ok(table)
 }
 
+/// 解析一份 `segment<TAB>weight` 表。
+///
+/// 與 package `data/*/segments.tsv` **共用同一個解析器**——host(CLI / app)
+/// 讓使用者指定手動權重表時走這裡,不在外面重寫一份格式知識。
+pub fn parse_prior_table(path: &str, source: &str) -> Result<WeightTable, PriorError> {
+    let mut table = WeightTable::new();
+    parse_prior(&mut table, path, source)?;
+    Ok(table)
+}
+
 fn parse_prior(table: &mut WeightTable, path: &str, source: &str) -> Result<(), PriorError> {
     let error = |line: usize, message: &str| PriorError::Parse {
         path: path.to_owned(),
