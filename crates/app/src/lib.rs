@@ -56,7 +56,7 @@ use conlang_changeset::{
     ResolvedStatement, UnresolvedChangeSet,
 };
 use conlang_language::{LanguageDocument, LibrarySpec};
-use conlang_persistence::{GraphStore, StoreError};
+use conlang_persistence::{GraphStore, ProjectDocument, StoreError};
 use std::path::Path;
 
 #[derive(Debug, thiserror::Error)]
@@ -97,6 +97,36 @@ pub struct Session {
 }
 
 impl Session {
+    /// 開啟一個專案目錄。
+    ///
+    /// **這是 UI 的入口**,取代此前的「開啟 store 目錄 + 自己猜 `LibrarySpec`」。
+    /// 流程:
+    ///
+    /// 1. 讀 `project.toml` 得出要載入的套件(R3 的 import 表);
+    /// 2. **沒有那個檔案時退回 `fallback`** —— 既有的 store 目錄照樣打得開,
+    ///    不製造遷移斷點;
+    /// 3. 以該組套件 `load` 演化圖(replay/fsck 在 persistence 側做);
+    /// 4. active 指標停在**第一個 root**(依 id 序,故決定性);圖是空的就不開。
+    ///
+    /// 回傳專案宣告本身,好讓 UI 拿到 `name` / `default_view`。
+    pub fn open_project(
+        store: &GraphStore,
+        fallback: LibrarySpec,
+    ) -> Result<(Session, Option<ProjectDocument>), AppError> {
+        let project = store.read_project()?;
+        let libraries = match &project {
+            Some(declared) => declared.to_spec()?,
+            None => fallback,
+        };
+        let graph = store.load(libraries.clone())?;
+        let first_root = graph.roots().next().cloned();
+        let mut session = Session::new(graph, libraries);
+        if let Some(root) = first_root {
+            session.open(&root)?;
+        }
+        Ok((session, project))
+    }
+
     pub fn new(graph: EvolutionGraph, libraries: LibrarySpec) -> Session {
         Session {
             graph,
@@ -247,5 +277,13 @@ impl Session {
     /// 節點會回 `StoreError::StaleNode`,指向 `remove_node`。
     pub fn persist(&self, store: &GraphStore) -> Result<(), AppError> {
         Ok(store.save(&self.graph)?)
+    }
+
+    /// 這個工作階段實際載入的套件組合。
+    ///
+    /// UI 存檔時以此寫 `project.toml`,故「開啟時載了什麼」與「存檔時宣告什麼」
+    /// 是同一份——不會存出一份自己開不起來的宣告。
+    pub fn libraries(&self) -> &LibrarySpec {
+        &self.libraries
     }
 }

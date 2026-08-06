@@ -19,7 +19,7 @@ use conlang_changeset::state::EvolutionState;
 use conlang_changeset::evolution::{
     Edge, EvolutionError, EvolutionGraph, Nativization, NodeId, PersistedNode,
 };
-use conlang_language::{sha256_hex, Language, LanguageDocument, LibrarySpec};
+use conlang_language::{sha256_hex, Language, LanguageDocument, LibraryId, LibrarySpec};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -60,6 +60,10 @@ pub enum StoreError {
     /// 節點被 store 裡別的節點引用為 parent,不得移除(同 `EvolutionGraph` 側)。
     #[error("PERSISTENCE_NODE_HAS_DEPENDENTS: {node} is a parent of {dependent}")]
     NodeHasDependents { node: String, dependent: String },
+    #[error("PERSISTENCE_PACKAGE_ID_INVALID: {0:?} is not a <kind>:<name> library id")]
+    InvalidPackageId(String),
+    #[error("PERSISTENCE_PROJECT_FORMAT: project.toml: {0}")]
+    ProjectFormat(String),
     #[error("PERSISTENCE_VIEW_NAME_INVALID: {0:?} must be a single path segment")]
     InvalidViewName(String),
     #[error("PERSISTENCE_PATH_INVALID: annotation path {0:?} is not relative and traversal-free")]
@@ -101,6 +105,100 @@ pub struct ViewDocument {
     /// group id → 顯示名。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub labels: BTreeMap<String, String>,
+}
+
+/// 專案宣告檔(`project.toml`,R3 的 import 表)。
+///
+/// # 為什麼需要它
+///
+/// `GraphStore::load` 要一個 `LibrarySpec`,但此前 store 裡**沒有任何檔案記錄
+/// 這個專案需要哪些套件**,呼叫端只能傳 `LibrarySpec::default()`
+/// (`natural: None`、`plugins: []`)。用了 `natural:en-standard` 的專案因此
+/// 開不起來,而錯誤訊息還說「add it to your import table」——**指向一個不存在
+/// 的表**(R13 的措辭當時就預設了 R3)。
+///
+/// # 為什麼不能從 `.chg` 的 library lock 反推
+///
+/// 每條主幹邊的 prelude 都有 `library <pkg>@<ver> sha256:`,故有演化的專案
+/// 確實 recoverable。但:
+///
+/// - **只有一個 root 的專案沒有任何 `.chg`** → 零資訊,而那正是最需要它的時候;
+/// - lock 是 **replay 產物**(當時用了什麼),import 表是**意圖**(這個專案要
+///   什麼)。拿產物反推意圖,就表達不了「想加一個套件但還沒用到」。
+///
+/// # 為什麼是 TOML
+///
+/// R3 附則:依「功能與編輯方」分——人編輯的宣告檔用 TOML,機器產生的結果用
+/// JSON。本檔是人寫的。
+///
+/// # `packages.lock.json` 為什麼不在這裡
+///
+/// **鎖只在套件來自二進位之外時才有工作做。** 目前所有套件都是 `include_str!`
+/// 內嵌的,解析結果完全由引擎版本決定,不存在「同一份宣告在不同機器解出不同
+/// 版本」。等 R9-a 的注入入口真的被 host 用來讀磁碟套件,再做。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectDocument {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// 預設開哪個 `views/<name>.json`(R1)。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_view: Option<String>,
+    #[serde(default)]
+    pub packages: ProjectPackages,
+}
+
+/// import 表本體。**只宣告直接依賴**;遞移依賴由各 package 的 `requires`
+/// 展開,走既有的 `LibraryCatalog::visit()`(R3 ①)。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectPackages {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub std: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub natural: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugins: Vec<String>,
+}
+
+impl ProjectDocument {
+    /// 由既有的 `LibrarySpec` 產生一份宣告(存檔用)。
+    pub fn from_spec(spec: &LibrarySpec) -> ProjectDocument {
+        ProjectDocument {
+            packages: ProjectPackages {
+                std: spec.std.iter().map(ToString::to_string).collect(),
+                natural: spec.natural.as_ref().map(ToString::to_string),
+                plugins: spec.plugins.iter().map(ToString::to_string).collect(),
+            },
+            ..ProjectDocument::default()
+        }
+    }
+
+    /// 翻成 `LibrarySpec`。
+    ///
+    /// **`std` 為空表示「不載入任何 std」,不是「用預設」。** 兩者必須分得開,
+    /// 否則 R12 剛做出來的「不載入 `std:grambank`」就表達不了——而那正是
+    /// 裁定 S 的重點:特權是一份**可覆寫**的預設值。
+    /// 「用預設」由**檔案不存在**表達(見 [`GraphStore::read_project`])。
+    pub fn to_spec(&self) -> Result<LibrarySpec, StoreError> {
+        let parse = |text: &str| {
+            text.parse::<LibraryId>()
+                .map_err(|_| StoreError::InvalidPackageId(text.to_owned()))
+        };
+        Ok(LibrarySpec {
+            std: self
+                .packages
+                .std
+                .iter()
+                .map(|id| parse(id))
+                .collect::<Result<_, _>>()?,
+            natural: self.packages.natural.as_deref().map(parse).transpose()?,
+            plugins: self
+                .packages
+                .plugins
+                .iter()
+                .map(|id| parse(id))
+                .collect::<Result<_, _>>()?,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -362,6 +460,48 @@ impl GraphStore {
     //
     // 若反過來讓 persistence 直接吃 command,格式層就會隨 UI 的意圖集合一起長,
     // 而那正是 §2.2「app 不得自行定義第二套格式」想避免的鏡像錯誤。
+
+    // ── project.toml(R3 的 import 表)────────────────────────────────
+
+    /// 讀專案宣告。**不存在時回 `None`,不是錯誤。**
+    ///
+    /// `None` 與「空的宣告」是兩件事:前者表示「這個目錄沒有專案宣告,
+    /// 沿用呼叫端的預設」,後者表示「明確宣告不載入任何套件」。
+    /// 分不開的話,升級後既有的 store 目錄就會突然變成「什麼都不載入」。
+    pub fn read_project(&self) -> Result<Option<ProjectDocument>, StoreError> {
+        let path = self.project_path();
+        if !path.exists() {
+            return Ok(None);
+        }
+        let text = fs::read_to_string(&path).map_err(|source| StoreError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        toml::from_str(&text)
+            .map(Some)
+            .map_err(|error| StoreError::ProjectFormat(error.to_string()))
+    }
+
+    pub fn write_project(&self, project: &ProjectDocument) -> Result<(), StoreError> {
+        let text = toml::to_string_pretty(project)
+            .map_err(|error| StoreError::ProjectFormat(error.to_string()))?;
+        atomic_write(&self.project_path(), text.as_bytes())
+    }
+
+    /// 這個專案要載入的套件組合。
+    ///
+    /// 沒有 `project.toml` 時回 `fallback`——**既有的 store 目錄照樣打得開**,
+    /// 不製造遷移斷點。
+    pub fn library_spec_or(&self, fallback: LibrarySpec) -> Result<LibrarySpec, StoreError> {
+        match self.read_project()? {
+            Some(project) => project.to_spec(),
+            None => Ok(fallback),
+        }
+    }
+
+    fn project_path(&self) -> PathBuf {
+        self.root.join("project.toml")
+    }
 
     /// 一個視角檔的內容。`views/<name>.json`。
     ///
