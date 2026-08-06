@@ -8,11 +8,11 @@
 //! 3. **演化樹只給 parents**,且區分主幹/引用邊。
 
 use conlang_app::wire::UI_SCHEMA_V1;
-use conlang_app::Workspace;
+use conlang_app::{AppError, Workspace};
 use conlang_changeset::evolution::{Edge, EvolutionGraph, Nativization};
 use conlang_changeset::{change_set_prelude, UnresolvedChangeSet};
 use conlang_language::{LanguageDocument, LibrarySpec};
-use conlang_persistence::{GraphStore, ProjectDocument};
+use conlang_persistence::{GraphStore, ProjectDocument, StoreError};
 use conlang_query::{LexiconFilter, ViewConfig};
 use std::fs;
 use std::path::PathBuf;
@@ -321,6 +321,22 @@ fn the_node_detail_page_shows_only_hash_external_metadata() {
     // **語言內容完全沒動**
     assert_eq!(after.sign_count, before.sign_count);
     assert_eq!(after.id, before.id, "節點 id 不變——那些欄位在雜湊外");
+}
+
+/// 旁註列舉是持久層 I/O；損毀或缺失不能被 UI 偽裝成「這個節點沒有旁註」。
+#[test]
+fn node_detail_propagates_annotation_listing_errors() {
+    let temp = Temp::new("annotation-error");
+    let store = project(&temp);
+    let workspace = workspace(&store);
+    let id = workspace.session().active().expect("active");
+    let annotation_dir = store.root().join("nodes").join(id.as_str()).join("annotation");
+    fs::remove_dir(&annotation_dir).expect("移除空的 annotation 目錄");
+
+    assert!(matches!(
+        workspace.node_detail(&store),
+        Err(AppError::Store(StoreError::Io { .. }))
+    ));
 }
 
 /// JSON 物件的鍵,排序後。

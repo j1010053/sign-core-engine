@@ -26,6 +26,7 @@ Symbol u
 Symbol s
 
 Class vowel {a, u}
+Class consonant {k, t, s}
 
 global trait Core:
 
@@ -165,10 +166,14 @@ conlang propose ./myproject --name miku --gloss WATER --category Noun \
     --weights weights.tsv --template CVC --count 5
 ```
 
+`CVC` 不是把 `C`、`V` 當字面字元：`C` 會從 `Class consonant`、`V` 會從
+`Class vowel` 依權重抽樣。因此上面的候選會是子音—母音—子音的形式；若任一類別
+缺失或該類別沒有正權重，命令會明確報錯，而不是列出假的零候選。
+
 ```
 5 candidates for "miku"
   [0] /kak/ score=1.000
-  [1] /kat/ score=1.000
+  [1] /kuk/ score=1.000
   ...
 ```
 

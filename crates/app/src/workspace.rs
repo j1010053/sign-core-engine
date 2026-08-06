@@ -172,8 +172,7 @@ impl Workspace {
             label: node.label().map(str::to_owned),
             state: store.read_state(id)?,
             annotations: store
-                .list_annotations(id)
-                .unwrap_or_default()
+                .list_annotations(id)?
                 .into_iter()
                 .map(|path| path.display().to_string())
                 .collect(),

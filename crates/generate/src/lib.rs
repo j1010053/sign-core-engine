@@ -43,7 +43,7 @@ use conlang_language::{
 use conlang_changeset::state::EvolutionState;
 pub use conlang_changeset::state::{Contact, ContactIntensity};
 pub use conlang_stats::{DistributionProvider, WeightTable};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub mod strategy;
 
@@ -101,10 +101,36 @@ pub struct Proposal {
     pub rationale: String,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum GenerationError {
+    #[error("GENERATE_DISTRIBUTION_EMPTY: no weighted segments were supplied")]
+    EmptyDistribution,
+    #[error(
+        "GENERATE_DISTRIBUTION_NO_POSITIVE_WEIGHT: no weighted segment has a positive weight"
+    )]
+    NoPositiveDistributionWeight,
+    #[error(
+        "GENERATE_DISTRIBUTION_INVALID: segment {segment:?} has non-finite or negative weight {weight}"
+    )]
+    InvalidWeight { segment: String, weight: f64 },
+    #[error("GENERATE_TEMPLATE_CLASS_MISSING: slot {slot} requires Class {class_name}")]
+    MissingClass { slot: char, class_name: &'static str },
+    #[error("GENERATE_TEMPLATE_NO_SEGMENTS: slot {slot} has no matching weighted segments")]
+    NoSegments { slot: char },
+    #[error("GENERATE_TEMPLATE_NO_POSITIVE_WEIGHT: slot {slot} has no positive matching weight")]
+    NoPositiveSlotWeight { slot: char },
+    #[error("GENERATE_SAMPLING: {0}")]
+    Sampling(#[from] WeightedSampleError),
+}
+
 /// 唯讀提議者。可多實作(規則/借詞/逆構詞/LLM),共用同一個 [`build`]。
 pub trait Generator: std::fmt::Debug {
     /// **唯讀**:讀 Need 與已編譯系統,不得寫入任何東西。
-    fn propose(&self, need: &Need, system: &CompiledSystem) -> Vec<Proposal>;
+    fn propose(
+        &self,
+        need: &Need,
+        system: &CompiledSystem,
+    ) -> Result<Vec<Proposal>, GenerationError>;
 }
 
 // ── 選擇層:**兩個模式,不是一個** ────────────────────────────────────────
@@ -328,7 +354,8 @@ pub fn admissible(proposals: Vec<Proposal>, filter: &dyn PhonotacticFilter) -> V
 pub struct DistributionGenerator<'a> {
     /// 疊完的三層有效分佈(手動 > provider > E1)。
     pub distribution: &'a WeightTable,
-    /// 音節模板:`C` = 取一個分佈中的音素,其餘字元原樣輸出。
+    /// 音節模板:`C` 從 `Class consonant`、`V` 從 `Class vowel` 抽樣;
+    /// 其餘字元原樣輸出。
     pub template: &'a str,
     /// 要提幾個候選。
     pub count: usize,
@@ -336,29 +363,72 @@ pub struct DistributionGenerator<'a> {
 }
 
 impl Generator for DistributionGenerator<'_> {
-    fn propose(&self, _need: &Need, _system: &CompiledSystem) -> Vec<Proposal> {
-        let (segments, weights) = self.distribution.to_sampler_input();
-        if segments.is_empty() {
-            return Vec::new();
+    fn propose(
+        &self,
+        _need: &Need,
+        system: &CompiledSystem,
+    ) -> Result<Vec<Proposal>, GenerationError> {
+        if self.distribution.is_empty() {
+            return Err(GenerationError::EmptyDistribution);
         }
+        for (segment, weight) in self.distribution.iter() {
+            if !weight.is_finite() || weight < 0.0 {
+                return Err(GenerationError::InvalidWeight {
+                    segment: segment.to_owned(),
+                    weight,
+                });
+            }
+        }
+        if !self
+            .distribution
+            .iter()
+            .any(|(_, weight)| weight > 0.0)
+        {
+            return Err(GenerationError::NoPositiveDistributionWeight);
+        }
+
+        // 先把模板會用到的類別解析一次。這既避免同一個類別在每一個候選、每一個
+        // 位置反覆掃描，也讓「模板宣告了 C/V 但語言沒有對應 Class」在開始抽樣前
+        // 就成為明確錯誤。
+        let consonants = self
+            .template
+            .contains('C')
+            .then(|| self.slot_sampler('C', "consonant", system))
+            .transpose()?;
+        let vowels = self
+            .template
+            .contains('V')
+            .then(|| self.slot_sampler('V', "vowel", system))
+            .transpose()?;
+
         (0..self.count)
-            .filter_map(|index| {
+            .map(|index| {
                 let mut form = String::new();
                 for (position, slot) in self.template.chars().enumerate() {
-                    if slot != 'C' {
-                        form.push(slot);
-                        continue;
-                    }
+                    let sampler = match slot {
+                        'C' => consonants.as_ref().ok_or(GenerationError::MissingClass {
+                            slot,
+                            class_name: "consonant",
+                        })?,
+                        'V' => vowels.as_ref().ok_or(GenerationError::MissingClass {
+                            slot,
+                            class_name: "vowel",
+                        })?,
+                        literal => {
+                            form.push(literal);
+                            continue;
+                        }
+                    };
                     // 每個位置派生一個子種子:同 seed 可重現,位置間不相關。
                     let derived = self
                         .seed
                         .wrapping_mul(0x9E37_79B9_7F4A_7C15)
                         .wrapping_add((index as u64) << 32)
                         .wrapping_add(position as u64);
-                    let sample = sample_weighted_index(&weights, derived).ok()?;
-                    form.push_str(segments[sample.selected_index]);
+                    let sample = sample_weighted_index(&sampler.1, derived)?;
+                    form.push_str(sampler.0[sample.selected_index]);
                 }
-                Some(Proposal {
+                Ok(Proposal {
                     // 評分:引擎不定義怎麼算(統計先驗 §6.4)。此實作給等權
                     // ——它已依分佈抽樣,候選之間無進一步高下可言。
                     score: 1.0,
@@ -367,6 +437,40 @@ impl Generator for DistributionGenerator<'_> {
                 })
             })
             .collect()
+    }
+}
+
+impl DistributionGenerator<'_> {
+    /// 取出一個模板槽能抽樣的分佈子集。類別歸屬以**已編譯的 DSL program**為準，
+    /// 不以字串命名或 Unicode 啟發式猜測母音／子音。
+    fn slot_sampler(
+        &self,
+        slot: char,
+        class_name: &'static str,
+        system: &CompiledSystem,
+    ) -> Result<(Vec<&str>, Vec<f64>), GenerationError> {
+        let program = &system.artifacts.grammar.program;
+        let members = program
+            .classes
+            .get(class_name)
+            .ok_or(GenerationError::MissingClass { slot, class_name })?;
+        let member_names: BTreeSet<&str> = members
+            .iter()
+            .filter_map(|symbol| program.env.syms.resolve(*symbol))
+            .collect();
+        let (segments, weights): (Vec<_>, Vec<_>) = self
+            .distribution
+            .iter()
+            .filter(|(segment, _)| member_names.contains(*segment))
+            .unzip();
+
+        if segments.is_empty() {
+            return Err(GenerationError::NoSegments { slot });
+        }
+        if !weights.iter().any(|weight| *weight > 0.0) {
+            return Err(GenerationError::NoPositiveSlotWeight { slot });
+        }
+        Ok((segments, weights))
     }
 }
 

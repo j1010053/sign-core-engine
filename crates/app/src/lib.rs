@@ -227,14 +227,18 @@ impl Session {
     /// 提交後 active 指標移到新節點,舊節點入 history、redo 清空。
     pub fn commit(&mut self, label: Option<String>) -> Result<NodeId, AppError> {
         let parent = self.active.clone().ok_or(AppError::NoActiveNode)?;
-        let pending = self.pending.take().ok_or(AppError::NoActiveNode)?;
         let document = self.graph.snapshot(&parent)?.clone();
 
         // replay 一次以取得 `.chg` 原文所需的降階結果;節點的 snapshot 由
         // `EvolutionGraph::commit` 自己重放邊上的 changeset 產生(P56 因果契約)。
-        let dumped = pending.dump();
-        ChangeInterpreter::new(document, self.libraries.clone(), pending.namespace.clone())?
-            .run(&pending)?;
+        // Keep the pending changeset available until validation and graph commit
+        // have both succeeded. A failed commit must be retryable by the caller.
+        let dumped = {
+            let pending = self.pending.as_ref().ok_or(AppError::NoActiveNode)?;
+            ChangeInterpreter::new(document, self.libraries.clone(), pending.namespace.clone())?
+                .run(pending)?;
+            pending.dump()
+        };
 
         let id = self.graph.commit(
             vec![Edge::trunk(parent.clone(), dumped)],
@@ -244,6 +248,7 @@ impl Session {
         self.history.push(parent);
         self.redo.clear();
         self.active = Some(id.clone());
+        self.pending = None;
         Ok(id)
     }
 

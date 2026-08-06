@@ -21,7 +21,7 @@ use conlang_language::{compile_system, LanguageDocument, LibrarySpec};
 use conlang_stats::{DistributionProvider, EffectiveDistribution};
 use std::collections::BTreeMap;
 
-const BASE: &str = "Symbol k\nSymbol a\nSymbol t\nSymbol u\nSymbol s\n\nClass vowel {a, u}\n\n\
+const BASE: &str = "Symbol k\nSymbol a\nSymbol t\nSymbol u\nSymbol s\n\nClass consonant {k, t, s}\nClass vowel {a, u}\n\n\
 sign old:\n    belongs Noun\n    phon:\n        /kat/\n";
 
 fn document() -> LanguageDocument {
@@ -83,6 +83,7 @@ fn forms(state: &EvolutionState, seed: u64) -> Vec<String> {
         seed,
     }
     .propose(&need(), &system)
+    .expect("propose")
     .into_iter()
     .map(|proposal| proposal.phon)
     .collect()
@@ -172,7 +173,8 @@ fn replaying_the_same_changeset_ignores_the_state_entirely() {
         count: 4,
         seed: 3,
     }
-    .propose(&need(), &system);
+    .propose(&need(), &system)
+    .expect("propose");
     let chosen = proposals.first().expect("有候選");
     let edits = build(&need(), chosen, &document, &Strategies::default()).expect("build");
 

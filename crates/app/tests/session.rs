@@ -9,7 +9,7 @@
 
 use conlang_app::{AppError, Session};
 use conlang_changeset::evolution::{EvolutionGraph, NodeId};
-use conlang_changeset::PrimitiveEdit;
+use conlang_changeset::{NodeUpdate, PrimitiveEdit};
 use conlang_command::{lower, LanguageCommand};
 use conlang_changeset::rewrite::{AtomicRewrite, DonorScope, RuleHome, ServiceContext};
 use conlang_generate::Strategies;
@@ -21,6 +21,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 const BASE: &str = "Symbol k\nSymbol a\nSymbol t\nSymbol u\n\nClass vowel {a, u}\n\n\
 global trait Core:\n\nsign old:\n    belongs Noun\n    phon:\n        /kat/\n";
+
+const DUPLICATE_NAME_BASE: &str = "Symbol a\n\nClass vowel {a}\n\n\
+sign a:\n    belongs Noun\n    phon:\n        /a/\n\n\
+sign b:\n    belongs Noun\n    phon:\n        /a/\n";
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -55,6 +59,20 @@ fn session() -> (Session, NodeId) {
     let mut graph = EvolutionGraph::new(libraries.clone());
     let root = graph
         .add_root(LanguageDocument::import_new_root(BASE, "app:root").expect("root parses"))
+        .expect("add_root");
+    let mut session = Session::new(graph, libraries);
+    session.open(&root).expect("open");
+    (session, root)
+}
+
+fn duplicate_name_session() -> (Session, NodeId) {
+    let libraries = LibrarySpec::default();
+    let mut graph = EvolutionGraph::new(libraries.clone());
+    let root = graph
+        .add_root(
+            LanguageDocument::import_new_root(DUPLICATE_NAME_BASE, "app:duplicate")
+                .expect("root parses"),
+        )
         .expect("add_root");
     let mut session = Session::new(graph, libraries);
     session.open(&root).expect("open");
@@ -98,6 +116,36 @@ fn commit_moves_the_active_pointer_and_undo_walks_it_back() {
     // 節點**不因 undo 消失**——撤銷的是「我在哪」,不是「它存不存在」
     assert!(session.graph().node(&child).is_some());
     assert_eq!(session.graph().len(), 2);
+}
+
+/// 🔑 驗證失敗不可以消耗工作副本；使用者必須能看見並修改原本那份 pending `.chg`。
+#[test]
+fn a_failed_commit_preserves_the_pending_changeset() {
+    let (mut session, root) = duplicate_name_session();
+    session.begin_edit("app:duplicate-name").expect("begin");
+    let b = session
+        .snapshot()
+        .expect("snapshot")
+        .ref_for_sign("b")
+        .expect("b ref");
+    session
+        .stage(vec![PrimitiveEdit::Update {
+            node: b,
+            change: NodeUpdate::Rename("a".to_owned()),
+        }])
+        .expect("stage");
+    let before = session.pending().expect("pending").dump();
+
+    // `b → a` 會造成重名，因此 commit 必須失敗；這正是從前會把 pending take 掉的路徑。
+    assert!(session.commit(None).is_err(), "重名不可提交");
+
+    assert_eq!(
+        session.pending().map(|pending| pending.dump()),
+        Some(before),
+        "失敗後必須保留可修正、可重試的原草稿"
+    );
+    assert_eq!(session.active(), Some(&root), "失敗不得移動 active");
+    assert_eq!(session.graph().len(), 1, "失敗不得新增節點");
 }
 
 /// 🔑 **分岔之後 redo 回到使用者真正去過的那一支。**

@@ -233,6 +233,48 @@ fn the_coining_section_lists_then_adopts() {
         "教學宣稱等權:{scores:?}"
     );
 
+    // 教學的 `CVC` 是類別模板，不是字面字元。直接讀真實 CLI 輸出，避免只驗分數
+    // 與採用流程而讓 `/aVa/` 這類假候選蒙混過關。
+    let forms: Vec<&str> = listed
+        .lines()
+        .filter(|line| line.starts_with("  ["))
+        .filter_map(|line| line.split_whitespace().nth(1))
+        .collect();
+    assert_eq!(forms.len(), 5, "教學要求列五個候選:{listed}");
+    for form in &forms {
+        let segments: Vec<char> = form.trim_matches('/').chars().collect();
+        assert!(
+            segments.len() == 3
+                && matches!(segments[0], 'k' | 't')
+                && matches!(segments[1], 'a' | 'u')
+                && matches!(segments[2], 'k' | 't'),
+            "CVC 必須使用教學宣告的子音／母音類別:{form}"
+        );
+    }
+
+    // 範例輸出也必須等於同一個固定 seed 的真實候選；否則教學雖然描述對了模板，
+    // 卻仍可能列出不存在的具體形式。
+    let documented_forms: Vec<&str> = TUTORIAL
+        .lines()
+        .skip_while(|line| !line.contains("5 candidates for \"miku\""))
+        .skip(1)
+        .take_while(|line| line.starts_with("  ["))
+        .filter_map(|line| line.split_whitespace().nth(1))
+        .collect();
+    assert!(
+        documented_forms.len() >= 2,
+        "教學應列出至少兩個具體候選:{TUTORIAL}"
+    );
+    assert!(
+        documented_forms.len() <= forms.len(),
+        "教學列出的候選不可多於命令要求的候選數:{documented_forms:?}"
+    );
+    assert_eq!(
+        &forms[..documented_forms.len()],
+        documented_forms.as_slice(),
+        "教學中的候選必須與固定 seed 的 CLI 輸出一致:{listed}"
+    );
+
     let mut adopt: Vec<&str> = args.to_vec();
     adopt.extend(["--adopt", "0"]);
     let adopted = sandbox.cli(&adopt).expect("§5 adopt");

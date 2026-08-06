@@ -26,10 +26,12 @@ use conlang_app::{AppError, Workspace};
 use conlang_changeset::evolution::{EvolutionGraph, NodeId};
 use conlang_changeset::rewrite::{AtomicRewrite, DonorScope, RuleHome, ServiceContext};
 use conlang_command::{lower, LanguageCommand};
-use conlang_generate::Strategies;
+use conlang_generate::{
+    build, ranked, DistributionGenerator, GenerationError, Generator, Need, NeedOrigin,
+    Strategies,
+};
 use conlang_language::{LanguageDocument, LibrarySpec};
 use conlang_persistence::{GraphStore, ProjectDocument, StoreError};
-use conlang_generate::{build, ranked, DistributionGenerator, Generator, Need, NeedOrigin};
 use conlang_query::{
     dialect_groups, project_phoneme_freq, ExploratoryHeuristicV1, GroupingOverride, LexiconFilter,
     SortKey, TreeEdgeCut, ViewConfig,
@@ -62,6 +64,8 @@ pub enum CliError {
     UnknownNode(String),
     #[error("CLI_WEIGHTS: {path}: {message}")]
     Weights { path: String, message: String },
+    #[error(transparent)]
+    Generation(#[from] GenerationError),
     /// 兩個大的錯誤型別**裝箱**:`AppError` 逾 128 bytes,直接內嵌會讓每個
     /// `Result<_, CliError>` 都背著那份大小(clippy `result_large_err`)。
     #[error(transparent)]
@@ -444,7 +448,7 @@ fn propose(args: &[String], out: &mut String) -> Result<(), CliError> {
             .unwrap_or(8),
         seed: 0,
     }
-    .propose(&need, &compiled);
+    .propose(&need, &compiled)?;
 
     let ordered = ranked(&proposals);
     let _ = writeln!(out, "{} candidates for {name:?}", ordered.len());

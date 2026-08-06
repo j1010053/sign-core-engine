@@ -13,7 +13,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const SOURCE: &str = "Symbol k\nSymbol a\nSymbol t\nSymbol u\n\nClass vowel {a, u}\n\n\
+const SOURCE: &str = "Symbol k\nSymbol a\nSymbol t\nSymbol u\n\nClass consonant {k, t}\nClass vowel {a, u}\n\n\
 global trait Core:\n\n\
 sign dog:\n    belongs Noun\n    phon:\n        /tuk/\n    sem:\n        senses:\n            core = DOG\n\
 sign run:\n    belongs Verb\n    phon:\n        /kat/\n    sem:\n        senses:\n            core = RUN\n";
@@ -376,6 +376,22 @@ fn propose_lists_ranked_candidates_from_the_manual_layer() {
     }
 }
 
+/// 有一張權重表不等於它能抽樣；全零表不能被偽裝成 P70 的合法零候選。
+#[test]
+fn propose_rejects_an_all_zero_distribution() {
+    let project = Project::new("propose-all-zero");
+    let path = weights_file(&project, "k\t0.0\na\t0.0\n");
+
+    let error = cli(&[
+        "propose", &project.arg(), "--name", "coined", "--gloss", "THING", "--weights", &path,
+    ])
+    .expect_err("全零權重不得輸出合法的零候選");
+    assert!(
+        format!("{error}").contains("GENERATE_DISTRIBUTION_NO_POSITIVE_WEIGHT"),
+        "要保留可行動的抽樣錯誤:{error}"
+    );
+}
+
 /// 🔑 **`--adopt` 走完整條路:候選 → Builder → 四原語 → 節點 → 落盤。**
 #[test]
 fn adopting_a_candidate_commits_a_node_that_survives_reopening() {
@@ -413,7 +429,7 @@ fn adopting_a_candidate_commits_a_node_that_survives_reopening() {
 #[test]
 fn adopting_a_candidate_that_does_not_exist_is_refused() {
     let project = Project::new("adopt-oob");
-    let path = weights_file(&project, "k\t1.0\n");
+    let path = weights_file(&project, "k\t1.0\na\t1.0\n");
     let error = cli(&[
         "propose", &project.arg(), "--name", "x", "--gloss", "X",
         "--weights", &path, "--count", "2", "--adopt", "99",

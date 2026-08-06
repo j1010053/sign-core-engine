@@ -15,8 +15,8 @@ use conlang_changeset::{
     change_set_prelude, ChangeInterpreter, PrimitiveEdit, ResolvedStatement, UnresolvedChangeSet,
 };
 use conlang_generate::{
-    build, highest_scoring, ranked, sample_proposal, BlockingStrategy, Generator, Need, NeedOrigin,
-    Proposal, Strategies, StrategyError,
+    build, highest_scoring, ranked, sample_proposal, BlockingStrategy, GenerationError, Generator,
+    Need, NeedOrigin, Proposal, Strategies, StrategyError,
 };
 use conlang_language::{compile_system, LanguageDocument, LibrarySpec, SignDef};
 
@@ -39,15 +39,16 @@ impl Generator for SyllableGenerator {
         &self,
         _need: &Need,
         _system: &conlang_language::CompiledSystem,
-    ) -> Vec<Proposal> {
-        self.shapes
+    ) -> Result<Vec<Proposal>, GenerationError> {
+        Ok(self
+            .shapes
             .iter()
             .map(|(phon, score)| Proposal {
                 phon: (*phon).to_owned(),
                 score: *score,
                 rationale: format!("CV 音節模板 {phon}"),
             })
-            .collect()
+            .collect())
     }
 }
 
@@ -89,7 +90,7 @@ fn a_need_becomes_a_stored_sign_through_the_four_primitives() {
     };
 
     let need = need("stealer");
-    let proposals = generator.propose(&need, &system);
+    let proposals = generator.propose(&need, &system).expect("propose");
     let chosen = highest_scoring(&proposals).expect("有候選");
     assert_eq!(chosen.phon, "/tu/", "取最高分,不是列舉序第一個");
 
@@ -115,7 +116,9 @@ fn proposing_alone_changes_nothing() {
     let generator = SyllableGenerator {
         shapes: vec![("/ka/", 0.4), ("/tu/", 0.9)],
     };
-    let proposals = generator.propose(&need("stealer"), &system);
+    let proposals = generator
+        .propose(&need("stealer"), &system)
+        .expect("propose");
     assert_eq!(proposals.len(), 2, "提議確實產生了(否則本測試空轉)");
     assert_eq!(document.source(), before, "提議不得改動文件");
 }
@@ -127,7 +130,7 @@ fn no_candidates_is_a_legal_outcome() {
     let system = compile_system(document.language().clone()).expect("compiles");
     let generator = SyllableGenerator { shapes: Vec::new() };
     let need = need("stealer");
-    let proposals = generator.propose(&need, &system);
+    let proposals = generator.propose(&need, &system).expect("propose");
     // 兩個模式都必須把「零候選」當合法結果
     assert!(ranked(&proposals).is_empty());
     assert!(sample_proposal(&need, &proposals, 7).expect("不是錯誤").is_none());
@@ -151,7 +154,7 @@ fn many_candidates_are_ranked_by_the_proposer() {
     let generator = SyllableGenerator { shapes };
 
     let need = need("river");
-    let proposals = generator.propose(&need, &system);
+    let proposals = generator.propose(&need, &system).expect("propose");
     assert_eq!(proposals.len(), 20);
 
     // ── 手動 / 輔助模式:引擎只排序,不選 ──
