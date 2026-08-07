@@ -11,8 +11,17 @@ use conlang_changeset::state::EvolutionState;
 use std::sync::{Mutex, MutexGuard};
 use tauri::State;
 
-fn locked(state: &State<'_, Mutex<ProjectSlot>>) -> Result<MutexGuard<'_, ProjectSlot>, UiError> {
-    state.lock().map_err(|_| UiError {
+/// `State<'r, T>` 內含 `&'r T`,故它有**兩個**生命週期:包裝本身的借用,
+/// 與裡面那個引用的 `'r`。省略規則在多個輸入生命週期下無從推斷回傳值該綁哪一個
+/// (E0106),必須指名。
+///
+/// 綁 `'r`(經 `inner()`)而非 `&self` 的借用:guard 真正能活的是 `'r`,
+/// 綁短的那個會讓呼叫端在「把 guard 存成變數再跨語句使用」時撞到
+/// 「temporary dropped while borrowed」。
+fn locked<'r>(
+    state: &State<'r, Mutex<ProjectSlot>>,
+) -> Result<MutexGuard<'r, ProjectSlot>, UiError> {
+    state.inner().lock().map_err(|_| UiError {
         code: "APP_STATE_POISONED".to_owned(),
         message: "the project session lock is unavailable".to_owned(),
     })
