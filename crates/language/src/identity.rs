@@ -1953,9 +1953,7 @@ mod tests {
     #[test]
     fn nested_case_projection_and_application_arguments_have_distinct_addresses() {
         let mut language = Language::parse(
-            r#"schema conlang.lang/v2
-
-sign root:
+            r#"sign root:
     phon:
         /r/
     case:

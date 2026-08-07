@@ -29,7 +29,7 @@ export function Launcher() {
   });
   const creator = useMutation({
     mutationFn: () =>
-      api.createProject({ path: projectPath, sourcePath, name: name || undefined, namespace }),
+      api.createProject({ path: projectPath, sourcePath: sourcePath || undefined, name: name || undefined, namespace }),
     onSuccess: finish,
   });
 
@@ -99,14 +99,14 @@ export function Launcher() {
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowCreate(false)}>
           <section className="modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
             <div><p className="eyebrow">NEW PROJECT</p><h2>{t("launcher.create")}</h2></div>
-            <label>{t("launcher.source")}<div className="path-picker"><input value={sourcePath} readOnly /><button type="button" onClick={pickSource}>…</button></div></label>
+            <label>{t("launcher.source")}<div className="path-picker"><input value={sourcePath} readOnly placeholder={t("launcher.sourceHint")} /><button type="button" onClick={pickSource}>…</button>{sourcePath && <button type="button" onClick={() => setSourcePath("")}>{t("launcher.sourceClear")}</button>}</div></label>
             <label>{t("launcher.destination")}<div className="path-picker"><input value={projectPath} readOnly /><button type="button" onClick={pickDestination}>…</button></div></label>
             <label>{t("launcher.name")}<input value={name} onChange={(event) => setName(event.target.value)} /></label>
             <label>{t("launcher.namespace")}<input value={namespace} onChange={(event) => setNamespace(event.target.value)} /></label>
             {creator.error && <ErrorNotice error={creator.error} />}
             <div className="modal-actions">
               <button className="button ghost" type="button" onClick={() => setShowCreate(false)}>{t("common.cancel")}</button>
-              <button className="button primary" type="button" disabled={!sourcePath || !projectPath || !namespace || creator.isPending} onClick={() => creator.mutate()}>{t("common.create")}</button>
+              <button className="button primary" type="button" disabled={!projectPath || !namespace || creator.isPending} onClick={() => creator.mutate()}>{t("common.create")}</button>
             </div>
           </section>
         </div>

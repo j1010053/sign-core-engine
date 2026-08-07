@@ -6,9 +6,7 @@ use conlang_language::{
 #[test]
 fn applied_residual_slot_keeps_its_name_when_passed_to_a_nested_application() {
     let language = Language::parse(
-        r#"schema conlang.lang/v2
-
-trait AliasAtom:
+        r#"trait AliasAtom:
 
 sign x:
     belongs AliasAtom
@@ -69,9 +67,7 @@ sign seed:
 #[test]
 fn resumed_construction_uses_internal_committed_and_autofilled_occurrences() {
     let language = Language::parse(
-        r#"schema conlang.lang/v2
-
-trait BoundAtom:
+        r#"trait BoundAtom:
     syn:
         feature:
             mark = enum(plain, marked)
@@ -163,9 +159,7 @@ sign Outer:
 #[test]
 fn candidate_search_executes_typed_cases_but_never_hides_their_errors() {
     let language = Language::parse(
-        r#"schema conlang.lang/v2
-
-trait CandidateAtom:
+        r#"trait CandidateAtom:
 
 trait CandidateConstruction:
 
@@ -208,9 +202,7 @@ sign Faulty:
 #[test]
 fn candidate_context_misses_are_filtered_and_zero_is_not_ambiguity() {
     let language = Language::parse(
-        r#"schema conlang.lang/v2
-
-trait ExpectedAtom:
+        r#"trait ExpectedAtom:
 
 trait OtherAtom:
 
@@ -291,9 +283,7 @@ sign FixedOff:
 #[test]
 fn hard_occurrence_constraint_blocks_only_the_specific_case_branch() {
     let language = Language::parse(
-        r#"schema conlang.lang/v2
-
-Symbol x
+        r#"Symbol x
 Class vowel {x}
 
 trait BlockingAtom:
@@ -357,9 +347,7 @@ sign Current:
 #[test]
 fn stored_self_application_does_not_replay_inherited_rules_or_replace_provenance() {
     let language = Language::parse(
-        r#"schema conlang.lang/v2
-
-Symbol s
+        r#"Symbol s
 Class vowel {s}
 
 trait EvaluateOnce:
@@ -413,9 +401,7 @@ sign seed:
 #[test]
 fn stored_self_occurrence_constraints_rerun_local_rules_from_the_source_baseline() {
     let language = Language::parse(
-        r#"schema conlang.lang/v2
-
-Symbol s
+        r#"Symbol s
 Class vowel {s}
 
 trait Contextual:

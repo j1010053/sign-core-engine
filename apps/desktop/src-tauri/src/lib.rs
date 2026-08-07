@@ -43,11 +43,12 @@ fn open_project(
     locked(&state)?.open(path, discard_dirty)
 }
 
+/// `source_path` 省略 ⇒ **空白專案**(P28:canonical empty root 永遠存在)。
 #[tauri::command]
 fn create_project(
     state: State<'_, Mutex<ProjectSlot>>,
     path: String,
-    source_path: String,
+    source_path: Option<String>,
     name: Option<String>,
     namespace: String,
     discard_dirty: bool,

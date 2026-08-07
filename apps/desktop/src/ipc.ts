@@ -78,7 +78,8 @@ export const api = {
     call("open_project", { path, discardDirty }, projectSummarySchema),
   createProject: (input: {
     path: string;
-    sourcePath: string;
+    /** 省略 ⇒ 空白專案(引擎的 canonical empty root,P28)。 */
+    sourcePath?: string;
     name?: string;
     namespace: string;
     discardDirty?: boolean;

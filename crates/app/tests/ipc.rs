@@ -654,3 +654,73 @@ fn language_state_changes_invalidate_the_proposal_cache() {
         .expect_err("state invalidates proposals");
     assert_eq!(error.code, "APP_PROPOSALS_STALE");
 }
+
+// ── 空白專案 ─────────────────────────────────────────────────────────────
+
+/// 🔑 **不給來源 `.lang` 也建得起專案**(P28:canonical empty root 永遠存在)。
+///
+/// 此前 `create` 硬性要一個檔案路徑,於是「新建專案」的第一個必填欄位要求
+/// 使用者先有一份檔案——而多數人剛開始造語時什麼都還沒有,只能去手寫一份
+/// 23 位元組的佔位檔。那是把實作細節外洩給使用者。
+///
+/// 判別性:空白專案必須**真的可用**——有 root 節點、開得了編輯、詞典是空的
+/// 但查得動。只斷言「create 沒報錯」會漏掉「建出一個死專案」。
+#[test]
+fn a_project_can_start_from_a_blank_language() {
+    let temp = Temp::new("blank");
+    let mut slot = conlang_app::ipc::ProjectSlot::default();
+    let summary = slot
+        .create(
+            &temp.0,
+            None::<&std::path::Path>,
+            Some("空白語".to_owned()),
+            "evo:root",
+            false,
+        )
+        .expect("不給來源也該建得起來");
+    assert_eq!(summary.name.as_deref(), Some("空白語"));
+
+    let session = slot.session().expect("有 session");
+    let tree = session.tree();
+    assert_eq!(tree.nodes.len(), 1, "空白專案仍有一個 root 節點");
+    assert!(tree.active.is_some(), "而且停在它上面");
+
+    // **真的可用**:詞典查得動,只是空的
+    let lexicon = slot
+        .session_mut()
+        .expect("session")
+        .lexicon(&LexiconQuery::default())
+        .expect("空專案的詞典查得動");
+    assert!(lexicon.lexicon.entries.is_empty());
+    assert_eq!(lexicon.lexicon.total_before_filter, 0);
+
+    // 落盤了——重開仍在
+    let reopened = UiSession::open(&temp.0, LibrarySpec::default()).expect("重開");
+    assert_eq!(reopened.tree().nodes.len(), 1);
+}
+
+/// 給了來源就照用——空白只是**選項**,不是取代。
+#[test]
+fn supplying_a_source_still_works() {
+    let temp = Temp::new("with-source");
+    let source = temp.0.join("proto.lang");
+    std::fs::create_dir_all(&temp.0).expect("mkdir");
+    std::fs::write(&source, SOURCE).expect("write");
+
+    let mut slot = conlang_app::ipc::ProjectSlot::default();
+    slot.create(
+        temp.0.join("project"),
+        Some(&source),
+        None,
+        "evo:root",
+        false,
+    )
+    .expect("給來源照樣可以");
+
+    let lexicon = slot
+        .session_mut()
+        .expect("session")
+        .lexicon(&LexiconQuery::default())
+        .expect("lexicon");
+    assert_eq!(lexicon.lexicon.entries.len(), 2, "kat 與 tak 都在");
+}

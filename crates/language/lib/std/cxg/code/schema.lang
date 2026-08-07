@@ -1,4 +1,3 @@
-schema conlang.lang/v2
 
 /* Cross-linguistic construction schemas. Form is phon+syn and conventional
    meaning/function is sem+prag; no duplicate pole wrapper is introduced.

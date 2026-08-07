@@ -73,7 +73,7 @@ fn container_head(text: &str) -> Option<(&'static str, &str)> {
 }
 
 fn is_language_head(text: &str) -> bool {
-    text == crate::LEGACY_V2_HEADER || text == "distribution:" || container_head(text).is_some()
+    text == "distribution:" || container_head(text).is_some()
 }
 
 fn split_arguments(source: &str, line: usize) -> Result<Vec<&str>, ParseError> {
@@ -1633,10 +1633,21 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
             i += 1;
             continue;
         }
-        // 舊 v2 schema 標頭:v1 已淘汰、v2 唯一 → 接受並忽略(back-compat;printer 不再輸出)。
-        if ln.text == crate::LEGACY_V2_HEADER {
-            i += 1;
-            continue;
+        // 舊 v2 schema 標頭:**顯式拒絕**,不是靜默忽略,也不是放它掉進 dsl 域。
+        //
+        // v1 於 2026-07-24 硬移除後,這行對解析、canonical dump 與 identity digest
+        // 皆零影響——留著「認得但無意義」的語法會讓作者以為它有作用。
+        //
+        // 但也不能只把分支刪掉:`.lang` 把首個 language 構造前的內容 verbatim 交給
+        // dsl 域(裁決1),所以那行會被送進 tshiatun 的 lexer,得到
+        // `parse error at line 1: … expected: {Arrow, Lt, RepeatPlus, …}`
+        // ——拿著舊檔的人完全看不出問題在哪。同 I17-d:顯式拒絕優於難懂的下游錯誤。
+        if ln.text == "schema conlang.lang/v2" {
+            return Err(err(
+                ln.no,
+                "`schema conlang.lang/v2` is retired; delete this line \
+                 (it never affected parsing, canonical dump, or identity digest)",
+            ));
         }
         if ln.text.starts_with("prosody =") {
             return Err(err(

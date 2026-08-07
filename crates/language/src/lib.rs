@@ -431,11 +431,6 @@ pub struct Realization {
     pub expression: Option<TypedCase>,
 }
 
-/// 舊 v2 schema 標頭。**v1 已淘汰、v2 為唯一模型**(2026-07-24 硬移除):FP 層永遠
-/// 可用,不再需要標頭選版。為 back-compat,parser 仍**接受並忽略**此行(printer 不再
-/// 輸出);它不影響解析、canonical dump 或 identity digest。
-pub const LEGACY_V2_HEADER: &str = "schema conlang.lang/v2";
-
 /// The type expected at an expression site.  `Feature` carries its declared
 /// enum domain separately during type checking; it is not an untyped string.
 #[derive(Debug, Clone, PartialEq, Eq)]
