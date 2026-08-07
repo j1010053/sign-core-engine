@@ -135,12 +135,12 @@ fn the_outbound_shapes_are_pinned() {
         .as_array()
         .expect("tree nodes")
         .iter()
-        .find(|node| node.get("parents").is_none())
+        .find(|node| node["parents"].as_array().expect("一律有 parents").is_empty())
         .expect("tree has a root");
     assert_eq!(
         keys(root),
-        vec!["id", "label"],
-        "root 沒有 parents ⇒ 該欄位不序列化"
+        vec!["id", "label", "parents"],
+        "🔑 root 也要有 `parents`(空陣列)——省略它只會讓消費端多一個 undefined 分支"
     );
 
     let lexicon = serde_json::to_value(
