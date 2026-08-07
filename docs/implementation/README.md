@@ -6,3 +6,5 @@
 
 - 05 保留編號，因其承載 I 系列實作決策。
 - 其餘文件以階段或能力命名，記錄 M1+ 入口與 ChangeSet authoring 的實作結構。
+- `lang_chg_weightDB_std_package_MVP_v0.1.md`：`.lang`／`.chg`／兩類 weight data 的
+  std package 邊界、補齊順序與驗收矩陣。

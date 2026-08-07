@@ -257,7 +257,7 @@ pub enum EvolutionError {
 /// 單 root 之下任兩個節點往上追必定相遇,故 P61 的「**無共同祖先 → 空基準**」路徑
 /// 永遠走不到——而那正是真克里奧爾(法語 + 西非語言)的形狀。不是「做得出來但沒用」,
 /// 是**造不出輸入去測它**,寫了也是改成什麼樣測試都不會紅的死碼。
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EvolutionGraph {
     libraries: LibrarySpec,
     nodes: BTreeMap<NodeId, Node>,

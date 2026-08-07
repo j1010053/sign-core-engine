@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Tauri system packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf xvfb
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            tshiatun -> target
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.16.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Rust workspace
+        run: cargo test --workspace --locked
+      - name: Tshiatun workspace
+        run: cargo test --manifest-path tshiatun/Cargo.toml --workspace --locked
+
+      - name: Frontend typecheck
+        run: pnpm --filter @langcraft/desktop typecheck
+      - name: Frontend lint
+        run: pnpm --filter @langcraft/desktop lint
+      - name: Frontend unit tests
+        run: pnpm --filter @langcraft/desktop test
+      - name: WebDriver config typecheck
+        run: pnpm --filter @langcraft/desktop typecheck:e2e
+      - name: Frontend production build
+        run: pnpm --filter @langcraft/desktop build
+      - name: Tauri compile
+        run: cargo check -p langcraft-desktop --locked
+
+      - name: Tauri E2E (Linux/Xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a pnpm --filter @langcraft/desktop e2e
+      - name: Tauri E2E (Windows)
+        if: runner.os == 'Windows'
+        run: pnpm --filter @langcraft/desktop e2e

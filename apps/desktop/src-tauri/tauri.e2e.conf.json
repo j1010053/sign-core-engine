@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "capabilities": [
+        {
+          "identifier": "langcraft-e2e",
+          "description": "Test-only permissions for the embedded WebDriver build",
+          "windows": ["main"],
+          "permissions": [
+            "core:default",
+            "dialog:default",
+            "store:default",
+            "wdio:allow-execute",
+            "wdio:allow-debug-plugin",
+            "wdio-webdriver:default"
+          ]
+        }
+      ]
+    }
+  }
+}

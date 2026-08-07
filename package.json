@@ -1,0 +1,13 @@
+{
+  "name": "langcraft-workspace",
+  "private": true,
+  "packageManager": "pnpm@11.16.0",
+  "scripts": {
+    "dev": "pnpm --filter @langcraft/desktop dev",
+    "build": "pnpm --filter @langcraft/desktop build",
+    "test": "pnpm --filter @langcraft/desktop test",
+    "typecheck": "pnpm --filter @langcraft/desktop typecheck",
+    "lint": "pnpm --filter @langcraft/desktop lint",
+    "tauri": "pnpm --filter @langcraft/desktop tauri"
+  }
+}

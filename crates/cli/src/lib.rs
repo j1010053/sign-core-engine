@@ -22,21 +22,16 @@
 #![forbid(unsafe_code)]
 #![deny(missing_debug_implementations)]
 
-use conlang_app::{AppError, Workspace};
-use conlang_changeset::evolution::{EvolutionGraph, NodeId};
-use conlang_changeset::rewrite::{AtomicRewrite, DonorScope, RuleHome, ServiceContext};
-use conlang_command::{lower, LanguageCommand};
-use conlang_generate::{
-    build, ranked, DistributionGenerator, GenerationError, Generator, Need, NeedOrigin,
-    Strategies,
+use conlang_app::{
+    AppError, GroupingQuery, ProposalQuery, SegmentWeight, SoundChangeInput, UiError, UiSession,
+    Workspace,
 };
+use conlang_changeset::evolution::{EvolutionGraph, NodeId};
+use conlang_generate::GenerationError;
 use conlang_language::{LanguageDocument, LibrarySpec};
 use conlang_persistence::{GraphStore, ProjectDocument, StoreError};
-use conlang_query::{
-    dialect_groups, project_phoneme_freq, ExploratoryHeuristicV1, GroupingOverride, LexiconFilter,
-    SortKey, TreeEdgeCut, ViewConfig,
-};
-use conlang_stats::{parse_prior_table, EffectiveDistribution, WeightTable};
+use conlang_query::{LexiconFilter, SortKey, ViewConfig};
+use conlang_stats::{parse_prior_table, WeightTable};
 use std::fmt::Write as _;
 
 pub const USAGE: &str = "\
@@ -72,6 +67,8 @@ pub enum CliError {
     App(Box<AppError>),
     #[error(transparent)]
     Store(Box<StoreError>),
+    #[error("{code}: {message}")]
+    Ui { code: String, message: String },
 }
 
 impl From<AppError> for CliError {
@@ -83,6 +80,15 @@ impl From<AppError> for CliError {
 impl From<StoreError> for CliError {
     fn from(error: StoreError) -> CliError {
         CliError::Store(Box::new(error))
+    }
+}
+
+impl From<UiError> for CliError {
+    fn from(error: UiError) -> CliError {
+        CliError::Ui {
+            code: error.code,
+            message: error.message,
+        }
     }
 }
 
@@ -155,11 +161,20 @@ fn workspace(options: &Options) -> Result<Workspace, CliError> {
     let store = GraphStore::open(&options.project)?;
     let mut workspace = Workspace::open(&store, LibrarySpec::default())?;
     if let Some(wanted) = options.get("node") {
-        let id = NodeId::parse(wanted)
-            .map_err(|_| CliError::UnknownNode(wanted.to_owned()))?;
+        let id = NodeId::parse(wanted).map_err(|_| CliError::UnknownNode(wanted.to_owned()))?;
         workspace.session_mut().open(&id)?;
     }
     Ok(workspace)
+}
+
+/// Open the same application service used by Tauri and select the requested
+/// node before dispatching an orchestration-heavy command.
+fn ui_session(options: &Options) -> Result<UiSession, CliError> {
+    let mut session = UiSession::open(&options.project, LibrarySpec::default())?;
+    if let Some(wanted) = options.get("node") {
+        session.select_node(wanted)?;
+    }
+    Ok(session)
 }
 
 // ── 子命令 ───────────────────────────────────────────────────────────────
@@ -174,9 +189,8 @@ fn init(args: &[String], out: &mut String) -> Result<(), CliError> {
     let Some(source_path) = options.get("from") else {
         return Err(CliError::Usage("init 需要 --from <FILE.lang>".to_owned()));
     };
-    let source = std::fs::read_to_string(source_path).map_err(|error| CliError::Usage(format!(
-        "讀不到 {source_path}:{error}"
-    )))?;
+    let source = std::fs::read_to_string(source_path)
+        .map_err(|error| CliError::Usage(format!("讀不到 {source_path}:{error}")))?;
     let namespace = options.get("namespace").unwrap_or("root");
     let document = LanguageDocument::import_new_root(&source, namespace)
         .map_err(|error| CliError::Usage(format!("{source_path} 解析失敗:{error}")))?;
@@ -323,18 +337,16 @@ fn state(args: &[String], out: &mut String) -> Result<(), CliError> {
 
 fn groups(args: &[String], out: &mut String) -> Result<(), CliError> {
     let options = parse(args)?;
-    let workspace = workspace(&options)?;
     let threshold = options
         .get("threshold")
         .and_then(|value| value.parse::<f64>().ok())
         .unwrap_or(0.6);
-
-    let grouping = dialect_groups(
-        workspace.session().graph(),
-        &TreeEdgeCut { threshold },
-        &ExploratoryHeuristicV1::suggested(),
-        &GroupingOverride::default(),
-    );
+    let grouping = ui_session(&options)?
+        .grouping(&GroupingQuery {
+            view: "default".to_owned(),
+            threshold,
+        })?
+        .grouping;
     let _ = writeln!(
         out,
         "measure: {} threshold: {}",
@@ -356,33 +368,16 @@ fn evolve(args: &[String], out: &mut String) -> Result<(), CliError> {
     let Some(rule) = options.get("rule") else {
         return Err(CliError::Usage("evolve 需要 --rule".to_owned()));
     };
-    let store = GraphStore::open(&options.project)?;
-    let mut workspace = workspace(&options)?;
+    let mut session = ui_session(&options)?;
+    session.stage_sound_change(&SoundChangeInput {
+        rule: rule.to_owned(),
+        home: options.get("home").unwrap_or("Core").to_owned(),
+    })?;
+    let detail = session.commit(options.get("label").map(str::to_owned))?;
+    let summary = session.save_project()?;
 
-    let namespace = format!("cli:{}", workspace.session().graph().len());
-    workspace.session_mut().begin_edit(&namespace)?;
-    let document = workspace.session().snapshot()?.clone();
-    let rewrite = AtomicRewrite::SoundChange {
-        home: RuleHome::Global(options.get("home").unwrap_or("Core").to_owned()),
-        body: rule.to_owned(),
-    };
-    let edits = lower(
-        &LanguageCommand::ApplyRewrite(&rewrite),
-        &document,
-        &Strategies::default(),
-        &ServiceContext::offline(),
-        &DonorScope::new(),
-    )
-    .map_err(|error| CliError::Usage(format!("規則降階失敗:{error}")))?;
-    workspace.session_mut().stage(edits)?;
-
-    let id = workspace
-        .session_mut()
-        .commit(options.get("label").map(str::to_owned))?;
-    workspace.session().persist(&store)?;
-
-    let _ = writeln!(out, "committed: {}", id.as_str());
-    let _ = writeln!(out, "nodes: {}", workspace.session().graph().len());
+    let _ = writeln!(out, "committed: {}", detail.id);
+    let _ = writeln!(out, "nodes: {}", summary.node_count);
     Ok(())
 }
 
@@ -423,37 +418,36 @@ fn propose(args: &[String], out: &mut String) -> Result<(), CliError> {
         ));
     };
     let table = weights(path)?;
-    let store = GraphStore::open(&options.project)?;
-    let mut workspace = workspace(&options)?;
-    let compiled = workspace.compiled()?;
-
-    let need = Need {
+    let query = ProposalQuery {
         name: name.to_owned(),
         categories: options
             .get("category")
             .map(|c| vec![c.to_owned()])
             .unwrap_or_default(),
         gloss: Some(gloss.to_owned()),
-        origin: NeedOrigin::Coined,
-    };
-    let distribution = EffectiveDistribution::default()
-        .with_manual(table)
-        .resolve();
-    let proposals = DistributionGenerator {
-        distribution: &distribution,
-        template: options.get("template").unwrap_or("CVC"),
+        template: options.get("template").unwrap_or("CVC").to_owned(),
         count: options
             .get("count")
             .and_then(|c| c.parse().ok())
             .unwrap_or(8),
         seed: 0,
-    }
-    .propose(&need, &compiled)?;
-
-    let ordered = ranked(&proposals);
-    let _ = writeln!(out, "{} candidates for {name:?}", ordered.len());
-    for (index, proposal) in ordered.iter().enumerate() {
-        let _ = writeln!(out, "  [{index}] {} score={:.3}", proposal.phon, proposal.score);
+        weights: table
+            .iter()
+            .map(|(segment, weight)| SegmentWeight {
+                segment: segment.to_owned(),
+                weight,
+            })
+            .collect(),
+    };
+    let mut session = ui_session(&options)?;
+    let proposals = session.propose(&query)?;
+    let _ = writeln!(out, "{} candidates for {name:?}", proposals.proposals.len());
+    for (index, proposal) in proposals.proposals.iter().enumerate() {
+        let _ = writeln!(
+            out,
+            "  [{index}] {} score={:.3}",
+            proposal.phon, proposal.score
+        );
     }
 
     let Some(pick) = options.get("adopt") else {
@@ -462,21 +456,14 @@ fn propose(args: &[String], out: &mut String) -> Result<(), CliError> {
     let index: usize = pick
         .parse()
         .map_err(|_| CliError::Usage(format!("--adopt 要一個序號,得到 {pick:?}")))?;
-    let Some(chosen) = ordered.get(index) else {
+    let Some(chosen) = proposals.proposals.get(index).cloned() else {
         return Err(CliError::Usage(format!("沒有第 {index} 個候選")));
     };
+    session.adopt_proposal(&query, index)?;
+    let detail = session.commit(Some(format!("cli:coin:{}", session.summary().node_count)))?;
+    session.save_project()?;
 
-    // 採用 = 走 Builder 降階四原語(C1),與其他命令同一條路
-    let document = workspace.session().snapshot()?.clone();
-    let edits = build(&need, chosen, &document, &Strategies::default())
-        .map_err(|error| CliError::Usage(format!("造詞失敗:{error}")))?;
-    let namespace = format!("cli:coin:{}", workspace.session().graph().len());
-    workspace.session_mut().begin_edit(&namespace)?;
-    workspace.session_mut().stage(edits)?;
-    let id = workspace.session_mut().commit(Some(namespace))?;
-    workspace.session().persist(&store)?;
-
-    let _ = writeln!(out, "adopted [{index}] {} -> {}", chosen.phon, id.as_str());
+    let _ = writeln!(out, "adopted [{index}] {} -> {}", chosen.phon, detail.id);
     Ok(())
 }
 
@@ -486,30 +473,30 @@ fn propose(args: &[String], out: &mut String) -> Result<(), CliError> {
 /// 沒給就退回逐字元,而那會把塞擦音之類的多字元音段拆開——故輸出會標明。
 fn stats(args: &[String], out: &mut String) -> Result<(), CliError> {
     let options = parse(args)?;
-    let workspace = workspace(&options)?;
-    let document = workspace.session().snapshot()?;
-
     let table = match options.get("weights") {
         Some(path) => Some(weights(path)?),
         None => None,
     };
-    let inventory: Vec<&str> = table.as_ref().map(|t| t.keys().collect()).unwrap_or_default();
-    let report = project_phoneme_freq(document.language(), &inventory);
+    let inventory: Vec<String> = table
+        .as_ref()
+        .map(|table| table.keys().map(str::to_owned).collect())
+        .unwrap_or_default();
+    let report = ui_session(&options)?.stats(&inventory)?;
 
     let _ = writeln!(
         out,
         "segmentation: {}",
-        if inventory.is_empty() {
+        if report.segmentation == "per-character" {
             "per-character(未給 --weights;多字元音段會被拆開)"
         } else {
             "longest-match against --weights keys"
         }
     );
     let _ = writeln!(out, "note: 報表,非抽樣來源(§6.1)");
-    let total: f64 = report.iter().map(|(_, count)| count).sum();
-    let _ = writeln!(out, "{} distinct / {total} total", report.len());
-    for (segment, count) in report.iter() {
-        let _ = writeln!(out, "  {segment:<8} {count}");
+    let total: f64 = report.segments.iter().map(|item| item.count).sum();
+    let _ = writeln!(out, "{} distinct / {total} total", report.segments.len());
+    for item in &report.segments {
+        let _ = writeln!(out, "  {:<8} {}", item.segment, item.count);
     }
     Ok(())
 }

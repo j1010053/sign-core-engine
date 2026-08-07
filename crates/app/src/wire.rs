@@ -24,8 +24,9 @@
 //! bump。旁證是本模組的 golden 測試:形狀一變 JSON 就 churn,審查時看得到。
 
 use conlang_changeset::state::EvolutionState;
-use conlang_query::{Grouping, Lexicon};
+use conlang_query::{DerivationDag, Grouping, IntelligibilityScore, Lexicon};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 pub const UI_SCHEMA_V1: &str = "conlang.ui/v1";
 
@@ -101,4 +102,205 @@ pub struct NodeDetailV1 {
 pub struct GroupingViewV1 {
     pub schema: String,
     pub grouping: Grouping,
+}
+
+/// Launcher 與全域導覽列共用的專案概況。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectSummaryV1 {
+    pub schema: String,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// 沒有 `project.toml`、以 fallback 套件開啟的既有 store。
+    pub legacy: bool,
+    pub graph_dirty: bool,
+    pub has_pending: bool,
+    pub node_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active: Option<String>,
+    pub packages: Vec<String>,
+}
+
+/// Embedded package catalog exposed to the desktop settings page.
+///
+/// `declared` means the package is a root in `project.toml`; `selected` also
+/// includes packages pulled in transitively by `requires`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogPackageV1 {
+    pub id: String,
+    pub kind: String,
+    pub version: String,
+    pub source: String,
+    pub enabled: bool,
+    pub declared: bool,
+    pub selected: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageCatalogV1 {
+    pub schema: String,
+    pub packages: Vec<CatalogPackageV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WeightEntryV1 {
+    pub segment: String,
+    pub weight: f64,
+    /// `manual` | `prior`; imported providers remain reserved for a later UI.
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WeightConfigV1 {
+    pub schema: String,
+    pub declaration_source: String,
+    pub manual: Vec<WeightEntryV1>,
+    pub effective: Vec<WeightEntryV1>,
+}
+
+/// pending `.chg` 的可觀測狀態與 replay 預覽。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PendingChangeV1 {
+    pub schema: String,
+    pub source: String,
+    pub statements: usize,
+    pub diff: DiffSummaryV1,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiffSummaryV1 {
+    pub aligned: usize,
+    pub born: usize,
+    pub died: usize,
+    pub phon: usize,
+    pub syn: usize,
+    pub sem: usize,
+    pub prag: usize,
+    pub structural: usize,
+}
+
+impl From<conlang_changeset::diff::DiffVector> for DiffSummaryV1 {
+    fn from(value: conlang_changeset::diff::DiffVector) -> Self {
+        Self {
+            aligned: value.aligned,
+            born: value.born,
+            died: value.died,
+            phon: value.phon,
+            syn: value.syn,
+            sem: value.sem,
+            prag: value.prag,
+            structural: value.structural,
+        }
+    }
+}
+
+/// 現行語言快照的 expert view。它是 canonical `.lang`，不是第二份格式。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceViewV1 {
+    pub schema: String,
+    pub node: String,
+    pub source: String,
+}
+
+/// 專家編輯器把 `.lang` 轉成 pending `.chg` 後的 identity 對帳報告。
+///
+/// 這是新的獨立 V1 DTO，不改動既有 `SourceViewV1` 的 wire shape。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceReconcileV1 {
+    pub schema: String,
+    pub matched: usize,
+    pub inserted: usize,
+    pub deleted: usize,
+    pub primitive_edits: usize,
+    pub pending: PendingChangeV1,
+}
+
+/// Rebase 永遠先 preview；只有 `status == "clean"` 才能由確認命令套用。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RebasePreviewV1 {
+    pub schema: String,
+    pub node: String,
+    pub onto: String,
+    /// `clean` | `conflict` | `environment` | `broken`。
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub statement: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SegmentStatV1 {
+    pub segment: String,
+    pub count: f64,
+}
+
+/// 音素投影只是一份報表；`sampling_source` 永遠是 false。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StatsViewV1 {
+    pub schema: String,
+    pub node: String,
+    pub segmentation: String,
+    pub sampling_source: bool,
+    pub segments: Vec<SegmentStatV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProposalV1 {
+    pub phon: String,
+    pub score: f64,
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProposalsViewV1 {
+    pub schema: String,
+    pub node: String,
+    pub proposals: Vec<ProposalV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntelligibilityViewV1 {
+    pub schema: String,
+    pub source: String,
+    pub target: String,
+    pub score: IntelligibilityScore,
+    pub diff: DiffSummaryV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DerivationViewV1 {
+    pub schema: String,
+    pub node: String,
+    pub family: DerivationDag,
+}
+
+/// 前端用來編輯 grouping override 的穩定形狀。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GroupingOverrideV1 {
+    #[serde(default)]
+    pub assignments: BTreeMap<String, String>,
+    #[serde(default)]
+    pub labels: BTreeMap<String, String>,
 }

@@ -44,21 +44,28 @@
 
 pub mod cache;
 pub mod compile;
-pub mod view;
 pub mod ipc;
+pub mod view;
 pub mod wire;
 pub mod workspace;
 
 pub use cache::{ContentDigest, DiffKey, LexiconKey, QueryCache};
 pub use compile::{CompileKey, CompileService, CompileServiceError};
+pub use ipc::{
+    GroupingQuery, LexiconQuery, PackageSelectionInput, ProjectSlot, ProposalQuery, SegmentWeight,
+    SoundChangeInput, UiError, UiSession,
+};
 pub use view::apply_view_command;
-pub use ipc::{LexiconQuery, UiError, UiSession};
 pub use wire::{
-    EvolutionTreeV1, GroupingViewV1, LexiconViewV1, NodeDetailV1, TreeEdgeV1, TreeNodeV1,
-    UI_SCHEMA_V1,
+    CatalogPackageV1, DerivationViewV1, DiffSummaryV1, EvolutionTreeV1, GroupingOverrideV1,
+    GroupingViewV1, IntelligibilityViewV1, LexiconViewV1, NodeDetailV1, PackageCatalogV1,
+    PendingChangeV1, ProjectSummaryV1, ProposalV1, ProposalsViewV1, RebasePreviewV1, SegmentStatV1,
+    SourceReconcileV1, SourceViewV1, StatsViewV1, TreeEdgeV1, TreeNodeV1, WeightConfigV1,
+    WeightEntryV1, UI_SCHEMA_V1,
 };
 pub use workspace::Workspace;
 
+use conlang_changeset::diff::{diff_vector, DiffVector};
 use conlang_changeset::evolution::{Edge, EvolutionError, EvolutionGraph, Nativization, NodeId};
 use conlang_changeset::{
     change_set_prelude, ChangeInterpreter, PrimitiveEdit, ReplayError, ResolvedChangeSet,
@@ -176,6 +183,34 @@ impl Session {
         self.pending.as_ref()
     }
 
+    /// 目前 pending `.chg` 的 canonical source。
+    pub fn pending_source(&self) -> Option<String> {
+        self.pending.as_ref().map(ResolvedChangeSet::dump)
+    }
+
+    /// 以文字編輯器送來的完整 `.chg` 原子替換 pending。
+    ///
+    /// parse／resolve 全部成功後才改欄位；失敗時舊 working copy 保持可重試。
+    pub fn replace_pending_source(&mut self, source: &str) -> Result<(), AppError> {
+        let document = self.snapshot()?.clone();
+        let resolved = UnresolvedChangeSet::parse(source)?.resolve(&document, &self.libraries)?;
+        self.pending = Some(resolved);
+        Ok(())
+    }
+
+    /// 在不提交、不改圖的前提下 replay pending，供 UI 預覽。
+    pub fn preview_pending(&self) -> Result<DiffVector, AppError> {
+        let document = self.snapshot()?.clone();
+        let pending = self.pending.as_ref().ok_or(AppError::NoActiveNode)?;
+        let outcome = ChangeInterpreter::new(
+            document.clone(),
+            self.libraries.clone(),
+            pending.namespace.clone(),
+        )?
+        .run(pending)?;
+        Ok(diff_vector(&document, &outcome.document))
+    }
+
     /// 切到某個節點。**清空 redo**——分岔之後舊的 redo 路徑已無意義,
     /// 留著會讓「redo 跳到一個我沒去過的地方」。同一般編輯器的作法。
     pub fn open(&mut self, id: &NodeId) -> Result<(), AppError> {
@@ -277,6 +312,25 @@ impl Session {
         Ok(next)
     }
 
+    /// 從記憶體圖移除一個已經在 persistence 側驗證過的葉節點。
+    ///
+    /// 這不是 undo；呼叫端必須以顯式刪除操作觸發。若刪的是 active，導覽會
+    /// 回到最近仍存在的節點，沒有就取排序後第一個 root。
+    pub fn remove_node(&mut self, id: &NodeId) -> Result<(), AppError> {
+        self.graph.remove_node(id)?;
+        self.history.retain(|candidate| candidate != id);
+        self.redo.retain(|candidate| candidate != id);
+        if self.active.as_ref() == Some(id) {
+            self.active = self
+                .history
+                .pop()
+                .filter(|candidate| self.graph.node(candidate).is_some())
+                .or_else(|| self.graph.roots().next().cloned());
+        }
+        self.pending = None;
+        Ok(())
+    }
+
     // ── 落盤(唯一碰 fs 的地方,且格式一律借用既有的)──────────────────
 
     /// 存 pending 為一份 `.chg` 檔。
@@ -298,8 +352,7 @@ impl Session {
             source,
         })?;
         let document = self.snapshot()?.clone();
-        let resolved =
-            UnresolvedChangeSet::parse(&text)?.resolve(&document, &self.libraries)?;
+        let resolved = UnresolvedChangeSet::parse(&text)?.resolve(&document, &self.libraries)?;
         self.pending = Some(resolved);
         Ok(())
     }

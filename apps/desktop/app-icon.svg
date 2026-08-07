@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="LangCraft">
+  <rect width="1024" height="1024" rx="224" fill="#101816"/>
+  <path d="M238 218v588h338v-126H382V218H238Z" fill="#e7efeb"/>
+  <path d="M714 322c-120 0-214 84-214 190s94 190 214 190c46 0 89-12 123-34l-62-101c-17 11-37 17-59 17-52 0-92-31-92-72s40-72 92-72c22 0 42 6 59 17l62-101c-34-22-77-34-123-34Z" fill="#d5ff62"/>
+  <circle cx="750" cy="262" r="44" fill="#76e6b0"/>
+</svg>

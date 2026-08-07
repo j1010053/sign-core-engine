@@ -131,8 +131,14 @@ fn the_outbound_shapes_are_pinned() {
 
     let tree = serde_json::to_value(workspace.tree()).expect("json");
     assert_eq!(keys(&tree), vec!["active", "nodes", "schema"]);
+    let root = tree["nodes"]
+        .as_array()
+        .expect("tree nodes")
+        .iter()
+        .find(|node| node.get("parents").is_none())
+        .expect("tree has a root");
     assert_eq!(
-        keys(&tree["nodes"][0]),
+        keys(root),
         vec!["id", "label"],
         "root 沒有 parents ⇒ 該欄位不序列化"
     );

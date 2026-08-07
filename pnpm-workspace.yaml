@@ -1,0 +1,11 @@
+packages:
+  - apps/*
+
+nodeLinker: hoisted
+
+onlyBuiltDependencies:
+  - esbuild
+allowBuilds:
+  edgedriver: false
+  esbuild: true
+  geckodriver: false

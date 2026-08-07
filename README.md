@@ -7,6 +7,10 @@ conlang(人造語言)工作台的**共時／歷時核心(架構 2.0)**。本 rep
 `crates/changeset`（四原語、EvolutionGraph、reconstruct）與 `crates/persistence`
 （P60/P64 host filesystem boundary）。
 
+桌面工作台 **LangCraft** 位於 [`apps/desktop`](apps/desktop/README.md)，採
+React／TypeScript、Vite、Tauri 2 與 pnpm workspace；Rust `conlang-app` 仍是唯一的
+專案與領域狀態來源。
+
 自體段(autosegmental)**音變引擎**已抽離為獨立產品 **Tshiatūn(切韻)**,以 git
 submodule 掛於 `tshiatun/`(GPL-3.0-or-later,規則檔 `.qy`,bin `tshiatun`)。
 依賴方向單向:`language → tshiatun/dsl → tshiatun/core`(P20)。

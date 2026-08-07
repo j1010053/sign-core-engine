@@ -6,7 +6,10 @@
 //! 釘的是 MVP 兩個面板加編輯頁真的走得通:
 //! 演化樹 → 點節點 → 編輯頁 → 改 label/State/旁註 → **語言內容不動**。
 
-use conlang_app::ipc::{LexiconQuery, UiSession};
+use conlang_app::ipc::{
+    LexiconQuery, PackageSelectionInput, ProjectSlot, ProposalQuery, SegmentWeight,
+    SoundChangeInput, UiSession,
+};
 use conlang_changeset::evolution::{Edge, EvolutionGraph, Nativization};
 use conlang_changeset::state::{Contact, ContactIntensity, EvolutionState};
 use conlang_changeset::{change_set_prelude, UnresolvedChangeSet};
@@ -16,7 +19,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const SOURCE: &str = "Symbol k\nSymbol a\nSymbol t\n\nglobal trait Core:\n\n\
+const SOURCE: &str = "Symbol k\nSymbol a\nSymbol t\n\nClass consonant {k, t}\nClass vowel {a}\n\nglobal trait Core:\n\n\
 sign kat:\n    belongs Noun\n    phon:\n        /kat/\n    sem:\n        senses:\n            core = STONE\n\
 sign tak:\n    belongs Verb\n    phon:\n        /tak/\n    sem:\n        senses:\n            core = GO\n";
 
@@ -81,6 +84,15 @@ fn project(temp: &Temp) -> GraphStore {
 fn session(temp: &Temp) -> UiSession {
     project(temp);
     UiSession::open(&temp.0, LibrarySpec::default()).expect("open")
+}
+
+fn default_package_input() -> PackageSelectionInput {
+    let spec = LibrarySpec::default();
+    PackageSelectionInput {
+        std: spec.std.iter().map(ToString::to_string).collect(),
+        natural: spec.natural.as_ref().map(ToString::to_string),
+        plugins: spec.plugins.iter().map(ToString::to_string).collect(),
+    }
 }
 
 // ── 演化樹面板 ───────────────────────────────────────────────────────────
@@ -326,7 +338,9 @@ fn editing_without_a_node_reports_a_code() {
         session
             .set_state(&EvolutionState::default())
             .expect_err("state"),
-        session.write_annotation("a.md", "x").expect_err("annotation"),
+        session
+            .write_annotation("a.md", "x")
+            .expect_err("annotation"),
     ] {
         assert_eq!(error.code, "APP_NO_ACTIVE_NODE", "{error:?}");
     }
@@ -345,4 +359,298 @@ fn error_codes_come_from_the_existing_diagnostic_convention() {
         "沿用既有前綴而非新造:{error:?}"
     );
     assert!(!error.message.is_empty());
+}
+
+// ── F2:同一份 pending `.chg` 的 raw / structured / persist 邊界 ────────
+
+#[test]
+fn an_invalid_raw_draft_never_replaces_the_last_valid_pending_changeset() {
+    let temp = Temp::new("raw-atomic");
+    let mut session = session(&temp);
+    let valid = session.begin_edit("ui:test:raw").expect("begin");
+
+    session
+        .replace_pending_source("this is not a changeset")
+        .expect_err("invalid source");
+
+    let still_valid = session.pending_change().expect("old pending remains");
+    assert_eq!(still_valid.source, valid.source);
+    assert_eq!(still_valid.statements, 0);
+}
+
+#[test]
+fn structured_authoring_commits_in_memory_then_persists_only_on_explicit_save() {
+    let temp = Temp::new("authoring-boundaries");
+    let mut session = session(&temp);
+    let before = session.tree().nodes.len();
+
+    let pending = session
+        .stage_sound_change(&SoundChangeInput {
+            rule: "t => k".to_owned(),
+            home: "Core".to_owned(),
+        })
+        .expect("stage");
+    assert_eq!(pending.statements, 1);
+    assert!(pending.source.contains("t => k"));
+
+    session.commit(Some("shift".to_owned())).expect("commit");
+    assert_eq!(session.tree().nodes.len(), before + 1);
+    assert!(session.summary().graph_dirty);
+    assert!(!session.summary().has_pending);
+
+    let from_disk = UiSession::open(&temp.0, LibrarySpec::default()).expect("reopen before save");
+    assert_eq!(from_disk.tree().nodes.len(), before, "commit 尚未落盤");
+
+    session.save_project().expect("explicit save");
+    let saved = UiSession::open(&temp.0, LibrarySpec::default()).expect("reopen after save");
+    assert_eq!(saved.tree().nodes.len(), before + 1);
+}
+
+#[test]
+fn project_slot_refuses_to_replace_a_dirty_session_without_explicit_discard() {
+    let temp = Temp::new("dirty-slot");
+    project(&temp);
+    let mut slot = ProjectSlot::default();
+    slot.open(&temp.0, false).expect("open");
+    slot.session_mut()
+        .expect("session")
+        .begin_edit("ui:test:dirty")
+        .expect("begin");
+
+    let error = slot.open(&temp.0, false).expect_err("dirty guard");
+    assert_eq!(error.code, "APP_DIRTY_PROJECT");
+    assert!(slot.summary().expect("still open").has_pending);
+}
+
+#[test]
+fn expert_source_reconcile_is_atomic_and_only_stages_a_pending_changeset() {
+    let temp = Temp::new("source-reconcile");
+    let mut session = session(&temp);
+    let before_nodes = session.tree().nodes.len();
+
+    let error = session
+        .reconcile_source("not valid .lang")
+        .expect_err("invalid source must be rejected");
+    assert!(!error.code.is_empty());
+    assert_eq!(session.tree().nodes.len(), before_nodes);
+    assert!(
+        !session.summary().has_pending,
+        "failure must leave no partial working copy"
+    );
+
+    let canonical = session.source().expect("source").source;
+    let edited = canonical.replace("STONE", "ROCK");
+    assert_ne!(edited, canonical, "fixture must make a semantic edit");
+    let report = session.reconcile_source(&edited).expect("reconcile");
+
+    assert!(report.matched > 0);
+    assert!(report.primitive_edits > 0);
+    assert!(report.pending.diff.sem > 0);
+    assert_eq!(
+        session.tree().nodes.len(),
+        before_nodes,
+        "staging is not commit"
+    );
+    assert!(session.summary().has_pending);
+    assert!(!session.summary().graph_dirty);
+}
+
+#[test]
+fn rebase_preview_uses_a_graph_copy_and_apply_keeps_the_old_chain() {
+    let temp = Temp::new("rebase-preview");
+    let mut session = session(&temp);
+    let original = session.tree();
+    let root = original
+        .nodes
+        .iter()
+        .find(|node| node.parents.is_empty())
+        .expect("root")
+        .id
+        .clone();
+    let daughter = original
+        .nodes
+        .iter()
+        .find(|node| !node.parents.is_empty())
+        .expect("daughter")
+        .id
+        .clone();
+
+    session.select_node(&root).expect("select ancestor");
+    session
+        .stage_sound_change(&SoundChangeInput {
+            rule: "t => k".to_owned(),
+            home: "Core".to_owned(),
+        })
+        .expect("edit ancestor");
+    let edited_ancestor = session
+        .commit(Some("edited ancestor".to_owned()))
+        .expect("commit")
+        .id;
+    assert_eq!(session.tree().nodes.len(), original.nodes.len() + 1);
+
+    let preview = session
+        .preview_rebase(&daughter, &edited_ancestor)
+        .expect("preview");
+    assert_eq!(preview.status, "clean");
+    assert!(preview.result.is_some());
+    assert_eq!(
+        session.tree().nodes.len(),
+        original.nodes.len() + 1,
+        "preview must not mutate the real graph"
+    );
+
+    let applied = session
+        .apply_rebase(&daughter, &edited_ancestor)
+        .expect("apply");
+    assert_eq!(applied.status, "clean");
+    let tree = session.tree();
+    assert_eq!(tree.nodes.len(), original.nodes.len() + 2);
+    assert!(
+        tree.nodes.iter().any(|node| node.id == daughter),
+        "old chain remains"
+    );
+    assert_eq!(tree.active, applied.result);
+    assert!(session.summary().graph_dirty);
+}
+
+#[test]
+fn embedded_package_catalog_marks_declared_and_transitive_packages() {
+    let temp = Temp::new("package-catalog");
+    let session = session(&temp);
+    let catalog = session.package_catalog().expect("catalog");
+
+    assert_eq!(catalog.schema, "conlang.ui/v1");
+    assert!(!catalog.packages.is_empty());
+    assert!(catalog
+        .packages
+        .iter()
+        .all(|item| item.source == "embedded"));
+    assert!(catalog
+        .packages
+        .iter()
+        .any(|item| item.id == "std:core" && item.declared && item.selected));
+}
+
+#[test]
+fn package_changes_validate_before_disk_write_and_reopen_the_session() {
+    let temp = Temp::new("package-reopen");
+    let mut session = session(&temp);
+    let project_path = temp.0.join("project.toml");
+    let before = fs::read_to_string(&project_path).expect("before");
+
+    let error = session
+        .configure_packages(PackageSelectionInput {
+            std: vec!["std:not-installed".to_owned()],
+            ..PackageSelectionInput::default()
+        })
+        .expect_err("unknown package");
+    assert!(!error.code.is_empty());
+    assert_eq!(
+        fs::read_to_string(&project_path).expect("unchanged"),
+        before
+    );
+
+    let summary = session
+        .configure_packages(default_package_input())
+        .expect("validated reopen");
+    assert!(!summary.legacy);
+    assert_eq!(summary.node_count, 2);
+    assert!(!summary.graph_dirty);
+    assert!(!summary.has_pending);
+}
+
+#[test]
+fn dirty_project_blocks_package_reconfiguration() {
+    let temp = Temp::new("package-dirty");
+    let mut session = session(&temp);
+    session.begin_edit("ui:test:packages").expect("begin");
+
+    let error = session
+        .configure_packages(default_package_input())
+        .expect_err("dirty guard");
+    assert_eq!(error.code, "APP_DIRTY_PROJECT");
+    assert!(session.summary().has_pending);
+}
+
+#[test]
+fn manual_weights_persist_and_seeded_proposals_only_stage_pending_work() {
+    let temp = Temp::new("weights-proposals");
+    let mut session = session(&temp);
+    let entries = vec![
+        SegmentWeight {
+            segment: "a".to_owned(),
+            weight: 1.0,
+        },
+        SegmentWeight {
+            segment: "k".to_owned(),
+            weight: 1.0,
+        },
+        SegmentWeight {
+            segment: "t".to_owned(),
+            weight: 0.5,
+        },
+    ];
+    let config = session.set_weights(entries).expect("save weights");
+    assert_eq!(config.declaration_source, "project.toml:weights");
+    assert!(config
+        .effective
+        .iter()
+        .any(|item| item.segment == "k" && item.source == "manual"));
+
+    drop(session);
+    let mut session = UiSession::open(&temp.0, LibrarySpec::default()).expect("reopen");
+    assert_eq!(session.weight_config().expect("weights").manual.len(), 3);
+    let query = ProposalQuery {
+        name: "new_word".to_owned(),
+        gloss: Some("TEST".to_owned()),
+        categories: vec!["Noun".to_owned()],
+        template: "CVC".to_owned(),
+        count: 4,
+        seed: 42,
+        weights: Vec::new(),
+    };
+    let first = session.propose(&query).expect("propose");
+    let second = session.propose(&query).expect("same seed");
+    assert_eq!(first, second, "fixed seed must be reproducible");
+    let before_nodes = session.tree().nodes.len();
+    session.adopt_proposal(&query, 0).expect("adopt");
+    assert_eq!(
+        session.tree().nodes.len(),
+        before_nodes,
+        "adopt is not commit"
+    );
+    assert!(session.summary().has_pending);
+    assert!(!session.summary().graph_dirty);
+}
+
+#[test]
+fn language_state_changes_invalidate_the_proposal_cache() {
+    let temp = Temp::new("proposal-cache");
+    let mut session = session(&temp);
+    let query = ProposalQuery {
+        name: "cache_word".to_owned(),
+        gloss: None,
+        categories: vec!["Noun".to_owned()],
+        template: "CVC".to_owned(),
+        count: 2,
+        seed: 7,
+        weights: vec![
+            SegmentWeight {
+                segment: "a".to_owned(),
+                weight: 1.0,
+            },
+            SegmentWeight {
+                segment: "k".to_owned(),
+                weight: 1.0,
+            },
+        ],
+    };
+    session.propose(&query).expect("propose");
+    session
+        .set_state(&EvolutionState::default())
+        .expect("state write");
+    let error = session
+        .adopt_proposal(&query, 0)
+        .expect_err("state invalidates proposals");
+    assert_eq!(error.code, "APP_PROPOSALS_STALE");
 }

@@ -86,6 +86,7 @@ fn a_project_declaration_round_trips_through_toml() {
             natural: Some("natural:en-standard".to_owned()),
             plugins: Vec::new(),
         },
+        weights: [("k".to_owned(), 0.8)].into_iter().collect(),
     };
     store.write_project(&project).expect("write");
 
@@ -93,6 +94,7 @@ fn a_project_declaration_round_trips_through_toml() {
     let text = fs::read_to_string(temp.0.join("project.toml")).expect("read");
     assert!(text.contains("name = \"tshiatun\""), "{text}");
     assert!(text.contains("[packages]"), "{text}");
+    assert!(text.contains("[weights]"), "{text}");
 
     assert_eq!(store.read_project().expect("read"), Some(project.clone()));
     let spec = project.to_spec().expect("翻譯");

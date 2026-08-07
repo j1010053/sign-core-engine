@@ -136,7 +136,7 @@ pub struct ViewDocument {
 /// **鎖只在套件來自二進位之外時才有工作做。** 目前所有套件都是 `include_str!`
 /// 內嵌的,解析結果完全由引擎版本決定,不存在「同一份宣告在不同機器解出不同
 /// 版本」。等 R9-a 的注入入口真的被 host 用來讀磁碟套件,再做。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProjectDocument {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -145,6 +145,10 @@ pub struct ProjectDocument {
     pub default_view: Option<String>,
     #[serde(default)]
     pub packages: ProjectPackages,
+    /// Project-level manual sampling overrides. These are authoring data, not
+    /// language snapshots, and therefore never participate in node identity.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub weights: BTreeMap<String, f64>,
 }
 
 /// import 表本體。**只宣告直接依賴**;遞移依賴由各 package 的 `requires`

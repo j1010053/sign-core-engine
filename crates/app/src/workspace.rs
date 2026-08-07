@@ -61,6 +61,10 @@ impl Workspace {
         self.project.as_ref()
     }
 
+    pub fn replace_project(&mut self, project: ProjectDocument) {
+        self.project = Some(project);
+    }
+
     /// 目前節點的編譯產物。**lazy**——沒人問就不編譯。
     pub fn compiled(&mut self) -> Result<Arc<CompiledSystem>, AppError> {
         let document = self.session.snapshot()?.clone();
@@ -161,21 +165,36 @@ impl Workspace {
     /// 不在圖裡。
     pub fn node_detail(&self, store: &GraphStore) -> Result<NodeDetailV1, AppError> {
         let id = self.session.active().ok_or(AppError::NoActiveNode)?;
-        let node = self
-            .session
-            .graph()
-            .node(id)
-            .ok_or_else(|| conlang_changeset::evolution::EvolutionError::UnknownNode(id.clone()))?;
+        let node =
+            self.session.graph().node(id).ok_or_else(|| {
+                conlang_changeset::evolution::EvolutionError::UnknownNode(id.clone())
+            })?;
+        // A commit deliberately creates only an in-memory graph node.  Until the
+        // explicit Save Project boundary, that node has no hash-external files
+        // to read yet.  An existing node directory is different: failures below
+        // it must still propagate so damaged metadata is never hidden.
+        let node_dir = store.root().join("nodes").join(id.as_str());
+        let (state, annotations) = if node_dir.exists() {
+            (
+                store.read_state(id)?,
+                store
+                    .list_annotations(id)?
+                    .into_iter()
+                    .map(|path| path.display().to_string())
+                    .collect(),
+            )
+        } else {
+            (
+                conlang_changeset::state::EvolutionState::default(),
+                Vec::new(),
+            )
+        };
         Ok(NodeDetailV1 {
             schema: UI_SCHEMA_V1.to_owned(),
             id: id.as_str().to_owned(),
             label: node.label().map(str::to_owned),
-            state: store.read_state(id)?,
-            annotations: store
-                .list_annotations(id)?
-                .into_iter()
-                .map(|path| path.display().to_string())
-                .collect(),
+            state,
+            annotations,
             sign_count: node.snapshot().language().signs.len(),
         })
     }
