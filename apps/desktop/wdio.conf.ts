@@ -18,16 +18,25 @@ export const config: WebdriverIO.Config = {
   mochaOpts: { timeout: 60_000 },
   services: [["@wdio/tauri-service", { appBinaryPath: binary, driverProvider: "embedded" }]],
   onPrepare() {
+    // Windows 必須走 shell:自 CVE-2024-27980 修補起(Node ≥18.20.2),
+    // spawn 一個 `.cmd`/`.bat` 而不開 shell 會直接回 EINVAL——`pnpm` 在
+    // Windows 正是 `pnpm.cmd`。症狀很容易誤讀成建置失敗:status 是 `null`
+    // 而不是非零,且 stdio:"inherit" 什麼都印不出來(cargo 根本沒被執行)。
+    const windows = process.platform === "win32";
     const result = spawnSync(
-      process.platform === "win32" ? "pnpm.cmd" : "pnpm",
+      "pnpm",
       ["tauri", "build", "--debug", "--no-bundle", "--features", "wdio", "--config", "src-tauri/tauri.e2e.conf.json"],
       {
         cwd: here,
         env: { ...process.env, VITE_WDIO: "true" },
         stdio: "inherit",
-        shell: false,
+        shell: windows,
       },
     );
+    // `result.error` 一定要往外帶:spawn 失敗(EINVAL/ENOENT)與建置失敗
+    // 兩者的 status 都不是 0,但只有 error 分得出是哪一種。先前這裡把它
+    // 丟掉了,於是 CI 上只留下一句 "failed with no exit code"。
+    if (result.error) throw new Error(`Tauri E2E build could not be started: ${result.error.message}`);
     if (result.status !== 0) throw new Error(`Tauri E2E build failed with ${result.status ?? "no exit code"}`);
   },
 };
