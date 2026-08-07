@@ -26,7 +26,9 @@ sign dog:
     phon:
         /dog/
     sem:
-        kind = animal
+        feature:
+            kind = enum(animal, companion)
+            kind = animal
 
 sign puppy:
     belongs Canine
@@ -157,8 +159,8 @@ sign root:
         else:
             belongs PrimitiveFragmentMark
             sem:
-                first = one
-                second = two
+                time.past = one
+                time.present = two
 "#;
     let before = LanguageDocument::import_new_root(source, "evo:fragment-edits").unwrap();
     let case = sign_case(&before, "root");
@@ -175,7 +177,7 @@ sign root:
     )
     .unwrap()
     .document;
-    assert!(updated.source().contains("first = updated"));
+    assert!(updated.source().contains("time.past = updated"));
     assert_eq!(
         child(&updated, &branch, NodeKind::Definition, 0).id,
         first.id
@@ -187,7 +189,7 @@ sign root:
             parent: branch.clone(),
             anchor: Anchor::End,
             subtree: DetachedNode::Item(SignItem::Def(Def {
-                path: "sem.third".to_owned(),
+                path: "sem.time.future".to_owned(),
                 value: "three".to_owned(),
             })),
         },
@@ -376,12 +378,13 @@ sign dog:
 fn semantic_change_is_observable_when_surface_is_identical() {
     let before = document();
     let dog = before.ref_for_sign("dog").unwrap();
-    let semantic_def = child(&before, &dog, NodeKind::Definition, 1);
+    // P71 §4.3:dog 的 sem 內容已是宣告過的 feature,故走 FeatureAssignment。
+    let semantic_value = child(&before, &dog, NodeKind::FeatureValue, 0);
     let outcome = apply_edit(
         &before,
         PrimitiveEdit::Update {
-            node: semantic_def,
-            change: NodeUpdate::DefinitionValue("companion".to_owned()),
+            node: semantic_value,
+            change: NodeUpdate::FeatureAssignment("companion".to_owned()),
         },
         &LibrarySpec::default(),
     )

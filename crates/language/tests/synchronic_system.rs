@@ -33,7 +33,17 @@ fn ontology_and_projection_layers() {
         Some("base"),
         "the declared feature inherits its base value before the rule runs"
     );
-    assert_eq!(run.project(Dim::Sem, &reg).get("sem.gloss"), Some("RUN"));
+    // P71 §4.1:gloss 住 `senses:`,Def 投影已無此鍵
+    assert_eq!(run.project(Dim::Sem, &reg).get("sem.gloss"), None);
+    assert_eq!(
+        conlang_language::sem::SemNode::of_sign(run, &reg).field("gloss"),
+        Some("RUN")
+    );
+    assert_eq!(
+        run.project(Dim::Sem, &reg).get("sem.manner"),
+        Some("neutral"),
+        "已宣告的 sem feature 仍是 Def 路徑"
+    );
     assert_eq!(run.project(Dim::Phon, &reg).get("phon"), Some("/run/"));
 }
 
@@ -91,7 +101,15 @@ fn dimension_isolation_across_system() {
     let run = lang.sign_named("run").unwrap();
     let (run2, _) = synchronic::run_sign_dim_rules(run, Dim::Syn, &reg);
     // sem/phon 仍為原值(未被 syn 規則污染)
-    assert_eq!(run2.project(Dim::Sem, &reg).get("sem.gloss"), Some("RUN"));
+    assert_eq!(
+        run2.project(Dim::Sem, &reg).get("sem.manner"),
+        Some("neutral")
+    );
+    assert_eq!(
+        conlang_language::sem::SemNode::of_sign(&run2, &reg).field("gloss"),
+        Some("RUN"),
+        "義項亦未被 syn 規則污染"
+    );
     assert_eq!(run2.project(Dim::Phon, &reg).get("phon"), Some("/run/"));
     assert!(run2.project(Dim::Prag, &reg).defs.is_empty());
 }
@@ -102,15 +120,15 @@ fn patch_and_entrenchment_layer() {
     let (lang, reg) = load();
     let run = lang.sign_named("run").unwrap();
     assert_eq!(run.entrenchment(), Some(0.9));
-    let run2 = Patch::sem().set("gloss", "SPRINT").apply(run);
+    let run2 = Patch::sem().set("manner", "rapid").apply(run);
     assert_eq!(
-        run.project(Dim::Sem, &reg).get("sem.gloss"),
-        Some("RUN"),
+        run.project(Dim::Sem, &reg).get("sem.manner"),
+        Some("neutral"),
         "原不變"
     );
     assert_eq!(
-        run2.project(Dim::Sem, &reg).get("sem.gloss"),
-        Some("SPRINT")
+        run2.project(Dim::Sem, &reg).get("sem.manner"),
+        Some("rapid")
     );
     assert_eq!(run2.entrenchment(), Some(0.9), "patch 未動 entrenchment");
 }

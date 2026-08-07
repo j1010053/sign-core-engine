@@ -15,7 +15,7 @@ use crate::semantic_dto::{SemanticDocumentError, SemanticDocumentV1, SemanticNod
 use crate::synchronic::{self, RuleRecord, RuleStatus, SelfRead, SlotRead};
 use crate::{
     CaseCondition, CaseSelection, Dim, Expression, Language, LanguageDocument, SignApplication,
-    SignArgumentValue, SignDef, SignId, SignItem, SignLifecycle, SignProvenance, SlotConstraint,
+    SignArgumentValue, SignDef, SignId, SignItem, SignLifecycle, SignProvenance,
     TypedCase,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -316,6 +316,79 @@ fn path_dimension(path: &str) -> Option<Dim> {
     Dim::parse(head)
 }
 
+/// 引擎自有的 `Def` 路徑(P71 §4.2)——引擎自己讀的那幾條。
+const ENGINE_DEF_PATHS: &[&str] = &["phon", "phon.realization"];
+
+/// 套件座標的合法**前綴**(P71 §4.2:Phase 1 硬編;Phase 2 改為套件自行宣告,見 §5 ④)。
+///
+/// 命中規則:路徑等於該字串,或以 `<字串>.` 起頭。內容取自 `crates/language/lib`
+/// 下 std/natural 套件**實際使用**的座標(A4 重新量測,見規格 §7.5),
+/// 不是憑印象列的——漏一條就會讓套件自己編不過。
+const PACKAGE_DEF_PREFIXES: &[&str] = &[
+    "prag.clause-type",
+    "prag.evidence",
+    "prag.identifiability",
+    "prag.illocution",
+    "prag.information-structure",
+    "prag.perspective",
+    "prag.reference",
+    "sem.aspect",
+    "sem.causation",
+    "sem.event",
+    "sem.number",
+    "sem.person",
+    "sem.polarity",
+    "sem.possession",
+    "sem.predication",
+    "sem.quantification",
+    "sem.reference",
+    // `sem.roles` 同時是引擎自有(內部 context 標籤)與套件座標(`sem.roles.beneficiary`)。
+    "sem.roles",
+    "sem.time",
+    "syn.adposition",
+    "syn.alignment",
+    "syn.argument",
+    "syn.complex-predicate",
+    "syn.determination",
+    "syn.evidential",
+    "syn.interrogative",
+    "syn.negation",
+    "syn.number",
+    "syn.numeral",
+    "syn.possession",
+    "syn.predication",
+    "syn.pronoun",
+    "syn.tam",
+    "syn.typology",
+    "syn.valency",
+    "syn.voice",
+    "syn.word-order",
+];
+
+/// P71 R1 + §7 A1:路徑是否在封閉清單上。**`Def` 與 synchronic rule 目標共用**
+/// ——否則關了前門(Def)還留著側門(規則目標),而規則寫的是同一個路徑空間。
+pub(crate) fn def_path_allowed(path: &str) -> bool {
+    ENGINE_DEF_PATHS.contains(&path)
+        || PACKAGE_DEF_PREFIXES.iter().any(|prefix| {
+            path == *prefix
+                || path
+                    .strip_prefix(prefix)
+                    .is_some_and(|rest| rest.starts_with('.'))
+        })
+}
+
+/// 不在清單上時給作者的指路訊息(§4.2:訊息**必須指向 `feature:`**,
+/// 否則只看到一句 invalid Definition 而不知正解)。
+pub(crate) fn closed_list_hint(path: &str) -> String {
+    let dim = path_dimension(path)
+        .map(|dim| dim.keyword())
+        .unwrap_or("syn");
+    format!(
+        "path {path:?} is not on the closed list (P71); \
+         author-defined fields must be declared under `{dim}: feature:` with an enum domain"
+    )
+}
+
 fn validate_defs_and_rules(
     language: &Language,
     registry: &OntologyRegistry,
@@ -359,22 +432,29 @@ fn validate_defs_and_rules(
                             "source_package" => LibraryId::from_str(&def.value).is_ok(),
                             _ => false,
                         };
+                    // P71 §4.2:此處**曾是**開放逃生口——只檢查「長得像 `<dim>.<field>`」,
+                    // 欄位名不查、值不查。現改為封閉清單,比照上面的 `valid_meta`。
                     let valid_dim = path_dimension(&def.path).is_some()
                         && (def.path == "phon"
                             || def
                                 .path
                                 .split_once('.')
                                 .is_some_and(|(_, field)| !field.is_empty()))
-                        && parse_path(&def.path).is_ok();
+                        && parse_path(&def.path).is_ok()
+                        && def_path_allowed(&def.path);
                     if !valid_meta && !valid_dim {
+                        let detail = if path_dimension(&def.path).is_some()
+                            && !def_path_allowed(&def.path)
+                        {
+                            closed_list_hint(&def.path)
+                        } else {
+                            format!("invalid Definition {} = {}", def.path, def.value)
+                        };
                         report.push(
                             Diagnostic::new(
                                 Severity::Error,
                                 "DEF_INVALID_PATH_OR_VALUE",
-                                format!(
-                                    "{owner:?} has invalid Definition {} = {}",
-                                    def.path, def.value
-                                ),
+                                format!("{owner:?} has {detail}"),
                             )
                             .with_sources(vec![DiagnosticSource {
                                 owner: owner.to_owned(),
@@ -385,6 +465,13 @@ fn validate_defs_and_rules(
                     }
                 }
                 SignItem::Rule(rule) | SignItem::FeatureRule(rule) if rule.dim != Dim::Phon => {
+                    let source = || {
+                        vec![DiagnosticSource {
+                            owner: owner.to_owned(),
+                            path: Some(format!("rule {}", rule.id)),
+                            location: rule.source,
+                        }]
+                    };
                     for error in synchronic::validate_rule(rule, registry, slots) {
                         report.push(
                             Diagnostic::new(
@@ -392,12 +479,22 @@ fn validate_defs_and_rules(
                                 "RULE_INVALID",
                                 format!("{owner:?}: {error}"),
                             )
-                            .with_sources(vec![DiagnosticSource {
-                                owner: owner.to_owned(),
-                                path: Some(format!("rule {}", rule.id)),
-                                location: rule.source,
-                            }]),
+                            .with_sources(source()),
                         );
+                    }
+                    // P71 §7 A1:目標路徑亦受封閉清單約束。只查**普通規則**——
+                    // `FeatureRule` 的出口是 `feature:`,自有兩道既存檢查。
+                    if matches!(item, SignItem::Rule(_)) {
+                        for error in synchronic::rule_target_violations(rule) {
+                            report.push(
+                                Diagnostic::new(
+                                    Severity::Error,
+                                    "RULE_TARGET_NOT_ALLOWED",
+                                    format!("{owner:?}: {error}"),
+                                )
+                                .with_sources(source()),
+                            );
+                        }
                     }
                 }
                 SignItem::SlotFeatureBinding(binding)
@@ -621,9 +718,9 @@ fn validate_typed_schemas(
                                     format!(
                                         "{owner:?} gives role {:?} incompatible contracts [{}]{} and [{}]{}",
                                         role.name,
-                                        previous.constraint,
+                                        previous.constraint.display_name(),
                                         if previous.optional { "?" } else { "" },
-                                        role.constraint,
+                                        role.constraint.display_name(),
                                         if role.optional { "?" } else { "" },
                                     ),
                                 )
@@ -707,7 +804,9 @@ fn validate_typed_schemas(
                 SignItem::FeatureExpression(feature) => Some(feature.dim),
                 _ => None,
             };
-            if let Some(dim @ (Dim::Phon | Dim::Prag)) = dim {
+            // P71-C:`prag` 已納入 typed feature 支援(R2 需要一個宣告值域的出口)。
+            // `phon` 仍不支援:其內容是 UR/模板與 DSL 音變規則,不是 enum 值域欄位。
+            if let Some(dim @ Dim::Phon) = dim {
                 report.push(
                     Diagnostic::new(
                         Severity::Error,
@@ -1143,14 +1242,18 @@ fn validate_typed_schemas(
             }
         }
         for role in role_declarations.values() {
-            if !registry.has(&role.constraint) {
+            // `[*]` 不指名任何 trait,無存在性可驗。
+            if let Some(category) = role.constraint.category() {
+                if !registry.has(category) {
                 report.push(
                     Diagnostic::new(
                         Severity::Error,
                         "ROLE_UNKNOWN_CONSTRAINT",
                         format!(
-                            "{owner:?} role {:?} requires unknown trait {:?}",
-                            role.name, role.constraint
+                            "{owner:?} role {:?} requires unknown trait {:?}{}",
+                            role.name,
+                            category,
+                            registry.missing_name_hint(category)
                         ),
                     )
                     .with_sources(vec![DiagnosticSource {
@@ -1159,6 +1262,7 @@ fn validate_typed_schemas(
                         location: role.source,
                     }]),
                 );
+                }
             }
         }
         for binding in effective.items.iter().filter_map(|item| match item {
@@ -2050,13 +2154,7 @@ fn validate_constructions_and_local_phon(
                 };
                 let effective_filler = registry.effective_sign(filler_sign);
                 let categories = registry.sign_categories(&effective_filler);
-                let authorized = match constraint {
-                    SlotConstraint::AnySign => true,
-                    SlotConstraint::Category(required) => {
-                        categories.iter().any(|category| category == required)
-                    }
-                };
-                if !authorized {
+                if !constraint.is_satisfied_by(&categories, registry) {
                     report.push(Diagnostic::new(
                         Severity::Error,
                         "SLOT_MAP_FILLER_CATEGORY",
@@ -2287,6 +2385,11 @@ fn validate_constructions_and_local_phon(
 
 fn validate_source_language(std: &Language, effective_source: &Language) -> ValidationReport {
     let (registry, ontology_diags) = OntologyRegistry::build(&[std, effective_source]);
+    // R13:掛上「可解析但未宣告」的匯出索引,使名字查無時能指路。
+    let registry = match library::embedded_catalog() {
+        Ok(catalog) => registry.with_available(catalog.export_index()),
+        Err(_) => registry,
+    };
     let mut report = registry.validation_report(&[std, effective_source], &ontology_diags);
     validate_duplicate_signs(effective_source, &mut report);
     validate_defs_and_rules(std, &registry, &mut report);
@@ -2373,6 +2476,23 @@ pub fn check_document(document: &crate::LanguageDocument, spec: &LibrarySpec) ->
     report
 }
 
+/// **編譯語意版本**——同一份輸入在不同版本下可能編出不同的 `CompiledSystem`。
+///
+/// 用途:呼叫端的記憶體快取必須把它納入鍵,否則引擎升級後會沿用舊的編譯結果
+/// (見 `conlang-app::compile::CompileKey`)。
+///
+/// # 什麼時候要 bump
+///
+/// **compile 的任何可觀測輸出改變時**——五個 pass 的產物、ontology 閉包語意、
+/// projection 內容、診斷碼與嚴重度。純效能改動與註解不算。
+///
+/// # 誠實說明:沒有東西強制你 bump
+///
+/// 這是個約定,不是機制。唯一的旁證是 compile 的 **dump golden**(每 pass 一份)
+/// ——編譯語意一變它們就會 churn,審查時看得到。若某次改動讓那些 golden 動了
+/// 而此處沒動,那就是漏了。
+pub const COMPILER_SEMANTICS_VERSION: &str = "conlang-compile/1";
+
 /// Exact owned entry point requested by P38–P44. Use `compile_system_ref` when
 /// the caller wants to retain its original `Language` without cloning first.
 pub fn compile_system(language: Language) -> Result<CompiledSystem, CompileSystemError> {
@@ -2408,6 +2528,10 @@ pub fn compile_with_libraries_ref(
     let artifacts = codegen::compile_full(&effective_source)?;
     let ordered = artifacts.pipeline.ordered.clone();
     let (registry, ontology_diags) = OntologyRegistry::build(&[&std, &ordered]);
+    let registry = match library::embedded_catalog() {
+        Ok(catalog) => registry.with_available(catalog.export_index()),
+        Err(_) => registry,
+    };
     let mut validation = registry.validation_report(&[&std, &ordered], &ontology_diags);
     validate_duplicate_signs(&ordered, &mut validation);
     validate_defs_and_rules(&ordered, &registry, &mut validation);
@@ -2503,13 +2627,11 @@ impl CompiledSystem {
                         "unknown semantic trait {category:?}"
                     )));
                 }
-                if system.ontology.has("Semantic")
-                    && !system.ontology.category_is_a(category, "Semantic")
-                {
-                    return Err(SemanticDocumentError::Invalid(format!(
-                        "trait {category:?} is not a Semantic type"
-                    )));
-                }
+                // P71-S:此處曾要求每個型別都在 `Semantic` 之下。`Semantic` 只是
+                // `std:core` 的一個 trait,引擎不得據以設限;且 R14 之後 `types`
+                // 是**完整閉包**,合法 sign 的閉包本就含非 Semantic 範疇
+                // (如 `AgreementBearer`),該檢查會讓正常的 round-trip 失敗。
+                // 上面的 `has(category)` 已足以擋掉不存在的範疇。
             }
             let schema_sign = SignDef {
                 id: crate::SignId::synthetic(),
@@ -2565,14 +2687,13 @@ impl CompiledSystem {
             }
             for (name, child) in &node.roles {
                 let declaration = roles[name.as_str()];
-                if !child.types.iter().any(|category| {
-                    system
-                        .ontology
-                        .category_is_a(category, &declaration.constraint)
-                }) {
+                if !declaration
+                    .constraint
+                    .is_satisfied_by(&child.types, &system.ontology)
+                {
                     return Err(SemanticDocumentError::Invalid(format!(
                         "role {name:?} requires [{}]",
-                        declaration.constraint
+                        declaration.constraint.display_name()
                     )));
                 }
                 validate_node(system, child)?;
@@ -2924,9 +3045,7 @@ impl CompiledSystem {
                             "unknown case category {expected:?}"
                         )));
                     }
-                    return Ok(filler.categories.iter().any(|category| {
-                        category == expected || self.ontology.category_is_a(category, expected)
-                    }));
+                    return Ok(self.ontology.categories_satisfy(&filler.categories, expected));
                 }
             }
         }
@@ -4003,9 +4122,7 @@ impl CompiledSystem {
             if !construction::is_construction(&effective)
                 || !self
                     .ontology
-                    .sign_categories(&effective)
-                    .iter()
-                    .any(|item| item == category || self.ontology.category_is_a(item, category))
+                    .categories_satisfy(&self.ontology.sign_categories(&effective), category)
             {
                 continue;
             }

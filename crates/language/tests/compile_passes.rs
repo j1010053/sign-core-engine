@@ -129,7 +129,7 @@ fn stage_sort_keeps_feature_rules_in_the_same_dispatch_stream() {
     use conlang_language::Stage::*;
 
     let source = Language::parse(
-        "sign staged:\n    syn:\n        feature:\n            mark = enum(on, off)\n            mark => on @stage phrase\n        plain => ready @stage stem\n",
+        "sign staged:\n    syn:\n        feature:\n            mark = enum(on, off)\n            mark => on @stage phrase\n        tam.past => ready @stage stem\n",
     )
     .unwrap();
     let ordered = compile::compile(&source).unwrap().ordered;
@@ -146,7 +146,7 @@ fn stage_sort_keeps_feature_rules_in_the_same_dispatch_stream() {
     assert_eq!(
         sequence,
         [
-            ("rule", Stem, "plain => ready"),
+            ("rule", Stem, "tam.past => ready"),
             ("feature", Phrase, "mark => on")
         ]
     );
@@ -183,7 +183,8 @@ fn error_unknown_trait() {
 #[test]
 fn error_block_out_of_range() {
     // 0 起算:1-block trait 的合法索引只有 0;`T[1]` 越界。
-    let l = Language::parse("trait T:\n    syn:\n        a = 1\n\nsign x:\n    T[1]\n").unwrap();
+    let l =
+        Language::parse("trait T:\n    syn:\n        tam.past = 1\n\nsign x:\n    T[1]\n").unwrap();
     assert_eq!(
         compile::expand_traits(&l).unwrap_err(),
         CompileError::BlockOutOfRange {
@@ -199,7 +200,7 @@ fn error_block_out_of_range() {
 #[test]
 fn error_incomplete_trait_use_p5() {
     let l = Language::parse(
-        "trait T:\n    syn:\n        a = 1\n    ==\n    syn:\n        b = 2\n\nsign x:\n    T[0]\n",
+        "trait T:\n    syn:\n        tam.past = 1\n    ==\n    syn:\n        tam.present = 2\n\nsign x:\n    T[0]\n",
     )
     .unwrap();
     assert_eq!(
@@ -218,7 +219,7 @@ fn error_incomplete_trait_use_p5() {
 fn bare_and_empty_brackets_inline_whole_trait() {
     // 分塊 trait(2 block)裸引用 → 兩 block 全展開,無 IncompleteTraitUse
     let split = Language::parse(
-        "trait T:\n    syn:\n        a = 1\n    ==\n    syn:\n        b = 2\n\nsign x:\n    T\n",
+        "trait T:\n    syn:\n        tam.past = 1\n    ==\n    syn:\n        tam.present = 2\n\nsign x:\n    T\n",
     )
     .unwrap();
     let e = compile::expand_traits(&split).unwrap();
@@ -231,7 +232,11 @@ fn bare_and_empty_brackets_inline_whole_trait() {
             _ => None,
         })
         .collect();
-    assert_eq!(paths, ["syn.a", "syn.b"], "裸 T 展開全部 block");
+    assert_eq!(
+        paths,
+        ["syn.tam.past", "syn.tam.present"],
+        "裸 T 展開全部 block"
+    );
     assert!(!x
         .items
         .iter()
@@ -239,7 +244,7 @@ fn bare_and_empty_brackets_inline_whole_trait() {
 
     // 未分塊 trait(1 block)寫 `T[]` → 整個 trait(等同裸 T),canonical 印為裸 `T`
     let unsplit =
-        Language::parse("trait T:\n    syn:\n        a = 1\n\nsign y:\n    T[]\n").unwrap();
+        Language::parse("trait T:\n    syn:\n        tam.past = 1\n\nsign y:\n    T[]\n").unwrap();
     assert!(
         unsplit.dump().contains("    T\n"),
         "T[] 正規化為裸 T:\n{}",
@@ -256,7 +261,7 @@ fn bare_and_empty_brackets_inline_whole_trait() {
             _ => None,
         })
         .collect();
-    assert_eq!(yp, ["syn.a"]);
+    assert_eq!(yp, ["syn.tam.past"]);
 }
 
 #[test]

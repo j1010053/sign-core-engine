@@ -364,8 +364,10 @@ Class vowel {s}
 
 trait EvaluateOnce:
     syn:
-        state => changed / state == committed
-            else state => committed
+        feature:
+            state = enum(changed, committed)
+            state => changed / state == committed
+                else state => committed
 
 sign Wrapper:
     syn:

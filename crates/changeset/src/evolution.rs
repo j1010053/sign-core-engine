@@ -198,6 +198,14 @@ pub enum EvolutionError {
     /// root 由 `add_root` 建立;其餘節點必須有 parent。
     #[error("EVOLUTION_NO_PARENT: a committed node needs at least one parent")]
     NoParent,
+    /// 節點被別的節點引用為 parent,不得移除。
+    ///
+    /// 這不是政策而是**結構事實**:子節點的 id 由其 parents 的 id 算出
+    /// (見本檔頭「無環是結構保證,不是檢查」),移除父節點會讓子節點的 id
+    /// 指向不存在的東西,`restore` 也會以
+    /// [`PersistedParentMissing`](Self::PersistedParentMissing) 拒收。
+    #[error("EVOLUTION_NODE_HAS_DEPENDENTS: {node} is a parent of {dependent}")]
+    NodeHasDependents { node: NodeId, dependent: NodeId },
     /// 兩個 root 共用 identity namespace ⇒ 它們的穩定 id 會撞,合併會靜默併掉
     /// 無關的 sign(見 `add_root`)。
     #[error("EVOLUTION_DUPLICATE_ROOT_NAMESPACE: {0} is already used by another root")]
@@ -450,6 +458,49 @@ impl EvolutionGraph {
             .get_mut(id)
             .ok_or_else(|| EvolutionError::UnknownNode(id.clone()))?;
         node.label = label;
+        Ok(())
+    }
+
+    /// 移除一個節點。**只有葉節點可移除**。
+    ///
+    /// # 為什麼需要它
+    ///
+    /// 撰寫時的「撤銷一次演化」需要真的把節點拿掉。此前圖上沒有移除入口,
+    /// 而 host 端的 `save` 是 append-only,故「從圖裡刪掉再存檔」是**靜默無效**的
+    /// ——下一次 `load` 會把它讀回來。有了本方法與 `GraphStore::remove_node`,
+    /// 兩側才對得起來。
+    ///
+    /// # 為什麼只有葉節點
+    ///
+    /// 子節點的 id 由其 parents 的 id 算出,故父節點被任何節點引用時就**結構上**
+    /// 不可移除——移了會讓子節點的 id 指向不存在的東西,且 `restore` 會拒收
+    /// (`PersistedParentMissing`)。引用邊(`Edge::reference`)同樣算依賴:
+    /// donor 被移除後,子節點的 id 一樣對不上。
+    ///
+    /// root 被移除時一併釋放其 identity namespace,否則同一份 `.lang` 無法重加。
+    pub fn remove_node(&mut self, id: &NodeId) -> Result<(), EvolutionError> {
+        if !self.nodes.contains_key(id) {
+            return Err(EvolutionError::UnknownNode(id.clone()));
+        }
+        for (candidate, node) in &self.nodes {
+            if candidate == id {
+                continue;
+            }
+            if node.parents.iter().any(|edge| &edge.from == id) {
+                return Err(EvolutionError::NodeHasDependents {
+                    node: id.clone(),
+                    dependent: candidate.clone(),
+                });
+            }
+        }
+        let removed = self
+            .nodes
+            .remove(id)
+            .ok_or_else(|| EvolutionError::UnknownNode(id.clone()))?;
+        if self.roots.remove(id) {
+            self.root_namespaces
+                .remove(&removed.snapshot.identities().root_namespace);
+        }
         Ok(())
     }
 
@@ -897,7 +948,7 @@ mod tests {
     use super::*;
     use crate::change_set_prelude;
 
-    const ROOT: &str = "sign x:\n    syn:\n        category = noun\n";
+    const ROOT: &str = "sign x:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n";
 
     fn fixture() -> (EvolutionGraph, NodeId) {
         let root = LanguageDocument::import_new_root(ROOT, "evo:root").expect("root parses");
@@ -907,7 +958,7 @@ mod tests {
         let mut changeset =
             change_set_prelude(&base, &LibrarySpec::default(), "evo:n1").expect("prelude");
         changeset
-            .push_str("\n    #0:\n        update sign(\"x\").def[syn.category].value = verb\n");
+            .push_str("\n    #0:\n        update sign(\"x\").feature[syn.category].value = verb\n");
         let id = graph
             .commit(
                 vec![Edge::trunk(root_id, changeset)],
@@ -925,7 +976,7 @@ mod tests {
         let (mut graph, id) = fixture();
         let mut node = graph.nodes.remove(&id).expect("node exists");
         node.snapshot = LanguageDocument::import_new_root(
-            "sign x:\n    syn:\n        category = adj\n",
+            "sign x:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = adj\n",
             "evo:forged",
         )
         .expect("forged parses");

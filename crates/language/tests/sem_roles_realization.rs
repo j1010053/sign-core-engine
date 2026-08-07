@@ -79,7 +79,9 @@ sign TestCountTransfer:
             agent = {agent}
             theme = {theme}
     prag:
-        realized-number => $self.sem.number
+        feature:
+            realized-number = enum(singular, plural)
+            realized-number => $self.sem.number
     phon:
         /{agent}{theme}/
         realization:
@@ -525,7 +527,9 @@ fn feature_rules_share_stable_stage_dispatch_with_ordinary_rules() {
             copied => $self.syn.value @stage stem
 trait Plain:
     syn:
-        value => ready @stage phrase
+        feature:
+            value = enum(ready)
+            value => ready @stage phrase
 sign Ordered:
     belongs Typed
     belongs Plain
@@ -563,7 +567,9 @@ sign GuardedForm:
         slots:
             stem [Noun]
     prag:
-        purpose = test
+        feature:
+            purpose = enum(test)
+            purpose = test
     phon:
         /x/
         realization:

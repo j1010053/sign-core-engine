@@ -18,13 +18,17 @@ const ROOT: &str = "Symbol a\nSymbol b\n\n\
                     \x20   phon:\n\
                     \x20       /a/\n\
                     \x20   syn:\n\
-                    \x20       category = noun\n\
+                    \x20       feature:\n\
+                    \x20           category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n\
+                    \x20           category = noun\n\
                     \x20   sem:\n\
                     \x20       senses:\n\
                     \x20           core = THING\n\n\
                     sign y:\n\
                     \x20   syn:\n\
-                    \x20       category = noun\n";
+                    \x20       feature:\n\
+                    \x20           category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n\
+                    \x20           category = noun\n";
 
 fn base() -> LanguageDocument {
     LanguageDocument::import_new_root(ROOT, "evo:root").expect("root parses")
@@ -59,7 +63,7 @@ fn a_syn_change_moves_only_the_syn_component() {
     let after = apply(
         &before,
         "evo:n1",
-        &statement("update sign(\"x\").def[syn.category].value = verb"),
+        &statement("update sign(\"x\").feature[syn.category].value = verb"),
     );
     let vector = diff_vector(&before, &after);
 
@@ -91,7 +95,7 @@ fn the_dimension_accessor_agrees_with_the_fields() {
     let after = apply(
         &before,
         "evo:n1",
-        &statement("update sign(\"x\").def[syn.category].value = verb"),
+        &statement("update sign(\"x\").feature[syn.category].value = verb"),
     );
     let vector = diff_vector(&before, &after);
     assert_eq!(vector.dimension(Dim::Syn), vector.syn);
@@ -177,7 +181,7 @@ fn unrelated_documents_share_nothing() {
     // 不同命名空間 ⇒ 沒有一個 id 對得上 ⇒ 全部計為生滅,沒有任何維分量。
     let left = base();
     let right = LanguageDocument::import_new_root(
-        "sign only:\n    syn:\n        category = noun\n",
+        "sign only:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n",
         "evo:r",
     )
     .unwrap();

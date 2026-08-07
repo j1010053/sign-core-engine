@@ -15,7 +15,9 @@ sign go:
     belongs MotionVerb
     entrenchment = 0.2
     syn:
-        category = verb
+        feature:
+            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)
+            category = verb
     sem:
         senses:
             core = GO
@@ -24,7 +26,9 @@ sign finish:
     belongs MotionVerb
     entrenchment = 0.2
     syn:
-        category = verb
+        feature:
+            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)
+            category = verb
     sem:
         senses:
             core = FINISH
@@ -33,7 +37,9 @@ sign stone:
     belongs Noun
     entrenchment = 0.2
     syn:
-        category = noun
+        feature:
+            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)
+            category = noun
     sem:
         senses:
             core = STONE
@@ -107,11 +113,11 @@ function CandidatesInRecipes(x):
     package.function_sources = vec![
         LibraryFunctionSource {
             path: "code/goals.chg".to_owned(),
-            source: SEQUENCE,
+            source: SEQUENCE.to_owned(),
         },
         LibraryFunctionSource {
             path: "code/recipes.chg".to_owned(),
-            source: CANDIDATES,
+            source: CANDIDATES.to_owned(),
         },
     ];
     let table = functions_from_packages(&[&package]).unwrap();
@@ -312,9 +318,9 @@ fn synthetic(functions: &'static str, exported: &[&str]) -> LibraryPackage {
             })
             .collect(),
         id,
-        code: "",
-        functions,
-        data: "",
+        code: String::new(),
+        functions: functions.to_owned(),
+        data: String::new(),
     }
 }
 

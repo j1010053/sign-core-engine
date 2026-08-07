@@ -330,6 +330,29 @@ pub(crate) fn rule_slot_references(rule: &crate::Rule) -> Vec<String> {
         .collect()
 }
 
+/// P71 §7 A1:**普通規則的目標路徑亦受封閉清單約束**。
+///
+/// 規則寫入的是 `Patch` 的 Def 路徑(見本檔 `Patch::for_dim(dim).set(...)`),
+/// 與 `Def` 同一個路徑空間。只關 `Def` 而不關這裡,等於前門上鎖、側門敞開:
+/// `syn: category => noun` 照樣寫得進去,而那正是 P69 才剛修掉的路徑。
+///
+/// **`FeatureRule` 不走這條**——其目標是宣告過的 feature,已有
+/// `FEATURE_RULE_UNDECLARED` 與 `FEATURE_RULE_VALUE_OUT_OF_DOMAIN` 兩道檢查,
+/// 那正是 R2 給作者的正解出口。
+pub(crate) fn rule_target_violations(rule: &crate::Rule) -> Vec<String> {
+    std::iter::once(rule.body.as_str())
+        .chain(rule.else_chain.iter().map(String::as_str))
+        .chain(rule.then_chain.iter().map(String::as_str))
+        .enumerate()
+        .filter_map(|(index, branch)| {
+            let parsed = parse_dim_rule(branch).ok()?;
+            let path = format!("{}.{}", rule.dim.keyword(), parsed.field);
+            (!crate::system::def_path_allowed(&path))
+                .then(|| format!("branch {index}: {}", crate::system::closed_list_hint(&path)))
+        })
+        .collect()
+}
+
 pub(crate) fn validate_rule(
     rule: &crate::Rule,
     registry: &OntologyRegistry,

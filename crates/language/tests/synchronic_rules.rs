@@ -21,21 +21,28 @@ fn setup() -> (Language, OntologyRegistry) {
 fn rules_are_tagged_with_their_dimension() {
     let (lang, _) = setup();
     let teacher = lang.sign_named("teacher").unwrap();
+    // P71-C:prag 亦支援 typed feature,故 register 規則現為 `FeatureRule`。
     let dims: Vec<_> = teacher
         .items
         .iter()
         .filter_map(|i| match i {
-            conlang_language::SignItem::Rule(r) => Some(r.dim),
+            conlang_language::SignItem::Rule(r) | conlang_language::SignItem::FeatureRule(r) => {
+                Some(r.dim)
+            }
             _ => None,
         })
         .collect();
     assert_eq!(dims, vec![Dim::Prag]);
     let chain = lang.sign_named("chain").unwrap();
+    // P71 §4.3:`chain` 的目標 a/b 現為已宣告特徵,故其規則節點是 `FeatureRule`。
+    // 維度標記(P44 隔離的依據)對兩種規則節點一致。
     let dims: Vec<_> = chain
         .items
         .iter()
         .filter_map(|i| match i {
-            conlang_language::SignItem::Rule(r) => Some(r.dim),
+            conlang_language::SignItem::Rule(r) | conlang_language::SignItem::FeatureRule(r) => {
+                Some(r.dim)
+            }
             _ => None,
         })
         .collect();

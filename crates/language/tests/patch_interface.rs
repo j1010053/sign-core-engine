@@ -17,16 +17,16 @@ fn sign(src: &str) -> conlang_language::SignDef {
 /// `Sign × Patch → Sign'`:Set upsert、**保留原 Sign**(不就地破壞,P30)。
 #[test]
 fn set_upserts_and_preserves_original() {
-    let s = sign("sign a:\n    syn:\n        class = noun\n");
+    let s = sign("sign a:\n    syn:\n        tam.present = 0\n");
     let before = format!("{s:?}");
-    let p = Patch::syn().set("class", "verb").set("valence", "2");
+    let p = Patch::syn().set("tam.present", "1").set("tam.past", "1");
     let s2 = p.apply(&s);
     assert_eq!(format!("{s:?}"), before, "原 Sign 不變(P30)");
 
     let (reg, _) = ontology::with_std(&Language::new());
     let syn = s2.project(Dim::Syn, &reg);
-    assert_eq!(syn.get("syn.class"), Some("verb"), "upsert 既有欄位");
-    assert_eq!(syn.get("syn.valence"), Some("2"), "新增欄位");
+    assert_eq!(syn.get("syn.tam.present"), Some("1"), "upsert 既有欄位");
+    assert_eq!(syn.get("syn.tam.past"), Some("1"), "新增欄位");
 }
 
 /// Unset 移除本地 Def;繼承值(範疇預設)由 projection 重新浮現。
@@ -34,18 +34,18 @@ fn set_upserts_and_preserves_original() {
 fn unset_removes_local_and_inheritance_resurfaces() {
     // Verb 範疇預設 syn.class=verb(stdlib);sign 本地覆寫為 proper,unset 後回繼承值。
     let lang =
-        Language::parse("trait InheritedSynFeature:\n    syn:\n        inherited_value = base\nsign p:\n    belongs Verb\n    belongs InheritedSynFeature\n    syn:\n        inherited_value = local\n").unwrap();
+        Language::parse("trait InheritedSynFeature:\n    syn:\n        tam.past = base\nsign p:\n    belongs Verb\n    belongs InheritedSynFeature\n    syn:\n        tam.past = local\n").unwrap();
     let (reg, _) = ontology::with_std(&lang);
     let p = lang.sign_named("p").unwrap();
     assert_eq!(
-        p.project(Dim::Syn, &reg).get("syn.inherited_value"),
+        p.project(Dim::Syn, &reg).get("syn.tam.past"),
         Some("local"),
         "本地覆寫"
     );
 
-    let s2 = Patch::syn().unset("inherited_value").apply(p);
+    let s2 = Patch::syn().unset("tam.past").apply(p);
     assert_eq!(
-        s2.project(Dim::Syn, &reg).get("syn.inherited_value"),
+        s2.project(Dim::Syn, &reg).get("syn.tam.past"),
         Some("base"),
         "unset 本地後,範疇繼承值 verb 重新浮現"
     );
@@ -65,11 +65,14 @@ fn patch_is_dimension_isolated_by_construction() {
 #[test]
 fn patch_serialization_round_trips() {
     let p = Patch::sem()
-        .set("gloss", "GIVE")
+        .set("time.past", "1")
         .unset("stale")
-        .set("frame", "giving");
+        .set("causation", "direct");
     let text = p.render();
-    assert_eq!(text, "sem: set gloss=GIVE; unset stale; set frame=giving");
+    assert_eq!(
+        text,
+        "sem: set time.past=1; unset stale; set causation=direct"
+    );
     assert_eq!(Patch::parse(&text).unwrap(), p, "round-trip");
     // 空 patch
     let e = Patch::phon();
@@ -94,10 +97,10 @@ fn patch_parse_rejects_malformed() {
 #[test]
 fn diff_apply_matches_target_in_each_dimension() {
     let before = sign(
-        "sign w:\n    phon:\n        /a/\n    syn:\n        x = 1\n    sem:\n        gloss = A\n",
+        "sign w:\n    phon:\n        /a/\n    syn:\n        tam.present = 1\n    sem:\n        senses:\n            core = A\n",
     );
     let after = sign(
-        "sign w:\n    phon:\n        /b/\n    syn:\n        y = 2\n    sem:\n        gloss = B\n    prag:\n        register = formal\n",
+        "sign w:\n    phon:\n        /b/\n    syn:\n        tam.past = 2\n    sem:\n        senses:\n            core = B\n    prag:\n        evidence.direct = 1\n",
     );
     let empty = Language::new();
     let (reg, _) = ontology::with_std(&empty);
@@ -138,8 +141,9 @@ fn entrenchment_is_data_field_only() {
 /// entrenchment 是**非維度** meta 欄位:不落任一維 projection(維度正交)。
 #[test]
 fn entrenchment_is_non_dimensional() {
-    let lang = Language::parse("sign w:\n    entrenchment = 0.5\n    syn:\n        class = verb\n")
-        .unwrap();
+    let lang =
+        Language::parse("sign w:\n    entrenchment = 0.5\n    syn:\n        tam.present = 1\n")
+            .unwrap();
     let (reg, _) = ontology::with_std(&lang);
     let w = lang.sign_named("w").unwrap();
     for dim in Dim::all() {

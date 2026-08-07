@@ -43,8 +43,12 @@ fn derived_sem_composes_filler_meaning_nodes() {
     // role gift = book 的語意節點
     let gift = tok.sem.role("gift").expect("gift role");
     assert_eq!(gift.field("gloss"), Some("BOOK"));
-    // 節點非字串:giver 是有多欄位的 SemNode
-    assert!(!giver.is_atomic() || giver.fields.len() >= 2);
+    // 節點非字串:giver 帶整個語意結構(義項網絡 + 已宣告特徵),不是單一 gloss 字串
+    assert!(!giver.is_atomic() || giver.senses.len() + giver.features.len() >= 2);
+    assert_eq!(giver.senses.len(), 1, "gloss 現住 senses(P71 §4.1)");
+    assert_eq!(giver.features.len(), 1, "ref 現為已宣告特徵(P71 §4.3)");
+    // P71 R1:裸 Def 已無立足之地——此節點不該再有任何純量 Def 欄位
+    assert!(giver.fields.is_empty(), "無裸 Def 殘留:{:?}", giver.fields);
 }
 
 /// form-meaning pair 同時導出:表層(form)+ 語意(meaning)。
@@ -69,7 +73,10 @@ fn form_and_meaning_derived_together() {
     assert_eq!(tok.sem.role("giver").unwrap().field("gloss"), Some("JOHN"));
 }
 
-/// polysemy(多義):一 filler 帶多個 sense 欄位,全數保留於其語意節點。
+/// polysemy(多義):一 filler 帶多個**一級義項節點**,全數保留於其語意節點。
+///
+/// P71 §4.1 後,多義不再靠自造欄位(舊寫法 `sense2 = LOGBOOK`)假裝——義項各有身分,
+/// `field("gloss")` 投影主義項 `core`,其餘義項仍在 `senses` 裡各自可定址。
 #[test]
 fn polysemy_filler_keeps_multiple_senses() {
     let (lang, _art, reg) = setup();
@@ -81,8 +88,26 @@ fn polysemy_filler_keeps_multiple_senses() {
     )
     .unwrap();
     let gift = tok.sem.role("gift").unwrap();
+    // 主義項投影自 senses,不是 Def 欄位
     assert_eq!(gift.field("gloss"), Some("BOOK"));
-    assert_eq!(gift.field("sense2"), Some("LOGBOOK"), "多義合法、不去重");
+    assert_eq!(gift.primary_sense().map(|s| s.name.as_str()), Some("core"));
+    // 多義 = 多個有身分的義項:不去重、不塌成單一欄位
+    let senses = gift
+        .senses
+        .iter()
+        .map(|s| (s.name.as_str(), s.gloss.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        senses,
+        vec![("core", "BOOK"), ("log", "LOGBOOK")],
+        "多義合法、不去重"
+    );
+    // 判別性:`gloss` 不得同時殘留為 Def 欄位(否則兩份真相)
+    assert!(
+        !gift.fields.iter().any(|(k, _)| k == "gloss"),
+        "gloss 已退出 Def 欄位投影:{:?}",
+        gift.fields
+    );
 }
 
 /// synonymy(同義):sofa/couch 同 gloss → 建構無診斷、兩者皆可填。

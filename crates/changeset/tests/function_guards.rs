@@ -31,25 +31,33 @@ use conlang_language::{
 const SOURCE: &str = r#"trait MotionVerb:
     belongs Verb
     syn:
-        telic = no
+        feature:
+            telic = enum(no, yes)
+            telic = no
 
 sign go:
     belongs MotionVerb
     entrenchment = 0.2
     syn:
-        category = verb
+        feature:
+            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)
+            category = verb
 
 sign finish:
     belongs MotionVerb
     entrenchment = 0.2
     syn:
-        category = verb
+        feature:
+            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)
+            category = verb
 
 sign stone:
     belongs Noun
     entrenchment = 0.2
     syn:
-        category = noun
+        feature:
+            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)
+            category = noun
 "#;
 
 fn base() -> LanguageDocument {
@@ -83,9 +91,9 @@ fn synthetic(functions: &'static str, exported: &[&str]) -> LibraryPackage {
             })
             .collect(),
         id,
-        code: "",
-        functions,
-        data: "",
+        code: String::new(),
+        functions: functions.to_owned(),
+        data: String::new(),
     }
 }
 
@@ -343,13 +351,17 @@ fn the_same_definition_evaluates_differently_against_a_different_document() {
     const MOVED: &str = r#"trait MotionVerb:
     belongs Verb
     syn:
-        telic = no
+        feature:
+            telic = enum(no, yes)
+            telic = no
 
 sign go:
     belongs Noun
     entrenchment = 0.2
     syn:
-        category = noun
+        feature:
+            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)
+            category = noun
 "#;
     let verbish = base();
     let nounish = LanguageDocument::import_new_root(MOVED, "evo:other").expect("parses");

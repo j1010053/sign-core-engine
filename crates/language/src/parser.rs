@@ -1362,8 +1362,12 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                         "role declaration must close its `[Trait]` constraint",
                     ));
                 };
-                if !ident_ok(name.trim()) || !ident_ok(constraint.trim()) {
-                    return Err(err(no, "role name and constraint must be identifiers"));
+                let constraint = constraint.trim();
+                if !ident_ok(name.trim()) || (constraint != "*" && !ident_ok(constraint)) {
+                    return Err(err(
+                        no,
+                        "role name and constraint must be identifiers, or use `[*]`",
+                    ));
                 }
                 blocks
                     .last_mut()
@@ -1371,7 +1375,11 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                     .items
                     .push(SignItem::RoleDecl(RoleDecl {
                         name: name.trim().to_owned(),
-                        constraint: constraint.trim().to_owned(),
+                        constraint: if constraint == "*" {
+                            SlotConstraint::AnySign
+                        } else {
+                            SlotConstraint::Category(constraint.to_owned())
+                        },
                         optional,
                         source: SourceLocation::line(no),
                     }));
@@ -1415,8 +1423,14 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             continue;
         }
         if text == "feature:" {
-            if !matches!(dim, DimKw::Syn | DimKw::Sem) {
-                return Err(err(no, "`feature:` is only valid under `syn:` or `sem:`"));
+            // P71-C:`prag:` 亦支援 `feature:`。P71 R2 要求自造欄位一律先宣告值域,
+            // 而 prag 原本沒有這個出口,R2 在該維無處可去。`phon:` 仍不支援——
+            // 其 Def 是 UR/模板,規則屬 DSL 音變語言,不走 typed feature 這條。
+            if !matches!(dim, DimKw::Syn | DimKw::Sem | DimKw::Prag) {
+                return Err(err(
+                    no,
+                    "`feature:` is only valid under `syn:`, `sem:` or `prag:`",
+                ));
             }
             in_feature = true;
             feature_indent = ind;

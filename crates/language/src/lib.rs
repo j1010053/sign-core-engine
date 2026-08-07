@@ -53,7 +53,8 @@ pub use identity::{
 };
 pub use library::{
     LibraryCatalog, LibraryDataSource, LibraryExport, LibraryExportKind, LibraryFunctionSource,
-    LibraryId, LibraryKind, LibraryLoadError, LibraryPackage, LibrarySpec,
+    LibraryId, LibraryKind, LibraryLoadError, LibraryPackage, LibrarySpec, PackageFile,
+    PackageSources,
 };
 pub use metadata::{SignLifecycle, SignProvenance};
 pub use sampling::{
@@ -68,15 +69,21 @@ pub use system::{
     compile_system, compile_system_ref, compile_with_libraries, compile_with_libraries_ref,
     CandidateSelectionTrace, CandidateSelector, CandidateSet, CaseBranchStatus, CaseRecord,
     CompileSystemError, CompiledSystem, ConstructionCandidate, DerivationContext, PhonRealization,
+    COMPILER_SEMANTICS_VERSION,
     RealizedPhonInput, SignExpressionEvaluation, SignValue, SystemDerivation, SystemError,
 };
 pub use tshiatun_dsl::lower::Stage;
+
+use serde::{Deserialize, Serialize};
 
 // ── 共時四維(修補07 P38 v0.2;單一分類樹、四個內容面向)──
 
 /// 四個內容彼此獨立的共時維度。分類只有一棵維度中立的 ontology；
 /// 正交性由 projection、validation、patch、diff 與 rule write-set 保證。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// 出境時序列化為小寫關鍵詞(`"phon"`…),與 [`Dim::keyword`] 一致
+/// ——UI 看到的字面與 `.lang` 的維度區塊同名。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Dim {
     Phon,
     Syn,
@@ -299,7 +306,12 @@ pub struct SlotFeatureBinding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoleDecl {
     pub name: String,
-    pub constraint: String,
+    /// Typed filler authorization, **與 slot 同型**(`[*]` = `AnySign`)。
+    ///
+    /// P71-S:此處曾是裸 `String`,而「任何有意義的節點」只能寫成 `[Semantic]`
+    /// ——靠引擎無條件把 `Semantic` 塞進每個 sign 的型別來成立。那是引擎硬寫
+    /// std 詞彙;`[*]` 才是該表達的東西。
+    pub constraint: SlotConstraint,
     pub optional: bool,
     pub source: SourceLocation,
 }
@@ -326,7 +338,14 @@ pub struct Sense {
 }
 
 /// 衍生邊的種類(P16 `derive_sense{kind: metaphor|metonymy|narrow|broaden}`)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+///
+/// **目前無消費者**(已知延後,非缺陷):全庫沒有任何語意分支讀取本值——
+/// parser/printer/DTO/diff/Primitive Edit 都只是原樣搬運,四個 variant 之間
+/// 的差異不影響任何行為。語意效果待《測試案例集總索引》實例 7「語用隱喻固化」
+/// (現況 ⚪ 未開始)落地,屆時 kind 與 [`SenseTransparency`] 一併成為
+/// 語意漂移引擎(B)的輸入。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum DerivationKind {
     Metaphor,
     Metonymy,
@@ -355,7 +374,22 @@ impl DerivationKind {
 }
 
 /// 衍生邊是否仍透明。`Opaque` = 已 `lexicalize_sense`(語源關係固化、不再透明)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+///
+/// **目前無消費者**(已知延後,非缺陷):`Transparent`/`Opaque` 之間全庫零語意
+/// 分支。唯二觸及本值的地方都不是消費者——[`crate::printer`] 省略預設值
+/// `Transparent`(純序列化),`lexicalize_sense` 寫入 `Opaque`(純寫入)。
+/// 亦即目前 `lexicalize_sense` 的效果僅止於「被記錄下來」。
+///
+/// 語意效果待《測試案例集總索引》實例 7「語用隱喻固化」(現況 ⚪ 未開始)落地。
+/// 該索引 §「透明度一個欄位」列明本欄位為**四案共測、高優先**的共用欄位:
+/// 折磨 6(火車)的 component transparency、實例 7(隱喻固化)、實例 1(複合)、
+/// 實例 5(緊密度)——屆時四案共用同一欄位,不另開新欄位。
+///
+/// 註:15a 造出了表面語法(`sem: edges:` 的 `opaque` 尾綴)卻尚無消費者,
+/// 這一點繞過了《共時lang語法與資料貼合度》「不先造無消費者語法」的原則;
+/// 保留現狀是為了讓實例 7 落地時四案有共同著力點。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum SenseTransparency {
     #[default]
     Transparent,
@@ -646,6 +680,40 @@ pub struct TraitDef {
     pub blocks: Vec<Block>,
 }
 
+impl SignItem {
+    /// 抹平 `SourceLocation` 的複本,供**內容**比較用(diff 分量、3-way merge)。
+    ///
+    /// 行號是來源註記,不是內容。多數項目型別(`FeatureDecl`/`FeatureValue`/
+    /// `Sense`/`SenseEdge`/`RoleDecl`/…)帶 `SourceLocation` 且參與 `PartialEq`,
+    /// 於是**在別處插入或刪除一行**就會位移其後所有項目的位置,使內容未變的
+    /// sign 被判成改過——diff 會多算一個維度分量,3-way merge 會無中生有一個
+    /// Content 衝突。
+    ///
+    /// 這個坑長期被掩蓋,因為 [`Def`] 是少數**不帶位置**的項目型別,而舊 fixture
+    /// 的自造欄位幾乎都寫成 `Def`;P71 把它們遷入 `feature:` 後才浮現。
+    pub fn without_source_location(&self) -> SignItem {
+        let mut item = self.clone();
+        let blank = SourceLocation::unknown();
+        match &mut item {
+            SignItem::FeatureDecl(value) => value.source = blank,
+            SignItem::FeatureValue(value) => value.source = blank,
+            SignItem::FeatureExpression(value) => value.source = blank,
+            SignItem::SlotFeatureBinding(value) => value.source = blank,
+            SignItem::RoleDecl(value) => value.source = blank,
+            SignItem::RoleBinding(value) => value.source = blank,
+            SignItem::RoleExpression(value) => value.source = blank,
+            SignItem::Sense(value) => value.source = blank,
+            SignItem::SenseEdge(value) => value.source = blank,
+            SignItem::Rule(rule) | SignItem::FeatureRule(rule) => {
+                rule.source = blank;
+                rule.branch_sources = Vec::new();
+            }
+            _ => {}
+        }
+        item
+    }
+}
+
 /// sign 內項目:trait 引用位置有語意(P5),故與 Def/Rule 同列保序。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SignItem {
@@ -728,6 +796,22 @@ impl SlotConstraint {
         }
     }
 
+    /// filler 的範疇集合是否獲授權。`[*]` 一律通過;具名約束委派
+    /// [`crate::ontology::OntologyRegistry::categories_satisfy`]——**slot 與 role
+    /// 共用同一判定**,不再各寫一套。
+    pub fn is_satisfied_by(
+        &self,
+        categories: &[String],
+        registry: &crate::ontology::OntologyRegistry,
+    ) -> bool {
+        match self {
+            SlotConstraint::AnySign => true,
+            SlotConstraint::Category(required) => {
+                registry.categories_satisfy(categories, required)
+            }
+        }
+    }
+
     pub fn display_name(&self) -> &str {
         self.category().unwrap_or("*")
     }
@@ -750,6 +834,52 @@ pub struct SignDef {
     pub id: SignId,
     pub name: String,
     pub items: Vec<SignItem>,
+}
+
+impl SignDef {
+    /// 內容相等:**忽略 `SourceLocation`**。見 [`SignItem::without_source_location`]。
+    pub fn content_eq(&self, other: &SignDef) -> bool {
+        self.name == other.name && items_content_eq(&self.items, &other.items)
+    }
+
+    /// **底層形 UR**(P1):`phon:` 區塊的 `/…/`,已去界定斜線與前後空白。
+    ///
+    /// 表層形永不儲存,由共時規則按需導出——故這裡回的一定是 UR。
+    ///
+    /// 只看**本地**項目,不走繼承投影:繼承來的 phon 是 construction 的模板
+    /// (`ge{stem}t` 這類),與「這個 sign 的底層形」是兩件事。
+    ///
+    /// 存放處是路徑為 `phon` 的 `Def`(P71 `ENGINE_DEF_PATHS` 之一)。
+    /// 這件事**只在這裡知道**——`stats` 的音素投影與 `query` 的詞典視圖都經此,
+    /// 免得「UR 住哪」散成三份。
+    pub fn underlying_form(&self) -> Option<&str> {
+        self.items.iter().find_map(|item| match item {
+            SignItem::Def(def) if def.path == "phon" => Some(def.value.trim().trim_matches('/')),
+            _ => None,
+        })
+    }
+}
+
+impl TraitDef {
+    /// 內容相等:**忽略 `SourceLocation`**。見 [`SignItem::without_source_location`]。
+    pub fn content_eq(&self, other: &TraitDef) -> bool {
+        self.name == other.name
+            && self.global == other.global
+            && self.blocks.len() == other.blocks.len()
+            && self
+                .blocks
+                .iter()
+                .zip(&other.blocks)
+                .all(|(a, b)| items_content_eq(&a.items, &b.items))
+    }
+}
+
+fn items_content_eq(left: &[SignItem], right: &[SignItem]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(a, b)| a.without_source_location() == b.without_source_location())
 }
 
 // ── 根(P28 canonical empty)──

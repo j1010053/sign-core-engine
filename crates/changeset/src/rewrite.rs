@@ -341,6 +341,10 @@ pub fn expand(
             ])
         }
 
+        // **寫入後目前無消費者**(已知延後,非缺陷):翻成 `Opaque` 之後,全庫沒有
+        // 任何語意分支因此改變行為(見 `SenseTransparency` 的 doc comment)。
+        // 語意效果待《測試案例集總索引》實例 7「語用隱喻固化」落地,屆時與折磨 6
+        // (火車)的 component transparency 共用同一欄位。
         AtomicRewrite::LexicalizeSense { sign, edge } => {
             let target = node(document, &format!("sign({sign:?}).edge[{edge}]"))?;
             Ok(vec![PrimitiveEdit::Update {

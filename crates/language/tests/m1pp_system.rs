@@ -19,15 +19,19 @@ Class vowel {o, u}
 sign dog:
     belongs Noun
     sem:
-        gloss = DOG
-        gloss => HOUND
+        senses:
+            core = DOG
+        feature:
+            sense_register = enum(neutral, elevated)
+            sense_register => elevated
     phon:
         /dog/
 
 sign run:
     belongs Verb
     sem:
-        gloss = RUN
+        senses:
+            core = RUN
     phon:
         /run/
 
@@ -37,15 +41,24 @@ sign Clause:
         slots:
             subject [Noun]
             predicate [Verb]
-        state = raw
-        state => ready
+        feature:
+            state = enum(raw, ready)
+            state = raw
+            state => ready
     sem:
-        frame = event
-        actor = {subject}
-        action = {predicate}
-        frame => occurrence / frame == event
+        roles:
+            actor [*]
+            action [*]?
+            actor = {subject}
+            action = {predicate}
+        feature:
+            frame = enum(event, occurrence)
+            frame = event
+            frame => occurrence / frame == event
     prag:
-        register => neutral
+        feature:
+            register = enum(neutral, formal)
+            register => neutral
     phon:
         /{subject}{predicate}/
         o => u
@@ -56,7 +69,9 @@ sign Wrapper:
         slots:
             clause [Verb]
     sem:
-        content = {clause}
+        roles:
+            content [*]
+            content = {clause}
     phon:
         /x{clause}/
 "#;
@@ -91,8 +106,13 @@ fn public_runtime_connects_fillers_token_rules_and_phon_surface() {
     );
     assert_eq!(first.token.sem.field("frame"), Some("occurrence"));
     assert_eq!(
-        first.token.sem.role("actor").unwrap().field("gloss"),
-        Some("HOUND"),
+        first
+            .token
+            .sem
+            .role("actor")
+            .unwrap()
+            .field("sense_register"),
+        Some("elevated"),
         "filler rules run before recursive semantic composition"
     );
     assert_eq!(
@@ -191,8 +211,8 @@ fn derived_token_can_fill_another_construction() {
             .unwrap()
             .role("actor")
             .unwrap()
-            .field("gloss"),
-        Some("HOUND")
+            .field("sense_register"),
+        Some("elevated")
     );
     assert!(matches!(
         wrapped.provenance.fillers[0].source,
@@ -259,12 +279,14 @@ fn slot_map_supports_all_operations_and_validates_atomically() {
 
 #[test]
 fn validation_report_grades_resolved_conflicts_and_blocks_slot_conflicts() {
+    // P71 §4.2:裸自造 Def 已不合法,故本例改用**封閉清單上**的套件座標。
+    // 這條測的是 Def 衝突解析與 winner provenance,與路徑取哪一條無關。
     let warning_source = r#"trait Earlier:
     syn:
-        choice = early
+        tam.present = 0
 trait Later:
     syn:
-        choice = late
+        tam.present = 1
 sign s:
     belongs Earlier
     belongs Later
@@ -279,7 +301,7 @@ sign s:
                 && diagnostic
                     .sources
                     .iter()
-                    .any(|source| source.path.as_deref() == Some("syn.choice"))
+                    .any(|source| source.path.as_deref() == Some("syn.tam.present"))
         })
         .unwrap();
     assert_eq!(conflict.severity, Severity::Warning);
@@ -293,8 +315,8 @@ sign s:
             .unwrap()
             .sign
             .project(Dim::Syn, &system.ontology)
-            .get("syn.choice"),
-        Some("late")
+            .get("syn.tam.present"),
+        Some("1")
     );
 
     let invalid = r#"trait Left:
@@ -329,15 +351,19 @@ fn compile_system_returns_coded_errors_for_duplicate_names_and_bad_guards() {
         .any(|diagnostic| diagnostic.code == "SIGN_DUPLICATE"));
 
     let bad_guard = Language::parse(
-        "sign s:\n    syn:\n        value => x / [Ghost]\n            else value => y\n",
+        "sign s:\n    syn:\n        feature:\n            value = enum(x, y)\n            value => x / [Ghost]\n                else value => y\n",
     )
     .unwrap();
     let CompileSystemError::Validation(report) = compile_system(bad_guard).unwrap_err() else {
         panic!("expected validation report")
     };
-    assert!(report.errors().any(|diagnostic| {
-        diagnostic.code == "RULE_INVALID" && diagnostic.sources[0].location.line == 3
-    }));
+    assert!(
+        report.errors().any(|diagnostic| {
+            diagnostic.code == "RULE_INVALID" && diagnostic.sources[0].location.line == 5
+        }),
+        "{:?}",
+        report.errors().collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -369,10 +395,14 @@ sign C:
     syn:
         slots:
             item [Noun]
-        state = same
-        state => same / [Verb]
-        missed => no / [Known]
-        broken => no / [Ghost]
+        feature:
+            state = enum(same)
+            missed = enum(no, yes)
+            broken = enum(no, yes)
+            state = same
+            state => same / [Verb]
+            missed => no / [Known]
+            broken => no / [Ghost]
     phon:
         /{item}/
 "#;
@@ -397,20 +427,28 @@ sign C:
 fn inherited_rules_are_diamond_deduplicated_and_keep_source_order() {
     let source = r#"trait Root:
     syn:
-        root => yes
+        feature:
+            root = enum(yes)
+            root => yes
 trait Left:
     belongs Root
     syn:
-        left => yes / root == yes
+        feature:
+            left = enum(yes)
+            left => yes / root == yes
 trait Right:
     belongs Root
     syn:
-        right => yes / left == yes
+        feature:
+            right = enum(yes)
+            right => yes / left == yes
 sign s:
     belongs Left
     belongs Right
     syn:
-        local => yes / right == yes
+        feature:
+            local = enum(yes)
+            local => yes / right == yes
 "#;
     let system = compile_system(Language::parse(source).unwrap()).unwrap();
     let evaluated = system.evaluate_sign("s").unwrap();
@@ -424,7 +462,7 @@ sign s:
         .iter()
         .map(|record| record.source.line)
         .collect();
-    assert_eq!(lines, vec![3, 7, 11, 16]);
+    assert_eq!(lines, vec![5, 11, 17, 24], "遠祖→近祖→本地的來源順序");
 }
 
 #[test]
@@ -433,13 +471,17 @@ fn inherited_slots_and_nearer_defaults_feed_construction_application() {
 Class vowel {a}
 trait Base:
     syn:
-        level = base
+        feature:
+            level = enum(base, near)
+            level = base
         slots:
             item [Noun]
 trait Near:
     belongs Base
     syn:
-        level = near
+        feature:
+            level = enum(base, near)
+            level = near
 sign atom:
     belongs Noun
     phon:
@@ -479,7 +521,9 @@ trait BaseSlots:
 trait ReadingChild:
     belongs BaseSlots
     syn:
-        observed => yes / $slot.item == [Noun]
+        feature:
+            observed = enum(yes)
+            observed => yes / $slot.item == [Noun]
 sign atom:
     belongs Noun
     phon:

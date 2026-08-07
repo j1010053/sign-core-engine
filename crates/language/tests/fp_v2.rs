@@ -81,7 +81,9 @@ trait ThirdPersonFragment:
             inflection = enum(base, third)
             inflection = third
     sem:
-        exponent = third_singular
+        feature:
+            exponent = enum(third_singular)
+            exponent = third_singular
     phon:
         /walks/
 
@@ -92,11 +94,15 @@ sign walk:
             trigger = enum(on, off)
     phon:
         /walk/
+    prag:
+        feature:
+            selected = enum(yes, no)
     case:
         $self.syn.trigger == on:
             ThirdPersonFragment
             prag:
-                selected = yes
+                feature:
+                    selected = yes
 "#;
     let parsed = Language::parse(source).expect("SignContext fragment parses");
     let canonical = parsed.dump();
@@ -132,12 +138,14 @@ sign walk:
     assert!(stored.sign.items.iter().any(
         |item| matches!(item, SignItem::Def(def) if def.path == "phon" && def.value == "/walks/")
     ));
-    assert!(stored.sign.items.iter().any(
-        |item| matches!(item, SignItem::Def(def) if def.path == "sem.exponent" && def.value == "third_singular")
-    ));
-    assert!(stored.sign.items.iter().any(
-        |item| matches!(item, SignItem::Def(def) if def.path == "prag.selected" && def.value == "yes")
-    ));
+    assert!(stored.sign.items.iter().any(|item| {
+        matches!(item, SignItem::FeatureValue(value)
+            if value.dim == Dim::Sem && value.name == "exponent" && value.value == "third_singular")
+    }));
+    assert!(stored.sign.items.iter().any(|item| {
+        matches!(item, SignItem::FeatureValue(value)
+            if value.dim == Dim::Prag && value.name == "selected" && value.value == "yes")
+    }));
 
     let unmatched = system
         .evaluate_sign_expression(
@@ -186,13 +194,19 @@ sign cumulative:
                 feature:
                     outcome = fallback
     sem:
+        feature:
+            selected = enum(semantic, none)
         when:
             $self.syn.trigger == on:
-                selected = semantic
+                feature:
+                    selected = semantic
     prag:
+        feature:
+            licensed = enum(yes, no)
         when:
             $self.syn.trigger == on:
-                licensed = yes
+                feature:
+                    licensed = yes
     phon:
         /x/
 "#;
@@ -200,8 +214,12 @@ sign cumulative:
     let canonical = parsed.dump();
     assert_eq!(Language::parse(&canonical).unwrap().dump(), canonical);
     assert!(canonical.contains("        when:\n            $self.syn.trigger == on:"));
-    assert!(canonical.contains("sem:\n        when:"));
-    assert!(canonical.contains("prag:\n        when:"));
+    // P71 §4.3 後各維先有 `feature:` 宣告,`when:` 不再是維度的第一個子項;
+    // 這裡要釘的是「每一維各有自己的 when: 分支」,故直接看分支內容。
+    assert!(canonical
+        .contains("            $self.syn.trigger == on:\n                feature:\n                    selected = semantic"));
+    assert!(canonical
+        .contains("            $self.syn.trigger == on:\n                feature:\n                    licensed = yes"));
 
     let system = compile_system(parsed).expect("closed dimension fragments compile");
     let evaluated = system
@@ -226,12 +244,14 @@ sign cumulative:
         Some("no"),
         "the first fragment must not make the second guard match"
     );
-    assert!(stored.sign.items.iter().any(
-        |item| matches!(item, SignItem::Def(def) if def.path == "sem.selected" && def.value == "semantic")
-    ));
-    assert!(stored.sign.items.iter().any(
-        |item| matches!(item, SignItem::Def(def) if def.path == "prag.licensed" && def.value == "yes")
-    ));
+    assert!(stored.sign.items.iter().any(|item| {
+        matches!(item, SignItem::FeatureValue(value)
+            if value.dim == Dim::Sem && value.name == "selected" && value.value == "semantic")
+    }));
+    assert!(stored.sign.items.iter().any(|item| {
+        matches!(item, SignItem::FeatureValue(value)
+            if value.dim == Dim::Prag && value.name == "licensed" && value.value == "yes")
+    }));
 
     let syn_records = evaluated
         .cases
@@ -1238,25 +1258,44 @@ sign Invalid:
         .any(|diagnostic| diagnostic.code == "CASE_BRANCH_TYPE_MISMATCH"));
 }
 
+/// P71-C:typed feature 支援 syn/sem/**prag**;`phon` 仍不支援。
+///
+/// prag 於 P71-C 開放,是因為 R2 要求自造欄位一律先宣告值域,而 prag 原本沒有
+/// 這個出口。`phon` 維持不支援——其內容是 UR/模板與 DSL 音變規則,不是 enum 欄位。
 #[test]
-fn programmatic_ast_rejects_typed_features_outside_syn_and_sem() {
-    let mut language = Language::new();
-    language.add_sign(
-        "invalid_prag_feature",
+fn typed_features_are_supported_in_prag_but_not_phon() {
+    let decl = |dim| {
         vec![SignItem::FeatureDecl(FeatureDecl {
-            dim: Dim::Prag,
+            dim,
             name: "register".to_owned(),
             values: vec!["formal".to_owned(), "informal".to_owned()],
             source: SourceLocation::unknown(),
-        })],
-    );
+        })]
+    };
+
+    // phon:仍是 FEATURE_DIMENSION_UNSUPPORTED
+    let mut language = Language::new();
+    language.add_sign("invalid_phon_feature", decl(Dim::Phon));
     let CompileSystemError::Validation(report) = compile_system(language).unwrap_err() else {
-        panic!("an unsupported feature dimension must fail validation")
+        panic!("phon 仍是不支援的 feature 維度")
     };
     assert!(report
         .diagnostics()
         .iter()
         .any(|diagnostic| diagnostic.code == "FEATURE_DIMENSION_UNSUPPORTED"));
+
+    // prag:正向控制組——必須通過,且不得留下該診斷碼
+    let mut language = Language::new();
+    language.add_sign("valid_prag_feature", decl(Dim::Prag));
+    let compiled = compile_system(language).expect("prag typed feature 於 P71-C 後合法");
+    assert!(
+        !compiled
+            .validation
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "FEATURE_DIMENSION_UNSUPPORTED"),
+        "prag 不該再有維度不支援診斷"
+    );
 }
 
 #[test]
@@ -1519,7 +1558,7 @@ trait EnrichedContract:
     syn:
         slots:
             adjunct [ContractAtom]
-        inherited = yes
+        tam.present = yes
         feature:
             committed = enum(no, yes)
             committed => yes
@@ -1584,7 +1623,7 @@ sign root:
             .project(Dim::Syn, &system.ontology)
             .defs
             .iter()
-            .find(|(path, _)| path == "syn.inherited")
+            .find(|(path, _)| path == "syn.tam.present")
             .map(|(_, value)| value.as_str()),
         Some("yes")
     );
@@ -1641,7 +1680,7 @@ sign root:
         partial
             .syn
             .iter()
-            .find(|(path, _)| path == "syn.inherited")
+            .find(|(path, _)| path == "syn.tam.present")
             .map(|(_, value)| value.as_str()),
         Some("yes"),
         "the inherited Syn Def must enter the rebuilt deep state"

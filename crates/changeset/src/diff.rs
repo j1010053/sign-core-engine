@@ -124,10 +124,16 @@ pub fn diff_vector(before: &LanguageDocument, after: &LanguageDocument) -> DiffV
 ///
 /// 承 docs/07 §6「層是 sign 的投影」——投影就是**挑出屬於該維的項目**,不另建結構。
 /// 項目是正規排序的(`item_group`),故同內容必然同序,直接比相等即可。
-fn projection(sign: &SignDef, dim: Option<Dim>) -> Vec<&SignItem> {
+///
+/// **比較必須對行號不敏感**:多數項目型別(`FeatureDecl`/`FeatureValue`/`Sense`/
+/// `SenseEdge`/…)帶 `SourceLocation` 且參與 `PartialEq`,而 `Def` 不帶。若直接比
+/// 整個項目,任何插入都會位移後續行號,使**內容未變的維度**被算成有差異——正是本檔
+/// 開頭說的「那一維的數字說謊」。差異向量衡量的是內容,故比較前一律抹平位置。
+fn projection(sign: &SignDef, dim: Option<Dim>) -> Vec<SignItem> {
     sign.items
         .iter()
         .filter(|item| item_dimension(item) == dim)
+        .map(SignItem::without_source_location)
         .collect()
 }
 

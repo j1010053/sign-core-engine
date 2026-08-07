@@ -37,7 +37,9 @@ sign go:
     belongs MotionVerb
     entrenchment = 0.2
     syn:
-        category = verb
+        feature:
+            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)
+            category = verb
     sem:
         senses:
             core = GO
@@ -46,7 +48,9 @@ sign finish:
     belongs MotionVerb
     entrenchment = 0.2
     syn:
-        category = verb
+        feature:
+            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)
+            category = verb
     sem:
         senses:
             core = FINISH
@@ -164,7 +168,7 @@ fn a_statement_without_any_function_call_records_no_trace() {
     let resolved = resolve(
         &document,
         "evo:plain",
-        "\n    #0:\n        update sign(\"go\").def[syn.category].value = aux\n",
+        "\n    #0:\n        update sign(\"go\").feature[syn.category].value = aux\n",
     )
     .resolve(&document, &LibrarySpec::default())
     .expect("resolves");

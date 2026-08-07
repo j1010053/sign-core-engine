@@ -12,8 +12,8 @@ use conlang_language::{Dim, Language};
 #[test]
 fn later_same_depth_belongs_wins() {
     let lang = Language::parse(
-        "trait Earlier:\n    syn:\n        choice = earlier\n\
-         trait Later:\n    syn:\n        choice = later\n\
+        "trait Earlier:\n    syn:\n        tam.present = earlier\n\
+         trait Later:\n    syn:\n        tam.present = later\n\
          sign s:\n    belongs Earlier\n    belongs Later\n",
     )
     .unwrap();
@@ -23,7 +23,7 @@ fn later_same_depth_belongs_wins() {
         lang.sign_named("s")
             .unwrap()
             .project(Dim::Syn, &reg)
-            .get("syn.choice"),
+            .get("syn.tam.present"),
         Some("later")
     );
 }
@@ -31,7 +31,7 @@ fn later_same_depth_belongs_wins() {
 #[test]
 fn unknown_category_guard_is_error_and_never_falls_into_else() {
     let lang = Language::parse(
-        "sign s:\n    syn:\n        value => main / [Ghost]\n            else value => fallback\n",
+        "sign s:\n    syn:\n        feature:\n            value = enum(main, fallback)\n            value => main / [Ghost]\n                else value => fallback\n",
     )
     .unwrap();
     let (reg, _) = OntologyRegistry::build(&[&lang]);
@@ -45,7 +45,7 @@ fn unknown_category_guard_is_error_and_never_falls_into_else() {
 #[test]
 fn then_stops_after_error_but_keeps_prior_commits() {
     let lang = Language::parse(
-        "sign s:\n    syn:\n        first => committed\n            then malformed branch\n            then late => forbidden\n",
+        "sign s:\n    syn:\n        feature:\n            first = enum(committed)\n            late = enum(forbidden)\n            first => committed\n                then malformed branch\n                then late => forbidden\n",
     )
     .unwrap();
     let (reg, _) = OntologyRegistry::build(&[&lang]);
@@ -61,19 +61,23 @@ fn then_stops_after_error_but_keeps_prior_commits() {
 
 #[test]
 fn patch_set_replaces_all_duplicate_local_defs() {
-    let lang =
-        Language::parse("sign s:\n    syn:\n        value = stale-1\n        value = stale-2\n")
-            .unwrap();
+    let lang = Language::parse(
+        "sign s:\n    syn:\n        tam.past = stale-1\n        tam.past = stale-2\n",
+    )
+    .unwrap();
     let (reg, _) = OntologyRegistry::build(&[&lang]);
     let sign = lang.sign_named("s").unwrap();
-    let out = Patch::syn().set("value", "fresh").apply(sign);
+    let out = Patch::syn().set("tam.past", "fresh").apply(sign);
 
-    assert_eq!(out.project(Dim::Syn, &reg).get("syn.value"), Some("fresh"));
+    assert_eq!(
+        out.project(Dim::Syn, &reg).get("syn.tam.past"),
+        Some("fresh")
+    );
     assert_eq!(
         out.items
             .iter()
             .filter(
-                |item| matches!(item, conlang_language::SignItem::Def(d) if d.path == "syn.value")
+                |item| matches!(item, conlang_language::SignItem::Def(d) if d.path == "syn.tam.past")
             )
             .count(),
         1

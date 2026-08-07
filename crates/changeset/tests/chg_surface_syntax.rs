@@ -10,7 +10,7 @@
 use conlang_changeset::{change_set_prelude, ReplayError, ResolvedChangeSet, UnresolvedChangeSet};
 use conlang_language::{LanguageDocument, LibrarySpec};
 
-const SOURCE: &str = "Symbol a\n\ntrait LocalNoun:\n\nsign x:\n    belongs LocalNoun\n    phon:\n        /a/\n    syn:\n        category = noun\n";
+const SOURCE: &str = "Symbol a\n\ntrait LocalNoun:\n\nsign x:\n    belongs LocalNoun\n    phon:\n        /a/\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n";
 
 fn base() -> LanguageDocument {
     LanguageDocument::import_new_root(SOURCE, "evo:root").expect("base parses")
@@ -26,7 +26,7 @@ fn resolve(body: &str) -> Result<ResolvedChangeSet, ReplayError> {
         .resolve(&base, &spec)
 }
 
-const UPDATE: &str = "        update sign(\"x\").def[syn.category].value = aux\n";
+const UPDATE: &str = "        update sign(\"x\").feature[syn.category].value = aux\n";
 
 #[test]
 fn a_statement_is_marked_with_a_hash_and_its_ordinal() {
@@ -63,7 +63,7 @@ fn several_statements_keep_their_boundaries() {
     // 迴歸:`#1:` 曾被吞進前一句的 insert block(body 收集只認舊形)。
     let resolved = resolve(concat!(
         "\n    #0:\n        insert into sign(\"x\") at end:\n            sem:\n                senses:\n                    core = X\n",
-        "\n    #1:\n        update sign(\"x\").def[syn.category].value = aux\n",
+        "\n    #1:\n        update sign(\"x\").feature[syn.category].value = aux\n",
     ))
     .expect("two statements");
     assert_eq!(resolved.statements.len(), 2);

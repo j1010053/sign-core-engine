@@ -191,7 +191,7 @@ fn catalog_has_25_binary_parameters_and_three_resolvable_knowledge_states() {
         .iter()
         .find(|package| package.name == "grambank")
         .unwrap();
-    let rows = feature_rows(package.data);
+    let rows = feature_rows(&package.data);
     assert_eq!(rows.len(), 25);
     let ids: BTreeSet<_> = rows.iter().map(|row| row.id).collect();
     assert_eq!(ids.len(), 25);
@@ -255,15 +255,23 @@ fn public_runtime_inherits_behavior_and_uses_value_traits_as_guards() {
     belongs GB322_Present
     belongs GB522_Present
     syn:
-        category-guard => matched / [GB107_Present]
-        field-guard => matched / typology.grambank.GB107 == 1
+        feature:
+            category-guard = enum(matched)
+            field-guard = enum(matched)
+            category-guard => matched / [GB107_Present]
+            field-guard => matched / typology.grambank.GB107 == 1
     prag:
-        evidence-guard => matched / [GB322_Present]
+        feature:
+            evidence-guard = enum(matched)
+            evidence-guard => matched / [GB322_Present]
 sign near_miss:
     belongs GB107_Absent
     syn:
-        category-guard => matched / [GB107_Present]
-        field-guard => matched / typology.grambank.GB107 == 1
+        feature:
+            category-guard = enum(matched)
+            field-guard = enum(matched)
+            category-guard => matched / [GB107_Present]
+            field-guard => matched / typology.grambank.GB107 == 1
 "#,
     )
     .unwrap();

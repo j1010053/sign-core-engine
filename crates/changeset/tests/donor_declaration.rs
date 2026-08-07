@@ -19,7 +19,7 @@ use conlang_changeset::{
 };
 use conlang_language::{LanguageDocument, LibrarySpec};
 
-const ROOT: &str = "sign x:\n    syn:\n        category = noun\n";
+const ROOT: &str = "sign x:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n";
 const NODE: &str = "3f2a9b7c5d1e8046a2b3c4d5e6f70819a2b3c4d5e6f708192a3b4c5d6e7f8091";
 
 fn base() -> LanguageDocument {
@@ -46,7 +46,7 @@ fn donor_spec() -> DonorSpec {
     let mut spec = DonorSpec::new();
     spec.insert(
         NODE,
-        LanguageDocument::import_new_root("sign eau:\n    syn:\n        category = noun\n", "fr")
+        LanguageDocument::import_new_root("sign eau:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n", "fr")
             .unwrap(),
     );
     spec
@@ -84,7 +84,7 @@ fn donors_survive_resolve_and_dump() {
     let spec = LibrarySpec::default();
     let source = changeset(
         &[&format!("donor fr {NODE}")],
-        "\n    #0:\n        update sign(\"x\").def[syn.category].value = verb\n",
+        "\n    #0:\n        update sign(\"x\").feature[syn.category].value = verb\n",
     );
     let parsed = UnresolvedChangeSet::parse(&source).expect("parses");
     let resolved = parsed
@@ -132,7 +132,7 @@ fn a_changeset_without_donors_is_unchanged() {
     let spec = LibrarySpec::default();
     let source = changeset(
         &[],
-        "\n    #0:\n        update sign(\"x\").def[syn.category].value = verb\n",
+        "\n    #0:\n        update sign(\"x\").feature[syn.category].value = verb\n",
     );
     let resolved = UnresolvedChangeSet::parse(&source)
         .unwrap()
@@ -146,7 +146,7 @@ fn a_changeset_without_donors_is_unchanged() {
 fn a_declared_donor_does_not_disturb_the_statements() {
     // 宣告只是**授權範圍**,不改變任何編輯的行為(本刀還沒有引用條目)。
     let spec = LibrarySpec::default();
-    let body = "\n    #0:\n        update sign(\"x\").def[syn.category].value = verb\n";
+    let body = "\n    #0:\n        update sign(\"x\").feature[syn.category].value = verb\n";
     let with = UnresolvedChangeSet::parse(&changeset(&[&format!("donor fr {NODE}")], body))
         .unwrap()
         .resolve_with(&base(), &spec, &donor_spec())

@@ -14,7 +14,7 @@ fn nested_paths_metadata_and_slot_maps_round_trip() {
     let language = Language::parse(COMPLETE).expect("parse complete synchronic surface");
     let canonical = language.dump();
     assert_eq!(Language::parse(&canonical).unwrap().dump(), canonical);
-    assert!(canonical.contains("senses[core].concept = DEFINITE_NP"));
+    assert!(canonical.contains("concept = DEFINITE_NP"));
     assert!(canonical.contains("map head rename nucleus"));
 
     let np = language.sign_named("NP").unwrap();
@@ -39,13 +39,9 @@ fn source_declared_slot_map_reaches_construction_runtime() {
 
     assert_eq!(token.phon_form().unwrap(), "ad");
     assert!(token.is_saturated());
-    assert_eq!(token.sem.field("senses[core].concept"), Some("DEFINITE_NP"));
+    assert_eq!(token.sem.field("concept"), Some("DEFINITE_NP"));
     assert_eq!(
-        token
-            .sem
-            .role("profile")
-            .unwrap()
-            .field("senses[core].concept"),
+        token.sem.role("profile").unwrap().field("concept"),
         Some("DOG")
     );
     assert_eq!(

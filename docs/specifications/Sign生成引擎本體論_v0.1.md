@@ -229,3 +229,48 @@ Token(組合暫態,不進 store)
 | 【N】 | (無 A 特有;跨模組留白見 D/B) |
 
 **依賴**:各維欄位由 A2(組合造詞)+ B(原語)案例逼出,回填 C §3.3。下一步:細化 B 的原語集(定死 D 的 ChangeEntry op),或開始 A 的 Generator/Builder 實作骨架。
+
+---
+
+## 12. 增修 A(C1):`Store` 在架構 2.0 的對映
+
+> **狀態:已裁定**(擁有者 2026-08-04)。本節不改 §0 的職責切分原則,
+> 只把「Store」這個角色對映到 2.0 已存在的容器。
+
+### 12.1 衝突
+
+本檔 §0 把「語言單位的身分、共享引用、fork」判給 **Store**,§8 稱
+「Sign store 是 D 節點的內容,D 快照/replay 復用 snapshot-and-actions」,
+§11【M】把「Store 共享/fork」列為必做。
+
+但架構 2.0 之後:
+
+| 本檔原文 | 2.0 的實情 |
+|---|---|
+| Store 存語言單位、負責身分 | **P2/P10:語言知識只住 `Language`**;「Grammar Store 容器」計畫已作廢 |
+| Store 負責 fork | `EvolutionGraph` 的 immutable node + parent 邊(P56) |
+| D 快照 store | `conlang-persistence` 的 `nodes/<id>/manifest` + content-addressed objects(P60/P64) |
+| replay 重建 store | `.chg` 四原語 replay(P23/P26) |
+
+照 §11 字面實作會蓋出**第二個語言知識儲存處**,直接牴觸 P2 與單一資訊源。
+
+### 12.2 裁定
+
+| # | 條款 |
+|---|---|
+| **C1-a** | §0 的 **Store 一列改判**:身分 → `LanguageDocument`(stable NodeId);fork/節點 → `EvolutionGraph`;持久化 → `conlang-persistence`。本檔不再要求另立 Store 容器。 |
+| **C1-b** | **Builder 不改 `Language`**,產出 `Vec<PrimitiveEdit>`。§0「Builder = 唯一寫入點」的**意思因此是「唯一的編輯產生點」**,而非唯一的就地寫入者。 |
+| **C1-c** | 降階**複用既有機制**:Builder 構造 `AtomicRewrite`(`Create`/`Lexicalize`/`Adopt`),交 `changeset::rewrite::expand` 降為四原語。不另闢平行路徑(§0 實作原則 1)。 |
+
+### 12.3 為何是這個形狀
+
+- 與 `AtomicRewrite → Vec<PrimitiveEdit>` **同構**:歷時與生成共用同一條降階路徑;
+- 步驟 13–17 的 identity / replay / 三道 digest **全部免費繼承**——造出來的詞
+  自動可 replay、進得了演化圖、跨機器可重現;
+- Builder 保持「純協調、不內建語言學」(§0 紅線):它連寫入都不做,
+  只把選定的 proposal 翻成一個既有的 Atomic Rewrite。
+
+### 12.4 §11 實現順序的對應修訂
+
+【M】梯次的「Store 共享/fork(§7)」**移除**——該能力已由 `EvolutionGraph` +
+persistence 提供,不是本模組的工作。其餘不變。

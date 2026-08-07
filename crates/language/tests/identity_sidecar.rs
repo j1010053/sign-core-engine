@@ -11,7 +11,9 @@ sign dog:
     phon:
         /dog/
     sem:
-        kind = animal
+        feature:
+            kind = enum(animal, companion)
+            kind = animal
 
 sign puppy:
     belongs Canine
@@ -260,7 +262,9 @@ sign root:
         else:
             belongs FragmentMark
             sem:
-                selected = yes
+                feature:
+                    selected = enum(yes, no)
+                    selected = yes
 "#;
     let document = LanguageDocument::import_new_root(source, "evo:fragment").unwrap();
     let branch = document
@@ -275,10 +279,14 @@ sign root:
         .iter()
         .filter(|node| {
             node.parent.as_ref() == Some(&branch.id)
-                && matches!(node.kind, NodeKind::Belongs | NodeKind::Definition)
+                // P71 §4.3:fragment 內的自造欄位已是 feature,故涵蓋宣告與賦值兩種節點。
+                && matches!(
+                    node.kind,
+                    NodeKind::Belongs | NodeKind::FeatureDeclaration | NodeKind::FeatureValue
+                )
         })
         .collect::<Vec<_>>();
-    assert_eq!(fragment_items.len(), 2);
+    assert_eq!(fragment_items.len(), 3);
     assert!(fragment_items.iter().all(|node| {
         node.address.0.windows(2).any(|pair| {
             matches!(

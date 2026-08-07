@@ -11,13 +11,22 @@
    **P1–P64、P69–P70(架構修補層;P1–P19 權威=《架構修補彙整 01–04》§1，
    P20–P64 權威=《架構修補彙整 05–11》§1，
    **P69–P70 權威=`specifications/function分支語意與選擇層_v1.0.md` §6，
-   P71 權威=`specifications/Def路徑封閉清單與feature分工_v1.0.md` §5（已裁定，實作未開始）**；
+   P71（含增修 A/B/C）權威=`specifications/Def路徑封閉清單與feature分工_v1.0.md` §5、§7–§9
+   （已裁定，**Phase 1 已落地 2026-08-02**；Phase 2 待 M4）**；
    個別修補文件保留詳細理由與落地紀錄，出入處一律以彙整為準；
    P7 已廢止→P14，P19 的 nativization 放置由 P56/P58/P64 局部覆寫，
    **P48 的 body 分支語意由 P69 修訂**；
    P65–P68 為《架構修補12》的**提案**，未定案，不得引用為決策)**。
    任何實作若與編號決策矛盾,**停下來明確指出衝突**,不要自行變通。規格未覆蓋的新問題:
    實作層提案編 I 系列入 docs/05 §9;架構層變更走 P 系列。
+   **R 系列**(`architecture/演化專案結構與套件載入_v0.1.md`)是**已裁定但刻意不編 P 號**
+   的第三類(R10,2026-08-04):套件載入那組(W/E/S、R7′、R9-a、R11–R14)已實作,
+   權威掛在《修補06》§8 增修 A;專案結構那組(R1/R2/R4/R5/R6)尚未實作,僅本檔為準。
+   **R15(2026-08-04)**:P29/P50 的「auto-discovery,**無顯式 import**」
+   **適用範圍限 `.lang` / `.chg` 兩種資料層檔案**,不及於專案層宣告
+   ——故 `project.toml` 的 import 表合法。仍禁:`.chg` prelude 的
+   `import <ns> sha256:`、`.lang` 的 `import`/`use`、跨套件引用內部檔案路徑。
+   界線判準與可重現性論證見《修補06》§8.5(權威)。
 2. **每個開發階段必須以測試出口收尾。** 不存在「做完但沒有測試綠燈」的階段
    (M0 實作參照 §8:每步以哪個範例綠燈為出口)。
 3. **哨兵規則:** 若你發現自己在逐檔/逐函式翻譯 Lexurgy(Kotlin, GPL-3.0)的原始碼,
@@ -38,7 +47,7 @@
 | `specifications/分層結構檔本體論_v0.1.md` | 模組 C(節點內部):sign 統一本體、四維特徵結構、組合=運算、固化=語法化、層作視圖投影(v0.1.1 修補)。**設計層,SYN 欄位待 A/B 驅動** |
 | `architecture/AB模組需求分配_v0.2.md` | A=完整 sign 生產者(含組合造詞、借詞、entrenchment 初值);B=**原語集三層定稿**(L1 資料/L2 語言/L3 理論宏),已回填 06 的 ChangeEntry op=L1∪L2。命名分層規約見本檔 §6 |
 | `specifications/Sign生成引擎本體論_v0.1.md` | 模組 A 核心:Sign 稀疏容器、四維、Need→Generator→Builder→Store 職責契約、五連接關係、兩種構詞、生命週期;附 18 案折磨測試(0 破壞)。**設計層** |
-| `specifications/Def路徑封閉清單與feature分工_v1.0.md` | **P71 權威**:`Def` 路徑限封閉清單、自造欄位一律走 `feature:`、`sem.gloss` 併入 `senses`;含量測(~55 條路徑三分)與 Phase 1 切法。**Phase 2 待 M4** |
+| `specifications/Def路徑封閉清單與feature分工_v1.0.md` | **P71 權威**:`Def` 路徑限封閉清單、自造欄位一律走 `feature:`、`sem.gloss` 併入 `senses`。增修 **A**=封閉清單同時約束 synchronic rule 目標(`gloss` 非法為規則目標)、**B**=`.chg` 新增 `feature[<dim>.<name>]` selector、**C**=`feature:` 開放至 `prag`(`phon` 仍不支援)。§7.5 為 A4 重新量測(§3 的數字是執行次數,已作廢)。**Phase 1 已落地;Phase 2 待 M4** |
 | `specifications/function分支語意與選擇層_v1.0.md` | **P69–P70 權威**:歷時 function body 的四種形狀(序列/`case:`/`when:`/`choose:`)、分支條件三選一、frozen matching;選擇移出引擎層(零候選為合法結果)。與 `case_when與context_fragment_v2.md` 逐條對齊 |
 | `specifications/統計先驗與抽樣引擎_v0.1.md` | 模組 E:唯讀先驗庫(PHOIBLE/Grambank/WALS/CLICS,附網址與授權)+ 無狀態抽樣;有效分佈=手動>導入 provider>投影>E1 先驗,覆寫層住節點。**設計層;01–10 設計鏈至此閉合** |
 | `verification/測試案例集總索引_v0.1.md` | **全專案測試索引**:DSL 範例 8.1–8.6、18 案折磨測試、十實例、Rust 測試、Lexurgy 黑盒的統一映射與狀態;動工任一模組前先查其驗收案例 |
@@ -51,7 +60,10 @@
 | `architecture/架構修補彙整_05-11_v1.0.md` | **P20–P64 權威總表** + 覆寫／相容性清冊 + 契約到證據 + Step 17 缺口 |
 | `architecture/架構2.0總鳥瞰_v1.0.md` | **2.0 單一入口**:Language/ChangeSet 雙軌全圖、四條資訊流、Debug 模塊化、**新實作順序(步驟 8–22,M1–M4)** |
 | `architecture/架構修補05_Primitive與檔案格式_v0.1.md` | P20–P28 詳細來源:DSL 獨立性、IR dump/canonical printer、條件語法、四原語、Ref、檔案格式 |
-| `architecture/架構修補06_插件服務與DSL_API_v0.1.md` | P29–P37 詳細來源:插件 code/data/config、服務生命週期、DSL API；完整插件仍是設計層 |
+| `architecture/架構修補06_插件服務與DSL_API_v0.1.md` | P29–P37 詳細來源:插件 code/data/config、服務生命週期、DSL API；完整插件仍是設計層。**§8 增修 A(2026-08-04)= 裁定 W/E/S 與 R7′/R9-a/R11–R15 的權威掛載點**:std 特權降為可覆寫預設、package 不必是編譯期常數；**§8.5 = P29/P50「無顯式 import」的適用範圍界線**(限 `.lang`／`.chg`) |
+| `architecture/接觸痕跡與語言聯盟_v0.1.md` | **問題陳述,未裁定**(S-a/S-b/S-c)。接觸痕跡**只記在節點層**(`.chg` 的 `donor`、`Edge::reference`),沒記在內容層:`Adopt` 不設 `origin`(而 `validate_origin_graph` 的 `::` 豁免因此無生產者)、`SoundChange` 不帶 donor。**語言聯盟(Sprachbund)全 repo 未建模**;§6.2 已把趨同動力學推到【N】multi-agent。附語言聯盟定義與其與借入/克里奧爾的對照 |
+| `architecture/資訊流D應用層框架_v0.1_提案.md` | **提案,未定案,不得引用為決策**(D-a–D-f 待裁)。應用層(步驟 21–22)參考框架:Query 純投影、Command 三分類(Language/View/ProjectData)、內容定址快取、互通度／分群只定接口。**Undo 按使用者活動分三條**:(A) 專案編輯=編輯一份寫到一半的 `.chg`(不落節點,**不需新格式或 `working/` 槽**)、(B) 演化 commit=app history stack(**非** graph parent 遍歷,children 在現行結構不可查)、views/data=文件編輯歷史。**§9 誌誤**記 v0.1 的四處錯 |
+| `architecture/演化專案結構與套件載入_v0.1.md` | **R 系列裁定的詳細推導**(程式碼註解引用 `裁定 W/E/S`、`R7′`、`R9-a`、`R11`–`R14` 者查此檔)。**權威分兩半**:套件載入組(W/E/S、R7′、R9-a、R11–R15)以《修補06》§8 為準,**已實作**;專案結構組(R1–R6:`project.toml`／`packages.lock.json`／`views/`／`data/`／`packages/`)**僅本檔、尚未實作、未編 P 號**(R10 裁定 2026-08-04),隨 M4 落地 |
 | `architecture/架構修補10_歷時function層與載入_v0.1.md` | P47–P55 詳細來源:function surface/load、接力展開、路徑庫、ServiceContext 接點、components、`.chg` canonical |
 | `architecture/架構修補11_演化樹節點模型_v0.1.md` | P56–P64 詳細來源:immutable snapshot、typed rebase、node-v2、全 parent merge、donor、persistence |
 | `architecture/架構修補12_授權面與封裝面分離_v0.1_提案.md` | P65–P68 **提案,未定案**:digest 移至邊、環境鎖分離、授權/封裝二分、bundle |
@@ -377,6 +389,59 @@ persisted expression／realization typed reconstruct 與 phon source insert／�
 content-addressed objects、node folder、hash-external annotation/config；細部拒絕邊界與
 驗證矩陣見 `docs/verification/Step16_文件契約與驗收矩陣_v1.0.md`。
 下一個歷時層是 Step 17。
+
+**已完成(鳥瞰步驟 18,C1)= M3 開跑**:`crates/generate`——模組 A 的造詞流水線
+`Need → Generator(唯讀)→ Vec<Proposal>(帶評分)→ 選擇 → Builder → Vec<PrimitiveEdit>`。
+**C1 增修**(`Sign生成引擎本體論` §12):規格原文的 `Store` 在 2.0 不存在
+(P2/P10 語言知識只住 Language、Grammar Store 計畫作廢),身分改由
+`LanguageDocument`、fork 由 `EvolutionGraph`、持久化由 `conlang-persistence`;
+**Builder 不改 Language**,構造 `AtomicRewrite::Create` 交既有
+`rewrite::expand` 降階——造出來的詞因此自動可 replay、進得了演化圖、
+受三道 digest 保護。選擇層**兩個模式對應干涉光譜**(架構書 §0;P12 明訂抽樣器只服務自動模式):
+`ranked()`=手動/輔助(引擎只排序,選擇權交出去,全程不碰抽樣器)、
+`sample_proposal(seed)`=自動(走與步驟 17 Goal 選擇**同一個**
+`sample_weighted_index`,注入式 ChaCha20Rng,trace 記 algorithm/seed/ordered)。
+兩者共通:列舉與選擇分離、零候選 `Ok(None)`(P70);有候選卻全零權重回 Err。
+validate/blocking/resolve 三個 Strategy **委派不內建**(§0 紅線)。
+出口 `generate/tests/coining.rs`(8 案):端到端造詞 → 四原語 → replay → `.lang`′;
+折磨 **11**(thief 擋 stealer,且換掉策略即通過——證明未內建)、
+**12**(20 候選、排序在提議側);Proposal 是幻影不改文件;origin/provenance 記錄。
+突變 4/4 首輪全紅。**尚未做**:逆構詞 Generator(折磨 4)、真正的 donor 借入
+(沿用既有 `Adopt`,需 `DonorScope`)、E1 抽樣接線(步驟 19)。
+
+**已完成(鳥瞰步驟 19)**:`crates/stats`(模組 E)+ 流 C 接點。權威=
+`統計先驗與抽樣引擎_v0.1` §1–§4 + **§6 增修 A**(擁有者 2026-08-04)。
+**有效分佈是三層**(手動 > 導入 provider > E1),§2 原訂的第三層「統計投影」
+**已移出抽樣棧**——投影照做但接 Query 當**唯讀報表**(`project_phoneme_freq`),
+抽樣器不看。代價:分佈不隨演化自動更新,出口「造詞像這個語言」弱化為
+「像**使用者宣告的分佈**」;可逆(日後在 provider 與 E1 間插回即可)。
+鍵 = **IPA 字串**(不用 SymId,免得把 E 綁進引擎)。E1 自 package
+`data/*/segments.tsv` 載入(裁定 W:先驗是 data;R9-a 後可外部注入)。
+`EffectiveDistribution` 逐項覆寫 + `provenance()` 可審計每項來自哪層。
+phonotactics 過濾 = **注入式 `PhonotacticFilter`**(§6.3),`generate` 零引擎依賴,
+且**事後過濾**不藏進 Generator——「提了幾個、擋掉幾個」是自動模式要審計的數字。
+`DistributionGenerator` 即流 C 圖上「Generator + E 抽樣」的最小實作,
+複用既有 `sample_weighted_index`。評分合成公式依 §6.4 **永久擱置**。
+投影切分依**給定音素清單**最長匹配(§6.6)——清單由呼叫端提供,因 dsl 域宣告
+是不透明區塊(I15-a),`stats` 不得越界解析;清單外的音段仍計入使問題現形。
+出口:`stats/tests/effective_distribution.rs`(13 案)、
+`generate/tests/distribution_driven.rs`(6 案);突變 8/8 首輪全紅。
+**尚未做**:E1 實際資料(PHOIBLE/Grambank 子集需離線匯入,§1 標明
+Index Diachronica 授權不明、SSWL 覆蓋 2%–100% 極不均)、
+`NaturalLanguage` provider、投影快取。
+
+**已完成(鳥瞰步驟 20)= M3 收工**:`changeset::state::EvolutionState`
+(time / region / society / contacts)。**定位收斂為 (A)**(修補04 增修 A):
+State 是**撰寫時**的環境輸入,**replay 永不讀它**,故雜湊外
+(`nodes/<id>/state`)。規格原句「使相同的 ChangeSet 在不同環境產生不同結果」
+與 P26/三道 digest 衝突,已修訂為「影響**產生什麼** ChangeSet」。
+`nativization` 不在 State——P19 已被 P56/P58/P64 覆寫為 immutable node content
+(早已實作);`contact_history` 則仍屬 State。
+接抽樣權重走**既有 provider 接點**(`generate::ContactInfluence`),不另立一層
+——獨立一層等於宣稱它是抽樣棧常駐成員,會誘使日後在 replay 路徑上讀它。
+出口 = **判別對**:正(記下接觸 → 鄰語音素進候選)+ 負(同一份 `.chg` 在不同
+State 下 replay 產物逐位元相同);另有 persistence 往返 + 雜湊外驗證。
+突變 3/3 全紅。**尚未做**:UI 顯示(M4 步驟 22)。
 
 **v1 路徑已硬移除(2026-07-24)**:v2 為唯一模型。移除 `LanguageSchema` V1/V2 分野
 (FP `case`/`when`/`constraints` 永遠可用,無需標頭;舊 `schema conlang.lang/v2` 行被

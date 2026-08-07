@@ -15,10 +15,11 @@
 #![forbid(unsafe_code)]
 #![deny(missing_debug_implementations)]
 
+use conlang_changeset::state::EvolutionState;
 use conlang_changeset::evolution::{
     Edge, EvolutionError, EvolutionGraph, Nativization, NodeId, PersistedNode,
 };
-use conlang_language::{sha256_hex, Language, LanguageDocument, LibrarySpec};
+use conlang_language::{sha256_hex, Language, LanguageDocument, LibraryId, LibrarySpec};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -45,6 +46,26 @@ pub enum StoreError {
     ObjectCorrupt { expected: String, actual: String },
     #[error("PERSISTENCE_NODE_IMMUTABLE: {node} already stores different {field}")]
     ImmutableNode { node: String, field: &'static str },
+    /// store 裡有這個節點,但傳進 `save` 的圖沒有它。
+    ///
+    /// `save` 是 append-only,**不替呼叫端刪東西**——若它會,一個只持有部分圖的
+    /// 呼叫端就能不可逆地清空 store。但也不能默默忽略:那會讓「從圖裡移除節點
+    /// → `save`」看起來成功,而下一次 `load` 又把它讀回來。故硬擋,並指向
+    /// [`GraphStore::remove_node`]。
+    #[error(
+        "PERSISTENCE_STALE_NODE: {node} exists in the store but not in the graph; \
+         call remove_node to delete it explicitly"
+    )]
+    StaleNode { node: String },
+    /// 節點被 store 裡別的節點引用為 parent,不得移除(同 `EvolutionGraph` 側)。
+    #[error("PERSISTENCE_NODE_HAS_DEPENDENTS: {node} is a parent of {dependent}")]
+    NodeHasDependents { node: String, dependent: String },
+    #[error("PERSISTENCE_PACKAGE_ID_INVALID: {0:?} is not a <kind>:<name> library id")]
+    InvalidPackageId(String),
+    #[error("PERSISTENCE_PROJECT_FORMAT: project.toml: {0}")]
+    ProjectFormat(String),
+    #[error("PERSISTENCE_VIEW_NAME_INVALID: {0:?} must be a single path segment")]
+    InvalidViewName(String),
     #[error("PERSISTENCE_PATH_INVALID: annotation path {0:?} is not relative and traversal-free")]
     InvalidAnnotationPath(PathBuf),
     #[error(transparent)]
@@ -63,6 +84,121 @@ pub struct NodeConfig {
     /// values while replaying or reconstructing a snapshot.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub preferences: BTreeMap<String, Value>,
+}
+
+/// 一個視角檔的**資料層**表示(`views/<name>.json`,R4 一套一檔)。
+///
+/// 本型別刻意只有**資料**,沒有任何應用層語意:它不知道 `GroupingOverride`
+/// 是什麼,也不知道 `ViewCommand`。翻譯是 app 的事(裁定 2026-08-04)。
+///
+/// 欄位對應流 D 框架 §4.2 的三段管線:
+/// - `sort` → 呈現設定(不影響入選集合);
+/// - `assignments` → **分類指派**(D-f2:不是 merge/split,故不可能衝突);
+/// - `labels` → 顯示名(不影響群組身分)。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewDocument {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<String>,
+    /// node id → group id。**sparse**:未列者用 strategy 算出的結果。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub assignments: BTreeMap<String, String>,
+    /// group id → 顯示名。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub labels: BTreeMap<String, String>,
+}
+
+/// 專案宣告檔(`project.toml`,R3 的 import 表)。
+///
+/// # 為什麼需要它
+///
+/// `GraphStore::load` 要一個 `LibrarySpec`,但此前 store 裡**沒有任何檔案記錄
+/// 這個專案需要哪些套件**,呼叫端只能傳 `LibrarySpec::default()`
+/// (`natural: None`、`plugins: []`)。用了 `natural:en-standard` 的專案因此
+/// 開不起來,而錯誤訊息還說「add it to your import table」——**指向一個不存在
+/// 的表**(R13 的措辭當時就預設了 R3)。
+///
+/// # 為什麼不能從 `.chg` 的 library lock 反推
+///
+/// 每條主幹邊的 prelude 都有 `library <pkg>@<ver> sha256:`,故有演化的專案
+/// 確實 recoverable。但:
+///
+/// - **只有一個 root 的專案沒有任何 `.chg`** → 零資訊,而那正是最需要它的時候;
+/// - lock 是 **replay 產物**(當時用了什麼),import 表是**意圖**(這個專案要
+///   什麼)。拿產物反推意圖,就表達不了「想加一個套件但還沒用到」。
+///
+/// # 為什麼是 TOML
+///
+/// R3 附則:依「功能與編輯方」分——人編輯的宣告檔用 TOML,機器產生的結果用
+/// JSON。本檔是人寫的。
+///
+/// # `packages.lock.json` 為什麼不在這裡
+///
+/// **鎖只在套件來自二進位之外時才有工作做。** 目前所有套件都是 `include_str!`
+/// 內嵌的,解析結果完全由引擎版本決定,不存在「同一份宣告在不同機器解出不同
+/// 版本」。等 R9-a 的注入入口真的被 host 用來讀磁碟套件,再做。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectDocument {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// 預設開哪個 `views/<name>.json`(R1)。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_view: Option<String>,
+    #[serde(default)]
+    pub packages: ProjectPackages,
+}
+
+/// import 表本體。**只宣告直接依賴**;遞移依賴由各 package 的 `requires`
+/// 展開,走既有的 `LibraryCatalog::visit()`(R3 ①)。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectPackages {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub std: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub natural: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugins: Vec<String>,
+}
+
+impl ProjectDocument {
+    /// 由既有的 `LibrarySpec` 產生一份宣告(存檔用)。
+    pub fn from_spec(spec: &LibrarySpec) -> ProjectDocument {
+        ProjectDocument {
+            packages: ProjectPackages {
+                std: spec.std.iter().map(ToString::to_string).collect(),
+                natural: spec.natural.as_ref().map(ToString::to_string),
+                plugins: spec.plugins.iter().map(ToString::to_string).collect(),
+            },
+            ..ProjectDocument::default()
+        }
+    }
+
+    /// 翻成 `LibrarySpec`。
+    ///
+    /// **`std` 為空表示「不載入任何 std」,不是「用預設」。** 兩者必須分得開,
+    /// 否則 R12 剛做出來的「不載入 `std:grambank`」就表達不了——而那正是
+    /// 裁定 S 的重點:特權是一份**可覆寫**的預設值。
+    /// 「用預設」由**檔案不存在**表達(見 [`GraphStore::read_project`])。
+    pub fn to_spec(&self) -> Result<LibrarySpec, StoreError> {
+        let parse = |text: &str| {
+            text.parse::<LibraryId>()
+                .map_err(|_| StoreError::InvalidPackageId(text.to_owned()))
+        };
+        Ok(LibrarySpec {
+            std: self
+                .packages
+                .std
+                .iter()
+                .map(|id| parse(id))
+                .collect::<Result<_, _>>()?,
+            natural: self.packages.natural.as_deref().map(parse).transpose()?,
+            plugins: self
+                .packages
+                .plugins
+                .iter()
+                .map(|id| parse(id))
+                .collect::<Result<_, _>>()?,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -102,13 +238,80 @@ impl GraphStore {
         &self.root
     }
 
+    /// 已存節點的目錄清單(排序後,跳過 `.` 開頭的暫存目錄)。
+    ///
+    /// `save` 的過期檢查與 `load` 共用同一份列舉——兩邊若各寫一套,
+    /// 「store 裡有什麼」就有兩個答案。
+    fn stored_node_dirs(&self) -> Result<Vec<PathBuf>, StoreError> {
+        let mut entries = fs::read_dir(self.nodes_dir()).map_err(|source| StoreError::Io {
+            path: self.nodes_dir(),
+            source,
+        })?;
+        let mut directories = Vec::new();
+        while let Some(entry) = entries
+            .next()
+            .transpose()
+            .map_err(|source| StoreError::Io {
+                path: self.nodes_dir(),
+                source,
+            })?
+        {
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with('.') {
+                continue;
+            }
+            let file_type = entry.file_type().map_err(|source| StoreError::Io {
+                path: entry.path(),
+                source,
+            })?;
+            if !file_type.is_dir() {
+                return Err(StoreError::Format(format!(
+                    "unexpected non-directory under nodes/: {:?}",
+                    name
+                )));
+            }
+            directories.push(entry.path());
+        }
+        directories.sort();
+        Ok(directories)
+    }
+
+    /// 已存節點的 id 清單。
+    fn stored_node_ids(&self) -> Result<Vec<String>, StoreError> {
+        self.stored_node_dirs()?
+            .into_iter()
+            .map(|directory| {
+                directory
+                    .file_name()
+                    .and_then(OsStr::to_str)
+                    .map(str::to_owned)
+                    .ok_or_else(|| StoreError::Format("node directory is not UTF-8".to_owned()))
+            })
+            .collect()
+    }
+
     /// Append every graph node to the content-addressed store.
     ///
     /// Existing immutable node files must match byte-for-byte. Config is the
     /// only file updated; arbitrary existing preferences and annotations are
     /// preserved while the graph's current label is synchronized.
+    ///
+    /// # append-only,但**不靜默**
+    ///
+    /// 本方法只新增,不刪除。若 store 裡有節點而傳進來的圖沒有,回
+    /// [`StoreError::StaleNode`] 而非默默略過——後者會讓「從圖裡移除節點 →
+    /// `save`」看起來成功,而 `load`(以 `nodes/` 的目錄內容為準)又把它讀回來。
+    /// 要真的刪,呼叫 [`remove_node`](Self::remove_node)。
+    ///
+    /// 檢查在寫入**之前**做,故被擋下時 store 未被動過。
     pub fn save(&self, graph: &EvolutionGraph) -> Result<(), StoreError> {
         graph.verify_all()?;
+        let known: std::collections::BTreeSet<&str> = graph.ids().map(NodeId::as_str).collect();
+        for stored in self.stored_node_ids()? {
+            if !known.contains(stored.as_str()) {
+                return Err(StoreError::StaleNode { node: stored });
+            }
+        }
         for id in graph.ids() {
             let node = graph
                 .node(id)
@@ -156,36 +359,7 @@ impl GraphStore {
     /// `.chg` remain the authority for replay compatibility; no state-changing
     /// dependency is smuggled through hash-external P64 config.
     pub fn load(&self, libraries: LibrarySpec) -> Result<EvolutionGraph, StoreError> {
-        let mut entries = fs::read_dir(self.nodes_dir()).map_err(|source| StoreError::Io {
-            path: self.nodes_dir(),
-            source,
-        })?;
-        let mut directories = Vec::new();
-        while let Some(entry) = entries
-            .next()
-            .transpose()
-            .map_err(|source| StoreError::Io {
-                path: self.nodes_dir(),
-                source,
-            })?
-        {
-            let name = entry.file_name();
-            if name.to_string_lossy().starts_with('.') {
-                continue;
-            }
-            let file_type = entry.file_type().map_err(|source| StoreError::Io {
-                path: entry.path(),
-                source,
-            })?;
-            if !file_type.is_dir() {
-                return Err(StoreError::Format(format!(
-                    "unexpected non-directory under nodes/: {:?}",
-                    name
-                )));
-            }
-            directories.push(entry.path());
-        }
-        directories.sort();
+        let directories = self.stored_node_dirs()?;
 
         let mut records = Vec::with_capacity(directories.len());
         for directory in directories {
@@ -220,6 +394,179 @@ impl GraphStore {
             });
         }
         Ok(EvolutionGraph::restore(libraries, records)?)
+    }
+
+    /// 從 store 刪掉一個節點的整個資料夾。**只有葉節點可刪**。
+    ///
+    /// 這是唯一的破壞性操作,故刻意做成顯式呼叫而非 `save` 的副作用
+    /// (見 [`StoreError::StaleNode`])。
+    ///
+    /// - 若 store 裡還有節點以它為 parent(含引用邊),回
+    ///   [`StoreError::NodeHasDependents`]——子節點的 id 由 parents 的 id 算出,
+    ///   父節點消失後 `load` 會直接拒收(`PersistedParentMissing`);
+    /// - `manifest`/`edges`/`config`/`state`/`annotation/` 一併刪除;
+    /// - **`objects/` 不動**:它是內容定址且跨節點共用,刪掉會破壞別的節點。
+    ///   孤兒 object 是無害的空間佔用,回收另計。
+    ///
+    /// 呼叫端通常要與 `EvolutionGraph::remove_node` 成對使用,否則下一次
+    /// `save` 會把它寫回去。
+    pub fn remove_node(&self, id: &NodeId) -> Result<(), StoreError> {
+        let node_dir = self.node_dir(id);
+        if !node_dir.exists() {
+            return Err(StoreError::Format(format!("unknown node {id}")));
+        }
+        for directory in self.stored_node_dirs()? {
+            if directory == node_dir {
+                continue;
+            }
+            let edges: EdgeManifest = read_json(&directory.join("edges"))?;
+            if edges.edges.iter().any(|edge| edge.from == id.as_str()) {
+                let dependent = directory
+                    .file_name()
+                    .and_then(OsStr::to_str)
+                    .unwrap_or("<non-utf8>")
+                    .to_owned();
+                return Err(StoreError::NodeHasDependents {
+                    node: id.as_str().to_owned(),
+                    dependent,
+                });
+            }
+        }
+        remove_dir_all(&node_dir)
+    }
+
+    /// 讀節點的 State(外部環境)。**雜湊外**,不存在時回預設空值。
+    ///
+    /// 裁定 (A):State 只在撰寫時被讀,**replay 不看它**——故它與
+    /// `manifest`/`edges` 分檔、不進 node-v2 雜湊,可自由編輯而不影響
+    /// 任何既有節點的重放產物。
+    pub fn read_state(&self, id: &NodeId) -> Result<EvolutionState, StoreError> {
+        let path = self.node_dir(id).join("state");
+        if !path.exists() {
+            return Ok(EvolutionState::default());
+        }
+        read_json(&path)
+    }
+
+    pub fn write_state(&self, id: &NodeId, state: &EvolutionState) -> Result<(), StoreError> {
+        atomic_write(&self.node_dir(id).join("state"), &json_bytes(state)?)
+    }
+
+    // ── views/(R4:一套一檔)────────────────────────────────────────────
+    //
+    // **這是資料層 API,不是 UI 的。** 本 crate 刻意**不認得** `ViewCommand`
+    // ——那是應用層的意圖型別;persistence 只擁有「檔案裡放什麼、怎麼讀寫」。
+    // 由 app 負責把意圖翻成對 [`ViewDocument`] 的修改再交回來寫。
+    //
+    // 若反過來讓 persistence 直接吃 command,格式層就會隨 UI 的意圖集合一起長,
+    // 而那正是 §2.2「app 不得自行定義第二套格式」想避免的鏡像錯誤。
+
+    // ── project.toml(R3 的 import 表)────────────────────────────────
+
+    /// 讀專案宣告。**不存在時回 `None`,不是錯誤。**
+    ///
+    /// `None` 與「空的宣告」是兩件事:前者表示「這個目錄沒有專案宣告,
+    /// 沿用呼叫端的預設」,後者表示「明確宣告不載入任何套件」。
+    /// 分不開的話,升級後既有的 store 目錄就會突然變成「什麼都不載入」。
+    pub fn read_project(&self) -> Result<Option<ProjectDocument>, StoreError> {
+        let path = self.project_path();
+        if !path.exists() {
+            return Ok(None);
+        }
+        let text = fs::read_to_string(&path).map_err(|source| StoreError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        toml::from_str(&text)
+            .map(Some)
+            .map_err(|error| StoreError::ProjectFormat(error.to_string()))
+    }
+
+    pub fn write_project(&self, project: &ProjectDocument) -> Result<(), StoreError> {
+        let text = toml::to_string_pretty(project)
+            .map_err(|error| StoreError::ProjectFormat(error.to_string()))?;
+        atomic_write(&self.project_path(), text.as_bytes())
+    }
+
+    /// 這個專案要載入的套件組合。
+    ///
+    /// 沒有 `project.toml` 時回 `fallback`——**既有的 store 目錄照樣打得開**,
+    /// 不製造遷移斷點。
+    pub fn library_spec_or(&self, fallback: LibrarySpec) -> Result<LibrarySpec, StoreError> {
+        match self.read_project()? {
+            Some(project) => project.to_spec(),
+            None => Ok(fallback),
+        }
+    }
+
+    fn project_path(&self) -> PathBuf {
+        self.root.join("project.toml")
+    }
+
+    /// 一個視角檔的內容。`views/<name>.json`。
+    ///
+    /// 專案根 == store 根(R1),故它與 `objects/`、`nodes/` 同層。
+    pub fn read_view(&self, name: &str) -> Result<ViewDocument, StoreError> {
+        let path = self.view_path(name)?;
+        if !path.exists() {
+            return Ok(ViewDocument::default());
+        }
+        read_json(&path)
+    }
+
+    pub fn write_view(&self, name: &str, view: &ViewDocument) -> Result<(), StoreError> {
+        let path = self.view_path(name)?;
+        create_dir_all(&self.views_dir())?;
+        atomic_write(&path, &json_bytes(view)?)
+    }
+
+    /// 已存在的視角名,排序後。
+    pub fn list_views(&self) -> Result<Vec<String>, StoreError> {
+        let dir = self.views_dir();
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut names = Vec::new();
+        let entries = fs::read_dir(&dir).map_err(|source| StoreError::Io {
+            path: dir.clone(),
+            source,
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|source| StoreError::Io {
+                path: dir.clone(),
+                source,
+            })?;
+            let file = entry.file_name();
+            let Some(name) = file.to_str().and_then(|n| n.strip_suffix(".json")) else {
+                continue;
+            };
+            names.push(name.to_owned());
+        }
+        names.sort();
+        Ok(names)
+    }
+
+    pub fn remove_view(&self, name: &str) -> Result<(), StoreError> {
+        let path = self.view_path(name)?;
+        if path.exists() {
+            remove_file(&path)?;
+        }
+        Ok(())
+    }
+
+    fn views_dir(&self) -> PathBuf {
+        self.root.join("views")
+    }
+
+    /// 視角名必須是單一路徑段——`../` 之類會逃出專案根。
+    fn view_path(&self, name: &str) -> Result<PathBuf, StoreError> {
+        let candidate = Path::new(name);
+        let mut parts = candidate.components();
+        match (parts.next(), parts.next()) {
+            (Some(Component::Normal(_)), None) if !name.is_empty() => {}
+            _ => return Err(StoreError::InvalidViewName(name.to_owned())),
+        }
+        Ok(self.views_dir().join(format!("{name}.json")))
     }
 
     pub fn read_config(&self, id: &NodeId) -> Result<NodeConfig, StoreError> {

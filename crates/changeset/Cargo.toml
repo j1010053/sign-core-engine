@@ -6,6 +6,7 @@ description = "Step 13 persistent primitive edits over caller Language source"
 
 [dependencies]
 conlang-language = { path = "../language" }
+serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 
 
