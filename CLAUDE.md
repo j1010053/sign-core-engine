@@ -119,6 +119,45 @@
 - CI 必掛:`cargo build -p conlang-core --target wasm32-unknown-unknown`
 - `#![forbid(unsafe_code)]` 已設,維持
 
+### 4.1 本機怎麼跑測試(桌面 app 的系統依賴)
+
+**完整閘門仍然是 `cargo test --workspace`**,CI 跑的就是它
+(`windows-latest` + `ubuntu-latest` 兩個 OS,並額外跑
+`cargo check -p langcraft-desktop`、前端 typecheck/lint/unit/build、
+`xvfb-run pnpm e2e`)。
+
+但 `apps/desktop/src-tauri`(`langcraft-desktop`)需要**該平台 webview 的
+dev 套件**才編得起來——Tauri 不自帶瀏覽器引擎,借用 OS 的
+(Linux→WebKitGTK、Windows→WebView2)。Linux 上還連帶要 D-Bus
+(桌面通知/系統匣走它)。缺任何一個,`libdbus-sys` / `webkit2gtk-sys` 的
+`build.rs` 會在 `pkg-config` 那一步 panic。
+
+**沒裝那些套件的機器上,`--workspace` 會整組失敗**——包含九個本來編得過的
+語意 crate。此時用:
+
+```sh
+cargo test --workspace --exclude langcraft-desktop   # 885 綠,完全不碰 Tauri
+```
+
+`--exclude` 是**單次指令的旗標**,不改 `Cargo.toml`、不改 CI、不從 workspace
+移除任何東西。它買到的是「一個建不起來的 crate 不要把另外九個一起扣住」,
+**不減少任何覆蓋率**。
+
+代價要知道:這樣跑**驗不到** Tauri 那 39 個 command 的簽名是否還對得上
+`conlang-app` 的公開 API(改 `conlang_app::ipc` 時尤其相關),要等 CI 才知道。
+那個代價不是 `--exclude` 造成的——沒裝套件的機器本來就編不了它。
+
+要在本機補齊(Linux):
+
+```sh
+sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+```
+
+**不要**改成把 `langcraft-desktop` 從 `[workspace] members` 移出去。那會讓它
+掉出 CI 的 `--workspace`,得另立一條步驟接住——兩份設定各自要記得維護,
+漏一邊就沒人知道。`tshiatun` 是真的排除,但理由不同:它**自有 workspace**
+(P20 獨立產品,自帶測試與 insta 快照路徑)。
+
 ## 5. 目前狀態與下一個任務
 
 **設計鏈狀態**:docs/01–12 + 架構修補01 全部到位並已納入 repo(repo 版為權威;根目錄
