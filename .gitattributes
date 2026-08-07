@@ -1,5 +1,19 @@
+# 換行符正規化。
+#
+# **不只是風格問題。** 套件的 library lock digest 是對「整個套件內容」取 sha256
+# (`package_lock_content`:config 欄位 + exports + code + functions + data),
+# 而 `include_str!` 在編譯期直接讀工作樹。CRLF 檢出 ⇒ 內容不同 ⇒ digest 不同
+# ⇒ 簽入的 `.chg` 在 Windows 上 resolve 不過(CHANGESET_LIBRARY_LOCK_MISMATCH)。
+#
+# 凡是**進 digest 的檔案類型**都必須釘 LF。新增套件檔案格式時要一併加進來。
+
+# 進 library lock digest 的:
 *.lang text eol=lf
 *.chg text eol=lf
+*.conf text eol=lf
+*.tsv text eol=lf
+
+# 其餘:
 *.qy text eol=lf
 *.json text eol=lf
 *.ts text eol=lf
