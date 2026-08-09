@@ -5,7 +5,7 @@
 
 | 檔案 | 角色 |
 |---|---|
-| `base.lang` | 最小復原基底；只含 schema，canonical Language 為空 |
+| `base.lang` | 最小復原基底；**空檔**,canonical Language 為空(P28)。舊版有一行 `schema conlang.lang/v2`,那是 v1 淘汰後的 no-op,已移除 |
 | `restore.chg` | 單一原子 statement，插入 17 個 Symbol、1 個 Class、37 個 trait 與 30 個 sign |
 | `../../crates/language/lib/natural/en-standard/code/grammar.lang` | 目標 Standard English 快照 |
 

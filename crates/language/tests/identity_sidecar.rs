@@ -127,9 +127,7 @@ fn fork_preserves_ancestor_ids_and_adds_an_active_allocator() {
     assert!(child.fork("evo:child").is_err());
 }
 
-const V2_EXPRESSION_SOURCE: &str = r#"schema conlang.lang/v2
-
-trait Entity:
+const V2_EXPRESSION_SOURCE: &str = r#"trait Entity:
 
 trait Marked:
 
@@ -251,9 +249,7 @@ fn v2_expression_nodes_have_recursive_unique_stable_addresses() {
 
 #[test]
 fn anonymous_sign_context_fragment_items_keep_stable_identity_and_refs() {
-    let source = r#"schema conlang.lang/v2
-
-trait FragmentMark:
+    let source = r#"trait FragmentMark:
 
 sign root:
     phon:
@@ -311,9 +307,7 @@ sign root:
 
 #[test]
 fn dimension_when_fragment_items_round_trip_with_stable_identity() {
-    let source = r#"schema conlang.lang/v2
-
-sign root:
+    let source = r#"sign root:
     syn:
         feature:
             trigger = enum(on, off)

@@ -57,9 +57,7 @@ fn trait_block(document: &LanguageDocument, name: &str) -> NodeRef {
     child(document, &parent, NodeKind::Block, 0)
 }
 
-const V2_SOURCE: &str = r#"schema conlang.lang/v2
-
-trait Atom:
+const V2_SOURCE: &str = r#"trait Atom:
 
 trait Other:
 
@@ -148,9 +146,7 @@ fn direct_application(branch: &CaseBranch) -> SignApplication {
 
 #[test]
 fn sign_context_fragment_items_support_all_four_primitive_edits() {
-    let source = r#"schema conlang.lang/v2
-
-trait PrimitiveFragmentMark:
+    let source = r#"trait PrimitiveFragmentMark:
 
 sign root:
     phon:
@@ -688,9 +684,7 @@ fn v2_typed_updates_preserve_case_application_and_constraint_identity() {
 #[test]
 fn case_selection_is_a_typed_identity_preserving_update() {
     let before = LanguageDocument::import_new_root(
-        r#"schema conlang.lang/v2
-
-sign root:
+        r#"sign root:
     syn:
         feature:
             trigger = enum(on, off)
@@ -1037,9 +1031,7 @@ fn distribution_update_keeps_identity_through_canonical_reordering() {
 #[test]
 fn diff_observes_projection_and_interpolation_wrapper_changes() {
     let before = LanguageDocument::import_new_root(
-        r#"schema conlang.lang/v2
-
-sign wrap:
+        r#"sign wrap:
     syn:
         slots:
             value [*]
@@ -1093,9 +1085,7 @@ sign root:
 #[test]
 fn slot_rename_rewrites_typed_consumers_and_named_applications() {
     let before = LanguageDocument::import_new_root(
-        r#"schema conlang.lang/v2
-
-trait LocalEntity:
+        r#"trait LocalEntity:
 
 sign wrap:
     syn:
@@ -1176,9 +1166,7 @@ sign caller:
 #[test]
 fn trait_slot_rename_stops_at_an_intermediate_shadow() {
     let before = LanguageDocument::import_new_root(
-        r#"schema conlang.lang/v2
-
-trait Base:
+        r#"trait Base:
     syn:
         slots:
             subject [*]
@@ -1233,9 +1221,7 @@ trait Leaf:
 #[test]
 fn nested_case_identity_survives_branch_move_and_canonical_reopen() {
     let before = LanguageDocument::import_new_root(
-        r#"schema conlang.lang/v2
-
-trait Atom:
+        r#"trait Atom:
 trait Other:
 
 sign wrap:

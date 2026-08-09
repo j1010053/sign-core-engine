@@ -1,9 +1,7 @@
 use conlang_language::construction::{OccurrenceCaseStatus, SlotFiller, SlotMap};
 use conlang_language::{compile_system, CompileSystemError, Dim, Language};
 
-const PRELUDE: &str = r#"schema conlang.lang/v2
-
-Symbol a
+const PRELUDE: &str = r#"Symbol a
 Class vowel {a}
 
 trait LocalCaseBearer:

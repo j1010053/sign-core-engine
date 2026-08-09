@@ -1,4 +1,3 @@
-schema conlang.lang/v2
 
 /* Contemporary formal Standard English common to British and American usage.
    Spaces in phon templates are structural word boundaries and are rendered

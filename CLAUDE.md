@@ -487,7 +487,12 @@ State 下 replay 產物逐位元相同);另有 persistence 往返 + 雜湊外驗
 (FP `case`/`when`/`constraints` 永遠可用,無需標頭;舊 `schema conlang.lang/v2` 行被
 接受並忽略,printer 不再輸出)、identity manifest v1(`IdentityManifestV1`/
 `IDENTITY_SCHEMA_V1`/`migrate_v1`/read 分支——`LanguageDocument::open` 只吃 v2 sidecar,
-v1/未知 → `UnknownSchema`)。**舊 v1 檔不可載入**。移除前已證 v1→v2 升級無損(Stage A,
+v1/未知 → `UnknownSchema`)。**舊 v1 檔不可載入**。
+**`schema conlang.lang/v2` 行已於 2026-08-07 完全移除**:它在 v1 淘汰後對解析、
+canonical dump 與 identity digest 皆零影響,parser 卻仍特別認得它——留著等於保留
+一條「認得但無意義」的語法。現改為**顯式拒絕**並附「刪掉這一行」的訊息;
+不能只把分支拿掉,因為 `.lang` 會把首個 language 構造前的內容 verbatim 交給 dsl 域
+(裁決1),那行會變成難懂的 tshiatun token 錯誤。repo 內三個 `.lang` 已一併清乾淨。移除前已證 v1→v2 升級無損(Stage A,
 git history)。12 base fixtures 於 v2 逐字不變(goldens 零 churn);263/263 綠、0 警告、
 引擎零觸動。共用型別 `NodeEntryV1`/`RefTargetV1`/`RefBindingV1`(v2 沿用)保留。
 

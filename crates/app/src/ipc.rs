@@ -240,14 +240,21 @@ impl UiSession {
     }
 
     /// 從 `.lang` 建立新專案。先完整解析 source，成功後才初始化目錄。
+    /// 建一個新專案。
+    ///
+    /// `source_path` 為 `None` ⇒ **空白專案**。空的 Language 是一等公民
+    /// (P28:canonical empty root 永遠存在,四原語有處掛靠),故不必先手寫一份
+    /// 佔位 `.lang`——那是把實作細節外洩給使用者。
     pub fn create(
         path: impl AsRef<Path>,
-        source_path: impl AsRef<Path>,
+        source_path: Option<impl AsRef<Path>>,
         name: Option<String>,
         namespace: &str,
     ) -> Result<UiSession, UiError> {
-        let source_path = source_path.as_ref();
-        let source = std::fs::read_to_string(source_path).map_err(UiError::of)?;
+        let source = match &source_path {
+            Some(from) => std::fs::read_to_string(from.as_ref()).map_err(UiError::of)?,
+            None => String::new(),
+        };
         let document =
             LanguageDocument::import_new_root(&source, namespace).map_err(UiError::of)?;
         let project_path = path.as_ref();
@@ -1065,7 +1072,7 @@ impl ProjectSlot {
     pub fn create(
         &mut self,
         path: impl AsRef<Path>,
-        source_path: impl AsRef<Path>,
+        source_path: Option<impl AsRef<Path>>,
         name: Option<String>,
         namespace: &str,
         discard_dirty: bool,

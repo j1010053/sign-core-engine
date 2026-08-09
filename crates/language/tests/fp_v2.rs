@@ -7,9 +7,7 @@ use conlang_language::{
     SourceLocation,
 };
 
-const FP_SOURCE: &str = r#"schema conlang.lang/v2
-
-trait TestVerb:
+const FP_SOURCE: &str = r#"trait TestVerb:
 
 trait ThirdSingular:
     syn:
@@ -68,9 +66,7 @@ fn v2_round_trip_keeps_context_typed_case() {
 
 #[test]
 fn sign_context_case_merges_anonymous_trait_fragment_into_the_same_sign() {
-    let source = r#"schema conlang.lang/v2
-
-trait FragmentTestVerb:
+    let source = r#"trait FragmentTestVerb:
 
 trait FragmentThirdSingular:
 
@@ -169,9 +165,7 @@ sign walk:
 
 #[test]
 fn when_guards_share_one_frozen_pre_merge_snapshot() {
-    let source = r#"schema conlang.lang/v2
-
-sign cumulative:
+    let source = r#"sign cumulative:
     syn:
         feature:
             trigger = enum(on, off)
@@ -274,9 +268,7 @@ sign cumulative:
 fn when_else_uses_the_same_external_default_policy() {
     let system = compile_system(
         Language::parse(
-            r#"schema conlang.lang/v2
-
-sign fallback:
+            r#"sign fallback:
     syn:
         feature:
             trigger = enum(on, off)
@@ -313,9 +305,7 @@ sign fallback:
 fn when_guard_error_aborts_before_any_fragment_commit() {
     let system = compile_system(
         Language::parse(
-            r#"schema conlang.lang/v2
-
-trait AtomicNominal:
+            r#"trait AtomicNominal:
     syn:
         feature:
             number = enum(singular, plural)
@@ -363,9 +353,7 @@ sign atomic:
 #[test]
 fn trait_expansion_is_closed_to_sign_context() {
     let error = Language::parse(
-        r#"schema conlang.lang/v2
-
-trait SuffixFragment:
+        r#"trait SuffixFragment:
     phon:
         /s/
 
@@ -390,9 +378,7 @@ sign word:
 fn sign_context_fragment_is_checked_as_a_typed_sign_body() {
     let error = compile_system(
         Language::parse(
-            r#"schema conlang.lang/v2
-
-sign fragment_schema:
+            r#"sign fragment_schema:
     syn:
         feature:
             mode = enum(a, b)
@@ -418,9 +404,7 @@ sign fragment_schema:
 
     let system = compile_system(
         Language::parse(
-            r#"schema conlang.lang/v2
-
-sign nested_fragment_schema:
+            r#"sign nested_fragment_schema:
     phon:
         /x/
     case:
@@ -452,8 +436,8 @@ sign nested_fragment_schema:
 }
 
 /// v1 淘汰後(2026-07-24):FP `case` 語法為預設,**無需 schema 標頭**即可解析;
-/// canonical dump 不再輸出標頭(printer 已移除)。舊 `schema conlang.lang/v2` 行仍被
-/// 接受並忽略(back-compat),見 `legacy_v2_header_is_accepted_and_ignored`。
+/// canonical dump 不再輸出標頭(printer 已移除);那行現已**被拒絕**,
+/// 見 `the_legacy_v2_header_is_now_rejected`。
 #[test]
 fn case_syntax_parses_without_any_schema_header() {
     let language = Language::parse(
@@ -479,16 +463,24 @@ fn case_syntax_parses_without_any_schema_header() {
     );
 }
 
-/// 舊 `schema conlang.lang/v2` 標頭 = 被接受並忽略的 no-op(back-compat):有無標頭的
-/// 同一來源產出**逐位元相同**的 canonical(標頭不進 dump / 不影響 identity digest)。
+/// 🔑 舊 `schema conlang.lang/v2` 標頭現在**被拒絕**。
+///
+/// v1 於 2026-07-24 硬移除後,那行成了 parser 特別認得、然後丟掉的 no-op
+/// ——不進 dump、不影響 identity digest,對任何行為零貢獻(常數名字就叫
+/// `LEGACY_V2_HEADER`)。留著等於保留一條「認得但無意義」的語法。
+///
+/// **拒絕而非忽略**:無意義的輸入靜默通過,會讓作者以為那行有作用。
+/// 本專案未曾發布,沒有既有檔案需要相容;repo 內三個 `.lang` 已一併清掉。
 #[test]
-fn legacy_v2_header_is_accepted_and_ignored() {
+fn the_legacy_v2_header_is_now_rejected() {
     let body = "sign walk:\n    phon:\n        /walk/\n";
-    let with_header = format!("schema conlang.lang/v2\n\n{body}");
-    assert_eq!(
-        Language::parse(&with_header).unwrap().dump(),
-        Language::parse(body).unwrap().dump(),
-        "標頭有無不影響 canonical"
+    Language::parse(body).expect("無標頭的來源照常解析");
+
+    let error = Language::parse(&format!("schema conlang.lang/v2\n\n{body}"))
+        .expect_err("舊標頭應被拒,而不是靜默忽略");
+    assert!(
+        format!("{error:?}").contains("line: 1"),
+        "錯誤要指得出是第一行:{error:?}"
     );
 }
 
@@ -542,9 +534,7 @@ fn sign_application_returns_a_full_typed_sign() {
 #[test]
 fn binary_constraints_execute_at_application() {
     let language = Language::parse(
-        r#"schema conlang.lang/v2
-
-trait TestNominal:
+        r#"trait TestNominal:
     syn:
         feature:
             number = enum(singular, plural)
@@ -599,9 +589,7 @@ sign Agreement:
 #[test]
 fn unsaturated_sign_can_receive_arguments_without_becoming_another_entity() {
     let language = Language::parse(
-        r#"schema conlang.lang/v2
-
-trait Piece:
+        r#"trait Piece:
     syn:
         feature:
             mark = enum(left, right)
@@ -687,9 +675,7 @@ sign seed:
 #[test]
 fn nested_unsaturated_signs_export_named_variables_and_resume_immutably() {
     let language = Language::parse(
-        r#"schema conlang.lang/v2
-
-trait NestedPiece:
+        r#"trait NestedPiece:
 
 sign value:
     belongs NestedPiece
@@ -750,9 +736,7 @@ sign seed:
 #[test]
 fn competition_returns_all_candidates_and_samples_deterministically() {
     let language = Language::parse(
-        r#"schema conlang.lang/v2
-
-trait Atom:
+        r#"trait Atom:
 
 trait CompetingConstruction:
 
@@ -888,9 +872,7 @@ fn entrenchment_sampling_normalizes_finite_weights_before_they_overflow() {
 #[test]
 fn phon_projection_evaluates_the_full_sign_before_extracting_phon() {
     let language = Language::parse(
-        r#"schema conlang.lang/v2
-
-trait ProjectionAtom:
+        r#"trait ProjectionAtom:
 
 trait OuterCategory:
 
@@ -936,9 +918,7 @@ sign Outer:
 #[test]
 fn nested_applications_participate_in_static_resolution_and_cycle_checks() {
     let unknown = Language::parse(
-        r#"schema conlang.lang/v2
-
-trait Atom:
+        r#"trait Atom:
 
 sign Wrapper:
     syn:
@@ -966,9 +946,7 @@ sign root:
         .any(|diagnostic| diagnostic.code == "APPLICATION_UNKNOWN_SIGN"));
 
     let cyclic = Language::parse(
-        r#"schema conlang.lang/v2
-
-sign A:
+        r#"sign A:
     syn:
         slots:
             value [*]
@@ -1002,9 +980,7 @@ sign B:
 #[test]
 fn feature_and_role_cases_execute_in_the_dimension_pipeline() {
     let language = Language::parse(
-        r#"schema conlang.lang/v2
-
-Symbol a
+        r#"Symbol a
 Symbol l
 Symbol p
 Symbol h
@@ -1096,9 +1072,7 @@ sign Chooser:
 #[test]
 fn feature_case_without_branch_or_base_reports_the_typed_default_error() {
     let language = Language::parse(
-        r#"schema conlang.lang/v2
-
-Symbol x
+        r#"Symbol x
 
 trait Unit:
 
@@ -1140,9 +1114,7 @@ sign MissingDefault:
 #[test]
 fn public_derive_executes_sign_level_case_and_nested_sign_rules() {
     let language = Language::parse(
-        r#"schema conlang.lang/v2
-
-Symbol p
+        r#"Symbol p
 Symbol r
 Symbol e
 Symbol x
@@ -1230,9 +1202,7 @@ sign Root:
 #[test]
 fn feature_case_rejects_a_sign_valued_branch_during_compile() {
     let language = Language::parse(
-        r#"schema conlang.lang/v2
-
-sign Helper:
+        r#"sign Helper:
     phon:
         /h/
 
@@ -1301,9 +1271,7 @@ fn typed_features_are_supported_in_prag_but_not_phon() {
 #[test]
 fn nested_case_leaves_are_statically_type_checked() {
     let language = Language::parse(
-        r#"schema conlang.lang/v2
-
-sign invalid:
+        r#"sign invalid:
     syn:
         feature:
             trigger = enum(on, off)
@@ -1333,9 +1301,7 @@ sign invalid:
 #[test]
 fn nested_cases_round_trip_and_execute_in_feature_role_and_phon_positions() {
     let language = Language::parse(
-        r#"schema conlang.lang/v2
-
-Symbol x
+        r#"Symbol x
 Class vowel {x}
 
 trait NestedEntity:
@@ -1431,9 +1397,7 @@ sign NestedChoice:
 #[test]
 fn nested_sign_case_returns_the_inner_sign_expression() {
     let language = Language::parse(
-        r#"schema conlang.lang/v2
-
-Symbol w
+        r#"Symbol w
 Symbol r
 Symbol a
 Symbol p
@@ -1489,9 +1453,7 @@ sign Root:
 #[test]
 fn stored_filler_runs_the_same_feature_case_pipeline_before_composition() {
     let language = Language::parse(
-        r#"schema conlang.lang/v2
-
-Symbol m
+        r#"Symbol m
 Class vowel {m}
 
 trait CaseUnit:
@@ -1541,9 +1503,7 @@ sign Holder:
 #[test]
 fn sign_case_membership_materializes_the_complete_trait_contract() {
     let language = Language::parse(
-        r#"schema conlang.lang/v2
-
-Symbol s
+        r#"Symbol s
 Symbol a
 Class vowel {a}
 
