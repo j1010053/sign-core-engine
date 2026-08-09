@@ -133,7 +133,7 @@ fn vendored_v2_packages_drive_compile_changesets_persist_and_reopen() {
             .session()
             .preview_pending()
             .expect("resolved-package preview")
-            .aligned,
+            .aligned_signs(),
         1
     );
     assert!(workspace

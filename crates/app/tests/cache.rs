@@ -147,11 +147,11 @@ fn the_diff_key_distinguishes_direction() {
     let backward = cache.get_or_insert_with(DiffKey::new(&b, &a), || diff_vector(&b, &a));
 
     assert_eq!(cache.len(), 2, "兩個方向是兩項");
-    assert_eq!(forward.born, backward.died, "生滅互換");
-    assert_eq!(forward.died, backward.born);
+    assert_eq!(forward.born_signs(), backward.died_signs(), "生滅互換");
+    assert_eq!(forward.died_signs(), backward.born_signs());
     assert_ne!(
-        (forward.born, forward.died),
-        (backward.born, backward.died),
+        (forward.born_signs(), forward.died_signs()),
+        (backward.born_signs(), backward.died_signs()),
         "前提:這兩份文件確實一生一滅,否則本測試無判別性"
     );
 }

@@ -126,7 +126,9 @@ impl IntelligibilityMeasure for ExploratoryHeuristicV1 {
     fn score(&self, input: &IntelligibilityInput<'_>) -> IntelligibilityScore {
         let w = &self.weights;
         let diff = input.diff;
-        let total = diff.aligned + diff.born + diff.died;
+        let aligned = diff.aligned_signs();
+        let (born, died) = (diff.born_signs(), diff.died_signs());
+        let total = aligned + born + died;
         let value = if total == 0 {
             // 兩邊都空:沒有任何可比之處,視為相通(而非 0)——否則兩份空文件
             // 會被判成互不相通,那是量測不到而非真的不通。
@@ -141,13 +143,13 @@ impl IntelligibilityMeasure for ExploratoryHeuristicV1 {
             let mut weighted = 0.0;
             let mut mass = 0.0;
             for (dim, weight) in per_dim {
-                weighted += weight * diff.dimension(dim) as f64;
-                mass += weight * diff.aligned as f64;
+                weighted += weight * diff.dimension(dim).signs.changed as f64;
+                mass += weight * aligned as f64;
             }
-            weighted += w.structural * diff.structural as f64;
-            mass += w.structural * diff.aligned as f64;
+            weighted += w.structural * diff.structural.signs.changed as f64;
+            mass += w.structural * aligned as f64;
             // 生滅:分母是全部 sign,不只對齊的那些
-            weighted += w.birth_death * (diff.born + diff.died) as f64;
+            weighted += w.birth_death * (born + died) as f64;
             mass += w.birth_death * total as f64;
 
             if mass == 0.0 {
