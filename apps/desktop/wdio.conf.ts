@@ -10,7 +10,24 @@ const capabilities: TauriCapabilities = { browserName: "tauri", "tauri:options":
 
 export const config: WebdriverIO.Config = {
   runner: "local",
-  specs: ["./e2e/**/*.e2e.ts"],
+  // 巢狀陣列 = wdio 的 spec group:群組內的檔案在**同一個 worker、同一個
+  // session** 內依序跑。這裡必須如此,原因是 embedded provider 的一個硬約束:
+  //
+  //   driverProvider "embedded" 只會生**一個** app 行程,而內嵌的 WebDriver
+  //   server 就住在那個行程裡。每個 worker 結束時會呼叫 deleteSession(),
+  //   Windows 的 WebView2 會因此讓 app 退出——於是下一個 spec 連到屍體,
+  //   得到 `fetch failed`,後續全部 ECONNREFUSED。
+  //
+  // Linux 的 WebKitGTK 剛好在 deleteSession 之後沒退出,所以這條路徑
+  // **只在 Windows 現形**。
+  //
+  // 順序有意義:launcher 斷言「空的 project slot」,必須排在 workbench
+  // 開專案之前——兩者共用同一個 app 行程,也就共用同一個 ProjectSlot。
+  //
+  // 別改成 maxInstances > 1 想讓它們各拿一個 app:embedded provider 不吃
+  // 那條路(那個 perWorkerMode 判斷是給 tauri-driver 用的),實測結果是兩個
+  // worker 併行搶同一個 ProjectSlot,workbench 的專案會漏進 launcher 的斷言。
+  specs: [["./e2e/launcher.e2e.ts", "./e2e/workbench.e2e.ts"]],
   maxInstances: 1,
   capabilities: [capabilities],
   framework: "mocha",
