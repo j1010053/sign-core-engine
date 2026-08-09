@@ -4067,9 +4067,43 @@ impl ResolvedChangeSet {
     }
 }
 
+/// 進 digest 前把 `\r\n` 收斂成 `\n`。
+///
+/// # 為什麼 digest 不能直接吃原始位元組
+///
+/// 套件原始碼由 `include_str!` 在**編譯期直接讀工作樹**。工作樹上的位元組
+/// 帶有與內容無關的變異——最明顯的是換行符:Windows 檢出預設
+/// `core.autocrlf=true`,沒被 `.gitattributes` 釘住的檔案就會是 CRLF。
+/// 2026-08-07 的 CI 正是這樣掛的(`.conf`/`.tsv` 漏釘)。
+///
+/// 釘 `.gitattributes` 只治症狀:下一個副檔名還會踩,而 R9-a 的注入式套件
+/// (host 從使用者磁碟讀)根本不受 `.gitattributes` 保護。
+///
+/// # 為什麼只收斂 `\r\n`,不多做
+///
+/// 判準是「**引擎解析時本來就看不見的差異,一分不多**」——digest 該是
+/// 「引擎讀到什麼」的函數,不是「磁碟上躺著什麼」的函數。
+///
+/// * **`\r\n`**:`str::lines()` 切 `\n` 並丟掉行尾的 `\r`,每行再 `.trim()`。
+///   實證:同一份 `.lang` 的 LF 版與 CRLF 版 canonical dump 完全相同。
+///   看不見 ⇒ 收斂。
+/// * **落單的 `\r`**:`str::lines()` **不**把它當換行,行中的 `\r` 會留在
+///   `.trim()` 之後的文字裡。看得見 ⇒ **不動**。
+/// * **尾端空白**:不是每個消費端都 trim,`data` 更是原文保存。看得見 ⇒ 不動。
+/// * **檔案順序**:P50 ③ 明文要求路徑與檔案邊界進 digest,正是為了讓重排
+///   被偵測到。正規化順序會**抵觸既有決策** ⇒ 不動。
+///
+/// 寧可 churn,不可讓兩份真的不同的內容撞同一個 digest——後者是 P26 的破口。
+fn lock_normalized(text: &str) -> String {
+    text.replace("\r\n", "\n")
+}
+
 /// 一個套件進 lock digest 的**全部內容**。抽成獨立函式是為了可直接斷言
 /// 「哪些東西被涵蓋」——digest 漏掉任何一項都會讓對應檔案改了卻不使 lock 失效
 /// (破 P26 可重現性)。
+///
+/// 原始碼與資料一律經 [`lock_normalized`];其餘欄位(id/version/路徑/exports)
+/// 是**解析後**的值,載入時已逐行 `.trim()`,不需要也不該再處理。
 fn package_lock_content(package: &conlang_language::LibraryPackage) -> String {
     let mut content = format!(
         "{}\n{}\n{}\n{}\n{}\n{}\n",
@@ -4089,29 +4123,29 @@ fn package_lock_content(package: &conlang_language::LibraryPackage) -> String {
             export.stable_id, export.kind, export.alias
         ));
     }
-    content.push_str(&package.code);
+    content.push_str(&lock_normalized(&package.code));
     content.push('\n');
     // P50 ③:function 路徑與逐檔原始碼都必須進 digest。路徑也是 ordered
     // package contract；只 hash 合併後文字會漏掉檔案邊界與重排。
     if package.function_sources.is_empty() {
-        content.push_str(&package.functions);
+        content.push_str(&lock_normalized(&package.functions));
     } else {
         for source in &package.function_sources {
             content.push_str("\nfunction-source ");
             content.push_str(&source.path);
             content.push('\n');
-            content.push_str(&source.source);
+            content.push_str(&lock_normalized(&source.source));
         }
     }
     content.push('\n');
     if package.data_sources.len() <= 1 {
-        content.push_str(&package.data);
+        content.push_str(&lock_normalized(&package.data));
     } else {
         for source in &package.data_sources {
             content.push_str("\ndata-source ");
             content.push_str(&source.path);
             content.push('\n');
-            content.push_str(&source.source);
+            content.push_str(&lock_normalized(&source.source));
         }
     }
     content
