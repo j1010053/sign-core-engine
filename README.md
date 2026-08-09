@@ -140,7 +140,9 @@ trait」表示未陳述，不等於 code `0`；需要明確負值時使用 `GB10
 ## 建置與測試
 
 ```
-cargo test -p conlang-language                              # 工作台(共時側)
+cargo test --workspace                                      # 完整閘門(CI 跑這個)
+cargo test --workspace --exclude langcraft-desktop          # 沒裝 GUI dev 套件的機器
+cargo test -p conlang-language                              # 單一 crate
 cargo test --manifest-path tshiatun/Cargo.toml             # Tshiatūn 引擎
 cargo build --manifest-path tshiatun/Cargo.toml \
     -p tshiatun-core --target wasm32-unknown-unknown       # 可移植性(I4)
@@ -148,6 +150,12 @@ cargo build --manifest-path tshiatun/Cargo.toml \
 # P38–P44 本機一鍵封板(先做工具鏈/submodule preflight)
 powershell -ExecutionPolicy Bypass -File scripts/verify-m1pp.ps1
 ```
+
+`langcraft-desktop`(Tauri 桌面殼)需要該平台 webview 的 **dev 套件**才編得起來
+——Tauri 借用 OS 的引擎(Linux→WebKitGTK、Windows→WebView2),Linux 上還連帶
+需要 D-Bus。缺套件時 `--workspace` 會整組失敗(包含九個本來編得過的語意 crate),
+此時用 `--exclude langcraft-desktop`;細節與代價見 CLAUDE.md §4.1,
+系統套件清單見 `apps/desktop/README.md`。
 
 首次取得須初始化 submodule:`git submodule update --init`。
 

@@ -49,7 +49,15 @@ pub struct TreeNodeV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// 空 = root。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// **一律序列化,即使是空陣列。** 先前加了 `skip_serializing_if` 省那幾個
+    /// 位元組,結果 root 節點在 JSON 裡沒有這個鍵,前端 `node.parents.length`
+    /// 直接 `Cannot read properties of undefined`。
+    ///
+    /// 「沒有 parents」與「parents 為空」**不是兩件事**——省略它只是替消費端
+    /// 憑空造一個 `undefined` 分支,沒有換到任何語意。
+    /// (對照 `active: Option<String>`:那裡「沒有」與「有」確實不同,故保留。)
+    #[serde(default)]
     pub parents: Vec<TreeEdgeV1>,
 }
 

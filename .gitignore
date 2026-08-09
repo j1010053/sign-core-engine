@@ -4,3 +4,6 @@ node_modules/
 apps/desktop/dist/
 apps/desktop/.vite/
 apps/desktop/coverage/
+# Tauri 建置時產生,且**平台專屬**(linux-schema.json / windows-schema.json)。
+# 簽進版控會在兩個 OS 之間永遠 churn 與衝突。
+apps/desktop/src-tauri/gen/
