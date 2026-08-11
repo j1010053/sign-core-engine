@@ -703,10 +703,12 @@ fn insertion_site(
         }
         (NodeKind::Rule | NodeKind::FeatureRule, NodeKind::RuleElseBranch) => {
             let rule = rule_at(language, &parent.address)?;
+            reject_flat_field_on_phon_block(rule, "else")?;
             (ListKey::RuleElse, rule.else_chain.len(), None)
         }
         (NodeKind::Rule | NodeKind::FeatureRule, NodeKind::RuleThenBranch) => {
             let rule = rule_at(language, &parent.address)?;
+            reject_flat_field_on_phon_block(rule, "then")?;
             (ListKey::RuleThen, rule.then_chain.len(), None)
         }
         (NodeKind::Case, NodeKind::CaseBranch) => {
@@ -1322,7 +1324,9 @@ fn update_payload(
             Ok(field)
         }
         (NodeKind::Rule | NodeKind::FeatureRule, NodeUpdate::RuleBody(value)) => {
-            rule_at_mut(language, &node.address)?.body = value;
+            let rule = rule_at_mut(language, &node.address)?;
+            reject_flat_field_on_phon_block(rule, "body")?;
+            rule.body = value;
             Ok(None)
         }
         (NodeKind::Rule | NodeKind::FeatureRule, NodeUpdate::RuleName(value)) => {
@@ -1330,11 +1334,15 @@ fn update_payload(
             Ok(None)
         }
         (NodeKind::Rule | NodeKind::FeatureRule, NodeUpdate::RuleStage(value)) => {
-            rule_at_mut(language, &node.address)?.stage = value;
+            let rule = rule_at_mut(language, &node.address)?;
+            reject_flat_field_on_phon_block(rule, "stage")?;
+            rule.stage = value;
             Ok(None)
         }
         (NodeKind::Rule | NodeKind::FeatureRule, NodeUpdate::RuleDimension(value)) => {
-            rule_at_mut(language, &node.address)?.dim = value;
+            let rule = rule_at_mut(language, &node.address)?;
+            reject_flat_field_on_phon_block(rule, "dim")?;
+            rule.dim = value;
             Ok(None)
         }
         (
@@ -5652,16 +5660,53 @@ fn set_rule_branch(
     value: String,
 ) -> Result<(), EditError> {
     let parent = address.parent().ok_or(EditError::RootImmutable)?;
-    match address.0.last() {
+    let (index, chain, field) = match address.0.last() {
         Some(AddressSegment::RuleElse(index)) => {
-            rule_at_mut(language, &parent)?.else_chain[*index] = value
+            let rule = rule_at_mut(language, &parent)?;
+            reject_flat_field_on_phon_block(rule, "else")?;
+            (*index, &mut rule.else_chain, "else")
         }
         Some(AddressSegment::RuleThen(index)) => {
-            rule_at_mut(language, &parent)?.then_chain[*index] = value
+            let rule = rule_at_mut(language, &parent)?;
+            reject_flat_field_on_phon_block(rule, "then")?;
+            (*index, &mut rule.then_chain, "then")
         }
         _ => return Err(EditError::FieldMismatch("expected rule branch".to_owned())),
-    }
+    };
+    let slot = chain.get_mut(index).ok_or_else(|| {
+        EditError::FieldMismatch(format!("`{field}[{index}]` is out of range on this rule"))
+    })?;
+    *slot = value;
     Ok(())
+}
+
+/// P46 取徑 A 的不可見欄位閘門。`phon_block.is_some()` 時 printer 只印
+/// `name:` + 巢狀 block(見 `language::printer::push_rule`),`body`/`stage`/`dim`/
+/// `else_chain`/`then_chain` 一概不落地——寫進去的值會在下一次 canonical
+/// round-trip 蒸發。這種**靜默吞掉**最糟:`.chg` 宣稱做了一件沒發生的事,而文件
+/// 逐位元不變,replay 決定性(P26)與三道 digest 都抓不到。故一律明確報錯,
+/// 訊息指向真正生效的定址(`.leaf[k].body` / `.then[n]` / `.else[n]`)。
+fn reject_flat_field_on_phon_block(rule: &Rule, field: &str) -> Result<(), EditError> {
+    if rule.phon_block.is_none() {
+        return Ok(());
+    }
+    let hint = match field {
+        "body" | "else" | "then" => {
+            "address the statement itself — `.leaf[k].body` inside this rule, \
+             descending through `.then[n]`/`.else[n]` when the block is nested"
+        }
+        // stage/dim 在結構化 block 下沒有 surface 語法可承載(printer 不印
+        // `@stage`/維度標記),故無從表達,也就無從編輯。
+        _ => {
+            "a structured phon block carries no `@stage`/dimension marker in `.lang`; \
+              there is no surface syntax for this field here"
+        }
+    };
+    Err(EditError::FieldMismatch(format!(
+        "`{field}` has no effect on a rule carrying a structured phon block (P46): \
+         the canonical printer emits only the block, so the write would vanish on \
+         round-trip — {hint}"
+    )))
 }
 
 #[derive(Debug)]

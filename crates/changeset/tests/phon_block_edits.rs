@@ -240,3 +240,150 @@ fn else_selector_on_a_then_block_does_not_resolve() {
         "expected addressing failure, got {err}"
     );
 }
+
+// ── P46 不可見欄位:寧可報錯,不可靜默吞掉 ──────────────────────────────────
+//
+// `phon_block.is_some()` 時 canonical printer 只印 `name:` + 巢狀 block,
+// `body`/`stage`/`dim`/`else_chain`/`then_chain` 一律不落地。對這些欄位的編輯
+// 若照寫不誤,下一次 round-trip 就把它蒸發掉——文件逐位元不變、`diff_vector`
+// 報零差異,而 `.chg` 卻宣稱做了一件沒發生的事(replay 決定性 P26 與三道
+// digest 都抓不到,因為根本沒東西變)。故一律明確拒絕。
+
+const MIXED: &str = r#"Symbol a
+Symbol b
+Symbol c
+Symbol d
+
+sign y:
+    phon:
+        /a/
+        flat: a => b @stage word
+        structured:
+            c => d
+"#;
+
+fn mixed_base() -> LanguageDocument {
+    LanguageDocument::import_new_root(MIXED, "evo:mixedroot").expect("mixed base parses")
+}
+
+fn mixed_resolve(chg_body: &str, ns: &str) -> Result<ResolvedChangeSet, ReplayError> {
+    let base = mixed_base();
+    let spec = LibrarySpec::default();
+    let mut source = change_set_prelude(&base, &spec, ns).unwrap();
+    source.push_str(chg_body);
+    UnresolvedChangeSet::parse(&source)
+        .unwrap()
+        .resolve(&base, &spec)
+}
+
+fn mixed_apply(chg_body: &str, ns: &str) -> LanguageDocument {
+    let base = mixed_base();
+    let spec = LibrarySpec::default();
+    let resolved = mixed_resolve(chg_body, ns).expect("resolve");
+    ChangeInterpreter::new(base, spec, ns)
+        .unwrap()
+        .run(&resolved)
+        .unwrap()
+        .document
+}
+
+#[test]
+fn body_update_on_a_structured_phon_rule_is_rejected_not_swallowed() {
+    let err = mixed_resolve(
+        "\n    statement 0:\n        update sign(\"y\").rule[\"structured\"].body = c => a\n",
+        "evo:blockbody",
+    )
+    .expect_err("`.body` on a structured phon rule must not be accepted");
+    let text = format!("{err}");
+    assert!(
+        text.contains("structured phon block"),
+        "error names the cause, got {text}"
+    );
+    assert!(
+        text.contains(".leaf[k].body"),
+        "error points at the address that works, got {text}"
+    );
+
+    // 對照:同一條規則走 `.leaf[0].body` 確實生效——被拒絕的不是編輯意圖,是位址。
+    let doc = mixed_apply(
+        "\n    statement 0:\n        update sign(\"y\").rule[\"structured\"].leaf[0].body = c => a\n",
+        "evo:blockleaf",
+    );
+    assert!(doc.source().contains("c => a"), "{}", doc.source());
+}
+
+#[test]
+fn stage_and_dim_updates_on_a_structured_phon_rule_are_rejected() {
+    // 同一類:structured block 在 `.lang` 沒有承載 `@stage`/維度標記的語法,
+    // 舊行為是照寫不誤然後在 print 時蒸發(stage 尤其陰險——codegen 讀它)。
+    for (field, statement) in [
+        (
+            "stage",
+            "update sign(\"y\").rule[\"structured\"].stage = stem",
+        ),
+        ("dim", "update sign(\"y\").rule[\"structured\"].dim = syn"),
+    ] {
+        let err = mixed_resolve(
+            &format!("\n    statement 0:\n        {statement}\n"),
+            &format!("evo:block{field}"),
+        )
+        .err()
+        .unwrap_or_else(|| panic!("`.{field}` on a structured phon rule must not be accepted"));
+        let text = format!("{err}");
+        assert!(
+            text.contains("structured phon block") && text.contains("no surface syntax"),
+            "`.{field}` rejection explains itself, got {text}"
+        );
+    }
+}
+
+#[test]
+fn else_branch_insert_into_a_structured_phon_rule_is_rejected() {
+    // flat else/then 鏈在 phon_block 之下同樣不印。插入原先只落得一個
+    // 不知所云的 ShapeMismatch;現在直接指出原因。
+    let err = mixed_resolve(
+        "\n    statement 0:\n        insert into sign(\"y\").rule[\"structured\"] at end:\n            else c => b\n",
+        "evo:blockelse",
+    )
+    .expect_err("flat else insert under a phon block must not be accepted");
+    let text = format!("{err}");
+    assert!(
+        text.contains("structured phon block"),
+        "error names the cause, got {text}"
+    );
+}
+
+#[test]
+fn flat_else_and_then_are_unaddressable_under_a_structured_phon_rule() {
+    // 閘門之外的第二道保險:structured rule 底下根本沒有 flat 分支節點,
+    // 故 `.else[n]`/`.then[n]` 連定址都不成立(root 是 Leaf,無同名子 block)。
+    for (field, ns) in [("else", "evo:noelse"), ("then", "evo:nothen")] {
+        let err = mixed_resolve(
+            &format!(
+                "\n    statement 0:\n        update sign(\"y\").rule[\"structured\"].{field}[0].body = c => b\n"
+            ),
+            ns,
+        )
+        .expect_err("no flat branch node exists here");
+        assert!(
+            format!("{err}").contains("cannot resolve"),
+            "expected addressing failure, got {err}"
+        );
+    }
+}
+
+#[test]
+fn flat_rules_still_take_body_and_stage_updates() {
+    // 閘門必須窄:同一份文件裡的 flat rule 不受影響。
+    let doc = mixed_apply(
+        "\n    statement 0:\n        update sign(\"y\").rule[\"flat\"].body = a => d\n",
+        "evo:flatbody",
+    );
+    assert!(doc.source().contains("a => d"), "{}", doc.source());
+
+    let doc = mixed_apply(
+        "\n    statement 0:\n        update sign(\"y\").rule[\"flat\"].stage = stem\n",
+        "evo:flatstage",
+    );
+    assert!(doc.source().contains("@stage stem"), "{}", doc.source());
+}
