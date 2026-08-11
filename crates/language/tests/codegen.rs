@@ -332,3 +332,122 @@ global trait Core:
         "phon_source:\n{s}"
     );
 }
+
+/// P46/P3:structured phon block 的 stratum 標記走 block 內 `stage:` 一行
+/// (`.qy` 權威形,見 tshiatūn `block_ir.rs` 的 `stable:\n stage: stem\n …`)。
+///
+/// 之前只有寫的那一半:codegen 會依 `Rule.stage` 排放 `stage:`,但 parser
+/// 不認、printer 不印,故 `Rule.stage` 對 structured block 永遠是 word,那條
+/// 分支到不了。標記本身則以**語句**身分混在 Leaf 裡矇混過關——引擎讀得到,
+/// 而 ④Ordered 的 stratum 排序與步驟 12 的 stage 切片讀 `Rule.stage`,讀不到。
+#[test]
+fn phon_structured_block_stage_lifts_to_the_rule_and_round_trips() {
+    let src = "\
+Symbol a
+Symbol b
+Symbol c
+
+global trait Core:
+    phon:
+        early:
+            stage: stem
+            a => b
+            Then:
+                b => c
+        late:
+            a => c
+";
+    let l = Language::parse(src).expect("structured block with a stage marker parses");
+
+    // 提升進 Rule.stage,且不留在 Leaf(單一資訊源)。
+    let rules: Vec<_> = l.traits[0].blocks[0]
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            conlang_language::SignItem::Rule(rule) => Some(rule),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(rules[0].name.as_deref(), Some("early"));
+    assert_eq!(rules[0].stage, Stage::Stem, "stage 提升進 rule");
+    assert_eq!(rules[1].stage, Stage::Word, "省略 = word,與 flat 側同預設");
+    let dumped = l.dump();
+    assert_eq!(
+        dumped.matches("stage:").count(),
+        1,
+        "標記只剩一份(印自 Rule.stage,不再是 Leaf 語句):\n{dumped}"
+    );
+    assert!(
+        dumped.contains("        early:\n            stage: stem\n            a => b\n"),
+        "印回 block 首行:\n{dumped}"
+    );
+    assert_eq!(
+        Language::parse(&dumped).unwrap().dump(),
+        dumped,
+        "round-trip 穩定"
+    );
+    // 逐字等於原輸入:此形本來就是 canonical 形。
+    assert_eq!(dumped, src, "canonical 輸入不動點:\n{dumped}");
+
+    // ④Ordered 現在看得見 stem——stratum 排序把 early 排到 late 之前。
+    let a = codegen::compile_full(&l).expect("compiles");
+    let s = &a.grammar.phon_source;
+    assert!(
+        s.contains("early:\n    stage: stem\n"),
+        "codegen 排放 stage:\n{s}"
+    );
+    assert_eq!(s.matches("stage:").count(), 1, "無重複排放:\n{s}");
+    assert!(
+        s.find("early:").unwrap() < s.find("late:").unwrap(),
+        "stem 先於 word(P18 stratum 排序):\n{s}"
+    );
+}
+
+/// 容忍度對齊引擎(`lower.rs`):標記可寫在樹上任一處、值須合法、一條 rule
+/// 只能有一個值;非 canonical 位置正規化到根 block 首行(步驟 9 的既有契約)。
+#[test]
+fn phon_structured_block_stage_marker_is_normalised_and_checked() {
+    let nested = "\
+Symbol a
+Symbol b
+
+global trait Core:
+    phon:
+        r:
+            a => b
+            Then:
+                stage: phrase
+                b => a
+";
+    let dumped = Language::parse(nested)
+        .expect("a nested marker parses")
+        .dump();
+    assert!(
+        dumped.contains("        r:\n            stage: phrase\n            a => b\n"),
+        "正規化到根 block 首行:\n{dumped}"
+    );
+    assert_eq!(Language::parse(&dumped).unwrap().dump(), dumped, "不動點");
+
+    let bad_value = nested.replace("stage: phrase", "stage: clause");
+    let error = Language::parse(&bad_value).expect_err("unknown stage rejected");
+    assert!(format!("{error}").contains("clause"), "{error}");
+
+    let conflict = "\
+Symbol a
+Symbol b
+
+global trait Core:
+    phon:
+        r:
+            stage: stem
+            a => b
+            Then:
+                stage: phrase
+                b => a
+";
+    let error = Language::parse(conflict).expect_err("conflicting markers rejected");
+    assert!(
+        format!("{error}").contains("conflicting stage markers"),
+        "{error}"
+    );
+}

@@ -313,26 +313,59 @@ fn body_update_on_a_structured_phon_rule_is_rejected_not_swallowed() {
 }
 
 #[test]
-fn stage_and_dim_updates_on_a_structured_phon_rule_are_rejected() {
-    // 同一類:structured block 在 `.lang` 沒有承載 `@stage`/維度標記的語法,
-    // 舊行為是照寫不誤然後在 print 時蒸發(stage 尤其陰險——codegen 讀它)。
-    for (field, statement) in [
+fn dim_update_on_a_structured_phon_rule_is_rejected() {
+    // 維度標記同樣不印,且 structured block 依 P46 限 phon 維——改維無從表達。
+    let err = mixed_resolve(
+        "\n    statement 0:\n        update sign(\"y\").rule[\"structured\"].dim = syn\n",
+        "evo:blockdim",
+    )
+    .expect_err("`.dim` on a structured phon rule must not be accepted");
+    let text = format!("{err}");
+    assert!(
+        text.contains("structured phon block") && text.contains("no surface syntax"),
+        "`.dim` rejection explains itself, got {text}"
+    );
+}
+
+#[test]
+fn stage_update_on_a_structured_phon_rule_takes_effect() {
+    // stage **不**在閘門之列:它有 surface 形(block 內 `stage:` 一行),
+    // parser 提升進 `Rule.stage`、printer 印回去,故編輯真的落地。
+    let doc = mixed_apply(
+        "\n    statement 0:\n        update sign(\"y\").rule[\"structured\"].stage = stem\n",
+        "evo:blockstage",
+    );
+    let src = doc.source();
+    assert!(
+        src.contains("        structured:\n            stage: stem\n"),
+        "stage 印在 block 首行:\n{src}"
+    );
+    // flat rule 的 `@stage` 尾綴不受影響(兩種 surface 各自歸位)。
+    assert!(src.contains("flat: a => b @stage word"), "{src}");
+}
+
+#[test]
+fn stage_cannot_be_smuggled_in_through_the_statement_channel() {
+    // `stage:` 是 rule 級屬性,不是語句:放它從語句通道進來,下一次 round-trip
+    // 會把它從 Leaf 提走,那個語句節點就此消失——另一種靜默吞掉。
+    for (label, statement) in [
         (
-            "stage",
-            "update sign(\"y\").rule[\"structured\"].stage = stem",
+            "insert",
+            "insert into sign(\"y\").rule[\"structured\"] at start:\n            leaf stage: phrase",
         ),
-        ("dim", "update sign(\"y\").rule[\"structured\"].dim = syn"),
+        (
+            "update",
+            "update sign(\"y\").rule[\"structured\"].leaf[0].body = stage: phrase",
+        ),
     ] {
         let err = mixed_resolve(
             &format!("\n    statement 0:\n        {statement}\n"),
-            &format!("evo:block{field}"),
+            &format!("evo:smuggle{label}"),
         )
-        .err()
-        .unwrap_or_else(|| panic!("`.{field}` on a structured phon rule must not be accepted"));
-        let text = format!("{err}");
+        .expect_err("`stage:` must not enter as a phon statement");
         assert!(
-            text.contains("structured phon block") && text.contains("no surface syntax"),
-            "`.{field}` rejection explains itself, got {text}"
+            format!("{err}").contains("rule-level attribute"),
+            "{label} rejection points at `.stage`, got {err}"
         );
     }
 }

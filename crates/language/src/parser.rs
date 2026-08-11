@@ -786,6 +786,57 @@ fn phon_block_boundary(text: &str) -> Option<(bool, bool, Option<String>)> {
 /// 把 `name:` 下的縮排 body 解析成結構化 `PhonBlock`(對映引擎 `RuleBlock`)。
 /// leading 語句 = 第一個 Leaf;`Then:`/`Else:`(inline 或縮排子 block)開後續 block;
 /// 同層不得混 Then/Else。
+/// 自 block 樹摘出 `stage:` 標記(遞迴,原地移除),回傳 rule 級 stage。
+///
+/// 容忍度對齊引擎:標記可寫在樹上任一處(手寫 `.qy` 常見寫在 header 下第一行),
+/// 但整條 rule 只能有一個值——衝突報錯,與 `lower.rs` 的
+/// 「conflicting stage markers in one rule block」同。printer 一律印回**根 block
+/// 首行**,故非 canonical 位置的輸入會正規化到不動點(步驟 9 的既有契約)。
+fn lift_phon_stage(block: &mut PhonBlock, line: usize) -> Result<Option<Stage>, ParseError> {
+    let mut found: Option<Stage> = None;
+    let mut visit = |found: &mut Option<Stage>, block: &mut PhonBlock| -> Result<(), ParseError> {
+        let PhonBlock::Leaf(statements) = block else {
+            return Ok(());
+        };
+        for statement in statements.iter() {
+            let Some(level) = statement.trim().strip_prefix("stage:") else {
+                continue;
+            };
+            let stage = match level.trim() {
+                "stem" => Stage::Stem,
+                "word" => Stage::Word,
+                "phrase" => Stage::Phrase,
+                other => return Err(err(line, format!("unknown stage {other:?}"))),
+            };
+            if found.is_some_and(|previous| previous != stage) {
+                return Err(err(line, "conflicting stage markers in one rule block"));
+            }
+            *found = Some(stage);
+        }
+        statements.retain(|statement| !statement.trim().starts_with("stage:"));
+        Ok(())
+    };
+    fn walk(
+        block: &mut PhonBlock,
+        found: &mut Option<Stage>,
+        visit: &mut impl FnMut(&mut Option<Stage>, &mut PhonBlock) -> Result<(), ParseError>,
+    ) -> Result<(), ParseError> {
+        visit(found, block)?;
+        match block {
+            PhonBlock::Leaf(_) => {}
+            PhonBlock::Then(elements) | PhonBlock::Else(elements) => {
+                for element in elements {
+                    walk(element, found, visit)?;
+                }
+            }
+            PhonBlock::Propagate(inner) => walk(inner, found, visit)?,
+        }
+        Ok(())
+    }
+    walk(block, &mut found, &mut visit)?;
+    Ok(found)
+}
+
 fn parse_phon_block(lines: &[Line]) -> Result<PhonBlock, ParseError> {
     let mut first: Vec<String> = Vec::new();
     let mut subs: Vec<PhonBlock> = Vec::new();
@@ -1561,8 +1612,15 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             while index < body.len() && (body[index].text.is_empty() || body[index].indent > ind) {
                 index += 1;
             }
-            let block = parse_phon_block(&body[start..index])?;
-            let mut r = lang.rule_dim(String::new(), Stage::Word, Dim::Phon);
+            let mut block = parse_phon_block(&body[start..index])?;
+            // P46/P3:`stage:` 在引擎裡是 **rule 級**屬性,不是語句
+            // (`tshiatun/crates/dsl/src/lower.rs`:掃全 block 樹取一個值、
+            // 衝突報錯、lower 時自 leaf 丟棄)。故在此提升進 `Rule.stage`,
+            // 不留在 Leaf 裡——否則同一個 stratum 標記會有兩個權威存放處
+            // (Leaf 字串 vs `Rule.stage`),而只有前者到得了引擎、只有後者
+            // 到得了 ④Ordered 與步驟 12 的 stage 切片。
+            let stage = lift_phon_stage(&mut block, no)?.unwrap_or(Stage::Word);
+            let mut r = lang.rule_dim(String::new(), stage, Dim::Phon);
             r.name = Some(name);
             r.propagate = propagate;
             r.phon_block = Some(block);

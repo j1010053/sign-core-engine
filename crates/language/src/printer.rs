@@ -76,6 +76,11 @@ fn push_rule(out: &mut String, indent: &str, r: &crate::Rule) {
             "{indent}{}{modifier}:\n",
             r.name.as_deref().unwrap_or("")
         ));
+        // P46/P3:stratum 標記走 `.qy` 的 block 內 `stage:` 形(其他維與 flat phon
+        // rule 用 `@stage` 尾綴)。省略 = word,與 flat 側同一預設。
+        if r.stage != crate::Stage::Word {
+            out.push_str(&format!("{indent}    stage: {}\n", stage_str(r.stage)));
+        }
         push_phon_block(out, block, &format!("{indent}    "));
         return;
     }

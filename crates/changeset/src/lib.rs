@@ -908,6 +908,7 @@ fn insert_payload(
                 NodeKind::Rule | NodeKind::FeatureRule | NodeKind::PhonBlockNode
             ) =>
         {
+            reject_stage_statement(&value)?;
             match phon_container_block_mut(language, &parent.address)? {
                 PhonBlock::Leaf(statements) => statements.insert(index, value),
                 _ => {
@@ -1333,10 +1334,10 @@ fn update_payload(
             rule_at_mut(language, &node.address)?.name = value;
             Ok(None)
         }
+        // `stage` **不**在閘門之列:structured block 的 stratum 標記有 surface 形
+        // (block 內 `stage:` 一行,printer/parser 兩側皆已接),故編輯真的落地。
         (NodeKind::Rule | NodeKind::FeatureRule, NodeUpdate::RuleStage(value)) => {
-            let rule = rule_at_mut(language, &node.address)?;
-            reject_flat_field_on_phon_block(rule, "stage")?;
-            rule.stage = value;
+            rule_at_mut(language, &node.address)?.stage = value;
             Ok(None)
         }
         (NodeKind::Rule | NodeKind::FeatureRule, NodeUpdate::RuleDimension(value)) => {
@@ -1374,6 +1375,7 @@ fn update_payload(
             Ok(None)
         }
         (NodeKind::PhonStatement, NodeUpdate::RuleBranchBody(value)) => {
+            reject_stage_statement(&value)?;
             *phon_statement_at_mut(language, &node.address)? = value;
             Ok(None)
         }
@@ -5681,11 +5683,28 @@ fn set_rule_branch(
 }
 
 /// P46 取徑 A 的不可見欄位閘門。`phon_block.is_some()` 時 printer 只印
-/// `name:` + 巢狀 block(見 `language::printer::push_rule`),`body`/`stage`/`dim`/
-/// `else_chain`/`then_chain` 一概不落地——寫進去的值會在下一次 canonical
-/// round-trip 蒸發。這種**靜默吞掉**最糟:`.chg` 宣稱做了一件沒發生的事,而文件
-/// 逐位元不變,replay 決定性(P26)與三道 digest 都抓不到。故一律明確報錯,
+/// `name:`(+ `stage:`)+ 巢狀 block(見 `language::printer::push_rule`),
+/// `body`/`dim`/`else_chain`/`then_chain` 一概不落地——寫進去的值會在下一次
+/// canonical round-trip 蒸發。這種**靜默吞掉**最糟:`.chg` 宣稱做了一件沒發生的事,
+/// 而文件逐位元不變,replay 決定性(P26)與三道 digest 都抓不到。故一律明確報錯,
 /// 訊息指向真正生效的定址(`.leaf[k].body` / `.then[n]` / `.else[n]`)。
+///
+/// `stage` **不在**此列:它有 block 內 `stage:` 的 surface 形,編輯真的落地。
+/// `stage:` 不是語句,是 rule 級屬性(引擎 `lower.rs` 掃全樹取一值、lower 時
+/// 自 leaf 丟棄;`.lang` parser 於解析時提升進 `Rule.stage`)。若放它從語句通道
+/// 進來,下一次 round-trip 會把它從 Leaf 提走——那個語句節點就此消失,成為
+/// 另一種形式的靜默吞掉。單一資訊源(實作原則 3):stratum 只有 `.stage` 一個入口。
+fn reject_stage_statement(text: &str) -> Result<(), EditError> {
+    if !text.trim().starts_with("stage:") {
+        return Ok(());
+    }
+    Err(EditError::FieldMismatch(
+        "`stage:` is a rule-level attribute, not a phon statement — \
+         write `update <rule>.stage = stem|word|phrase` instead"
+            .to_owned(),
+    ))
+}
+
 fn reject_flat_field_on_phon_block(rule: &Rule, field: &str) -> Result<(), EditError> {
     if rule.phon_block.is_none() {
         return Ok(());
@@ -5695,11 +5714,11 @@ fn reject_flat_field_on_phon_block(rule: &Rule, field: &str) -> Result<(), EditE
             "address the statement itself — `.leaf[k].body` inside this rule, \
              descending through `.then[n]`/`.else[n]` when the block is nested"
         }
-        // stage/dim 在結構化 block 下沒有 surface 語法可承載(printer 不印
-        // `@stage`/維度標記),故無從表達,也就無從編輯。
+        // dim 在結構化 block 下沒有 surface 語法可承載(printer 不印維度標記,
+        // 且 structured block 依 P46 限 phon 維),故無從表達,也就無從編輯。
         _ => {
-            "a structured phon block carries no `@stage`/dimension marker in `.lang`; \
-              there is no surface syntax for this field here"
+            "a structured phon block carries no dimension marker in `.lang` and is \
+              phon-only by P46; there is no surface syntax for this field here"
         }
     };
     Err(EditError::FieldMismatch(format!(
