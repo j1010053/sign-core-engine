@@ -34,9 +34,10 @@
 //! 最後一項是 `conlang_language::COMPILER_SEMANTICS_VERSION`——它是**約定不是
 //! 機制**(該檔已誠實記明);把它放進鍵至少讓「有 bump」這件事真的生效。
 
-use conlang_changeset::{identity_manifest_digest, library_lock_digest};
+use conlang_changeset::{identity_manifest_digest, library_lock_digest_with_packages};
 use conlang_language::{
-    compile_with_libraries_ref, CompileSystemError, CompiledSystem, LanguageDocument, LibrarySpec,
+    compile_document_with_packages, compile_with_libraries_ref, sha256_hex, CompileSystemError,
+    CompiledSystem, LanguageDocument, LibraryId, LibrarySpec, ResolvedPackages,
     COMPILER_SEMANTICS_VERSION,
 };
 use std::collections::BTreeMap;
@@ -50,6 +51,9 @@ pub struct CompileKey {
     pub document: ContentDigest,
     pub identities: String,
     pub library_lock: String,
+    /// Complete resolver-visible export index. Unselected packages can still
+    /// affect dependency diagnostics and the compiled ontology registry.
+    pub available_exports: String,
     /// `&'static str` 但存成 `String`——鍵要能獨立於編譯期常數存在。
     pub semantics: String,
 }
@@ -59,15 +63,51 @@ impl CompileKey {
         document: &LanguageDocument,
         libraries: &LibrarySpec,
     ) -> Result<CompileKey, CompileServiceError> {
+        let catalog = conlang_language::library::embedded_catalog()
+            .map_err(|error| CompileServiceError::Digest(error.to_string()))?;
+        let packages = catalog
+            .resolve_legacy(libraries)
+            .map_err(|error| CompileServiceError::Digest(error.to_string()))?;
         Ok(CompileKey {
             document: ContentDigest::of(document),
             identities: identity_manifest_digest(document)
                 .map_err(|error| CompileServiceError::Digest(error.to_string()))?,
-            library_lock: library_lock_digest(libraries)
-                .map_err(|error| CompileServiceError::Digest(error.to_string()))?,
+            library_lock: library_lock_digest_with_packages(&packages),
+            available_exports: export_index_digest(packages.available_exports()),
             semantics: COMPILER_SEMANTICS_VERSION.to_owned(),
         })
     }
+
+    /// Build a cache key from one already-resolved package snapshot.
+    ///
+    /// Unlike [`Self::of`], this path performs no catalog lookup. The lock
+    /// digest therefore describes exactly the package bytes that compilation
+    /// will consume, including host-provided packages unavailable to the
+    /// embedded catalog.
+    pub fn of_with_packages(
+        document: &LanguageDocument,
+        packages: &ResolvedPackages,
+    ) -> Result<CompileKey, CompileServiceError> {
+        Ok(CompileKey {
+            document: ContentDigest::of(document),
+            identities: identity_manifest_digest(document)
+                .map_err(|error| CompileServiceError::Digest(error.to_string()))?,
+            library_lock: packages.lock_digest(),
+            available_exports: export_index_digest(packages.available_exports()),
+            semantics: COMPILER_SEMANTICS_VERSION.to_owned(),
+        })
+    }
+}
+
+fn export_index_digest(index: &BTreeMap<String, LibraryId>) -> String {
+    let mut content = String::new();
+    for (alias, package) in index {
+        content.push_str(alias);
+        content.push('\t');
+        content.push_str(&package.to_string());
+        content.push('\n');
+    }
+    sha256_hex(content.as_bytes())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -114,6 +154,24 @@ impl CompileService {
         Ok(compiled)
     }
 
+    /// Compile against one immutable resolver result, without rediscovering
+    /// packages through the embedded catalog.
+    pub fn get_with_packages(
+        &mut self,
+        document: &LanguageDocument,
+        packages: &ResolvedPackages,
+    ) -> Result<Arc<CompiledSystem>, CompileServiceError> {
+        let key = CompileKey::of_with_packages(document, packages)?;
+        if let Some(hit) = self.entries.get(&key) {
+            self.hits += 1;
+            return Ok(Arc::clone(hit));
+        }
+        self.misses += 1;
+        let compiled = Arc::new(compile_document_with_packages(document, packages)?);
+        self.entries.insert(key, Arc::clone(&compiled));
+        Ok(compiled)
+    }
+
     /// 只查不編譯。
     pub fn peek(
         &self,
@@ -123,6 +181,18 @@ impl CompileService {
         Ok(self
             .entries
             .get(&CompileKey::of(document, libraries)?)
+            .map(Arc::clone))
+    }
+
+    /// Inspect an entry keyed by an already-resolved package snapshot.
+    pub fn peek_with_packages(
+        &self,
+        document: &LanguageDocument,
+        packages: &ResolvedPackages,
+    ) -> Result<Option<Arc<CompiledSystem>>, CompileServiceError> {
+        Ok(self
+            .entries
+            .get(&CompileKey::of_with_packages(document, packages)?)
             .map(Arc::clone))
     }
 

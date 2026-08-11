@@ -372,6 +372,7 @@ fn evolve(args: &[String], out: &mut String) -> Result<(), CliError> {
     session.stage_sound_change(&SoundChangeInput {
         rule: rule.to_owned(),
         home: options.get("home").unwrap_or("Core").to_owned(),
+        revision: None,
     })?;
     let detail = session.commit(options.get("label").map(str::to_owned))?;
     let summary = session.save_project()?;

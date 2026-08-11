@@ -15,16 +15,48 @@
 
 use crate::rewrite::DonorScope;
 use crate::{
-    apply_statement_structural, call, parse_call_head, split_named_argument, PrimitiveEdit,
-    ReplayError,
+    apply_statement_structural, apply_statement_structural_with_packages, call, parse_call_head,
+    split_named_argument, PrimitiveEdit, ReplayError, StatementRecord,
 };
 use conlang_language::{
-    compile_document, sample_weighted_index, LanguageDocument, LibraryCatalog, LibraryExportKind,
-    LibraryKind, LibraryPackage, LibrarySpec, SignItem,
+    compile_document, compile_document_with_packages, sample_weighted_index, LanguageDocument,
+    LibraryCatalog, LibraryExportKind, LibraryPackage, LibrarySpec, PackageLayer, ResolvedPackages,
+    SignItem,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const FUNCTIONS_SCHEMA_V1: &str = "conlang.functions/v1";
+
+#[derive(Clone, Copy)]
+enum RuntimePackages<'a> {
+    Legacy(&'a LibrarySpec),
+    Resolved(&'a ResolvedPackages),
+}
+
+impl RuntimePackages<'_> {
+    fn compile(
+        self,
+        document: &LanguageDocument,
+    ) -> Result<conlang_language::CompiledSystem, ReplayError> {
+        match self {
+            Self::Legacy(spec) => Ok(compile_document(document, spec)?),
+            Self::Resolved(packages) => Ok(compile_document_with_packages(document, packages)?),
+        }
+    }
+
+    fn apply_statement(
+        self,
+        document: &LanguageDocument,
+        edits: &[PrimitiveEdit],
+    ) -> Result<(LanguageDocument, StatementRecord), ReplayError> {
+        match self {
+            Self::Legacy(spec) => apply_statement_structural(document, 0, edits, spec),
+            Self::Resolved(packages) => {
+                apply_statement_structural_with_packages(document, 0, edits, packages)
+            }
+        }
+    }
+}
 
 /// rebase 對一個 function runtime 失敗的歸類(P57 的四桶去掉 `Clean`)。
 ///
@@ -779,7 +811,7 @@ fn bind_parameters(
     definition: &FunctionDef,
     invocation: &FunctionCall,
     document: &LanguageDocument,
-    libraries: &LibrarySpec,
+    libraries: RuntimePackages<'_>,
 ) -> Result<BTreeMap<String, String>, ReplayError> {
     let mut bindings = BTreeMap::new();
     if let Some(value) = &invocation.positional {
@@ -839,7 +871,7 @@ fn validate_constraint(
     value: &str,
     constraint: &str,
     document: &LanguageDocument,
-    libraries: &LibrarySpec,
+    libraries: RuntimePackages<'_>,
 ) -> Result<(), ReplayError> {
     let sign = sign_argument(value).ok_or_else(|| FunctionError::ConstraintNotASign {
         function: function.to_owned(),
@@ -857,7 +889,7 @@ fn validate_constraint(
             parameter: parameter.to_owned(),
             sign: sign.to_owned(),
         })?;
-    let system = compile_document(document, libraries)?;
+    let system = libraries.compile(document)?;
     if !definition.items.iter().any(|item| {
         matches!(
             item,
@@ -1004,7 +1036,7 @@ fn guard_holds(
     guard: &str,
     bindings: &BTreeMap<String, String>,
     document: &LanguageDocument,
-    libraries: &LibrarySpec,
+    libraries: RuntimePackages<'_>,
 ) -> Result<bool, ReplayError> {
     let subjects = guard_subjects(guard, bindings);
     let subject = match subjects.len() {
@@ -1042,7 +1074,7 @@ fn guard_holds(
             guard: guard.to_owned(),
             sign: name.to_owned(),
         })?;
-    let system = compile_document(document, libraries)?;
+    let system = libraries.compile(document)?;
     let effective = system.ontology.effective_sign(sign);
     let rewritten = rewrite_guard(guard, &subject, bindings);
     conlang_language::synchronic::guard_matches_sign(&effective, &rewritten, &system.ontology)
@@ -1080,7 +1112,7 @@ fn bind_call(call: &FunctionCall, bindings: &BTreeMap<String, String>) -> Functi
 
 struct EvaluationState<'a> {
     table: &'a FunctionTable,
-    libraries: &'a LibrarySpec,
+    libraries: RuntimePackages<'a>,
     document: LanguageDocument,
     edits: Vec<PrimitiveEdit>,
     trace: Vec<FunctionTraceStep>,
@@ -1295,7 +1327,7 @@ impl EvaluationState<'_> {
             block: None,
         };
         let edits = call::lower(&call, &self.document, &DonorScope::new())?;
-        let (document, _) = apply_statement_structural(&self.document, 0, &edits, self.libraries)?;
+        let (document, _) = self.libraries.apply_statement(&self.document, &edits)?;
         self.trace.push(FunctionTraceStep {
             stack: self.stack.clone(),
             call: invocation.clone(),
@@ -1314,6 +1346,34 @@ pub fn evaluate_function_offline(
     invocation: &FunctionCall,
     document: &LanguageDocument,
     libraries: &LibrarySpec,
+) -> Result<FunctionEvaluation, ReplayError> {
+    evaluate_function_runtime(
+        table,
+        invocation,
+        document,
+        RuntimePackages::Legacy(libraries),
+    )
+}
+
+pub fn evaluate_function_with_packages(
+    table: &FunctionTable,
+    invocation: &FunctionCall,
+    document: &LanguageDocument,
+    packages: &ResolvedPackages,
+) -> Result<FunctionEvaluation, ReplayError> {
+    evaluate_function_runtime(
+        table,
+        invocation,
+        document,
+        RuntimePackages::Resolved(packages),
+    )
+}
+
+fn evaluate_function_runtime(
+    table: &FunctionTable,
+    invocation: &FunctionCall,
+    document: &LanguageDocument,
+    libraries: RuntimePackages<'_>,
 ) -> Result<FunctionEvaluation, ReplayError> {
     let mut state = EvaluationState {
         table,
@@ -1397,9 +1457,9 @@ pub fn select_goal_candidate(
 
 /// priority 四層(P29):未啟用不參與 < std < 已啟用 plugin < 專案本地。
 fn package_priority(package: &LibraryPackage) -> i32 {
-    let base = match package.id.kind {
-        LibraryKind::Std => 0,
-        LibraryKind::Natural | LibraryKind::Plugin => 1_000,
+    let base = match package.layer {
+        PackageLayer::Reference | PackageLayer::Data => 0,
+        PackageLayer::Overlay => 1_000,
     };
     base + package.priority
 }
@@ -1426,6 +1486,12 @@ pub fn load_functions(
     functions_from_packages(&chosen)
 }
 
+pub fn load_functions_from_resolved(
+    packages: &ResolvedPackages,
+) -> Result<FunctionTable, ReplayError> {
+    functions_from_packages(&packages.packages().iter().collect::<Vec<_>>())
+}
+
 pub fn load_weight_db(
     catalog: &LibraryCatalog,
     spec: &LibrarySpec,
@@ -1445,6 +1511,10 @@ pub fn load_weight_db(
         })
         .collect::<Vec<_>>();
     weight_db_from_packages(&chosen)
+}
+
+pub fn load_weight_db_from_resolved(packages: &ResolvedPackages) -> Result<WeightDb, ReplayError> {
+    weight_db_from_packages(&packages.packages().iter().collect::<Vec<_>>())
 }
 
 pub fn weight_db_from_packages(packages: &[&LibraryPackage]) -> Result<WeightDb, ReplayError> {

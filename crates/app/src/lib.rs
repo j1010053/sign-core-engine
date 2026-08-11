@@ -52,14 +52,17 @@ pub mod workspace;
 pub use cache::{ContentDigest, DiffKey, LexiconKey, QueryCache};
 pub use compile::{CompileKey, CompileService, CompileServiceError};
 pub use ipc::{
-    GroupingQuery, LexiconQuery, PackageSelectionInput, ProjectSlot, ProposalQuery, SegmentWeight,
-    SoundChangeInput, UiError, UiSession,
+    BodyItemInput, GroupingQuery, LexiconQuery, MovePlacementInput, PackageSelectionInput,
+    ProjectSlot, ProposalQuery, SegmentWeight, SoundChangeInput, StructuredEdit,
+    StructuredEditInput, UiError, UiSession,
 };
 pub use view::apply_view_command;
 pub use wire::{
-    CatalogPackageV1, DerivationViewV1, DiffSummaryV1, EvolutionTreeV1, GroupingOverrideV1,
-    GroupingViewV1, IntelligibilityViewV1, LexiconViewV1, NodeDetailV1, PackageCatalogV1,
-    PendingChangeV1, ProjectSummaryV1, ProposalV1, ProposalsViewV1, RebasePreviewV1, SegmentStatV1,
+    AuthoringCatalogV1, AuthoringChoiceV1, AuthoringFieldV1, AuthoringMoveOptionV1,
+    AuthoringMoveOptionsV1, AuthoringNodeV1, AuthoringSignV1, AuthoringTraitV1, CatalogPackageV1,
+    DerivationViewV1, DiffSummaryV1, EvolutionTreeV1, GroupingOverrideV1, GroupingViewV1,
+    IntelligibilityViewV1, LexiconViewV1, NodeDetailV1, PackageCatalogV1, PendingChangeV1,
+    ProjectSummaryV1, ProposalV1, ProposalsViewV1, RebasePreviewV1, SegmentStatV1,
     SourceReconcileV1, SourceViewV1, StatsViewV1, TreeEdgeV1, TreeNodeV1, WeightConfigV1,
     WeightEntryV1, UI_SCHEMA_V1,
 };
@@ -68,10 +71,12 @@ pub use workspace::Workspace;
 use conlang_changeset::diff::{diff_vector, DiffVector};
 use conlang_changeset::evolution::{Edge, EvolutionError, EvolutionGraph, Nativization, NodeId};
 use conlang_changeset::{
-    change_set_prelude, ChangeInterpreter, PrimitiveEdit, ReplayError, ResolvedChangeSet,
-    ResolvedStatement, UnresolvedChangeSet,
+    change_set_prelude, change_set_prelude_with_packages, ChangeInterpreter, PrimitiveEdit,
+    ReplayError, ResolvedChangeSet, ResolvedStatement, UnresolvedChangeSet,
 };
-use conlang_language::{LanguageDocument, LibrarySpec};
+use conlang_language::{
+    LanguageDocument, LibrarySpec, PackageSources, PackageSpec, ResolvedPackages,
+};
 use conlang_persistence::{GraphStore, ProjectDocument, StoreError};
 use std::path::Path;
 
@@ -100,13 +105,24 @@ pub enum AppError {
     NothingToUndo,
     #[error("APP_NOTHING_TO_REDO")]
     NothingToRedo,
+    #[error(
+        "APP_PACKAGE_CONTEXT_MISSING: a resolved Session requires an EvolutionGraph built with ResolvedPackages"
+    )]
+    PackageContextMissing,
+    #[error(
+        "APP_PACKAGE_CONTEXT_MISMATCH: Session and EvolutionGraph package intent or exact resolution differ"
+    )]
+    PackageContextMismatch,
 }
 
 /// 一次工作階段。**唯一有狀態的東西。**
 #[derive(Debug)]
 pub struct Session {
     graph: EvolutionGraph,
+    /// Legacy compatibility projection. Canonical package-loader v2 consumers
+    /// use `packages`; old API callers retain their exact `LibrarySpec`.
     libraries: LibrarySpec,
+    packages: Option<ResolvedPackages>,
     /// 目前正在看/編輯的節點。
     active: Option<NodeId>,
     /// 尚未提交的編輯——**一份寫到一半的 `.chg`**(§5.2)。
@@ -115,6 +131,27 @@ pub struct Session {
     history: Vec<NodeId>,
     /// 被 undo 掉的,供 redo 取回。
     redo: Vec<NodeId>,
+}
+
+/// Best-effort projection for callers that still consume the legacy accessor.
+/// Open namespaces have no v1 field, so they occupy `plugins`; canonical v2
+/// behavior and persistence always use `ResolvedPackages::intent` instead.
+fn compatibility_library_spec(intent: &PackageSpec) -> LibrarySpec {
+    let mut libraries = LibrarySpec {
+        std: Vec::new(),
+        natural: None,
+        plugins: Vec::new(),
+    };
+    for requirement in &intent.roots {
+        match requirement.id.namespace.as_str() {
+            "std" => libraries.std.push(requirement.id.clone()),
+            "natural" if libraries.natural.is_none() => {
+                libraries.natural = Some(requirement.id.clone());
+            }
+            _ => libraries.plugins.push(requirement.id.clone()),
+        }
+    }
+    libraries
 }
 
 impl Session {
@@ -134,20 +171,41 @@ impl Session {
         store: &GraphStore,
         fallback: LibrarySpec,
     ) -> Result<(Session, Option<ProjectDocument>), AppError> {
+        Self::open_project_with_installed(store, fallback, std::iter::empty::<PackageSources>())
+    }
+
+    /// Open a project through the offline v2 resolver chain, with optional
+    /// caller-provided installed packages between project-vendored and shipped
+    /// embedded sources.
+    pub fn open_project_with_installed(
+        store: &GraphStore,
+        fallback: LibrarySpec,
+        installed: impl IntoIterator<Item = PackageSources>,
+    ) -> Result<(Session, Option<ProjectDocument>), AppError> {
         let project = store.read_project()?;
-        let libraries = match &project {
-            Some(declared) => declared.to_spec()?,
-            None => fallback,
+        let (packages, libraries) = match &project {
+            Some(declared) => {
+                let intent = declared.to_package_spec()?;
+                let libraries = declared
+                    .to_spec()
+                    .unwrap_or_else(|_| compatibility_library_spec(&intent));
+                (
+                    store.resolve_project_packages(declared, installed)?,
+                    libraries,
+                )
+            }
+            None => {
+                let intent = PackageSpec::from_legacy(&fallback);
+                let packages = store.resolve_packages(&intent, installed)?;
+                if let Some(lock) = store.read_packages_lock()? {
+                    lock.verify_resolved(&packages)?;
+                }
+                (packages, fallback)
+            }
         };
-        // **宣告必須當場解析得開。** 只有一個 root 的專案沒有任何 changeset 要
-        // replay,`load` 因此完全不碰套件組合——打錯一個套件名會一路安靜到使用者
-        // 去查詢時才炸在一個看不懂的地方。錯誤要報在使用者能處理的位置。
-        conlang_language::library::embedded_catalog()
-            .and_then(|catalog| catalog.select(&libraries))
-            .map_err(AppError::Library)?;
-        let graph = store.load(libraries.clone())?;
+        let graph = store.load_with_packages(packages.clone())?;
         let first_root = graph.roots().next().cloned();
-        let mut session = Session::new(graph, libraries);
+        let mut session = Session::new_resolved_with_libraries(graph, libraries, packages)?;
         if let Some(root) = first_root {
             session.open(&root)?;
         }
@@ -158,11 +216,43 @@ impl Session {
         Session {
             graph,
             libraries,
+            packages: None,
             active: None,
             pending: None,
             history: Vec::new(),
             redo: Vec::new(),
         }
+    }
+
+    /// Create a session bound to one immutable package-loader v2 result.
+    pub fn new_with_packages(
+        graph: EvolutionGraph,
+        packages: ResolvedPackages,
+    ) -> Result<Session, AppError> {
+        let libraries = compatibility_library_spec(&packages.intent);
+        Self::new_resolved_with_libraries(graph, libraries, packages)
+    }
+
+    fn new_resolved_with_libraries(
+        graph: EvolutionGraph,
+        libraries: LibrarySpec,
+        packages: ResolvedPackages,
+    ) -> Result<Session, AppError> {
+        let graph_packages = graph.packages().ok_or(AppError::PackageContextMissing)?;
+        if graph_packages.intent != packages.intent
+            || graph_packages.selection.resolved != packages.selection.resolved
+        {
+            return Err(AppError::PackageContextMismatch);
+        }
+        Ok(Session {
+            graph,
+            libraries,
+            packages: Some(packages),
+            active: None,
+            pending: None,
+            history: Vec::new(),
+            redo: Vec::new(),
+        })
     }
 
     pub fn graph(&self) -> &EvolutionGraph {
@@ -183,9 +273,70 @@ impl Session {
         self.pending.as_ref()
     }
 
+    /// Exact package-loader v2 snapshot used by this session. Sessions built
+    /// through the legacy constructor return `None`.
+    pub fn packages(&self) -> Option<&ResolvedPackages> {
+        self.packages.as_ref()
+    }
+
+    fn prelude_for(
+        &self,
+        document: &LanguageDocument,
+        namespace: &str,
+    ) -> Result<String, ReplayError> {
+        match &self.packages {
+            Some(packages) => change_set_prelude_with_packages(document, packages, namespace),
+            None => change_set_prelude(document, &self.libraries, namespace),
+        }
+    }
+
+    fn resolve_unresolved(
+        &self,
+        document: &LanguageDocument,
+        unresolved: &UnresolvedChangeSet,
+    ) -> Result<ResolvedChangeSet, ReplayError> {
+        match &self.packages {
+            Some(packages) => unresolved.resolve_packages(document, packages),
+            None => unresolved.resolve(document, &self.libraries),
+        }
+    }
+
+    fn replay_change_set(
+        &self,
+        document: LanguageDocument,
+        changeset: &ResolvedChangeSet,
+    ) -> Result<LanguageDocument, ReplayError> {
+        let interpreter = match &self.packages {
+            Some(packages) => ChangeInterpreter::with_packages(
+                document,
+                packages.clone(),
+                changeset.namespace.clone(),
+            )?,
+            None => ChangeInterpreter::new(
+                document,
+                self.libraries.clone(),
+                changeset.namespace.clone(),
+            )?,
+        };
+        Ok(interpreter.run(changeset)?.document)
+    }
+
     /// 目前 pending `.chg` 的 canonical source。
     pub fn pending_source(&self) -> Option<String> {
         self.pending.as_ref().map(ResolvedChangeSet::dump)
+    }
+
+    /// Materialize the document seen by the next structured authoring action.
+    ///
+    /// A pending ChangeSet is replayed in full, so a later action can address
+    /// nodes inserted or renamed by an earlier statement in the same working
+    /// copy. The active graph snapshot remains immutable.
+    pub fn preview_document(&self) -> Result<LanguageDocument, AppError> {
+        let document = self.snapshot()?.clone();
+        let Some(pending) = self.pending.as_ref() else {
+            return Ok(document);
+        };
+        Ok(self.replay_change_set(document, pending)?)
     }
 
     /// 以文字編輯器送來的完整 `.chg` 原子替換 pending。
@@ -193,7 +344,9 @@ impl Session {
     /// parse／resolve 全部成功後才改欄位；失敗時舊 working copy 保持可重試。
     pub fn replace_pending_source(&mut self, source: &str) -> Result<(), AppError> {
         let document = self.snapshot()?.clone();
-        let resolved = UnresolvedChangeSet::parse(source)?.resolve(&document, &self.libraries)?;
+        let unresolved = UnresolvedChangeSet::parse(source)?;
+        let resolved = self.resolve_unresolved(&document, &unresolved)?;
+        self.replay_change_set(document, &resolved)?;
         self.pending = Some(resolved);
         Ok(())
     }
@@ -202,13 +355,8 @@ impl Session {
     pub fn preview_pending(&self) -> Result<DiffVector, AppError> {
         let document = self.snapshot()?.clone();
         let pending = self.pending.as_ref().ok_or(AppError::NoActiveNode)?;
-        let outcome = ChangeInterpreter::new(
-            document.clone(),
-            self.libraries.clone(),
-            pending.namespace.clone(),
-        )?
-        .run(pending)?;
-        Ok(diff_vector(&document, &outcome.document))
+        let preview = self.replay_change_set(document.clone(), pending)?;
+        Ok(diff_vector(&document, &preview))
     }
 
     /// 切到某個節點。**清空 redo**——分岔之後舊的 redo 路徑已無意義,
@@ -236,8 +384,9 @@ impl Session {
     /// 零條 statement 的 `.chg` 合法,故這一步就已經是個完整的檔案。
     pub fn begin_edit(&mut self, namespace: &str) -> Result<(), AppError> {
         let document = self.snapshot()?.clone();
-        let prelude = change_set_prelude(&document, &self.libraries, namespace)?;
-        let resolved = UnresolvedChangeSet::parse(&prelude)?.resolve(&document, &self.libraries)?;
+        let prelude = self.prelude_for(&document, namespace)?;
+        let unresolved = UnresolvedChangeSet::parse(&prelude)?;
+        let resolved = self.resolve_unresolved(&document, &unresolved)?;
         self.pending = Some(resolved);
         Ok(())
     }
@@ -246,6 +395,31 @@ impl Session {
     pub fn stage(&mut self, edits: Vec<PrimitiveEdit>) -> Result<u64, AppError> {
         let pending = self.pending.as_mut().ok_or(AppError::NoActiveNode)?;
         Ok(conlang_command::stage(pending, edits))
+    }
+
+    /// Append one statement transactionally.
+    ///
+    /// The candidate ChangeSet is replayed against the immutable active
+    /// snapshot before it replaces `self.pending`. Invalid edits therefore do
+    /// not create a phantom working copy and cannot corrupt an existing one.
+    pub fn stage_checked(
+        &mut self,
+        namespace: &str,
+        edits: Vec<PrimitiveEdit>,
+    ) -> Result<u64, AppError> {
+        let document = self.snapshot()?.clone();
+        let mut candidate = match self.pending.as_ref() {
+            Some(pending) => pending.clone(),
+            None => {
+                let prelude = self.prelude_for(&document, namespace)?;
+                let unresolved = UnresolvedChangeSet::parse(&prelude)?;
+                self.resolve_unresolved(&document, &unresolved)?
+            }
+        };
+        let ordinal = conlang_command::stage(&mut candidate, edits);
+        self.replay_change_set(document, &candidate)?;
+        self.pending = Some(candidate);
+        Ok(ordinal)
     }
 
     /// **(A) 專案編輯的 undo**:丟棄最後一個未提交的 statement。
@@ -270,8 +444,7 @@ impl Session {
         // have both succeeded. A failed commit must be retryable by the caller.
         let dumped = {
             let pending = self.pending.as_ref().ok_or(AppError::NoActiveNode)?;
-            ChangeInterpreter::new(document, self.libraries.clone(), pending.namespace.clone())?
-                .run(pending)?;
+            self.replay_change_set(document, pending)?;
             pending.dump()
         };
 
@@ -352,7 +525,8 @@ impl Session {
             source,
         })?;
         let document = self.snapshot()?.clone();
-        let resolved = UnresolvedChangeSet::parse(&text)?.resolve(&document, &self.libraries)?;
+        let unresolved = UnresolvedChangeSet::parse(&text)?;
+        let resolved = self.resolve_unresolved(&document, &unresolved)?;
         self.pending = Some(resolved);
         Ok(())
     }
@@ -360,13 +534,18 @@ impl Session {
     /// 把圖寫進 store。`save` 是 append-only 且**不靜默**——store 有而圖沒有的
     /// 節點會回 `StoreError::StaleNode`,指向 `remove_node`。
     pub fn persist(&self, store: &GraphStore) -> Result<(), AppError> {
-        Ok(store.save(&self.graph)?)
+        store.save(&self.graph)?;
+        if let Some(packages) = &self.packages {
+            store.write_resolved_packages_lock(packages)?;
+        }
+        Ok(())
     }
 
-    /// 這個工作階段實際載入的套件組合。
+    /// Legacy package selection retained for source compatibility.
     ///
-    /// UI 存檔時以此寫 `project.toml`,故「開啟時載了什麼」與「存檔時宣告什麼」
-    /// 是同一份——不會存出一份自己開不起來的宣告。
+    /// For package-loader v2 sessions this is only an open-namespace
+    /// compatibility projection; use [`Self::packages`] for canonical intent,
+    /// exact versions, source provenance, and content digests.
     pub fn libraries(&self) -> &LibrarySpec {
         &self.libraries
     }

@@ -78,6 +78,14 @@ fn package(
         name: id.name.clone(),
         rule_namespace: id.to_string(),
         version: "test".to_owned(),
+        manifest_schema: 1,
+        layer: conlang_language::PackageLayer::Overlay,
+        capabilities: conlang_language::PackageCapabilities {
+            functions: true,
+            data: true,
+            ..conlang_language::PackageCapabilities::default()
+        },
+        source: conlang_language::PackageSource::default(),
         enabled: true,
         priority,
         requires: Vec::new(),

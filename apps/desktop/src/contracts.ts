@@ -101,9 +101,11 @@ export type ProjectSummary = z.infer<typeof projectSummarySchema>;
 const catalogPackageSchema = z
   .object({
     id: z.string(),
-    kind: z.enum(["std", "natural", "plugin"]),
+    // Package-loader v2 exposes the open namespace here. Legacy values remain
+    // ordinary namespaces rather than a closed discriminator.
+    kind: z.string().min(1),
     version: z.string(),
-    source: z.literal("embedded"),
+    source: z.enum(["embedded", "vendored", "installed", "injected"]),
     enabled: z.boolean(),
     declared: z.boolean(),
     selected: z.boolean(),
@@ -115,11 +117,9 @@ export const packageCatalogSchema = z
   .strict();
 export type CatalogPackage = z.infer<typeof catalogPackageSchema>;
 export type PackageCatalog = z.infer<typeof packageCatalogSchema>;
-export type PackageSelection = {
-  std: string[];
-  natural?: string;
-  plugins: string[];
-};
+export type PackageSelection =
+  | { roots: string[]; aliases?: Record<string, string> }
+  | { std?: string[]; natural?: string; plugins?: string[] };
 
 const weightEntrySchema = z
   .object({
@@ -162,6 +162,116 @@ export const pendingChangeSchema = z
   })
   .strict();
 export type PendingChange = z.infer<typeof pendingChangeSchema>;
+
+const authoringChoiceSchema = z
+  .object({ value: z.string(), label: z.string() })
+  .strict();
+const authoringFieldSchema = z
+  .object({
+    name: z.string(),
+    label: z.string(),
+    control: z.enum(["text", "textarea", "boolean", "choice"]),
+    choices: z.array(authoringChoiceSchema).default([]),
+  })
+  .strict();
+const authoringNodeSchema = z
+  .object({
+    selector: z.string(),
+    parent: z.string().optional(),
+    kind: z.string(),
+    path: z.string(),
+    summary: z.string(),
+    deletable: z.boolean(),
+    movable: z.boolean(),
+    fields: z.array(authoringFieldSchema).default([]),
+  })
+  .strict();
+const authoringSignSchema = z
+  .object({ name: z.string(), selector: z.string() })
+  .strict();
+const authoringTraitSchema = z
+  .object({
+    name: z.string(),
+    global: z.boolean(),
+    blocks: z.number().int().nonnegative(),
+    source: z.enum(["local", "library"]),
+    selector: z.string().optional(),
+  })
+  .strict();
+export const authoringCatalogSchema = z
+  .object({
+    schema: z.literal(UI_SCHEMA),
+    revision: z.string(),
+    nodes: z.array(authoringNodeSchema),
+    signs: z.array(authoringSignSchema),
+    traits: z.array(authoringTraitSchema),
+    rule_homes: z.array(authoringChoiceSchema),
+    body_containers: z.array(authoringChoiceSchema),
+  })
+  .strict();
+export type AuthoringCatalog = z.infer<typeof authoringCatalogSchema>;
+export type AuthoringField = z.infer<typeof authoringFieldSchema>;
+
+const authoringMoveOptionSchema = z
+  .object({
+    parent: z.string(),
+    parent_label: z.string(),
+    position: z.enum(["start", "end", "before", "after"]),
+    sibling: z.string().optional(),
+    label: z.string(),
+  })
+  .strict();
+export const authoringMoveOptionsSchema = z
+  .object({
+    schema: z.literal(UI_SCHEMA),
+    revision: z.string(),
+    target: z.string(),
+    placements: z.array(authoringMoveOptionSchema),
+  })
+  .strict();
+export type AuthoringMoveOptions = z.infer<typeof authoringMoveOptionsSchema>;
+export type MovePlacementInput = Pick<
+  z.infer<typeof authoringMoveOptionSchema>,
+  "parent" | "position" | "sibling"
+>;
+
+export type BodyItemInput =
+  | { kind: "belongs"; trait_name: string }
+  | { kind: "trait_use"; trait_name: string }
+  | { kind: "slot"; name: string; constraint: string; optional: boolean }
+  | {
+      kind: "feature";
+      dim: "syn" | "sem" | "prag";
+      name: string;
+      enum_values: string[];
+      value: string;
+    }
+  | { kind: "sense"; name: string; gloss: string }
+  | { kind: "phon"; form: string }
+  | {
+      kind: "definition";
+      dim: "syn" | "sem" | "prag";
+      path: string;
+      value: string;
+    }
+  | {
+      kind: "rule";
+      dim: "phon" | "syn" | "sem" | "prag";
+      body: string;
+      name?: string;
+      stage: "stem" | "word" | "phrase";
+    };
+
+export type StructuredEdit =
+  | { action: "insert_sign"; name: string; belongs: string[]; phon?: string; gloss?: string }
+  | { action: "insert_trait"; name: string; global: boolean; parent?: string }
+  | { action: "clone_sign"; source: string; name: string }
+  | { action: "insert_body"; container: string; body: BodyItemInput }
+  | { action: "delete"; target: string }
+  | { action: "update"; target: string; field: string; value: string }
+  | { action: "move"; target: string; placement: MovePlacementInput };
+
+export type StructuredEditInput = { revision: string } & StructuredEdit;
 
 export const sourceViewSchema = z
   .object({ schema: z.literal(UI_SCHEMA), node: z.string(), source: z.string() })

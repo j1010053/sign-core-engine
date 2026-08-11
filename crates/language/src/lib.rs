@@ -53,8 +53,9 @@ pub use identity::{
 };
 pub use library::{
     LibraryCatalog, LibraryDataSource, LibraryExport, LibraryExportKind, LibraryFunctionSource,
-    LibraryId, LibraryKind, LibraryLoadError, LibraryPackage, LibrarySpec, PackageFile,
-    PackageSources,
+    LibraryId, LibraryKind, LibraryLoadError, LibraryPackage, LibrarySpec, PackageCapabilities,
+    PackageFile, PackageId, PackageLayer, PackageRequirement, PackageResolver, PackageSource,
+    PackageSources, PackageSpec, ResolvedPackages, SelectedPackage,
 };
 pub use metadata::{SignLifecycle, SignProvenance};
 pub use sampling::{
@@ -65,8 +66,10 @@ pub use semantic_dto::{
 };
 pub use stdlib::{StdExport, StdExportKind, StdLoadError, StdPackage};
 pub use system::{
-    check_document, check_language, check_language_with_libraries, compile_document,
+    check_document, check_document_with_packages, check_language, check_language_with_libraries,
+    check_language_with_packages, compile_document, compile_document_with_packages,
     compile_system, compile_system_ref, compile_with_libraries, compile_with_libraries_ref,
+    compile_with_packages_ref,
     CandidateSelectionTrace, CandidateSelector, CandidateSet, CaseBranchStatus, CaseRecord,
     CompileSystemError, CompiledSystem, ConstructionCandidate, DerivationContext, PhonRealization,
     COMPILER_SEMANTICS_VERSION,

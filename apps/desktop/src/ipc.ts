@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { load } from "@tauri-apps/plugin-store";
 import type { ZodType } from "zod";
 import {
+  authoringCatalogSchema,
+  authoringMoveOptionsSchema,
   derivationViewSchema,
   evolutionTreeSchema,
   groupingViewSchema,
@@ -25,6 +27,7 @@ import {
   type ProjectSummary,
   type ProposalQuery,
   type SegmentWeight,
+  type StructuredEditInput,
   type UiError,
 } from "./contracts";
 
@@ -103,8 +106,21 @@ export const api = {
   pendingChange: () => call("pending_change", {}, pendingChangeSchema),
   replacePendingSource: (source: string) =>
     call("replace_pending_source", { source }, pendingChangeSchema),
-  stageSoundChange: (rule: string, home = "Core") =>
-    call("stage_sound_change", { input: { rule, home } }, pendingChangeSchema),
+  authoringCatalog: () => call("authoring_catalog", {}, authoringCatalogSchema),
+  authoringMoveOptions: (target: string, revision: string) =>
+    call(
+      "authoring_move_options",
+      { target, revision },
+      authoringMoveOptionsSchema,
+    ),
+  stageStructuredEdit: (input: StructuredEditInput) =>
+    call("stage_structured_edit", { input }, pendingChangeSchema),
+  stageSoundChange: (rule: string, home = "Core", revision?: string) =>
+    call(
+      "stage_sound_change",
+      { input: { rule, home, ...(revision ? { revision } : {}) } },
+      pendingChangeSchema,
+    ),
   discardLastEdit: () => call("discard_last_edit", {}, pendingChangeSchema),
   saveWorkingCopy: (path: string) => action("save_working_copy", { path }),
   loadWorkingCopy: (path: string) => call("load_working_copy", { path }, pendingChangeSchema),

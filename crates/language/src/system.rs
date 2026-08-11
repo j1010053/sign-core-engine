@@ -7,7 +7,7 @@ use crate::construction::{
     SlotMap, SlotMapOp,
 };
 use crate::diagnostic::{Diagnostic, DiagnosticSource, Severity, SourceLocation, ValidationReport};
-use crate::library::{self, LibraryId, LibraryLoadError, LibrarySpec};
+use crate::library::{self, LibraryId, LibraryLoadError, LibrarySpec, ResolvedPackages};
 use crate::ontology::OntologyRegistry;
 use crate::path::parse_path;
 use crate::sampling::{sample_weighted_index, WeightedSampleError};
@@ -15,8 +15,7 @@ use crate::semantic_dto::{SemanticDocumentError, SemanticDocumentV1, SemanticNod
 use crate::synchronic::{self, RuleRecord, RuleStatus, SelfRead, SlotRead};
 use crate::{
     CaseCondition, CaseSelection, Dim, Expression, Language, LanguageDocument, SignApplication,
-    SignArgumentValue, SignDef, SignId, SignItem, SignLifecycle, SignProvenance,
-    TypedCase,
+    SignArgumentValue, SignDef, SignId, SignItem, SignLifecycle, SignProvenance, TypedCase,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
@@ -1245,23 +1244,23 @@ fn validate_typed_schemas(
             // `[*]` 不指名任何 trait,無存在性可驗。
             if let Some(category) = role.constraint.category() {
                 if !registry.has(category) {
-                report.push(
-                    Diagnostic::new(
-                        Severity::Error,
-                        "ROLE_UNKNOWN_CONSTRAINT",
-                        format!(
-                            "{owner:?} role {:?} requires unknown trait {:?}{}",
-                            role.name,
-                            category,
-                            registry.missing_name_hint(category)
-                        ),
-                    )
-                    .with_sources(vec![DiagnosticSource {
-                        owner: owner.clone(),
-                        path: Some(format!("sem.roles.{}", role.name)),
-                        location: role.source,
-                    }]),
-                );
+                    report.push(
+                        Diagnostic::new(
+                            Severity::Error,
+                            "ROLE_UNKNOWN_CONSTRAINT",
+                            format!(
+                                "{owner:?} role {:?} requires unknown trait {:?}{}",
+                                role.name,
+                                category,
+                                registry.missing_name_hint(category)
+                            ),
+                        )
+                        .with_sources(vec![DiagnosticSource {
+                            owner: owner.clone(),
+                            path: Some(format!("sem.roles.{}", role.name)),
+                            location: role.source,
+                        }]),
+                    );
                 }
             }
         }
@@ -2383,13 +2382,13 @@ fn validate_constructions_and_local_phon(
     }
 }
 
-fn validate_source_language(std: &Language, effective_source: &Language) -> ValidationReport {
+fn validate_source_language(
+    std: &Language,
+    effective_source: &Language,
+    available_exports: &BTreeMap<String, LibraryId>,
+) -> ValidationReport {
     let (registry, ontology_diags) = OntologyRegistry::build(&[std, effective_source]);
-    // R13:掛上「可解析但未宣告」的匯出索引,使名字查無時能指路。
-    let registry = match library::embedded_catalog() {
-        Ok(catalog) => registry.with_available(catalog.export_index()),
-        Err(_) => registry,
-    };
+    let registry = registry.with_available(available_exports.clone());
     let mut report = registry.validation_report(&[std, effective_source], &ontology_diags);
     validate_duplicate_signs(effective_source, &mut report);
     validate_defs_and_rules(std, &registry, &mut report);
@@ -2412,27 +2411,57 @@ pub fn check_language(language: &Language) -> ValidationReport {
 /// catalog/configuration failure is represented as a normal diagnostic so
 /// edit callers never need to panic or attempt code generation for checking.
 pub fn check_language_with_libraries(language: &Language, spec: &LibrarySpec) -> ValidationReport {
-    let selection = match library::embedded_catalog().and_then(|catalog| catalog.select(spec)) {
-        Ok(selection) => selection,
-        Err(error) => {
-            let mut report = ValidationReport::new();
-            report.push(Diagnostic::new(
-                Severity::Error,
-                "LIBRARY_SELECTION_INVALID",
-                error.to_string(),
-            ));
-            return report;
-        }
-    };
-    let std = selection.standard;
-    let mut effective_source = selection.overlay;
+    let packages =
+        match library::embedded_catalog().and_then(|catalog| catalog.resolve_legacy(spec)) {
+            Ok(packages) => packages,
+            Err(error) => {
+                let mut report = ValidationReport::new();
+                report.push(Diagnostic::new(
+                    Severity::Error,
+                    "LIBRARY_SELECTION_INVALID",
+                    error.to_string(),
+                ));
+                return report;
+            }
+        };
+    check_language_with_packages(language, &packages)
+}
+
+/// Validate with one already-resolved package snapshot.  This is the v2
+/// canonical entry point; no catalog or filesystem lookup occurs here.
+pub fn check_language_with_packages(
+    language: &Language,
+    packages: &ResolvedPackages,
+) -> ValidationReport {
+    let std = packages.selection.standard.clone();
+    let mut effective_source = packages.selection.overlay.clone();
     effective_source.append_library(language.clone());
-    validate_source_language(&std, &effective_source)
+    validate_source_language(&std, &effective_source, packages.available_exports())
 }
 
 /// Validate both sidecar/source identity invariants and synchronic language
 /// invariants.  The caller document remains immutable.
 pub fn check_document(document: &crate::LanguageDocument, spec: &LibrarySpec) -> ValidationReport {
+    let packages =
+        match library::embedded_catalog().and_then(|catalog| catalog.resolve_legacy(spec)) {
+            Ok(packages) => packages,
+            Err(error) => {
+                let mut report = ValidationReport::new();
+                report.push(Diagnostic::new(
+                    Severity::Error,
+                    "LIBRARY_SELECTION_INVALID",
+                    error.to_string(),
+                ));
+                return report;
+            }
+        };
+    check_document_with_packages(document, &packages)
+}
+
+pub fn check_document_with_packages(
+    document: &crate::LanguageDocument,
+    packages: &ResolvedPackages,
+) -> ValidationReport {
     let mut report = ValidationReport::new();
     let ids: std::collections::BTreeMap<_, _> = document
         .identities()
@@ -2468,7 +2497,7 @@ pub fn check_document(document: &crate::LanguageDocument, spec: &LibrarySpec) ->
         }
     }
     report.extend(
-        check_language_with_libraries(document.language(), spec)
+        check_language_with_packages(document.language(), packages)
             .diagnostics()
             .iter()
             .cloned(),
@@ -2514,13 +2543,24 @@ pub fn compile_with_libraries_ref(
     language: &Language,
     spec: &LibrarySpec,
 ) -> Result<CompiledSystem, CompileSystemError> {
-    let selection = library::embedded_catalog()?.select(spec)?;
-    let std = selection.standard;
-    let mut effective_source = selection.overlay;
+    let catalog = library::embedded_catalog()?;
+    let packages = catalog.resolve_legacy(spec)?;
+    compile_with_packages_ref(language, &packages)
+}
+
+/// Compile against an immutable resolver result.  Every downstream lookup,
+/// diagnostic hint, and reported package ID comes from this same snapshot.
+pub fn compile_with_packages_ref(
+    language: &Language,
+    packages: &ResolvedPackages,
+) -> Result<CompiledSystem, CompileSystemError> {
+    let std = packages.selection.standard.clone();
+    let mut effective_source = packages.selection.overlay.clone();
     effective_source.append_library(language.clone());
     // Validate source-level ontology/rules before the legacy compile pipeline
     // can collapse duplicate names into an unstructured CompileError.
-    let pre_validation = validate_source_language(&std, &effective_source);
+    let pre_validation =
+        validate_source_language(&std, &effective_source, packages.available_exports());
     if pre_validation.has_errors() {
         return Err(CompileSystemError::Validation(pre_validation));
     }
@@ -2528,10 +2568,7 @@ pub fn compile_with_libraries_ref(
     let artifacts = codegen::compile_full(&effective_source)?;
     let ordered = artifacts.pipeline.ordered.clone();
     let (registry, ontology_diags) = OntologyRegistry::build(&[&std, &ordered]);
-    let registry = match library::embedded_catalog() {
-        Ok(catalog) => registry.with_available(catalog.export_index()),
-        Err(_) => registry,
-    };
+    let registry = registry.with_available(packages.available_exports().clone());
     let mut validation = registry.validation_report(&[&std, &ordered], &ontology_diags);
     validate_duplicate_signs(&ordered, &mut validation);
     validate_defs_and_rules(&ordered, &registry, &mut validation);
@@ -2558,7 +2595,7 @@ pub fn compile_with_libraries_ref(
     Ok(CompiledSystem {
         language: language.clone(),
         effective_language: ordered,
-        libraries: selection.packages,
+        libraries: packages.selection.packages.clone(),
         artifacts,
         ontology: registry,
         validation,
@@ -2571,11 +2608,20 @@ pub fn compile_document(
     document: &LanguageDocument,
     spec: &LibrarySpec,
 ) -> Result<CompiledSystem, CompileSystemError> {
-    let report = crate::check_document(document, spec);
+    let catalog = library::embedded_catalog()?;
+    let packages = catalog.resolve_legacy(spec)?;
+    compile_document_with_packages(document, &packages)
+}
+
+pub fn compile_document_with_packages(
+    document: &LanguageDocument,
+    packages: &ResolvedPackages,
+) -> Result<CompiledSystem, CompileSystemError> {
+    let report = check_document_with_packages(document, packages);
     if report.has_errors() {
         return Err(CompileSystemError::Validation(report));
     }
-    compile_with_libraries_ref(document.language(), spec)
+    compile_with_packages_ref(document.language(), packages)
 }
 
 impl CompiledSystem {
@@ -3045,7 +3091,9 @@ impl CompiledSystem {
                             "unknown case category {expected:?}"
                         )));
                     }
-                    return Ok(self.ontology.categories_satisfy(&filler.categories, expected));
+                    return Ok(self
+                        .ontology
+                        .categories_satisfy(&filler.categories, expected));
                 }
             }
         }

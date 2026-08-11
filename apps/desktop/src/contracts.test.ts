@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  authoringCatalogSchema,
+  authoringMoveOptionsSchema,
   evolutionTreeSchema,
   packageCatalogSchema,
   pendingChangeSchema,
@@ -44,6 +46,40 @@ describe("conlang.ui/v1 contract", () => {
     expect(result.diff.aligned).toBe(1);
   });
 
+  it("pins structured authoring catalog and validated move placements", () => {
+    const catalog = authoringCatalogSchema.parse({
+      schema: UI_SCHEMA,
+      revision: "sha256-preview",
+      nodes: [{
+        selector: "node(sign, @root:1)",
+        kind: "sign",
+        path: "sign kat",
+        summary: "kat",
+        deletable: true,
+        movable: true,
+        fields: [{ name: "name", label: "Name", control: "text" }],
+      }],
+      signs: [{ name: "kat", selector: "node(sign, @root:1)" }],
+      traits: [{ name: "Noun", global: false, blocks: 1, source: "library" }],
+      rule_homes: [],
+      body_containers: [{ value: "node(sign, @root:1)", label: "sign kat" }],
+    });
+    expect(catalog.nodes[0]?.fields[0]?.choices).toEqual([]);
+
+    const moves = authoringMoveOptionsSchema.parse({
+      schema: UI_SCHEMA,
+      revision: catalog.revision,
+      target: "node(sign, @root:1)",
+      placements: [{
+        parent: "node(language, @root:0)",
+        parent_label: "Language",
+        position: "end",
+        label: "end / Language",
+      }],
+    });
+    expect(moves.placements[0]?.position).toBe("end");
+  });
+
   it("pins the expert source reconcile report and nested pending contract", () => {
     const result = sourceReconcileSchema.parse({
       schema: UI_SCHEMA,
@@ -76,6 +112,24 @@ describe("conlang.ui/v1 contract", () => {
       }],
     });
     expect(result.packages[0]?.source).toBe("embedded");
+  });
+
+  it("accepts open package namespaces and offline source tiers", () => {
+    const result = packageCatalogSchema.parse({
+      schema: UI_SCHEMA,
+      packages: [{
+        id: "catalog:traditional-categories",
+        kind: "catalog",
+        version: "1.2.3",
+        source: "vendored",
+        enabled: true,
+        declared: true,
+        selected: true,
+        requires: [],
+      }],
+    });
+    expect(result.packages[0]?.kind).toBe("catalog");
+    expect(result.packages[0]?.source).toBe("vendored");
   });
 
   it("pins effective weight provenance", () => {

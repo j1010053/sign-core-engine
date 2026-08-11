@@ -5,6 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
 
+use serde::Deserialize;
+
 use crate::{Language, RuleNamespace, SignItem};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -31,13 +33,11 @@ impl LibraryKind {
             _ => None,
         }
     }
+}
 
-    fn rank(self) -> u8 {
-        match self {
-            LibraryKind::Std => 0,
-            LibraryKind::Natural => 1,
-            LibraryKind::Plugin => 2,
-        }
+impl From<LibraryKind> for String {
+    fn from(value: LibraryKind) -> Self {
+        value.keyword().to_owned()
     }
 }
 
@@ -47,41 +47,245 @@ impl fmt::Display for LibraryKind {
     }
 }
 
+/// Stable package identity.  Unlike the legacy [`LibraryKind`], namespaces are
+/// open: `catalog:*`, `dataset:*`, `theory:*`, and project-defined namespaces
+/// are ordinary package IDs rather than new engine enum variants.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct LibraryId {
-    pub kind: LibraryKind,
+pub struct PackageId {
+    pub namespace: String,
     pub name: String,
 }
 
-impl LibraryId {
-    pub fn new(kind: LibraryKind, name: impl Into<String>) -> Self {
+impl PackageId {
+    /// Construct an ID from either an open namespace string or a legacy
+    /// [`LibraryKind`].
+    pub fn new(namespace: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
-            kind,
+            namespace: namespace.into(),
             name: name.into(),
         }
     }
-}
 
-impl fmt::Display for LibraryId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}:{}", self.kind, self.name)
+    pub fn legacy_kind(&self) -> Option<LibraryKind> {
+        LibraryKind::parse(&self.namespace)
     }
 }
 
-impl FromStr for LibraryId {
+impl fmt::Display for PackageId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}:{}", self.namespace, self.name)
+    }
+}
+
+impl FromStr for PackageId {
     type Err = LibraryLoadError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let Some((kind, name)) = value.split_once(':') else {
+        let Some((namespace, name)) = value.split_once(':') else {
             return Err(LibraryLoadError::InvalidId(value.to_owned()));
         };
-        let Some(kind) = LibraryKind::parse(kind) else {
-            return Err(LibraryLoadError::InvalidId(value.to_owned()));
-        };
-        if !valid_identifier(name) {
+        if !valid_identifier(namespace) || !valid_identifier(name) {
             return Err(LibraryLoadError::InvalidId(value.to_owned()));
         }
-        Ok(Self::new(kind, name))
+        Ok(Self::new(namespace, name))
+    }
+}
+
+/// Migration name retained for callers moving to [`PackageId`].  This keeps
+/// the type name, not Rust struct-field source compatibility: v2 IDs expose
+/// `namespace` instead of the former closed-enum `kind` field.
+pub type LibraryId = PackageId;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum PackageLayer {
+    /// Reference models and annotation schemes.  They contribute reusable
+    /// traits but no concrete language inventory.
+    Reference,
+    /// Concrete language, project, or theory overlays.
+    Overlay,
+    /// Data/function-only packages that do not contribute `.lang` nodes.
+    Data,
+}
+
+impl PackageLayer {
+    pub fn keyword(self) -> &'static str {
+        match self {
+            Self::Reference => "reference",
+            Self::Overlay => "overlay",
+            Self::Data => "data",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "reference" => Some(Self::Reference),
+            "overlay" => Some(Self::Overlay),
+            "data" => Some(Self::Data),
+            _ => None,
+        }
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            Self::Reference => 0,
+            Self::Data => 1,
+            Self::Overlay => 2,
+        }
+    }
+}
+
+impl fmt::Display for PackageLayer {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.keyword())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PackageCapabilities {
+    pub traits: bool,
+    pub signs: bool,
+    pub functions: bool,
+    pub data: bool,
+}
+
+impl PackageCapabilities {
+    fn parse(values: &[String], package: &str) -> Result<Self, LibraryLoadError> {
+        let mut capabilities = Self::default();
+        for value in values {
+            let target = match value.as_str() {
+                "traits" => &mut capabilities.traits,
+                "signs" => &mut capabilities.signs,
+                "functions" => &mut capabilities.functions,
+                "data" => &mut capabilities.data,
+                _ => {
+                    return Err(config_error(
+                        package,
+                        0,
+                        format!("unknown capability {value:?}"),
+                    ))
+                }
+            };
+            if std::mem::replace(target, true) {
+                return Err(config_error(
+                    package,
+                    0,
+                    format!("duplicate capability {value:?}"),
+                ));
+            }
+        }
+        Ok(capabilities)
+    }
+
+    fn canonical(self) -> String {
+        let mut values = Vec::new();
+        if self.traits {
+            values.push("traits");
+        }
+        if self.signs {
+            values.push("signs");
+        }
+        if self.functions {
+            values.push("functions");
+        }
+        if self.data {
+            values.push("data");
+        }
+        values.join(",")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PackageRequirement {
+    pub id: PackageId,
+    /// v2 currently supports an exact version pin.  `None` is the legacy
+    /// unversioned dependency form and resolves to the only available version.
+    pub version: Option<String>,
+}
+
+impl PackageRequirement {
+    pub fn new(id: PackageId) -> Self {
+        Self { id, version: None }
+    }
+
+    pub fn exact(id: PackageId, version: impl Into<String>) -> Self {
+        Self {
+            id,
+            version: Some(version.into()),
+        }
+    }
+}
+
+impl From<PackageId> for PackageRequirement {
+    fn from(value: PackageId) -> Self {
+        Self::new(value)
+    }
+}
+
+impl fmt::Display for PackageRequirement {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.version {
+            Some(version) => write!(formatter, "{}@{version}", self.id),
+            None => self.id.fmt(formatter),
+        }
+    }
+}
+
+impl FromStr for PackageRequirement {
+    type Err = LibraryLoadError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (id, version) = match value.rsplit_once('@') {
+            Some((id, version)) if valid_version(version) => (id, Some(version.to_owned())),
+            Some(_) => return Err(LibraryLoadError::InvalidRequirement(value.to_owned())),
+            None => (value, None),
+        };
+        Ok(Self {
+            id: id.parse()?,
+            version,
+        })
+    }
+}
+
+/// v2 project intent.  The default is deliberately empty: shipped packages
+/// are available to the resolver but never become roots implicitly.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PackageSpec {
+    pub roots: Vec<PackageRequirement>,
+    pub aliases: BTreeMap<String, PackageId>,
+}
+
+impl PackageSpec {
+    pub fn with_root(mut self, requirement: impl Into<PackageRequirement>) -> Self {
+        self.roots.push(requirement.into());
+        self
+    }
+
+    pub fn with_alias(
+        mut self,
+        alias: impl Into<String>,
+        package: PackageId,
+    ) -> Result<Self, LibraryLoadError> {
+        let alias = alias.into();
+        if !valid_identifier(&alias) {
+            return Err(LibraryLoadError::InvalidPackageAlias(alias));
+        }
+        self.aliases.insert(alias, package);
+        Ok(self)
+    }
+
+    pub fn from_legacy(spec: &LibrarySpec) -> Self {
+        let mut roots = spec
+            .std
+            .iter()
+            .cloned()
+            .map(PackageRequirement::from)
+            .collect::<Vec<_>>();
+        roots.extend(spec.natural.iter().cloned().map(PackageRequirement::from));
+        roots.extend(spec.plugins.iter().cloned().map(PackageRequirement::from));
+        Self {
+            roots,
+            aliases: BTreeMap::new(),
+        }
     }
 }
 
@@ -128,14 +332,20 @@ pub struct LibraryDataSource {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LibraryPackage {
-    pub id: LibraryId,
+    pub id: PackageId,
     /// Compatibility short name used by the former stdlib API.
     pub name: String,
     pub version: String,
+    /// Manifest schema used to load this package.  Schema 1 is the historical
+    /// `package.conf`; schema 2 is `package.toml`.
+    pub manifest_schema: u32,
+    pub layer: PackageLayer,
+    pub capabilities: PackageCapabilities,
+    pub source: PackageSource,
     pub rule_namespace: String,
     pub enabled: bool,
     pub priority: i32,
-    pub requires: Vec<LibraryId>,
+    pub requires: Vec<PackageRequirement>,
     /// Ordered source files compiled as one package. Declaration and rule
     /// order follow this list, so package manifests must keep it stable.
     pub code_paths: Vec<String>,
@@ -183,6 +393,31 @@ pub struct LibrarySpec {
     pub plugins: Vec<LibraryId>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PackageSource {
+    Embedded,
+    Vendored(String),
+    Installed(String),
+    Injected(String),
+}
+
+impl Default for PackageSource {
+    fn default() -> Self {
+        Self::Injected("host".to_owned())
+    }
+}
+
+impl PackageSource {
+    pub fn keyword(&self) -> &'static str {
+        match self {
+            Self::Embedded => "embedded",
+            Self::Vendored(_) => "vendored",
+            Self::Installed(_) => "installed",
+            Self::Injected(_) => "injected",
+        }
+    }
+}
+
 /// 隨引擎發布的預設 std 組合。**是預設值,不是特權**——可被 spec 覆寫或清空。
 pub fn default_std_packages() -> Vec<LibraryId> {
     ["core", "cxg", "grambank", "grammaticalization"]
@@ -225,13 +460,29 @@ impl LibrarySpec {
 pub struct LibrarySelection {
     pub standard: Language,
     pub overlay: Language,
-    pub packages: Vec<LibraryId>,
+    pub packages: Vec<PackageId>,
+    /// Exact package facts used by compile, cache, lock, and replay.  Callers
+    /// must not reconstruct these from roots using a different catalog.
+    pub resolved: Vec<SelectedPackage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectedPackage {
+    pub id: PackageId,
+    pub version: String,
+    pub digest: String,
+    pub source: PackageSource,
+    pub layer: PackageLayer,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LibraryLoadError {
     #[error("invalid library id {0:?}")]
     InvalidId(String),
+    #[error("invalid package requirement {0:?}")]
+    InvalidRequirement(String),
+    #[error("invalid package alias {0:?}")]
+    InvalidPackageAlias(String),
     #[error("library package {package:?} config line {line}: {message}")]
     Config {
         package: String,
@@ -282,11 +533,21 @@ pub enum LibraryLoadError {
     UnknownPackage(LibraryId),
     #[error("library package {0} is disabled")]
     DisabledPackage(LibraryId),
-    #[error("expected package kind {expected}, got {actual} for {id}")]
+    #[error("package {package} requires version {expected:?}, but resolver selected {actual:?}")]
+    VersionMismatch {
+        package: PackageId,
+        expected: String,
+        actual: String,
+    },
+    #[error("package root {package} is declared more than once with incompatible versions")]
+    ConflictingRequirements { package: PackageId },
+    #[error("package alias {alias:?} targets unselected package {package}")]
+    AliasTargetNotSelected { alias: String, package: PackageId },
+    #[error("expected package namespace {expected}, got {actual} for {id}")]
     WrongKind {
         id: LibraryId,
         expected: LibraryKind,
-        actual: LibraryKind,
+        actual: String,
     },
     #[error("library dependency cycle: {0}")]
     DependencyCycle(String),
@@ -303,6 +564,8 @@ impl LibraryLoadError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::InvalidId(_) => "LIBRARY_INVALID_ID",
+            Self::InvalidRequirement(_) => "PACKAGE_REQUIREMENT_INVALID",
+            Self::InvalidPackageAlias(_) => "PACKAGE_ALIAS_INVALID",
             Self::Config { .. } => "LIBRARY_CONFIG_INVALID",
             Self::Exports { .. } => "LIBRARY_EXPORTS_INVALID",
             Self::PackageLanguage { .. } => "LIBRARY_LANGUAGE_INVALID",
@@ -314,6 +577,9 @@ impl LibraryLoadError {
             Self::MissingAlias { .. } => "LIBRARY_EXPORT_MISSING",
             Self::UnknownPackage(_) => "LIBRARY_PACKAGE_UNKNOWN",
             Self::DisabledPackage(_) => "LIBRARY_PACKAGE_DISABLED",
+            Self::VersionMismatch { .. } => "PACKAGE_VERSION_MISMATCH",
+            Self::ConflictingRequirements { .. } => "PACKAGE_REQUIREMENT_CONFLICT",
+            Self::AliasTargetNotSelected { .. } => "PACKAGE_ALIAS_TARGET_UNSELECTED",
             Self::WrongKind { .. } => "LIBRARY_KIND_MISMATCH",
             Self::DependencyCycle(_) => "LIBRARY_DEPENDENCY_CYCLE",
             Self::UnknownAlias(_) => "LIBRARY_EXPORT_UNKNOWN",
@@ -329,7 +595,7 @@ impl LibraryLoadError {
 /// `std::fs`(§4、wasm 綠)。wasm 前端無 fs,由 app shell 供給,走同一介面。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PackageSources {
-    /// `config/package.conf`
+    /// Legacy `config/package.conf` or v2 `package.toml` contents.
     pub config: String,
     /// `config/exports.tsv`
     pub exports: String,
@@ -341,6 +607,9 @@ pub struct PackageSources {
     pub data: String,
     /// 逐檔的 `data/*`,配上 manifest 路徑
     pub data_files: Vec<PackageFile>,
+    /// Host-provided provenance. Moving identical bytes between sources does
+    /// not alter the semantic package digest.
+    pub source: PackageSource,
 }
 
 /// 一個帶 manifest 路徑的來源檔。
@@ -466,16 +735,54 @@ const EMBEDDED_PACKAGES: &[EmbeddedPackage] = &[
 
 #[derive(Default)]
 struct Manifest {
+    schema: u32,
+    id: Option<PackageId>,
     kind: Option<LibraryKind>,
     name: Option<String>,
     version: Option<String>,
+    layer: Option<PackageLayer>,
+    capabilities: Option<PackageCapabilities>,
     rule_namespace: Option<String>,
     enabled: Option<bool>,
     priority: Option<i32>,
-    requires: Option<Vec<LibraryId>>,
+    requires: Option<Vec<PackageRequirement>>,
     code_paths: Option<Vec<String>>,
     data_paths: Option<Vec<String>>,
     function_paths: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TomlManifestV2 {
+    schema: u32,
+    id: String,
+    version: String,
+    layer: String,
+    capabilities: Vec<String>,
+    #[serde(default = "default_exports_path")]
+    exports: String,
+    #[serde(default)]
+    rule_namespace: Option<String>,
+    #[serde(default = "default_true")]
+    enabled: bool,
+    #[serde(default)]
+    priority: i32,
+    #[serde(default)]
+    requires: Vec<String>,
+    #[serde(default)]
+    code: Vec<String>,
+    #[serde(default)]
+    functions: Vec<String>,
+    #[serde(default)]
+    data: Vec<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_exports_path() -> String {
+    "config/exports.tsv".to_owned()
 }
 
 fn valid_identifier(value: &str) -> bool {
@@ -524,13 +831,16 @@ fn set_once<T>(
     Ok(())
 }
 
-fn parse_manifest(source: &str) -> Result<Manifest, LibraryLoadError> {
+fn parse_legacy_manifest(source: &str) -> Result<Manifest, LibraryLoadError> {
     let package_hint = source
         .lines()
         .find_map(|line| line.trim().strip_prefix("name ="))
         .map(str::trim)
         .unwrap_or("<unknown>");
-    let mut manifest = Manifest::default();
+    let mut manifest = Manifest {
+        schema: 1,
+        ..Manifest::default()
+    };
     for (index, raw) in source.lines().enumerate() {
         let line_number = index + 1;
         let line = raw.trim().trim_start_matches('\u{feff}');
@@ -629,7 +939,11 @@ fn parse_manifest(source: &str) -> Result<Manifest, LibraryLoadError> {
                 } else {
                     value
                         .split(',')
-                        .map(|part| part.trim().parse())
+                        .map(|part| {
+                            part.trim()
+                                .parse::<PackageId>()
+                                .map(PackageRequirement::from)
+                        })
                         .collect::<Result<Vec<_>, _>>()?
                 };
                 set_once(
@@ -716,11 +1030,128 @@ fn parse_manifest(source: &str) -> Result<Manifest, LibraryLoadError> {
     Ok(manifest)
 }
 
+fn valid_version(value: &str) -> bool {
+    !value.is_empty()
+        && value.trim() == value
+        && !value.chars().any(|character| {
+            character.is_whitespace() || character.is_control() || character == '@'
+        })
+}
+
+fn validate_manifest_paths(
+    package: &str,
+    key: &str,
+    paths: Vec<String>,
+) -> Result<Vec<String>, LibraryLoadError> {
+    let mut seen = BTreeSet::new();
+    let mut output = Vec::with_capacity(paths.len());
+    for raw in paths {
+        let path = raw.trim().replace('\\', "/");
+        let segments = path.split('/').collect::<Vec<_>>();
+        if path.is_empty()
+            || path.starts_with('/')
+            || path.contains(':')
+            || segments
+                .iter()
+                .any(|segment| segment.is_empty() || *segment == "." || *segment == "..")
+        {
+            return Err(config_error(
+                package,
+                0,
+                format!("{key} contains unsafe relative path {raw:?}"),
+            ));
+        }
+        if !seen.insert(path.clone()) {
+            return Err(config_error(
+                package,
+                0,
+                format!("{key} contains duplicate path {path:?}"),
+            ));
+        }
+        output.push(path);
+    }
+    Ok(output)
+}
+
+fn parse_toml_manifest(source: &str) -> Result<Manifest, LibraryLoadError> {
+    let raw = toml::from_str::<TomlManifestV2>(source)
+        .map_err(|error| config_error("<unknown>", 0, error.to_string()))?;
+    if raw.schema != 2 {
+        return Err(config_error(
+            &raw.id,
+            0,
+            format!("unsupported package manifest schema {}", raw.schema),
+        ));
+    }
+    if !valid_version(&raw.version) {
+        return Err(config_error(
+            &raw.id,
+            0,
+            "version must be a non-empty exact version without whitespace",
+        ));
+    }
+    let id = raw.id.parse::<PackageId>()?;
+    let layer = PackageLayer::parse(&raw.layer)
+        .ok_or_else(|| config_error(&raw.id, 0, "layer must be reference, overlay, or data"))?;
+    let capabilities = PackageCapabilities::parse(&raw.capabilities, &raw.id)?;
+    let _exports_path = validate_manifest_paths(&raw.id, "exports", vec![raw.exports])?;
+    let requires = raw
+        .requires
+        .iter()
+        .map(|requirement| requirement.parse())
+        .collect::<Result<Vec<_>, _>>()?;
+    let code_paths = validate_manifest_paths(&raw.id, "code", raw.code)?;
+    let function_paths = validate_manifest_paths(&raw.id, "functions", raw.functions)?;
+    let data_paths = validate_manifest_paths(&raw.id, "data", raw.data)?;
+    if code_paths.is_empty() && function_paths.is_empty() && data_paths.is_empty() {
+        return Err(config_error(
+            &raw.id,
+            0,
+            "a package must declare code, functions, or data",
+        ));
+    }
+    Ok(Manifest {
+        schema: 2,
+        id: Some(id.clone()),
+        kind: None,
+        name: None,
+        version: Some(raw.version),
+        layer: Some(layer),
+        capabilities: Some(capabilities),
+        rule_namespace: Some(raw.rule_namespace.unwrap_or_else(|| id.to_string())),
+        enabled: Some(raw.enabled),
+        priority: Some(raw.priority),
+        requires: Some(requires),
+        code_paths: Some(code_paths),
+        data_paths: Some(data_paths),
+        function_paths: Some(function_paths),
+    })
+}
+
+fn parse_manifest(source: &str) -> Result<Manifest, LibraryLoadError> {
+    let is_v2 = source.lines().any(|raw| {
+        let key = raw.trim().split_once('=').map(|(key, _)| key.trim());
+        matches!(key, Some("schema" | "id" | "layer" | "capabilities"))
+    });
+    if is_v2 {
+        parse_toml_manifest(source)
+    } else {
+        parse_legacy_manifest(source)
+    }
+}
+
 fn required<T>(value: Option<T>, package: &str, key: &str) -> Result<T, LibraryLoadError> {
     value.ok_or_else(|| config_error(package, 0, format!("missing required key {key:?}")))
 }
 
-fn parse_exports(id: &LibraryId, source: &str) -> Result<Vec<LibraryExport>, LibraryLoadError> {
+fn parse_exports(
+    id: &LibraryId,
+    source: &str,
+    allow_empty: bool,
+) -> Result<Vec<LibraryExport>, LibraryLoadError> {
+    if source.trim().is_empty() && allow_empty {
+        return Ok(Vec::new());
+    }
     let mut lines = source.lines().enumerate().filter_map(|(index, raw)| {
         let line = raw.trim().trim_start_matches('\u{feff}');
         (!line.is_empty() && !line.starts_with('#')).then_some((index + 1, line))
@@ -778,7 +1209,7 @@ fn parse_exports(id: &LibraryId, source: &str) -> Result<Vec<LibraryExport>, Lib
             alias: fields[2].to_owned(),
         });
     }
-    if exports.is_empty() {
+    if exports.is_empty() && !allow_empty {
         return Err(LibraryLoadError::Exports {
             package: id.to_string(),
             line: 0,
@@ -795,21 +1226,47 @@ fn validate_package_code(package: &LibraryPackage) -> Result<Language, LibraryLo
             line: error.line,
             message: error.msg,
         })?;
-    if package.id.kind == LibraryKind::Std {
+    if !package.capabilities.traits && !language.traits.is_empty() {
+        return Err(LibraryLoadError::UnsupportedContent {
+            package: package.id.to_string(),
+            message: "manifest does not grant the traits capability".to_owned(),
+        });
+    }
+    if !package.capabilities.signs && !language.signs.is_empty() {
+        return Err(LibraryLoadError::UnsupportedContent {
+            package: package.id.to_string(),
+            message: "manifest does not grant the signs capability".to_owned(),
+        });
+    }
+    if package.layer == PackageLayer::Data
+        && (!language.dsl_decls.is_empty()
+            || !language.distribution.is_empty()
+            || !language.traits.is_empty()
+            || !language.signs.is_empty())
+    {
+        return Err(LibraryLoadError::UnsupportedContent {
+            package: package.id.to_string(),
+            message: "data-layer packages may not contain language declarations".to_owned(),
+        });
+    }
+    if package.layer == PackageLayer::Reference {
         if !language.dsl_decls.is_empty()
             || !language.distribution.is_empty()
             || !language.signs.is_empty()
         {
             return Err(LibraryLoadError::UnsupportedContent {
                 package: package.id.to_string(),
-                message: "std code may contain trait declarations only".to_owned(),
+                message: "reference code may contain trait declarations only".to_owned(),
             });
         }
         for trait_def in &language.traits {
             if trait_def.global {
                 return Err(LibraryLoadError::UnsupportedContent {
                     package: package.id.to_string(),
-                    message: format!("global trait {:?} is not supported in std", trait_def.name),
+                    message: format!(
+                        "global trait {:?} is not supported in reference packages",
+                        trait_def.name
+                    ),
                 });
             }
             for item in trait_def.blocks.iter().flat_map(|block| &block.items) {
@@ -831,7 +1288,7 @@ fn validate_package_code(package: &LibraryPackage) -> Result<Language, LibraryLo
                     return Err(LibraryLoadError::UnsupportedContent {
                         package: package.id.to_string(),
                         message: format!(
-                            "std trait {:?} contains unsupported item {item:?}",
+                            "reference trait {:?} contains unsupported item {item:?}",
                             trait_def.name
                         ),
                     });
@@ -854,6 +1311,7 @@ fn load_sources(sources: &PackageSources) -> Result<LibraryPackage, LibraryLoadE
         functions: &sources.functions,
         data: &sources.data,
         data_files: &sources.data_files,
+        source: &sources.source,
     };
     load_package(embedded)
 }
@@ -866,6 +1324,7 @@ struct OwnedPackageView<'a> {
     functions: &'a [PackageFile],
     data: &'a str,
     data_files: &'a [PackageFile],
+    source: &'a PackageSource,
 }
 
 fn load_embedded(source: &EmbeddedPackage) -> Result<LibraryPackage, LibraryLoadError> {
@@ -892,14 +1351,26 @@ fn load_embedded(source: &EmbeddedPackage) -> Result<LibraryPackage, LibraryLoad
         functions: &functions,
         data: source.data,
         data_files: &data_files,
+        source: &PackageSource::Embedded,
     })
 }
 
 fn load_package(source: OwnedPackageView<'_>) -> Result<LibraryPackage, LibraryLoadError> {
     let manifest = parse_manifest(source.config)?;
-    let name = required(manifest.name, "<unknown>", "name")?;
-    let kind = required(manifest.kind, &name, "kind")?;
-    let id = LibraryId::new(kind, name);
+    let schema = manifest.schema;
+    let legacy_kind = manifest.kind;
+    let id = match manifest.id {
+        Some(id) => id,
+        None => {
+            let name = required(manifest.name, "<unknown>", "name")?;
+            let kind = required(legacy_kind, &name, "kind")?;
+            LibraryId::new(kind, name)
+        }
+    };
+    let layer = manifest.layer.unwrap_or(match legacy_kind {
+        Some(LibraryKind::Std) => PackageLayer::Reference,
+        Some(LibraryKind::Natural | LibraryKind::Plugin) | None => PackageLayer::Overlay,
+    });
     let rule_namespace = required(manifest.rule_namespace, &id.to_string(), "rule_namespace")?;
     if rule_namespace != id.to_string() {
         return Err(config_error(
@@ -908,43 +1379,94 @@ fn load_package(source: OwnedPackageView<'_>) -> Result<LibraryPackage, LibraryL
             format!("rule_namespace must equal package id {id}"),
         ));
     }
-    // P50 ③:function-only 套件(只帶 `code/*.chg`)沒有 `.lang`,故 `code` 選填;
-    // 但兩者不得同時為空——套件必須帶點東西。
     let code_paths = manifest.code_paths.unwrap_or_default();
-    let code_paths_empty = code_paths.is_empty();
+    let data_paths = match manifest.data_paths {
+        Some(paths) => paths,
+        None if schema == 1 => {
+            return Err(config_error(
+                &id.to_string(),
+                0,
+                "missing required key \"data\"",
+            ))
+        }
+        None => Vec::new(),
+    };
+    let embedded_data_paths = source
+        .data_files
+        .iter()
+        .map(|data| data.path.as_str())
+        .collect::<Vec<_>>();
+    if data_paths.iter().map(String::as_str).collect::<Vec<_>>() != embedded_data_paths {
+        return Err(config_error(
+            &id.to_string(),
+            0,
+            format!(
+                "data manifest paths {data_paths:?} do not match provided sources {embedded_data_paths:?}"
+            ),
+        ));
+    }
+    let function_paths = manifest.function_paths.unwrap_or_default();
+    let embedded_function_paths = source
+        .functions
+        .iter()
+        .map(|function| function.path.as_str())
+        .collect::<Vec<_>>();
+    if function_paths
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        != embedded_function_paths
+    {
+        return Err(config_error(
+            &id.to_string(),
+            0,
+            format!(
+                "functions manifest paths {function_paths:?} do not match provided sources {embedded_function_paths:?}"
+            ),
+        ));
+    }
+    if code_paths.is_empty() && function_paths.is_empty() && data_paths.is_empty() {
+        return Err(config_error(
+            &id.to_string(),
+            0,
+            "a package must declare code, functions, or data",
+        ));
+    }
+    let allow_empty_exports = schema >= 2
+        && manifest.capabilities.is_some_and(|capabilities| {
+            !capabilities.traits && !capabilities.signs && !capabilities.functions
+        });
+    let exports = parse_exports(&id, source.exports, allow_empty_exports)?;
+    let capabilities = manifest.capabilities.unwrap_or(PackageCapabilities {
+        traits: exports
+            .iter()
+            .any(|export| export.kind == LibraryExportKind::Trait),
+        signs: exports
+            .iter()
+            .any(|export| export.kind == LibraryExportKind::Sign),
+        functions: !function_paths.is_empty()
+            || exports
+                .iter()
+                .any(|export| export.kind == LibraryExportKind::Function),
+        data: !data_paths.is_empty(),
+    });
     let package = LibraryPackage {
-        exports: parse_exports(&id, source.exports)?,
+        exports,
         name: id.name.clone(),
         id,
         version: required(manifest.version, "<unknown>", "version")?,
+        manifest_schema: schema,
+        layer,
+        capabilities,
+        source: source.source.clone(),
         rule_namespace,
         enabled: required(manifest.enabled, "<unknown>", "enabled")?,
         priority: required(manifest.priority, "<unknown>", "priority")?,
         requires: manifest.requires.unwrap_or_default(),
         code_path: code_paths.join(","),
         code_paths,
-        data_path: {
-            let paths = required(manifest.data_paths.clone(), "<unknown>", "data")?;
-            paths.join(",")
-        },
-        data_paths: {
-            let paths = required(manifest.data_paths, "<unknown>", "data")?;
-            let embedded_paths = source
-                .data_files
-                .iter()
-                .map(|data| data.path.as_str())
-                .collect::<Vec<_>>();
-            if paths.iter().map(String::as_str).collect::<Vec<_>>() != embedded_paths {
-                return Err(config_error(
-                    "<unknown>",
-                    0,
-                    format!(
-                        "data manifest paths {paths:?} do not match embedded sources {embedded_paths:?}"
-                    ),
-                ));
-            }
-            paths
-        },
+        data_path: data_paths.join(","),
+        data_paths,
         data_sources: source
             .data_files
             .iter()
@@ -953,31 +1475,7 @@ fn load_package(source: OwnedPackageView<'_>) -> Result<LibraryPackage, LibraryL
                 source: data.source.to_owned(),
             })
             .collect(),
-        function_paths: {
-            let functions = manifest.function_paths.unwrap_or_default();
-            if code_paths_empty && functions.is_empty() {
-                return Err(config_error(
-                    "<unknown>",
-                    0,
-                    "a package must declare `code` or `functions`",
-                ));
-            }
-            let embedded_paths = source
-                .functions
-                .iter()
-                .map(|function| function.path.as_str())
-                .collect::<Vec<_>>();
-            if functions.iter().map(String::as_str).collect::<Vec<_>>() != embedded_paths {
-                return Err(config_error(
-                    "<unknown>",
-                    0,
-                    format!(
-                        "functions manifest paths {functions:?} do not match embedded sources {embedded_paths:?}"
-                    ),
-                ));
-            }
-            functions
-        },
+        function_paths,
         function_sources: source
             .functions
             .iter()
@@ -990,6 +1488,18 @@ fn load_package(source: OwnedPackageView<'_>) -> Result<LibraryPackage, LibraryL
         functions: String::new(),
         data: source.data.to_owned(),
     };
+    if !package.capabilities.functions && !package.function_paths.is_empty() {
+        return Err(LibraryLoadError::UnsupportedContent {
+            package: package.id.to_string(),
+            message: "manifest does not grant the functions capability".to_owned(),
+        });
+    }
+    if !package.capabilities.data && !package.data_paths.is_empty() {
+        return Err(LibraryLoadError::UnsupportedContent {
+            package: package.id.to_string(),
+            message: "manifest does not grant the data capability".to_owned(),
+        });
+    }
     let language = validate_package_code(&package)?;
     for export in &package.exports {
         let present = match export.kind {
@@ -1009,26 +1519,135 @@ fn load_package(source: OwnedPackageView<'_>) -> Result<LibraryPackage, LibraryL
                 alias: export.alias.clone(),
             });
         }
-        // std 套件可 export trait 與 function(P52:std::grammaticalization 的
-        // 路徑庫就是 std 的 function),但不 export sign。
-        if package.id.kind == LibraryKind::Std
-            && !matches!(
-                export.kind,
-                LibraryExportKind::Trait | LibraryExportKind::Function
-            )
-        {
+        let granted = match export.kind {
+            LibraryExportKind::Trait => package.capabilities.traits,
+            LibraryExportKind::Sign => package.capabilities.signs,
+            LibraryExportKind::Function => package.capabilities.functions,
+        };
+        if !granted {
             return Err(LibraryLoadError::UnsupportedContent {
                 package: package.id.to_string(),
-                message: "std packages may export traits and functions only".to_owned(),
+                message: format!(
+                    "export {:?} is not granted by package capabilities",
+                    export.kind
+                ),
             });
         }
     }
     Ok(package)
 }
 
+fn lock_normalized(text: &str) -> String {
+    text.replace("\r\n", "\n")
+}
+
+/// Canonical semantic content used by project locks and ChangeSet replay.
+/// Schema-1 packages retain the historical byte layout exactly; schema 2 adds
+/// the behavior-bearing manifest fields that did not exist in v1.
+pub fn package_lock_content(package: &LibraryPackage) -> String {
+    let mut content = String::new();
+    if package.manifest_schema >= 2 {
+        content.push_str(&format!(
+            "manifest-schema {}\nlayer {}\ncapabilities {}\n",
+            package.manifest_schema,
+            package.layer,
+            package.capabilities.canonical()
+        ));
+    }
+    content.push_str(&format!(
+        "{}\n{}\n{}\n{}\n{}\n{}\n",
+        package.id,
+        package.version,
+        package.rule_namespace,
+        package.priority,
+        package.code_path,
+        package.data_path
+    ));
+    for dependency in &package.requires {
+        content.push_str(&format!("requires {dependency}\n"));
+    }
+    for export in &package.exports {
+        content.push_str(&format!(
+            "export {} {:?} {}\n",
+            export.stable_id, export.kind, export.alias
+        ));
+    }
+    content.push_str(&lock_normalized(&package.code));
+    content.push('\n');
+    if package.function_sources.is_empty() {
+        content.push_str(&lock_normalized(&package.functions));
+    } else {
+        for source in &package.function_sources {
+            content.push_str("\nfunction-source ");
+            content.push_str(&source.path);
+            content.push('\n');
+            content.push_str(&lock_normalized(&source.source));
+        }
+    }
+    content.push('\n');
+    if package.data_sources.len() <= 1 {
+        content.push_str(&lock_normalized(&package.data));
+    } else {
+        for source in &package.data_sources {
+            content.push_str("\ndata-source ");
+            content.push_str(&source.path);
+            content.push('\n');
+            content.push_str(&lock_normalized(&source.source));
+        }
+    }
+    content
+}
+
+pub fn package_digest(package: &LibraryPackage) -> String {
+    crate::sha256_hex(package_lock_content(package).as_bytes())
+}
+
 #[derive(Debug, Clone)]
 pub struct LibraryCatalog {
     packages: Vec<LibraryPackage>,
+}
+
+/// Immutable result of one resolver pass.  Compile, check, lock generation,
+/// and replay consume this same value; none of them rediscover packages.
+#[derive(Debug, Clone)]
+pub struct ResolvedPackages {
+    pub intent: PackageSpec,
+    pub selection: LibrarySelection,
+    packages: Vec<LibraryPackage>,
+    available_exports: BTreeMap<String, PackageId>,
+}
+
+impl ResolvedPackages {
+    pub fn packages(&self) -> &[LibraryPackage] {
+        &self.packages
+    }
+
+    pub fn package(&self, id: &PackageId) -> Option<&LibraryPackage> {
+        self.packages.iter().find(|package| &package.id == id)
+    }
+
+    pub fn available_exports(&self) -> &BTreeMap<String, PackageId> {
+        &self.available_exports
+    }
+
+    pub fn lock_digest(&self) -> String {
+        let mut packages = self.selection.resolved.clone();
+        packages.sort_by(|left, right| left.id.cmp(&right.id));
+        let content = packages
+            .iter()
+            .map(|package| {
+                format!(
+                    "{}@{} sha256:{}\n",
+                    package.id, package.version, package.digest
+                )
+            })
+            .collect::<String>();
+        crate::sha256_hex(content.as_bytes())
+    }
+}
+
+pub trait PackageResolver {
+    fn resolve(&self, spec: &PackageSpec) -> Result<ResolvedPackages, LibraryLoadError>;
 }
 
 fn validate_catalog(packages: &[LibraryPackage]) -> Result<(), LibraryLoadError> {
@@ -1067,20 +1686,24 @@ fn validate_catalog(packages: &[LibraryPackage]) -> Result<(), LibraryLoadError>
     Ok(())
 }
 
+fn sort_catalog(packages: &mut [LibraryPackage]) {
+    packages.sort_by(|left, right| {
+        left.layer
+            .rank()
+            .cmp(&right.layer.rank())
+            .then(left.priority.cmp(&right.priority))
+            .then(left.id.namespace.cmp(&right.id.namespace))
+            .then(left.id.name.cmp(&right.id.name))
+    });
+}
+
 impl LibraryCatalog {
     pub fn embedded() -> Result<Self, LibraryLoadError> {
         let mut packages = EMBEDDED_PACKAGES
             .iter()
             .map(load_embedded)
             .collect::<Result<Vec<_>, _>>()?;
-        packages.sort_by(|left, right| {
-            left.id
-                .kind
-                .rank()
-                .cmp(&right.id.kind.rank())
-                .then(left.priority.cmp(&right.priority))
-                .then(left.id.name.cmp(&right.id.name))
-        });
+        sort_catalog(&mut packages);
         validate_catalog(&packages)?;
         Ok(Self { packages })
     }
@@ -1104,20 +1727,87 @@ impl LibraryCatalog {
         for sources in extra {
             packages.push(load_sources(&sources)?);
         }
-        packages.sort_by(|left, right| {
-            left.id
-                .kind
-                .rank()
-                .cmp(&right.id.kind.rank())
-                .then(left.priority.cmp(&right.priority))
-                .then(left.id.name.cmp(&right.id.name))
-        });
+        sort_catalog(&mut packages);
+        validate_catalog(&packages)?;
+        Ok(Self { packages })
+    }
+
+    /// Build an offline catalog in host search order: project-vendored,
+    /// user-installed, then shipped embedded fallback.  Higher tiers replace
+    /// lower-tier candidates with the same package ID.
+    pub fn with_source_precedence(
+        vendored: impl IntoIterator<Item = PackageSources>,
+        installed: impl IntoIterator<Item = PackageSources>,
+    ) -> Result<Self, LibraryLoadError> {
+        fn load_tier(
+            sources: impl IntoIterator<Item = PackageSources>,
+        ) -> Result<Vec<LibraryPackage>, LibraryLoadError> {
+            let mut packages = Vec::new();
+            let mut ids = BTreeSet::new();
+            for source in sources {
+                let package = load_sources(&source)?;
+                if !ids.insert(package.id.clone()) {
+                    return Err(LibraryLoadError::DuplicatePackage(package.id));
+                }
+                packages.push(package);
+            }
+            Ok(packages)
+        }
+
+        let vendored = load_tier(vendored)?;
+        let installed = load_tier(installed)?;
+        let embedded = EMBEDDED_PACKAGES
+            .iter()
+            .map(load_embedded)
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut chosen = BTreeMap::<PackageId, LibraryPackage>::new();
+        for package in embedded.into_iter().chain(installed).chain(vendored) {
+            chosen.insert(package.id.clone(), package);
+        }
+        let mut packages = chosen.into_values().collect::<Vec<_>>();
+        sort_catalog(&mut packages);
         validate_catalog(&packages)?;
         Ok(Self { packages })
     }
 
     pub fn packages(&self) -> &[LibraryPackage] {
         &self.packages
+    }
+
+    pub fn resolve_legacy(&self, spec: &LibrarySpec) -> Result<ResolvedPackages, LibraryLoadError> {
+        self.validate_legacy_spec(spec)?;
+        self.resolve(&PackageSpec::from_legacy(spec))
+    }
+
+    fn validate_legacy_spec(&self, spec: &LibrarySpec) -> Result<(), LibraryLoadError> {
+        for id in &spec.std {
+            if id.namespace != LibraryKind::Std.keyword() {
+                return Err(LibraryLoadError::WrongKind {
+                    id: id.clone(),
+                    expected: LibraryKind::Std,
+                    actual: id.namespace.clone(),
+                });
+            }
+        }
+        if let Some(natural) = &spec.natural {
+            if natural.namespace != LibraryKind::Natural.keyword() {
+                return Err(LibraryLoadError::WrongKind {
+                    id: natural.clone(),
+                    expected: LibraryKind::Natural,
+                    actual: natural.namespace.clone(),
+                });
+            }
+        }
+        for plugin in &spec.plugins {
+            if plugin.namespace != LibraryKind::Plugin.keyword() {
+                return Err(LibraryLoadError::WrongKind {
+                    id: plugin.clone(),
+                    expected: LibraryKind::Plugin,
+                    actual: plugin.namespace.clone(),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// 名字 → 匯出它的 package(**全 catalog**,不限已選取者)。
@@ -1143,7 +1833,7 @@ impl LibraryCatalog {
     ) -> Result<LibraryExport, LibraryLoadError> {
         self.packages
             .iter()
-            .filter(|package| package.enabled && package.id.kind == kind)
+            .filter(|package| package.enabled && package.id.legacy_kind() == Some(kind))
             .flat_map(|package| package.exports.iter())
             .find(|export| export.alias == alias)
             .cloned()
@@ -1157,19 +1847,46 @@ impl LibraryCatalog {
             .ok_or_else(|| LibraryLoadError::UnknownPackage(id.clone()))
     }
 
-    fn sort_same_layer(&self, ids: &mut [LibraryId]) -> Result<(), LibraryLoadError> {
-        for id in ids.iter() {
-            self.package(id)?;
+    fn package_for_requirement(
+        &self,
+        requirement: &PackageRequirement,
+    ) -> Result<&LibraryPackage, LibraryLoadError> {
+        let package = self.package(&requirement.id)?;
+        if let Some(expected) = &requirement.version {
+            if !valid_version(expected) {
+                return Err(LibraryLoadError::InvalidRequirement(
+                    requirement.to_string(),
+                ));
+            }
+            if &package.version != expected {
+                return Err(LibraryLoadError::VersionMismatch {
+                    package: requirement.id.clone(),
+                    expected: expected.clone(),
+                    actual: package.version.clone(),
+                });
+            }
         }
-        ids.sort_by(|left, right| {
-            let left_package = self.packages.iter().find(|package| package.id == *left);
-            let right_package = self.packages.iter().find(|package| package.id == *right);
+        Ok(package)
+    }
+
+    fn sort_requirements(
+        &self,
+        requirements: &mut [PackageRequirement],
+    ) -> Result<(), LibraryLoadError> {
+        for requirement in requirements.iter() {
+            self.package_for_requirement(requirement)?;
+        }
+        requirements.sort_by(|left, right| {
+            let left_package = self.packages.iter().find(|package| package.id == left.id);
+            let right_package = self.packages.iter().find(|package| package.id == right.id);
             match (left_package, right_package) {
                 (Some(left_package), Some(right_package)) => left_package
-                    .priority
-                    .cmp(&right_package.priority)
-                    .then(left_package.id.name.cmp(&right_package.id.name)),
-                _ => left.cmp(right),
+                    .layer
+                    .rank()
+                    .cmp(&right_package.layer.rank())
+                    .then(left_package.priority.cmp(&right_package.priority))
+                    .then(left.id.cmp(&right.id)),
+                _ => left.id.cmp(&right.id),
             }
         });
         Ok(())
@@ -1203,9 +1920,10 @@ impl LibraryCatalog {
         states.insert(id.clone(), 1);
         stack.push(id.clone());
         let mut dependencies = package.requires.clone();
-        self.sort_same_layer(&mut dependencies)?;
+        self.sort_requirements(&mut dependencies)?;
         for dependency in &dependencies {
-            self.visit(dependency, states, stack, ordered)?;
+            self.package_for_requirement(dependency)?;
+            self.visit(&dependency.id, states, stack, ordered)?;
         }
         stack.pop();
         states.insert(id.clone(), 2);
@@ -1214,54 +1932,59 @@ impl LibraryCatalog {
     }
 
     pub fn select(&self, spec: &LibrarySpec) -> Result<LibrarySelection, LibraryLoadError> {
-        // R12:std 與 natural/plugin 走同一套——一律由 spec 點名,不再憑 kind 自動入列。
-        let mut roots = spec.std.clone();
-        roots.sort();
-        roots.dedup();
-        for id in &roots {
-            if id.kind != LibraryKind::Std {
-                return Err(LibraryLoadError::WrongKind {
-                    id: id.clone(),
-                    expected: LibraryKind::Std,
-                    actual: id.kind,
-                });
+        self.validate_legacy_spec(spec)?;
+        self.select_packages(&PackageSpec::from_legacy(spec))
+    }
+
+    pub fn select_packages(
+        &self,
+        spec: &PackageSpec,
+    ) -> Result<LibrarySelection, LibraryLoadError> {
+        let mut root_versions = BTreeMap::<PackageId, Option<String>>::new();
+        for root in &spec.roots {
+            match root_versions.get_mut(&root.id) {
+                None => {
+                    root_versions.insert(root.id.clone(), root.version.clone());
+                }
+                Some(existing) => match (&*existing, &root.version) {
+                    (Some(left), Some(right)) if left != right => {
+                        return Err(LibraryLoadError::ConflictingRequirements {
+                            package: root.id.clone(),
+                        })
+                    }
+                    (None, Some(version)) => *existing = Some(version.clone()),
+                    _ => {}
+                },
             }
         }
-        self.sort_same_layer(&mut roots)?;
-        if let Some(natural) = &spec.natural {
-            if natural.kind != LibraryKind::Natural {
-                return Err(LibraryLoadError::WrongKind {
-                    id: natural.clone(),
-                    expected: LibraryKind::Natural,
-                    actual: natural.kind,
-                });
-            }
-            roots.push(natural.clone());
-        }
-        let mut plugins = spec.plugins.clone();
-        plugins.sort();
-        plugins.dedup();
-        for plugin in &plugins {
-            if plugin.kind != LibraryKind::Plugin {
-                return Err(LibraryLoadError::WrongKind {
-                    id: plugin.clone(),
-                    expected: LibraryKind::Plugin,
-                    actual: plugin.kind,
-                });
-            }
-        }
-        self.sort_same_layer(&mut plugins)?;
-        roots.extend(plugins);
+        let mut roots = root_versions
+            .into_iter()
+            .map(|(id, version)| PackageRequirement { id, version })
+            .collect::<Vec<_>>();
+        self.sort_requirements(&mut roots)?;
         let mut states = BTreeMap::new();
         let mut ordered = Vec::new();
         for root in roots {
-            self.visit(&root, &mut states, &mut Vec::new(), &mut ordered)?;
+            self.package_for_requirement(&root)?;
+            self.visit(&root.id, &mut states, &mut Vec::new(), &mut ordered)?;
+        }
+        for (alias, package) in &spec.aliases {
+            if !valid_identifier(alias) {
+                return Err(LibraryLoadError::InvalidPackageAlias(alias.clone()));
+            }
+            if !ordered.contains(package) {
+                return Err(LibraryLoadError::AliasTargetNotSelected {
+                    alias: alias.clone(),
+                    package: package.clone(),
+                });
+            }
         }
 
         let mut standard = Language::new();
         let mut overlay = Language::new();
         let mut trait_names = BTreeSet::new();
         let mut sign_names = BTreeSet::new();
+        let mut resolved = Vec::new();
         for id in &ordered {
             let package = self.package(id)?;
             let language = validate_package_code(package)?;
@@ -1275,15 +1998,41 @@ impl LibraryCatalog {
                     return Err(LibraryLoadError::DuplicateSign(sign.name.clone()));
                 }
             }
-            match package.id.kind {
-                LibraryKind::Std => standard.append_library(language),
-                LibraryKind::Natural | LibraryKind::Plugin => overlay.append_library(language),
+            match package.layer {
+                PackageLayer::Reference => standard.append_library(language),
+                PackageLayer::Overlay => overlay.append_library(language),
+                PackageLayer::Data => {}
             }
+            resolved.push(SelectedPackage {
+                id: package.id.clone(),
+                version: package.version.clone(),
+                digest: package_digest(package),
+                source: package.source.clone(),
+                layer: package.layer,
+            });
         }
         Ok(LibrarySelection {
             standard,
             overlay,
             packages: ordered,
+            resolved,
+        })
+    }
+}
+
+impl PackageResolver for LibraryCatalog {
+    fn resolve(&self, spec: &PackageSpec) -> Result<ResolvedPackages, LibraryLoadError> {
+        let selection = self.select_packages(spec)?;
+        let packages = selection
+            .packages
+            .iter()
+            .map(|id| self.package(id).cloned())
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ResolvedPackages {
+            intent: spec.clone(),
+            selection,
+            packages,
+            available_exports: self.export_index(),
         })
     }
 }
@@ -1303,6 +2052,10 @@ mod tests {
             rule_namespace: id.to_string(),
             id,
             version: "test".to_owned(),
+            manifest_schema: 1,
+            layer: PackageLayer::Overlay,
+            capabilities: PackageCapabilities::default(),
+            source: PackageSource::default(),
             enabled: true,
             priority,
             requires: Vec::new(),
@@ -1397,7 +2150,7 @@ mod tests {
             .find(|package| package.id == english)
             .unwrap()
             .requires
-            .push(LibraryId::new(LibraryKind::Std, "missing"));
+            .push(LibraryId::new(LibraryKind::Std, "missing").into());
         let unknown_error = unknown
             .select(&LibrarySpec::natural(english.clone()))
             .unwrap_err();
@@ -1428,7 +2181,7 @@ mod tests {
             .find(|package| package.id == LibraryId::new(LibraryKind::Std, "core"))
             .unwrap()
             .requires
-            .push(LibraryId::new(LibraryKind::Std, "cxg"));
+            .push(LibraryId::new(LibraryKind::Std, "cxg").into());
         let cycle_error = cycle.select(&LibrarySpec::default()).unwrap_err();
         assert!(matches!(&cycle_error, LibraryLoadError::DependencyCycle(_)));
         assert_eq!(cycle_error.code(), "LIBRARY_DEPENDENCY_CYCLE");
@@ -1453,7 +2206,7 @@ mod tests {
             selected
                 .packages
                 .iter()
-                .filter(|id| id.kind == LibraryKind::Plugin)
+                .filter(|id| id.legacy_kind() == Some(LibraryKind::Plugin))
                 .map(ToString::to_string)
                 .collect::<Vec<_>>(),
             ["plugin:alpha", "plugin:beta", "plugin:late"]
@@ -1467,6 +2220,13 @@ mod tests {
             name: id.name.clone(),
             id: id.clone(),
             version: "test".to_owned(),
+            manifest_schema: 1,
+            layer: PackageLayer::Reference,
+            capabilities: PackageCapabilities {
+                traits: true,
+                ..PackageCapabilities::default()
+            },
+            source: PackageSource::default(),
             rule_namespace: id.to_string(),
             enabled: true,
             priority: 0,

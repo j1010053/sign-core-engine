@@ -13,6 +13,7 @@ tshiatun-core = { path = "../../tshiatun/crates/core" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = { version = "0.8", default-features = false, features = ["parse"] }
 rand_chacha = { version = "0.3", default-features = false }
 rand_core = "0.6"
 

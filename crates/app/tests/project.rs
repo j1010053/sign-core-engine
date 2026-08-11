@@ -85,6 +85,7 @@ fn a_project_declaration_round_trips_through_toml() {
             std: vec!["std:core".to_owned(), "std:cxg".to_owned()],
             natural: Some("natural:en-standard".to_owned()),
             plugins: Vec::new(),
+            ..ProjectPackages::default()
         },
         weights: [("k".to_owned(), 0.8)].into_iter().collect(),
     };
