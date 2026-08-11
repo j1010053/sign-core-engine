@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
 
 use conlang_app::{
-    DerivationViewV1, EvolutionTreeV1, GroupingQuery, GroupingViewV1, IntelligibilityViewV1,
-    LexiconQuery, LexiconViewV1, NodeDetailV1, PackageCatalogV1, PackageSelectionInput,
-    PendingChangeV1, ProjectSlot, ProjectSummaryV1, ProposalQuery, ProposalsViewV1,
-    RebasePreviewV1, SegmentWeight, SoundChangeInput, SourceReconcileV1, SourceViewV1, StatsViewV1,
-    UiError, WeightConfigV1,
+    AuthoringCatalogV1, AuthoringMoveOptionsV1, DerivationViewV1, EvolutionTreeV1, GroupingQuery,
+    GroupingViewV1, IntelligibilityViewV1, LexiconQuery, LexiconViewV1, NodeDetailV1,
+    PackageCatalogV1, PackageSelectionInput, PendingChangeV1, ProjectSlot, ProjectSummaryV1,
+    ProposalQuery, ProposalsViewV1, RebasePreviewV1, SegmentWeight, SoundChangeInput,
+    SourceReconcileV1, SourceViewV1, StatsViewV1, StructuredEditInput, UiError, WeightConfigV1,
 };
 use conlang_changeset::state::EvolutionState;
 use std::sync::{Mutex, MutexGuard};
@@ -163,6 +163,30 @@ fn replace_pending_source(
     locked(&state)?
         .session_mut()?
         .replace_pending_source(&source)
+}
+
+#[tauri::command]
+fn authoring_catalog(state: State<'_, Mutex<ProjectSlot>>) -> Result<AuthoringCatalogV1, UiError> {
+    locked(&state)?.session()?.authoring_catalog()
+}
+
+#[tauri::command]
+fn authoring_move_options(
+    state: State<'_, Mutex<ProjectSlot>>,
+    target: String,
+    revision: String,
+) -> Result<AuthoringMoveOptionsV1, UiError> {
+    locked(&state)?
+        .session()?
+        .authoring_move_options(&target, &revision)
+}
+
+#[tauri::command]
+fn stage_structured_edit(
+    state: State<'_, Mutex<ProjectSlot>>,
+    input: StructuredEditInput,
+) -> Result<PendingChangeV1, UiError> {
+    locked(&state)?.session_mut()?.stage_structured_edit(&input)
 }
 
 #[tauri::command]
@@ -352,6 +376,9 @@ pub fn run() {
             begin_edit,
             pending_change,
             replace_pending_source,
+            authoring_catalog,
+            authoring_move_options,
+            stage_structured_edit,
             stage_sound_change,
             discard_last_edit,
             save_working_copy,

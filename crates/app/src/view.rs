@@ -23,9 +23,7 @@ pub fn apply_view_command(document: &mut ViewDocument, command: &ViewCommand) ->
             view.clone()
         }
         ViewCommand::AssignGroup { view, node, group } => {
-            document
-                .assignments
-                .insert(node.clone(), group.clone());
+            document.assignments.insert(node.clone(), group.clone());
             view.clone()
         }
         ViewCommand::LabelGroup { view, group, label } => {

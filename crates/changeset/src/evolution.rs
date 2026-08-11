@@ -41,7 +41,7 @@ use crate::{
     identity_manifest_digest, ChangeInterpreter, LanguageDocument, ReplayError, UnresolvedChangeSet,
 };
 use crate::{DonorRef, DonorSpec};
-use conlang_language::{sha256_hex, LibrarySpec};
+use conlang_language::{sha256_hex, LibrarySpec, ResolvedPackages};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// 節點識別 = **內容雜湊**(P58)。
@@ -259,21 +259,51 @@ pub enum EvolutionError {
 /// 是**造不出輸入去測它**,寫了也是改成什麼樣測試都不會紅的死碼。
 #[derive(Debug, Clone)]
 pub struct EvolutionGraph {
-    libraries: LibrarySpec,
+    package_context: EvolutionPackageContext,
     nodes: BTreeMap<NodeId, Node>,
     roots: BTreeSet<NodeId>,
     /// 已用掉的 root namespace。見 `add_root` 的說明。
     root_namespaces: BTreeSet<String>,
 }
 
+/// Package environment retained for every replay performed by one graph.
+///
+/// The legacy variant preserves the existing `LibrarySpec` API. The resolved
+/// variant owns one immutable resolver result so commit, fsck, restore, and
+/// rebase never rediscover packages from the embedded catalog.
+#[derive(Debug, Clone)]
+enum EvolutionPackageContext {
+    Legacy(LibrarySpec),
+    Resolved(ResolvedPackages),
+}
+
 impl EvolutionGraph {
     /// 建一張**空**圖。起點語言用 `add_root` 加(可以有多個)。
     pub fn new(libraries: LibrarySpec) -> EvolutionGraph {
+        Self::new_with_context(EvolutionPackageContext::Legacy(libraries))
+    }
+
+    /// Build an empty graph bound to one already-resolved package snapshot.
+    pub fn new_with_packages(packages: ResolvedPackages) -> EvolutionGraph {
+        Self::new_with_context(EvolutionPackageContext::Resolved(packages))
+    }
+
+    fn new_with_context(package_context: EvolutionPackageContext) -> EvolutionGraph {
         EvolutionGraph {
-            libraries,
+            package_context,
             nodes: BTreeMap::new(),
             roots: BTreeSet::new(),
             root_namespaces: BTreeSet::new(),
+        }
+    }
+
+    /// The immutable v2 package snapshot used by this graph, when it was
+    /// constructed through [`Self::new_with_packages`] or
+    /// [`Self::restore_with_packages`].
+    pub fn packages(&self) -> Option<&ResolvedPackages> {
+        match &self.package_context {
+            EvolutionPackageContext::Legacy(_) => None,
+            EvolutionPackageContext::Resolved(packages) => Some(packages),
         }
     }
 
@@ -290,6 +320,22 @@ impl EvolutionGraph {
     /// while the evolution crate itself remains free of filesystem I/O.
     pub fn restore(
         libraries: LibrarySpec,
+        persisted: Vec<PersistedNode>,
+    ) -> Result<EvolutionGraph, EvolutionError> {
+        Self::restore_with_context(EvolutionPackageContext::Legacy(libraries), persisted)
+    }
+
+    /// Restore materialized nodes while retaining the exact resolved package
+    /// snapshot used to author their ChangeSets.
+    pub fn restore_with_packages(
+        packages: ResolvedPackages,
+        persisted: Vec<PersistedNode>,
+    ) -> Result<EvolutionGraph, EvolutionError> {
+        Self::restore_with_context(EvolutionPackageContext::Resolved(packages), persisted)
+    }
+
+    fn restore_with_context(
+        package_context: EvolutionPackageContext,
         persisted: Vec<PersistedNode>,
     ) -> Result<EvolutionGraph, EvolutionError> {
         let mut pending = BTreeMap::new();
@@ -332,7 +378,7 @@ impl EvolutionGraph {
             }
         }
 
-        let mut graph = EvolutionGraph::new(libraries);
+        let mut graph = EvolutionGraph::new_with_context(package_context);
         while !pending.is_empty() {
             let ready = pending
                 .iter()
@@ -738,9 +784,20 @@ impl EvolutionGraph {
         let parsed = UnresolvedChangeSet::parse(changeset)?;
         let namespace = parsed.namespace.clone();
         let donors = self.donor_spec(parents, &parsed.donors)?;
-        let resolved = parsed.resolve_with(base, &self.libraries, &donors)?;
-        let interpreter = ChangeInterpreter::new(base.clone(), self.libraries.clone(), namespace)?;
-        Ok(interpreter.run(&resolved)?.document)
+        match &self.package_context {
+            EvolutionPackageContext::Legacy(libraries) => {
+                let resolved = parsed.resolve_with(base, libraries, &donors)?;
+                let interpreter =
+                    ChangeInterpreter::new(base.clone(), libraries.clone(), namespace)?;
+                Ok(interpreter.run(&resolved)?.document)
+            }
+            EvolutionPackageContext::Resolved(packages) => {
+                let resolved = parsed.resolve_with_packages(base, packages, &donors)?;
+                let interpreter =
+                    ChangeInterpreter::with_packages(base.clone(), packages.clone(), namespace)?;
+                Ok(interpreter.run(&resolved)?.document)
+            }
+        }
     }
 
     /// 這份 changeset **讀得到哪些語言**(P63 §8.3)。

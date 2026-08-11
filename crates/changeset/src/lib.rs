@@ -26,13 +26,13 @@ pub mod state;
 
 use crate::rewrite::DonorScope;
 use conlang_language::{
-    check_document, compile_document, sha256_hex, AddressSegment, BinaryConstraint, Block,
-    CaseBranch, CompileSystemError, CompiledSystem, Def, DerivationKind, Dim, Expression,
-    FeatureDecl, FeatureValue, IdentityError, IdentityManifestV2, Language, LanguageDocument,
-    LibraryCatalog, LibraryId, LibrarySpec, NodeAddress, NodeEntryV1, NodeId, NodeKind, NodeRef,
-    PhonBlock, Realization, RoleBinding, RoleDecl, Rule, SenseTransparency, Severity,
-    SignApplication, SignArgumentValue, SignDef, SignItem, Slot, SlotConstraint,
-    SlotFeatureBinding, SlotMapOp, Stage, TraitDef, TypedCase, ValidationReport,
+    check_document, check_document_with_packages, compile_document, sha256_hex, AddressSegment,
+    BinaryConstraint, Block, CaseBranch, CompileSystemError, CompiledSystem, Def, DerivationKind,
+    Dim, Expression, FeatureDecl, FeatureValue, IdentityError, IdentityManifestV2, Language,
+    LanguageDocument, LibraryCatalog, LibraryId, LibrarySpec, NodeAddress, NodeEntryV1, NodeId,
+    NodeKind, NodeRef, PhonBlock, Realization, ResolvedPackages, RoleBinding, RoleDecl, Rule,
+    SenseTransparency, Severity, SignApplication, SignArgumentValue, SignDef, SignItem, Slot,
+    SlotConstraint, SlotFeatureBinding, SlotMapOp, Stage, TraitDef, TypedCase, ValidationReport,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -352,6 +352,28 @@ pub fn apply_edit(
     edit: PrimitiveEdit,
     libraries: &LibrarySpec,
 ) -> Result<EditOutcome, EditError> {
+    apply_edit_impl(source, edit, |candidate| {
+        check_document(candidate, libraries)
+    })
+}
+
+/// Apply one primitive edit against an already-resolved package snapshot.
+/// No embedded catalog lookup occurs during validation.
+pub fn apply_edit_with_packages(
+    source: &LanguageDocument,
+    edit: PrimitiveEdit,
+    packages: &ResolvedPackages,
+) -> Result<EditOutcome, EditError> {
+    apply_edit_impl(source, edit, |candidate| {
+        check_document_with_packages(candidate, packages)
+    })
+}
+
+fn apply_edit_impl(
+    source: &LanguageDocument,
+    edit: PrimitiveEdit,
+    validate: impl FnOnce(&LanguageDocument) -> ValidationReport,
+) -> Result<EditOutcome, EditError> {
     let before = source.clone();
     let operation = primitive_kind(&edit);
     let target = edit_target(&edit);
@@ -362,7 +384,7 @@ pub fn apply_edit(
         .and_then(|reference| snapshot_for(source, reference));
 
     let candidate = apply_structural(source.clone(), &edit)?;
-    let validation = check_document(&candidate, libraries);
+    let validation = validate(&candidate);
     if validation.has_errors() {
         return Err(EditError::Validation(Box::new(validation)));
     }
@@ -2715,7 +2737,9 @@ impl UnresolvedChangeSet {
                 "statement ordinals must be unique".to_owned(),
             ));
         }
-        libraries.sort_by(|left, right| left.package.cmp(&right.package));
+        libraries.sort_by(|left, right| {
+            package_lock_order_key(&left.package).cmp(&package_lock_order_key(&right.package))
+        });
         Ok(UnresolvedChangeSet {
             schema,
             namespace,
@@ -2797,6 +2821,28 @@ impl UnresolvedChangeSet {
         libraries: &LibrarySpec,
         donors: &DonorSpec,
     ) -> Result<ResolvedChangeSet, ReplayError> {
+        let catalog =
+            LibraryCatalog::embedded().map_err(|error| ReplayError::Library(error.to_string()))?;
+        let packages = catalog
+            .resolve_legacy(libraries)
+            .map_err(|error| ReplayError::Library(error.to_string()))?;
+        self.resolve_with_packages(base, &packages, donors)
+    }
+
+    pub fn resolve_packages(
+        &self,
+        base: &LanguageDocument,
+        packages: &ResolvedPackages,
+    ) -> Result<ResolvedChangeSet, ReplayError> {
+        self.resolve_with_packages(base, packages, &DonorSpec::default())
+    }
+
+    pub fn resolve_with_packages(
+        &self,
+        base: &LanguageDocument,
+        packages: &ResolvedPackages,
+        donors: &DonorSpec,
+    ) -> Result<ResolvedChangeSet, ReplayError> {
         // 宣告的 donor 必須拿得到內容。比照 library 鎖:檔案宣告 vs 實際提供,
         // 對不上就硬錯——不得默默略過,那會讓引用條目在後面才以難懂的方式失敗。
         for donor in &self.donors {
@@ -2807,9 +2853,9 @@ impl UnresolvedChangeSet {
                 });
             }
         }
-        verify_base_and_locks(
+        verify_base_and_locks_with_packages(
             base,
-            libraries,
+            packages,
             &self.base_source,
             &self.base_identities,
             &self.libraries,
@@ -2823,9 +2869,7 @@ impl UnresolvedChangeSet {
                 .expect("donor content is verified above");
             scope.insert(donor.alias.as_str(), document);
         }
-        let catalog =
-            LibraryCatalog::embedded().map_err(|error| ReplayError::Library(error.to_string()))?;
-        let functions = function::load_functions(&catalog, libraries)?;
+        let functions = function::load_functions_from_resolved(packages)?;
         let mut working = base.fork(self.namespace.clone())?;
         let mut resolved = Vec::new();
         let mut calls = Vec::new();
@@ -2869,11 +2913,11 @@ impl UnresolvedChangeSet {
                                 positional: positional.clone(),
                                 named: named.clone(),
                             };
-                            return match function::evaluate_function_offline(
+                            return match function::evaluate_function_with_packages(
                                 &functions,
                                 &invocation,
                                 &working,
-                                libraries,
+                                packages,
                             )? {
                                 function::FunctionEvaluation::Executed(execution) => {
                                     Ok((execution.edits, execution.trace))
@@ -2910,8 +2954,12 @@ impl UnresolvedChangeSet {
                 }));
                 edits.extend(operation_edits);
             }
-            let (candidate, _) =
-                apply_statement_structural(&working, statement.ordinal, &edits, libraries)?;
+            let (candidate, _) = apply_statement_structural_with_packages(
+                &working,
+                statement.ordinal,
+                &edits,
+                packages,
+            )?;
             working = candidate;
             resolved.push(ResolvedStatement {
                 ordinal: statement.ordinal,
@@ -3833,6 +3881,15 @@ fn dump_node(reference: &NodeRef) -> String {
     dump_selector(&Selector::Stable(reference.clone()))
 }
 
+/// Canonical stable selector for a source node.
+///
+/// UI and other authoring clients treat this string as an opaque handle and
+/// feed it back through the normal `.chg` parser instead of inventing a second
+/// selector format.
+pub fn stable_node_selector(reference: &NodeRef) -> String {
+    dump_node(reference)
+}
+
 fn dump_anchor(anchor: &Anchor) -> String {
     match anchor {
         Anchor::Start => "start".to_owned(),
@@ -4094,10 +4151,6 @@ impl ResolvedChangeSet {
 ///   被偵測到。正規化順序會**抵觸既有決策** ⇒ 不動。
 ///
 /// 寧可 churn,不可讓兩份真的不同的內容撞同一個 digest——後者是 P26 的破口。
-fn lock_normalized(text: &str) -> String {
-    text.replace("\r\n", "\n")
-}
-
 /// 一個套件進 lock digest 的**全部內容**。抽成獨立函式是為了可直接斷言
 /// 「哪些東西被涵蓋」——digest 漏掉任何一項都會讓對應檔案改了卻不使 lock 失效
 /// (破 P26 可重現性)。
@@ -4105,50 +4158,7 @@ fn lock_normalized(text: &str) -> String {
 /// 原始碼與資料一律經 [`lock_normalized`];其餘欄位(id/version/路徑/exports)
 /// 是**解析後**的值,載入時已逐行 `.trim()`,不需要也不該再處理。
 fn package_lock_content(package: &conlang_language::LibraryPackage) -> String {
-    let mut content = format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\n",
-        package.id,
-        package.version,
-        package.rule_namespace,
-        package.priority,
-        package.code_path,
-        package.data_path
-    );
-    for dependency in &package.requires {
-        content.push_str(&format!("requires {dependency}\n"));
-    }
-    for export in &package.exports {
-        content.push_str(&format!(
-            "export {} {:?} {}\n",
-            export.stable_id, export.kind, export.alias
-        ));
-    }
-    content.push_str(&lock_normalized(&package.code));
-    content.push('\n');
-    // P50 ③:function 路徑與逐檔原始碼都必須進 digest。路徑也是 ordered
-    // package contract；只 hash 合併後文字會漏掉檔案邊界與重排。
-    if package.function_sources.is_empty() {
-        content.push_str(&lock_normalized(&package.functions));
-    } else {
-        for source in &package.function_sources {
-            content.push_str("\nfunction-source ");
-            content.push_str(&source.path);
-            content.push('\n');
-            content.push_str(&lock_normalized(&source.source));
-        }
-    }
-    content.push('\n');
-    if package.data_sources.len() <= 1 {
-        content.push_str(&lock_normalized(&package.data));
-    } else {
-        for source in &package.data_sources {
-            content.push_str("\ndata-source ");
-            content.push_str(&source.path);
-            content.push('\n');
-            content.push_str(&lock_normalized(&source.source));
-        }
-    }
-    content
+    conlang_language::library::package_lock_content(package)
 }
 
 /// 測試用:讓外部斷言 digest 涵蓋範圍(見 `function_loading.rs`)。
@@ -4166,38 +4176,63 @@ pub fn __lock_content_for_tests(package: &conlang_language::LibraryPackage) -> S
 /// 納入鍵,而**不必自己重寫一份鎖計算**——那會讓「鎖怎麼算」有兩個答案。
 pub fn library_lock_digest(spec: &LibrarySpec) -> Result<String, ReplayError> {
     let locks = package_locks(spec)?;
+    Ok(lock_set_digest(&locks))
+}
+
+pub fn library_lock_digest_with_packages(packages: &ResolvedPackages) -> String {
+    lock_set_digest(&package_locks_from_resolved(packages))
+}
+
+fn lock_set_digest(locks: &[LibraryLock]) -> String {
     let mut content = String::new();
-    for lock in &locks {
+    for lock in locks {
         content.push_str(&format!(
             "{}@{} sha256:{}\n",
             lock.package, lock.version, lock.digest
         ));
     }
-    Ok(sha256_hex(content.as_bytes()))
+    sha256_hex(content.as_bytes())
+}
+
+/// Preserve the historical `LibraryId` ordering for v1 lock files while
+/// giving open v2 namespaces a deterministic order after the legacy set.
+///
+/// The old ID used the derived enum order `Std < Natural < Plugin`; sorting
+/// the new string namespace directly would silently change existing lock-set
+/// digests to `natural < plugin < std`.
+fn package_lock_order_key(id: &LibraryId) -> (u8, &str, &str) {
+    match id.namespace.as_str() {
+        "std" => (0, "", id.name.as_str()),
+        "natural" => (1, "", id.name.as_str()),
+        "plugin" => (2, "", id.name.as_str()),
+        namespace => (3, namespace, id.name.as_str()),
+    }
 }
 
 fn package_locks(spec: &LibrarySpec) -> Result<Vec<LibraryLock>, ReplayError> {
     let catalog = conlang_language::library::embedded_catalog()
         .map_err(|error| ReplayError::Library(error.to_string()))?;
-    let selection = catalog
-        .select(spec)
+    let packages = catalog
+        .resolve_legacy(spec)
         .map_err(|error| ReplayError::Library(error.to_string()))?;
-    let mut locks = Vec::new();
-    for id in selection.packages {
-        let package = catalog
-            .packages()
-            .iter()
-            .find(|package| package.id == id)
-            .expect("catalog selection returns catalog IDs");
-        let content = package_lock_content(package);
-        locks.push(LibraryLock {
+    Ok(package_locks_from_resolved(&packages))
+}
+
+fn package_locks_from_resolved(packages: &ResolvedPackages) -> Vec<LibraryLock> {
+    let mut locks = packages
+        .selection
+        .resolved
+        .iter()
+        .map(|package| LibraryLock {
             package: package.id.clone(),
             version: package.version.clone(),
-            digest: sha256_hex(content.as_bytes()),
-        });
-    }
-    locks.sort_by(|left, right| left.package.cmp(&right.package));
-    Ok(locks)
+            digest: package.digest.clone(),
+        })
+        .collect::<Vec<_>>();
+    locks.sort_by(|left, right| {
+        package_lock_order_key(&left.package).cmp(&package_lock_order_key(&right.package))
+    });
+    locks
 }
 
 pub fn identity_manifest_digest(document: &LanguageDocument) -> Result<String, ReplayError> {
@@ -4210,6 +4245,22 @@ pub fn change_set_prelude(
     namespace: &str,
 ) -> Result<String, ReplayError> {
     let locks = package_locks(spec)?;
+    change_set_prelude_with_locks(document, namespace, &locks)
+}
+
+pub fn change_set_prelude_with_packages(
+    document: &LanguageDocument,
+    packages: &ResolvedPackages,
+    namespace: &str,
+) -> Result<String, ReplayError> {
+    change_set_prelude_with_locks(document, namespace, &package_locks_from_resolved(packages))
+}
+
+fn change_set_prelude_with_locks(
+    document: &LanguageDocument,
+    namespace: &str,
+    locks: &[LibraryLock],
+) -> Result<String, ReplayError> {
     let mut source = format!(
         "changeset {namespace}:\n    schema = {CHANGESET_SCHEMA_V1}\n    base_source = sha256:{}\n    base_identities = sha256:{}\n",
         document.identities().source_sha256,
@@ -4231,13 +4282,28 @@ fn verify_base_and_locks(
     identity_digest: &str,
     locks: &[LibraryLock],
 ) -> Result<(), ReplayError> {
+    let catalog = conlang_language::library::embedded_catalog()
+        .map_err(|error| ReplayError::Library(error.to_string()))?;
+    let packages = catalog
+        .resolve_legacy(spec)
+        .map_err(|error| ReplayError::Library(error.to_string()))?;
+    verify_base_and_locks_with_packages(base, &packages, source_digest, identity_digest, locks)
+}
+
+fn verify_base_and_locks_with_packages(
+    base: &LanguageDocument,
+    packages: &ResolvedPackages,
+    source_digest: &str,
+    identity_digest: &str,
+    locks: &[LibraryLock],
+) -> Result<(), ReplayError> {
     if base.identities().source_sha256 != source_digest {
         return Err(ReplayError::BaseSourceMismatch);
     }
     if identity_manifest_digest(base)? != identity_digest {
         return Err(ReplayError::BaseIdentitiesMismatch);
     }
-    let actual = package_locks(spec)?;
+    let actual = package_locks_from_resolved(packages);
     if actual != locks {
         return Err(ReplayError::LibraryLockMismatch(
             "resolved package/version/content set differs".to_owned(),
@@ -4316,6 +4382,28 @@ fn apply_statement_structural(
     edits: &[PrimitiveEdit],
     libraries: &LibrarySpec,
 ) -> Result<(LanguageDocument, StatementRecord), ReplayError> {
+    apply_statement_structural_impl(source, ordinal, edits, |candidate| {
+        check_document(candidate, libraries)
+    })
+}
+
+fn apply_statement_structural_with_packages(
+    source: &LanguageDocument,
+    ordinal: u64,
+    edits: &[PrimitiveEdit],
+    packages: &ResolvedPackages,
+) -> Result<(LanguageDocument, StatementRecord), ReplayError> {
+    apply_statement_structural_impl(source, ordinal, edits, |candidate| {
+        check_document_with_packages(candidate, packages)
+    })
+}
+
+fn apply_statement_structural_impl(
+    source: &LanguageDocument,
+    ordinal: u64,
+    edits: &[PrimitiveEdit],
+    validate: impl FnOnce(&LanguageDocument) -> ValidationReport,
+) -> Result<(LanguageDocument, StatementRecord), ReplayError> {
     let before = source.clone();
     let mut candidate = source.clone();
     let mut transitions = Vec::new();
@@ -4325,7 +4413,7 @@ fn apply_statement_structural(
             .map_err(|source| ReplayError::Statement { ordinal, source })?;
         transitions.push((previous, edit));
     }
-    let validation = check_document(&candidate, libraries);
+    let validation = validate(&candidate);
     if validation.has_errors() {
         return Err(ReplayError::Statement {
             ordinal,
@@ -4350,9 +4438,55 @@ fn apply_statement_structural(
 }
 
 #[derive(Debug, Clone)]
+enum ChangePackageRuntime {
+    Legacy(LibrarySpec),
+    Resolved(ResolvedPackages),
+}
+
+impl ChangePackageRuntime {
+    fn apply_statement(
+        &self,
+        document: &LanguageDocument,
+        ordinal: u64,
+        edits: &[PrimitiveEdit],
+    ) -> Result<(LanguageDocument, StatementRecord), ReplayError> {
+        match self {
+            Self::Legacy(spec) => apply_statement_structural(document, ordinal, edits, spec),
+            Self::Resolved(packages) => {
+                apply_statement_structural_with_packages(document, ordinal, edits, packages)
+            }
+        }
+    }
+
+    fn verify(
+        &self,
+        base: &LanguageDocument,
+        source: &str,
+        identities: &str,
+        locks: &[LibraryLock],
+    ) -> Result<(), ReplayError> {
+        match self {
+            Self::Legacy(spec) => verify_base_and_locks(base, spec, source, identities, locks),
+            Self::Resolved(packages) => {
+                verify_base_and_locks_with_packages(base, packages, source, identities, locks)
+            }
+        }
+    }
+
+    fn compile(&self, document: &LanguageDocument) -> Result<CompiledSystem, ReplayError> {
+        match self {
+            Self::Legacy(spec) => Ok(compile_document(document, spec)?),
+            Self::Resolved(packages) => Ok(conlang_language::compile_document_with_packages(
+                document, packages,
+            )?),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ChangeInterpreter {
     base: LanguageDocument,
-    libraries: LibrarySpec,
+    packages: ChangePackageRuntime,
     namespace: String,
 }
 
@@ -4366,7 +4500,21 @@ impl ChangeInterpreter {
         let _ = base.fork(namespace.clone())?;
         Ok(ChangeInterpreter {
             base,
-            libraries,
+            packages: ChangePackageRuntime::Legacy(libraries),
+            namespace,
+        })
+    }
+
+    pub fn with_packages(
+        base: LanguageDocument,
+        packages: ResolvedPackages,
+        namespace: impl Into<String>,
+    ) -> Result<ChangeInterpreter, ReplayError> {
+        let namespace = namespace.into();
+        let _ = base.fork(namespace.clone())?;
+        Ok(ChangeInterpreter {
+            base,
+            packages: ChangePackageRuntime::Resolved(packages),
             namespace,
         })
     }
@@ -4381,21 +4529,16 @@ impl ChangeInterpreter {
                 document.identities().active_namespace.clone(),
             ));
         }
-        apply_statement_structural(
-            document,
-            statement.ordinal,
-            &statement.edits,
-            &self.libraries,
-        )
+        self.packages
+            .apply_statement(document, statement.ordinal, &statement.edits)
     }
 
     pub fn run(&self, changeset: &ResolvedChangeSet) -> Result<ReplayOutcome, ReplayError> {
         if changeset.namespace != self.namespace {
             return Err(ReplayError::NamespaceMismatch(changeset.namespace.clone()));
         }
-        verify_base_and_locks(
+        self.packages.verify(
             &self.base,
-            &self.libraries,
             &changeset.base_source,
             &changeset.base_identities,
             &changeset.libraries,
@@ -4419,7 +4562,7 @@ impl ChangeInterpreter {
 #[derive(Debug)]
 pub struct ChangeSession {
     document: LanguageDocument,
-    libraries: LibrarySpec,
+    packages: ChangePackageRuntime,
     dirty: bool,
     compiled: Option<CompiledSystem>,
     compile_count: u64,
@@ -4429,7 +4572,17 @@ impl ChangeSession {
     pub fn new(document: LanguageDocument, libraries: LibrarySpec) -> ChangeSession {
         ChangeSession {
             document,
-            libraries,
+            packages: ChangePackageRuntime::Legacy(libraries),
+            dirty: true,
+            compiled: None,
+            compile_count: 0,
+        }
+    }
+
+    pub fn with_packages(document: LanguageDocument, packages: ResolvedPackages) -> ChangeSession {
+        ChangeSession {
+            document,
+            packages: ChangePackageRuntime::Resolved(packages),
             dirty: true,
             compiled: None,
             compile_count: 0,
@@ -4466,7 +4619,7 @@ impl ChangeSession {
 
     pub fn compiled_system(&mut self) -> Result<&CompiledSystem, ReplayError> {
         if self.dirty || self.compiled.is_none() {
-            let compiled = compile_document(&self.document, &self.libraries)?;
+            let compiled = self.packages.compile(&self.document)?;
             self.compiled = Some(compiled);
             self.compile_count += 1;
             self.dirty = false;
@@ -6079,6 +6232,13 @@ fn snapshots(document: &LanguageDocument) -> BTreeMap<NodeId, NodeSnapshot> {
             )
         })
         .collect()
+}
+
+/// Read-only snapshots of every locally owned source node, in identity order.
+/// The values are diagnostic summaries suitable for authoring target pickers;
+/// mutation still goes through parsed and replayed `.chg` statements.
+pub fn source_node_snapshots(document: &LanguageDocument) -> Vec<NodeSnapshot> {
+    snapshots(document).into_values().collect()
 }
 
 fn snapshot_for(document: &LanguageDocument, reference: &NodeRef) -> Option<NodeSnapshot> {

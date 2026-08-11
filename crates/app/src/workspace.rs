@@ -20,7 +20,7 @@
 //! [`drop_caches`](Workspace::drop_caches) 任何時候都能呼叫,不影響任何答案
 //! ——正確性由鍵保證,不由生命週期保證(§6.2)。
 
-use conlang_language::{CompiledSystem, LibrarySpec};
+use conlang_language::{CompiledSystem, LibrarySpec, PackageSources};
 use conlang_persistence::{GraphStore, ProjectDocument};
 use std::sync::Arc;
 
@@ -41,12 +41,27 @@ impl Workspace {
     /// 開啟專案目錄。`fallback` 用於沒有 `project.toml` 的舊 store。
     pub fn open(store: &GraphStore, fallback: LibrarySpec) -> Result<Workspace, AppError> {
         let (session, project) = Session::open_project(store, fallback)?;
-        Ok(Workspace {
+        Ok(Self::from_open_session(session, project))
+    }
+
+    /// Open with caller-provided installed package sources. Project-vendored
+    /// packages retain precedence and no network access occurs here.
+    pub fn open_with_installed(
+        store: &GraphStore,
+        fallback: LibrarySpec,
+        installed: impl IntoIterator<Item = PackageSources>,
+    ) -> Result<Workspace, AppError> {
+        let (session, project) = Session::open_project_with_installed(store, fallback, installed)?;
+        Ok(Self::from_open_session(session, project))
+    }
+
+    fn from_open_session(session: Session, project: Option<ProjectDocument>) -> Workspace {
+        Workspace {
             session,
             compiler: CompileService::new(),
             lexicons: QueryCache::new(),
             project,
-        })
+        }
     }
 
     pub fn session(&self) -> &Session {
@@ -67,9 +82,14 @@ impl Workspace {
 
     /// 目前節點的編譯產物。**lazy**——沒人問就不編譯。
     pub fn compiled(&mut self) -> Result<Arc<CompiledSystem>, AppError> {
-        let document = self.session.snapshot()?.clone();
-        let libraries = self.session.libraries().clone();
-        Ok(self.compiler.get(&document, &libraries)?)
+        let Workspace {
+            session, compiler, ..
+        } = self;
+        let document = session.snapshot()?.clone();
+        match session.packages() {
+            Some(packages) => Ok(compiler.get_with_packages(&document, packages)?),
+            None => Ok(compiler.get(&document, session.libraries())?),
+        }
     }
 
     /// 詞典視圖,經快取。

@@ -14,7 +14,7 @@ pub fn packages() -> Result<Vec<StdPackage>, StdLoadError> {
     Ok(library::embedded_catalog()?
         .packages()
         .iter()
-        .filter(|package| package.id.kind == LibraryKind::Std)
+        .filter(|package| package.id.legacy_kind() == Some(LibraryKind::Std))
         .cloned()
         .collect())
 }

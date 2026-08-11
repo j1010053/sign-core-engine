@@ -2,10 +2,21 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Box, FolderX, Languages, PackageOpen, RotateCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { PackageSelection, ProjectSummary } from "../contracts";
+import type { CatalogPackage, PackageSelection, ProjectSummary } from "../contracts";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { api } from "../ipc";
 import { setLocale } from "../i18n";
+
+export function exactPackageSelection(
+  packages: readonly CatalogPackage[],
+  declared: ReadonlySet<string>,
+): PackageSelection {
+  return {
+    roots: packages
+      .filter((item) => declared.has(item.id))
+      .map((item) => `${item.id}@${item.version}`),
+  };
+}
 
 export function SettingsPage({ project }: { project: ProjectSummary }) {
   const { t, i18n } = useTranslation();
@@ -27,12 +38,7 @@ export function SettingsPage({ project }: { project: ProjectSummary }) {
   const dirty = project.graph_dirty || project.has_pending;
 
   const packageSelection = (): PackageSelection => {
-    const packages = catalog.data?.packages.filter((item) => declared.has(item.id)) ?? [];
-    return {
-      std: packages.filter((item) => item.kind === "std").map((item) => item.id),
-      natural: packages.find((item) => item.kind === "natural")?.id,
-      plugins: packages.filter((item) => item.kind === "plugin").map((item) => item.id),
-    };
+    return exactPackageSelection(catalog.data?.packages ?? [], declared);
   };
 
   const configure = useMutation({
@@ -43,14 +49,9 @@ export function SettingsPage({ project }: { project: ProjectSummary }) {
     },
   });
 
-  const togglePackage = (id: string, kind: string, checked: boolean) => {
+  const togglePackage = (id: string, checked: boolean) => {
     setDeclared((current) => {
       const next = new Set(current);
-      if (kind === "natural" && checked) {
-        for (const item of catalog.data?.packages ?? []) {
-          if (item.kind === "natural") next.delete(item.id);
-        }
-      }
       if (checked) next.add(id);
       else next.delete(id);
       return next;
@@ -121,7 +122,7 @@ export function SettingsPage({ project }: { project: ProjectSummary }) {
                     type="checkbox"
                     checked={declared.has(item.id)}
                     disabled={!item.enabled || configure.isPending}
-                    onChange={(event) => togglePackage(item.id, item.kind, event.target.checked)}
+                    onChange={(event) => togglePackage(item.id, event.target.checked)}
                   />
                   <span>
                     <strong>{item.id}</strong>

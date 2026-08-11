@@ -130,7 +130,7 @@ pub struct ProjectSummaryV1 {
     pub packages: Vec<String>,
 }
 
-/// Embedded package catalog exposed to the desktop settings page.
+/// Current offline package catalog exposed to the desktop settings page.
 ///
 /// `declared` means the package is a root in `project.toml`; `selected` also
 /// includes packages pulled in transitively by `requires`.
@@ -171,6 +171,93 @@ pub struct WeightConfigV1 {
     pub declaration_source: String,
     pub manual: Vec<WeightEntryV1>,
     pub effective: Vec<WeightEntryV1>,
+}
+
+/// Structured authoring choice. Values are opaque engine identifiers; labels
+/// are display-only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthoringChoiceV1 {
+    pub value: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthoringFieldV1 {
+    pub name: String,
+    pub label: String,
+    /// `text` | `textarea` | `boolean` | `choice`.
+    pub control: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<AuthoringChoiceV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthoringNodeV1 {
+    pub selector: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    pub kind: String,
+    pub path: String,
+    pub summary: String,
+    pub deletable: bool,
+    pub movable: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<AuthoringFieldV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthoringSignV1 {
+    pub name: String,
+    pub selector: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthoringTraitV1 {
+    pub name: String,
+    pub global: bool,
+    pub blocks: usize,
+    /// `local` | `library`.
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthoringCatalogV1 {
+    pub schema: String,
+    pub revision: String,
+    pub nodes: Vec<AuthoringNodeV1>,
+    pub signs: Vec<AuthoringSignV1>,
+    pub traits: Vec<AuthoringTraitV1>,
+    pub rule_homes: Vec<AuthoringChoiceV1>,
+    pub body_containers: Vec<AuthoringChoiceV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthoringMoveOptionV1 {
+    pub parent: String,
+    pub parent_label: String,
+    /// `start` | `end` | `before` | `after`.
+    pub position: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sibling: Option<String>,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthoringMoveOptionsV1 {
+    pub schema: String,
+    pub revision: String,
+    pub target: String,
+    pub placements: Vec<AuthoringMoveOptionV1>,
 }
 
 /// pending `.chg` 的可觀測狀態與 replay 預覽。

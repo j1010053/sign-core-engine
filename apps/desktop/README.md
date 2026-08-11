@@ -7,7 +7,8 @@ LangCraft 是此 workspace 的單視窗桌面工作台。React 只保存路由�
 ## 開發環境
 
 - Node.js 24、pnpm 11、stable Rust。
-- Windows：MSVC Build Tools 與 WebView2。
+- Windows：Visual Studio 2022 Build Tools 的 **Desktop development with C++** workload
+  (`Microsoft.VisualStudio.Workload.VCTools`，含 x64/x86 MSVC 與 Windows SDK)，以及 WebView2。
 - Linux：WebKitGTK 4.1、libayatana-appindicator、librsvg、patchelf；E2E 另需 Xvfb。
 
 從 repo 根目錄執行：
@@ -16,6 +17,18 @@ LangCraft 是此 workspace 的單視窗桌面工作台。React 只保存路由�
 pnpm install --frozen-lockfile
 pnpm --filter @langcraft/desktop dev
 ```
+
+若 Windows 上出現 `linker 'link.exe' not found`，代表只有 Rust MSVC target，尚未安裝
+Microsoft C++ 工具鏈；VS Code 本身不包含 linker。可用官方 `vs_buildtools.exe` 安裝：
+
+```powershell
+vs_buildtools.exe --quiet --wait --norestart `
+  --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended
+cargo check -p langcraft-desktop --locked
+```
+
+第二行應能在一般 PowerShell 中直接通過；不需要把特定版本的 `link.exe` 路徑寫死進
+repo 或使用者的全域 `PATH`。
 
 一般驗證：
 

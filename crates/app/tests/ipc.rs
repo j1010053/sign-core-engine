@@ -7,8 +7,8 @@
 //! 演化樹 → 點節點 → 編輯頁 → 改 label/State/旁註 → **語言內容不動**。
 
 use conlang_app::ipc::{
-    LexiconQuery, PackageSelectionInput, ProjectSlot, ProposalQuery, SegmentWeight,
-    SoundChangeInput, UiSession,
+    BodyItemInput, LexiconQuery, MovePlacementInput, PackageSelectionInput, ProjectSlot,
+    ProposalQuery, SegmentWeight, SoundChangeInput, StructuredEdit, StructuredEditInput, UiSession,
 };
 use conlang_changeset::evolution::{Edge, EvolutionGraph, Nativization};
 use conlang_changeset::state::{Contact, ContactIntensity, EvolutionState};
@@ -92,6 +92,7 @@ fn default_package_input() -> PackageSelectionInput {
         std: spec.std.iter().map(ToString::to_string).collect(),
         natural: spec.natural.as_ref().map(ToString::to_string),
         plugins: spec.plugins.iter().map(ToString::to_string).collect(),
+        ..PackageSelectionInput::default()
     }
 }
 
@@ -378,6 +379,673 @@ fn an_invalid_raw_draft_never_replaces_the_last_valid_pending_changeset() {
     assert_eq!(still_valid.statements, 0);
 }
 
+fn session_with_source(temp: &Temp, source: &str) -> UiSession {
+    let store = GraphStore::init(&temp.0).expect("init");
+    let spec = LibrarySpec::default();
+    let mut graph = EvolutionGraph::new(spec.clone());
+    graph
+        .add_root(LanguageDocument::import_new_root(source, "ipc:custom").expect("root"))
+        .expect("add root");
+    store.save(&graph).expect("save graph");
+    store
+        .write_project(&ProjectDocument::from_spec(&spec))
+        .expect("project");
+    UiSession::open(&temp.0, LibrarySpec::default()).expect("open")
+}
+
+#[test]
+fn a_rejected_direct_sound_change_does_not_leave_an_empty_working_copy() {
+    let temp = Temp::new("sound-change-no-home");
+    let mut session = UiSession::create(
+        &temp.0,
+        None::<&std::path::Path>,
+        Some("空白語".to_owned()),
+        "evo:root",
+    )
+    .expect("create blank project");
+
+    session
+        .stage_sound_change(&SoundChangeInput {
+            rule: "t => k".to_owned(),
+            home: "Core".to_owned(),
+            revision: None,
+        })
+        .expect_err("blank language has no Core trait");
+
+    assert!(
+        !session.summary().has_pending,
+        "a failed one-click action must not create a phantom working copy"
+    );
+}
+
+#[test]
+fn structured_edit_wire_shape_deserializes_the_flattened_action_tag() {
+    let trait_input: StructuredEditInput = serde_json::from_value(serde_json::json!({
+        "revision": "revision-1",
+        "action": "insert_trait",
+        "name": "ShiftHome",
+        "global": true
+    }))
+    .expect("Tauri's flattened Insert Trait payload must deserialize");
+    assert!(matches!(
+        trait_input.edit,
+        StructuredEdit::InsertTrait {
+            ref name,
+            global: true,
+            parent: None
+        } if name == "ShiftHome"
+    ));
+
+    let sign_input: StructuredEditInput = serde_json::from_value(serde_json::json!({
+        "revision": "revision-1",
+        "action": "insert_sign",
+        "name": "stone",
+        "belongs": ["Noun"],
+        "phon": "kat",
+        "gloss": "STONE"
+    }))
+    .expect("Tauri's flattened Insert Sign payload must deserialize");
+    assert!(matches!(
+        sign_input.edit,
+        StructuredEdit::InsertSign {
+            ref name,
+            ref belongs,
+            phon: Some(ref phon),
+            gloss: Some(ref gloss)
+        } if name == "stone" && belongs == &["Noun"] && phon == "kat" && gloss == "STONE"
+    ));
+
+    let encoded = serde_json::to_value(&sign_input).expect("structured input serializes");
+    assert_eq!(encoded["action"], "insert_sign");
+    assert!(encoded.get("edit").is_none(), "the public DTO stays flat");
+
+    let unexpected = serde_json::from_value::<StructuredEditInput>(serde_json::json!({
+        "revision": "revision-1",
+        "action": "insert_trait",
+        "name": "ShiftHome",
+        "global": true,
+        "unexpected": "must not be ignored"
+    }));
+    assert!(
+        unexpected.is_err(),
+        "the tagged edit must still reject unknown variant fields"
+    );
+}
+
+#[test]
+fn structured_first_stage_is_atomic_and_pending_preview_drives_the_next_stage() {
+    let temp = Temp::new("structured-preview");
+    let mut session = session(&temp);
+    let initial = session.authoring_catalog().expect("initial catalog");
+    assert!(initial
+        .traits
+        .iter()
+        .any(|item| item.name == "Noun" && item.source == "library"));
+
+    let pending = session
+        .stage_structured_edit(&StructuredEditInput {
+            revision: initial.revision.clone(),
+            edit: StructuredEdit::InsertTrait {
+                name: "ShiftHome".to_owned(),
+                global: true,
+                parent: None,
+            },
+        })
+        .expect("insert global trait without beginning a raw working copy");
+    assert_eq!(pending.statements, 1);
+    assert!(session.summary().has_pending);
+
+    let preview = session.authoring_catalog().expect("pending-aware catalog");
+    assert_ne!(preview.revision, initial.revision);
+    assert!(preview
+        .rule_homes
+        .iter()
+        .any(|choice| choice.value == "ShiftHome"));
+
+    let pending = session
+        .stage_sound_change(&SoundChangeInput {
+            rule: "t => k".to_owned(),
+            home: "ShiftHome".to_owned(),
+            revision: Some(preview.revision.clone()),
+        })
+        .expect("new pending trait is a valid rule home");
+    assert_eq!(pending.statements, 2);
+    assert!(pending.source.contains("t => k"));
+
+    let before_stale = pending.source.clone();
+    let error = session
+        .stage_structured_edit(&StructuredEditInput {
+            revision: initial.revision,
+            edit: StructuredEdit::InsertSign {
+                name: "stale".to_owned(),
+                belongs: Vec::new(),
+                phon: None,
+                gloss: None,
+            },
+        })
+        .expect_err("old catalog revision must be rejected");
+    assert_eq!(error.code, "APP_AUTHORING_STALE");
+    assert_eq!(
+        session
+            .pending_change()
+            .expect("pending survives stale input")
+            .source,
+        before_stale
+    );
+}
+
+#[test]
+fn rejected_structured_edits_neither_create_nor_mutate_pending() {
+    let blank = Temp::new("structured-no-phantom");
+    let mut blank_session = UiSession::create(
+        &blank.0,
+        None::<&std::path::Path>,
+        Some("Blank".to_owned()),
+        "evo:root",
+    )
+    .expect("blank project");
+    let catalog = blank_session.authoring_catalog().expect("blank catalog");
+    blank_session
+        .stage_structured_edit(&StructuredEditInput {
+            revision: catalog.revision,
+            edit: StructuredEdit::InsertSign {
+                name: "bad".to_owned(),
+                belongs: vec!["UnknownTrait".to_owned()],
+                phon: None,
+                gloss: None,
+            },
+        })
+        .expect_err("unknown belongs target");
+    assert!(!blank_session.summary().has_pending);
+
+    let temp = Temp::new("structured-existing-atomic");
+    let mut session = session(&temp);
+    let valid = session
+        .stage_sound_change(&SoundChangeInput {
+            rule: "t => k".to_owned(),
+            home: "Core".to_owned(),
+            revision: None,
+        })
+        .expect("valid pending");
+    let catalog = session.authoring_catalog().expect("preview catalog");
+    session
+        .stage_structured_edit(&StructuredEditInput {
+            revision: catalog.revision,
+            edit: StructuredEdit::InsertTrait {
+                name: "Core".to_owned(),
+                global: true,
+                parent: None,
+            },
+        })
+        .expect_err("duplicate local trait");
+    let after = session.pending_change().expect("old pending remains");
+    assert_eq!(after.source, valid.source);
+    assert_eq!(after.statements, valid.statements);
+
+    let catalog = session
+        .authoring_catalog()
+        .expect("catalog after rejection");
+    let kat = catalog
+        .signs
+        .iter()
+        .find(|sign| sign.name == "kat")
+        .expect("kat")
+        .selector
+        .clone();
+    let root = catalog
+        .nodes
+        .iter()
+        .find(|node| node.kind == "language")
+        .expect("language root")
+        .selector
+        .clone();
+    let error = session
+        .stage_structured_edit(&StructuredEditInput {
+            revision: catalog.revision,
+            edit: StructuredEdit::Move {
+                target: kat,
+                placement: MovePlacementInput {
+                    parent: root,
+                    position: "start".to_owned(),
+                    sibling: None,
+                },
+            },
+        })
+        .expect_err("a no-op or unlisted move is rejected");
+    assert_eq!(error.code, "APP_AUTHORING_MOVE_INVALID");
+    assert_eq!(
+        session.pending_change().expect("pending remains").source,
+        valid.source
+    );
+}
+
+#[test]
+fn ontology_cycles_and_dangling_deletes_are_rejected_as_whole_statements() {
+    let temp = Temp::new("structured-ontology-atomic");
+    let mut session = session(&temp);
+    let catalog = session.authoring_catalog().expect("catalog");
+    session
+        .stage_structured_edit(&StructuredEditInput {
+            revision: catalog.revision,
+            edit: StructuredEdit::InsertTrait {
+                name: "ParentA".to_owned(),
+                global: false,
+                parent: Some("Noun".to_owned()),
+            },
+        })
+        .expect("insert A");
+    let catalog = session.authoring_catalog().expect("A preview");
+    session
+        .stage_structured_edit(&StructuredEditInput {
+            revision: catalog.revision,
+            edit: StructuredEdit::InsertTrait {
+                name: "ChildB".to_owned(),
+                global: false,
+                parent: Some("ParentA".to_owned()),
+            },
+        })
+        .expect("insert B");
+    let catalog = session.authoring_catalog().expect("B preview");
+    let parent_a = catalog
+        .traits
+        .iter()
+        .find(|item| item.name == "ParentA")
+        .and_then(|item| item.selector.clone())
+        .expect("A selector");
+    let parent_a_block = catalog
+        .nodes
+        .iter()
+        .find(|node| node.kind == "block" && node.parent.as_deref() == Some(parent_a.as_str()))
+        .expect("A block")
+        .selector
+        .clone();
+    let belongs = catalog
+        .nodes
+        .iter()
+        .find(|node| {
+            node.kind == "belongs" && node.parent.as_deref() == Some(parent_a_block.as_str())
+        })
+        .expect("A belongs node")
+        .selector
+        .clone();
+    let before_invalid = session.pending_change().expect("valid pending");
+    session
+        .stage_structured_edit(&StructuredEditInput {
+            revision: catalog.revision,
+            edit: StructuredEdit::Update {
+                target: belongs,
+                field: "target".to_owned(),
+                value: "ChildB".to_owned(),
+            },
+        })
+        .expect_err("A -> B -> A cycle");
+    assert_eq!(
+        session.pending_change().expect("cycle is atomic").source,
+        before_invalid.source
+    );
+
+    let catalog = session
+        .authoring_catalog()
+        .expect("catalog after cycle rejection");
+    session
+        .stage_structured_edit(&StructuredEditInput {
+            revision: catalog.revision,
+            edit: StructuredEdit::Delete { target: parent_a },
+        })
+        .expect_err("B still refers to A");
+    assert_eq!(
+        session.pending_change().expect("delete is atomic").source,
+        before_invalid.source
+    );
+}
+
+#[test]
+fn inserted_sign_can_be_updated_moved_deleted_and_reinserted_with_identity_rules() {
+    let temp = Temp::new("structured-sign-lifecycle");
+    let mut session = session(&temp);
+    let catalog = session.authoring_catalog().expect("catalog");
+    session
+        .stage_structured_edit(&StructuredEditInput {
+            revision: catalog.revision,
+            edit: StructuredEdit::InsertSign {
+                name: "newsign".to_owned(),
+                belongs: vec!["Noun".to_owned()],
+                phon: Some("kat".to_owned()),
+                gloss: Some("NEW".to_owned()),
+            },
+        })
+        .expect("insert sign");
+
+    let catalog = session.authoring_catalog().expect("insert preview");
+    let original_selector = catalog
+        .signs
+        .iter()
+        .find(|sign| sign.name == "newsign")
+        .expect("inserted sign")
+        .selector
+        .clone();
+    session
+        .stage_structured_edit(&StructuredEditInput {
+            revision: catalog.revision,
+            edit: StructuredEdit::InsertBody {
+                container: original_selector.clone(),
+                body: BodyItemInput::Slot {
+                    name: "argument".to_owned(),
+                    constraint: "Noun".to_owned(),
+                    optional: true,
+                },
+            },
+        })
+        .expect("new sign accepts a slot in the same pending");
+
+    let catalog = session.authoring_catalog().expect("slot preview");
+    session
+        .stage_structured_edit(&StructuredEditInput {
+            revision: catalog.revision,
+            edit: StructuredEdit::Update {
+                target: original_selector.clone(),
+                field: "name".to_owned(),
+                value: "renamed".to_owned(),
+            },
+        })
+        .expect("rename sign");
+    let catalog = session.authoring_catalog().expect("rename preview");
+    assert_eq!(
+        catalog
+            .signs
+            .iter()
+            .find(|sign| sign.name == "renamed")
+            .expect("renamed sign")
+            .selector,
+        original_selector,
+        "update preserves identity"
+    );
+    let slot_selector = catalog
+        .nodes
+        .iter()
+        .find(|node| node.kind == "slot" && node.path.contains("renamed"))
+        .expect("inserted slot")
+        .selector
+        .clone();
+
+    let moves = session
+        .authoring_move_options(&slot_selector, &catalog.revision)
+        .expect("validated move choices");
+    let placement = moves.placements.first().expect("at least one real move");
+    session
+        .stage_structured_edit(&StructuredEditInput {
+            revision: catalog.revision,
+            edit: StructuredEdit::Move {
+                target: slot_selector.clone(),
+                placement: MovePlacementInput {
+                    parent: placement.parent.clone(),
+                    position: placement.position.clone(),
+                    sibling: placement.sibling.clone(),
+                },
+            },
+        })
+        .expect("move slot");
+    let catalog = session.authoring_catalog().expect("move preview");
+    assert!(catalog
+        .nodes
+        .iter()
+        .any(|node| node.selector == slot_selector));
+    assert!(catalog
+        .signs
+        .iter()
+        .any(|sign| sign.selector == original_selector));
+
+    session
+        .stage_structured_edit(&StructuredEditInput {
+            revision: catalog.revision,
+            edit: StructuredEdit::Delete {
+                target: original_selector.clone(),
+            },
+        })
+        .expect("delete sign");
+    let catalog = session.authoring_catalog().expect("delete preview");
+    assert!(!catalog
+        .signs
+        .iter()
+        .any(|sign| sign.selector == original_selector));
+
+    session
+        .stage_structured_edit(&StructuredEditInput {
+            revision: catalog.revision,
+            edit: StructuredEdit::InsertSign {
+                name: "renamed".to_owned(),
+                belongs: vec!["Noun".to_owned()],
+                phon: Some("kat".to_owned()),
+                gloss: Some("NEW".to_owned()),
+            },
+        })
+        .expect("reinsert sign");
+    let catalog = session.authoring_catalog().expect("reinsert preview");
+    let replacement_selector = catalog
+        .signs
+        .iter()
+        .find(|sign| sign.name == "renamed")
+        .expect("replacement sign")
+        .selector
+        .clone();
+    assert_ne!(
+        replacement_selector, original_selector,
+        "deleted ids are retired"
+    );
+
+    let committed = session
+        .commit(Some("structured lifecycle".to_owned()))
+        .expect("commit");
+    session.save_project().expect("persist");
+    let mut reopened = UiSession::open(&temp.0, LibrarySpec::default()).expect("reopen");
+    reopened
+        .select_node(&committed.id)
+        .expect("select persisted commit");
+    assert_eq!(
+        reopened
+            .authoring_catalog()
+            .expect("reopened catalog")
+            .signs
+            .iter()
+            .find(|sign| sign.name == "renamed")
+            .expect("persisted replacement")
+            .selector,
+        replacement_selector,
+        "commit/save/reopen preserves the preview identity"
+    );
+}
+
+#[test]
+fn clone_sign_allocates_a_disjoint_deep_identity_subtree() {
+    fn descendants(catalog: &conlang_app::AuthoringCatalogV1, root: &str) -> Vec<String> {
+        let mut found = vec![root.to_owned()];
+        loop {
+            let before = found.len();
+            for node in &catalog.nodes {
+                if node
+                    .parent
+                    .as_ref()
+                    .is_some_and(|parent| found.contains(parent))
+                    && !found.contains(&node.selector)
+                {
+                    found.push(node.selector.clone());
+                }
+            }
+            if found.len() == before {
+                break;
+            }
+        }
+        found
+    }
+
+    let temp = Temp::new("structured-clone-ids");
+    let mut session = session(&temp);
+    let catalog = session.authoring_catalog().expect("catalog");
+    let source = catalog
+        .signs
+        .iter()
+        .find(|sign| sign.name == "kat")
+        .expect("kat")
+        .selector
+        .clone();
+    session
+        .stage_structured_edit(&StructuredEditInput {
+            revision: catalog.revision,
+            edit: StructuredEdit::CloneSign {
+                source: source.clone(),
+                name: "kat_clone".to_owned(),
+            },
+        })
+        .expect("clone");
+    let catalog = session.authoring_catalog().expect("clone preview");
+    let clone = catalog
+        .signs
+        .iter()
+        .find(|sign| sign.name == "kat_clone")
+        .expect("clone sign")
+        .selector
+        .clone();
+    let source_nodes = descendants(&catalog, &source);
+    let clone_nodes = descendants(&catalog, &clone);
+    assert!(source_nodes.len() > 1 && clone_nodes.len() > 1);
+    assert!(source_nodes
+        .iter()
+        .all(|selector| !clone_nodes.contains(selector)));
+}
+
+#[test]
+fn multi_block_trait_use_is_fanned_out_inside_one_atomic_statement() {
+    let temp = Temp::new("structured-multi-block-trait");
+    let mut session = session_with_source(&temp, "trait Multi:\n    ==\n\nsign host:\n");
+    let catalog = session.authoring_catalog().expect("catalog");
+    assert_eq!(
+        catalog
+            .traits
+            .iter()
+            .find(|item| item.name == "Multi")
+            .expect("multi trait")
+            .blocks,
+        2
+    );
+    let host = catalog
+        .signs
+        .iter()
+        .find(|sign| sign.name == "host")
+        .expect("host")
+        .selector
+        .clone();
+    let pending = session
+        .stage_structured_edit(&StructuredEditInput {
+            revision: catalog.revision,
+            edit: StructuredEdit::InsertBody {
+                container: host,
+                body: BodyItemInput::TraitUse {
+                    trait_name: "Multi".to_owned(),
+                },
+            },
+        })
+        .expect("insert every block reference");
+    assert_eq!(pending.statements, 1, "fan-out is one transaction");
+    assert!(pending.source.contains("Multi[0]"));
+    assert!(pending.source.contains("Multi[1]"));
+    assert_eq!(
+        session
+            .authoring_catalog()
+            .expect("preview")
+            .nodes
+            .iter()
+            .filter(|node| node.kind == "trait_use")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn every_guided_body_item_lowers_through_chg_and_replays() {
+    let temp = Temp::new("structured-body-kinds");
+    let mut session = session_with_source(
+        &temp,
+        "Symbol a\nSymbol b\n\ntrait Category:\n\ntrait Macro:\n    ==\n\nsign host:\n",
+    );
+    let bodies = vec![
+        BodyItemInput::Belongs {
+            trait_name: "Noun".to_owned(),
+        },
+        BodyItemInput::Phon {
+            form: "a".to_owned(),
+        },
+        BodyItemInput::Slot {
+            name: "argument".to_owned(),
+            constraint: "Noun".to_owned(),
+            optional: true,
+        },
+        BodyItemInput::TraitUse {
+            trait_name: "Macro".to_owned(),
+        },
+        BodyItemInput::Feature {
+            dim: "syn".to_owned(),
+            name: "number".to_owned(),
+            enum_values: vec!["sg".to_owned(), "pl".to_owned()],
+            value: "sg".to_owned(),
+        },
+        BodyItemInput::Sense {
+            name: "core".to_owned(),
+            gloss: "HOST".to_owned(),
+        },
+        BodyItemInput::Definition {
+            dim: "sem".to_owned(),
+            path: "aspect".to_owned(),
+            value: "completed".to_owned(),
+        },
+        BodyItemInput::Rule {
+            dim: "phon".to_owned(),
+            body: "a => b".to_owned(),
+            name: Some("shift".to_owned()),
+            stage: "word".to_owned(),
+        },
+    ];
+
+    for body in bodies {
+        let body_debug = format!("{body:?}");
+        let catalog = session.authoring_catalog().expect("fresh catalog");
+        let host = catalog
+            .signs
+            .iter()
+            .find(|sign| sign.name == "host")
+            .expect("host")
+            .selector
+            .clone();
+        session
+            .stage_structured_edit(&StructuredEditInput {
+                revision: catalog.revision,
+                edit: StructuredEdit::InsertBody {
+                    container: host,
+                    body,
+                },
+            })
+            .unwrap_or_else(|error| panic!("guided body item {body_debug}: {error:?}"));
+    }
+
+    let pending = session.pending_change().expect("pending");
+    assert_eq!(pending.statements, 8);
+    let catalog = session.authoring_catalog().expect("final preview");
+    for kind in [
+        "belongs",
+        "trait_use",
+        "slot",
+        "feature_declaration",
+        "feature_value",
+        "sense",
+        "definition",
+        "rule",
+    ] {
+        assert!(
+            catalog.nodes.iter().any(|node| node.kind == kind),
+            "missing catalog node kind {kind}"
+        );
+    }
+}
+
 #[test]
 fn structured_authoring_commits_in_memory_then_persists_only_on_explicit_save() {
     let temp = Temp::new("authoring-boundaries");
@@ -388,6 +1056,7 @@ fn structured_authoring_commits_in_memory_then_persists_only_on_explicit_save() 
         .stage_sound_change(&SoundChangeInput {
             rule: "t => k".to_owned(),
             home: "Core".to_owned(),
+            revision: None,
         })
         .expect("stage");
     assert_eq!(pending.statements, 1);
@@ -480,6 +1149,7 @@ fn rebase_preview_uses_a_graph_copy_and_apply_keeps_the_old_chain() {
         .stage_sound_change(&SoundChangeInput {
             rule: "t => k".to_owned(),
             home: "Core".to_owned(),
+            revision: None,
         })
         .expect("edit ancestor");
     let edited_ancestor = session
@@ -693,6 +1363,17 @@ fn a_project_can_start_from_a_blank_language() {
         .expect("空專案的詞典查得動");
     assert!(lexicon.lexicon.entries.is_empty());
     assert_eq!(lexicon.lexicon.total_before_filter, 0);
+
+    // 空白語言沒有 `Core` trait，但「開始 working copy」本身只建立一份
+    // 零 statement 的合法 `.chg`，不應預先要求任何 sound-change home。
+    let pending = slot
+        .session_mut()
+        .expect("session")
+        .begin_edit("ui:test:blank-working-copy")
+        .expect("空白專案也能開始 working copy");
+    assert_eq!(pending.statements, 0);
+    assert!(pending.source.starts_with("changeset "));
+    assert!(slot.summary().expect("summary").has_pending);
 
     // 落盤了——重開仍在
     let reopened = UiSession::open(&temp.0, LibrarySpec::default()).expect("重開");
