@@ -62,6 +62,22 @@ delete sign(\"four\")\n";
 /// 只改一個詞的底層形 —— 差異很小。
 const TWEAK: &str = "\n    #0:\n        update sign(\"one\").def[phon].value = /kats/\n";
 
+/// 在 `global trait Core` 底下加 `count` 條音變 —— 一條都不碰任何 sign。
+///
+/// 舊實作在這種輸入上回 `1.0`(`分層差異向量 v0.2 裁定` §0 的實測病灶):
+/// diff 只走 `signs`,而音變一個 sign 都沒改。
+///
+/// 用**具名規則**(`shiftN: …`)而非單一 `rules:` 區塊:後者不論裝幾條語句
+/// 都是**一個** `Rule` 節點(P46 結構化 block,語句住 `phon_block`),依 `RuleId`
+/// 對齊時只算一個事件。要造出 `count` 個規則事件就得有 `count` 個規則節點。
+fn sound_changes(count: usize) -> String {
+    let mut body = String::from("\n    #0:\n        insert into trait(\"Core\").block[0] at end:\n            phon:\n");
+    for index in 0..count {
+        body.push_str(&format!("                shift{index}: a => u{index} / _#\n"));
+    }
+    body
+}
+
 // ── ① 分數帶得出來源 ─────────────────────────────────────────────────────
 
 /// 🔑 **裸 `f64` 不合格**——結果必須說得出是哪套模型算的。
@@ -132,6 +148,8 @@ fn the_weights_are_data_and_changing_them_changes_the_answer() {
             prag: 0.0,
             structural: 0.0,
             birth_death: 0.0,
+            trait_rule: 0.25,
+            trait_content: 0.5,
         },
     };
     let heavy = intelligibility(a, b, &phon_only).value;
@@ -383,4 +401,128 @@ fn a_group_id_is_the_smallest_node_id_among_its_members() {
         );
     }
     assert_eq!(grouping.groups().len(), 2, "前提:確實有兩群可比");
+}
+
+// ── ⑤ 裁定 §4 的重新校準 ─────────────────────────────────────────────────────
+
+/// 🔑 **一次音變不得再回 `1.0`**——這是《分層差異向量 v0.2 裁定》§0 的病灶。
+///
+/// 舊實作的 diff 只走 `signs`,而音變一個 sign 都沒改,於是兩節點的互通度是
+/// 滿分、方言分群完全看不見它。這條測試是那個 bug 的迴歸鎖。
+#[test]
+fn a_sound_change_lowers_intelligibility_at_all() {
+    let (graph, ids) = chain(&[&sound_changes(1)]);
+    let score = intelligibility(
+        graph.snapshot(&ids[0]).expect("a"),
+        graph.snapshot(&ids[1]).expect("b"),
+        &measure(),
+    )
+    .value;
+    assert!(score < 1.0, "一條音變必須看得見:{score}");
+}
+
+/// 🔑 裁定 §4 的**硬約束**:一條音變不得讓互通度掉到預設閾值(0.6)以下。
+///
+/// > 若加一條音變就讓互通度掉到預設閾值以下,則每演化一步就分裂一次方言群,
+/// > 分群功能等於報廢。
+///
+/// 這條測試釘的是**餘裕本身**,不只是「有沒有低於」:係數若被調到讓一條音變
+/// 逼近閾值,分群就會變成一步一裂,而那種退化在功能測試裡看不出來——它只會
+/// 表現為「方言樹莫名其妙很碎」。
+#[test]
+fn one_sound_change_stays_far_above_the_default_grouping_threshold() {
+    let (graph, ids) = chain(&[&sound_changes(1)]);
+    let score = intelligibility(
+        graph.snapshot(&ids[0]).expect("a"),
+        graph.snapshot(&ids[1]).expect("b"),
+        &measure(),
+    )
+    .value;
+    assert!(score >= 0.9, "一條音變要留大量餘裕,實得 {score}");
+}
+
+/// 分群層面的同一件事:一步一條音變的演化鏈**不會自己裂開**。
+#[test]
+fn a_chain_of_single_sound_changes_stays_one_dialect() {
+    let (graph, ids) = chain(&[&sound_changes(1), &sound_changes(1), &sound_changes(1)]);
+    let grouping = dialect_groups(
+        &graph,
+        &TreeEdgeCut { threshold: 0.6 },
+        &measure(),
+        &GroupingOverride::default(),
+    );
+    assert_eq!(grouping.groups().len(), 1, "三步各一條音變不該裂成方言");
+    assert_eq!(grouping.members.len(), ids.len());
+}
+
+/// 但**一次改一大批**音變仍要判成方言分化——否則規則性音變等於沒進公式。
+///
+/// 判別性:前一條測試單獨看是「係數調到 0 也會過」;這一條把另一邊釘住。
+#[test]
+fn a_large_batch_of_sound_changes_does_split_a_dialect() {
+    let (graph, _) = chain(&[&sound_changes(12)]);
+    let grouping = dialect_groups(
+        &graph,
+        &TreeEdgeCut { threshold: 0.6 },
+        &measure(),
+        &GroupingOverride::default(),
+    );
+    assert_eq!(grouping.groups().len(), 2, "一次十二條音變應切開");
+}
+
+
+/// **餘裕的邊界釘在哪裡**:同一個 changeset 裡 8 條音變還在同群,9 條切開。
+///
+/// 這條測試的用途不是宣稱「9 是對的」——那是可被反駁的主張——而是讓**任何
+/// 改動係數的人立刻看見邊界移到哪裡**。裁定 §4 的約束是「一條音變不得切開」,
+/// 而係數若被悄悄調重,先崩的不是那條測試,是這裡。
+#[test]
+fn the_calibration_margin_sits_between_eight_and_nine_sound_changes() {
+    let groups = |count: usize| {
+        let (graph, _) = chain(&[&sound_changes(count)]);
+        dialect_groups(
+            &graph,
+            &TreeEdgeCut { threshold: 0.6 },
+            &measure(),
+            &GroupingOverride::default(),
+        )
+        .groups()
+        .len()
+    };
+    assert_eq!(groups(8), 1, "8 條仍在同一個方言群");
+    assert_eq!(groups(9), 2, "9 條切開");
+}
+
+/// **trait 的生滅只算一次**——不因為它在幾個維度上有內容而被記幾次。
+///
+/// `trait_content` 的 `only_before`/`only_after` 是 **trait 集合**的性質,五個
+/// leaf 的數字必然相同(同 `aligned_signs` 的道理)。公式若逐維把它加進去,
+/// 一個帶 sem 內容的新 trait 就會被記兩次(sem 一次、structural 一次),
+/// 帶四維內容的新 trait 記五次——「新增一個 trait」的傷害於是取決於它**碰巧
+/// 寫了幾個維度的內容**,而不是它影響了幾個詞。
+///
+/// 判別方式刻意不綁係數:同一個編輯,新 trait 帶不帶 sem 內容,分數必須相同。
+#[test]
+fn a_new_trait_is_charged_once_no_matter_how_many_dimensions_it_carries() {
+    let bare = "\n    #0:\n        insert into language at end:\n            trait Fancy:\n\
+                \n    #1:\n        insert into sign(\"one\") at end:\n            belongs Fancy\n";
+    let with_content = "\n    #0:\n        insert into language at end:\n            trait Fancy:\n                sem:\n                    senses:\n                        core = FANCY\n\
+                \n    #1:\n        insert into sign(\"one\") at end:\n            belongs Fancy\n";
+
+    let score = |body: &str| {
+        let (graph, ids) = chain(&[body]);
+        intelligibility(
+            graph.snapshot(&ids[0]).expect("a"),
+            graph.snapshot(&ids[1]).expect("b"),
+            &measure(),
+        )
+        .value
+    };
+    let (bare, rich) = (score(bare), score(with_content));
+
+    assert!(bare < 1.0, "前提:這個編輯本來就該壓低分數,實得 {bare}");
+    assert_eq!(
+        bare, rich,
+        "新 trait 帶幾個維度的內容,不該改變它被記幾次"
+    );
 }
