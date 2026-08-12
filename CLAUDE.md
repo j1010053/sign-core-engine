@@ -12,7 +12,10 @@
    P20–P64 權威=《架構修補彙整 05–11》§1，
    **P69–P70 權威=`specifications/function分支語意與選擇層_v1.0.md` §6，
    P71（含增修 A/B/C）權威=`specifications/Def路徑封閉清單與feature分工_v1.0.md` §5、§7–§9
-   （已裁定，**Phase 1 已落地 2026-08-02**；Phase 2 待 M4）**；
+   （已裁定，**Phase 1 已落地 2026-08-02**；Phase 2 待 M4），
+   **P72–P74 權威=`architecture/年代切片與歷時分期_v1.0.md` §1
+   （已裁定並實作 2026-08-11：方言群與歷時分期分離／切片=反鏈、判準走拓撲不走 `time`／
+   並存判準只看主幹邊）**；
    個別修補文件保留詳細理由與落地紀錄，出入處一律以彙整為準；
    P7 已廢止→P14，P19 的 nativization 放置由 P56/P58/P64 局部覆寫，
    **P48 的 body 分支語意由 P69 修訂**；
@@ -61,7 +64,8 @@
 | `architecture/架構2.0總鳥瞰_v1.0.md` | **2.0 單一入口**:Language/ChangeSet 雙軌全圖、四條資訊流、Debug 模塊化、**新實作順序(步驟 8–22,M1–M4)** |
 | `architecture/架構修補05_Primitive與檔案格式_v0.1.md` | P20–P28 詳細來源:DSL 獨立性、IR dump/canonical printer、條件語法、四原語、Ref、檔案格式 |
 | `architecture/架構修補06_插件服務與DSL_API_v0.1.md` | P29–P37 詳細來源:插件 code/data/config、服務生命週期、DSL API；完整插件仍是設計層。**§8 增修 A(2026-08-04)= 裁定 W/E/S 與 R7′/R9-a/R11–R15 的權威掛載點**:std 特權降為可覆寫預設、package 不必是編譯期常數；**§8.5 = P29/P50「無顯式 import」的適用範圍界線**(限 `.lang`／`.chg`) |
-| `architecture/分層差異向量_v0.2_裁定.md` | **已裁定,未實作**(擁有者 2026-08-07)。現行 `diff_vector` **只走 `signs`**,故一條音變規則、或 `trait` 加一行 `belongs`(影響數百詞的閉包)**diff 皆為零**——實測一次音變後互通度 `1.0`,方言分群看不見它。這與《演化圖本體論》§6.1「規則性音變其次」「差異 = ChangeSet 距離的分層投影」不符,屬**實作未達規格**(§6.1 標【M】)。四條裁定:①**階層向量**(外層仍四維,內層分 signs/rules/…)②**不做正規化**,發 `both`/`changed`/`only_before`/`only_after` 四個原始計數,Jaccard 由呼叫端算(§6.4)③補**整個 `traits` 容器**④先忠實計數,權重歸 measure。⚠ **§3.1 待裁**:trait 規則傳播到 sign 要不要重複算。實作會 bump `UI_SCHEMA_V1` |
+| `architecture/分層差異向量_v0.2_裁定.md` | **裁定完備,實作中**(裁定 2026-08-07 / §3.1 補裁 08-09)。原病灶:`diff_vector` **只走 `signs`**,故一條音變規則、或 `trait` 加一行 `belongs`(影響數百詞的閉包)**diff 皆為零**——實測一次音變後互通度 `1.0`,方言分群看不見它。這與《演化圖本體論》§6.1「規則性音變其次」「差異 = ChangeSet 距離的分層投影」不符,屬**實作未達規格**(§6.1 標【M】)。四條裁定:①**階層向量**(外層仍四維,內層分 signs/rules/…)②**不做正規化**,發 `both`/`changed`/`only_before`/`only_after` 四個原始計數,Jaccard 由呼叫端算(§6.4)③補**整個 `traits` 容器**④先忠實計數,權重歸 measure。**§3.1 已裁定丙**(08-09):trait 規則改動在**宣告處算 1**,影響範圍另記 `reach_before`/`reach_after` 兩個旁註欄位(不進四元組)。**進度**(§6 五步):**1–4 已落地**(階層結構 + 四原始計數 + `trait_content`/`trait_rules` leaf + 裁定丙的 `reach_before`/`reach_after`;`crates/changeset/src/diff.rs`)——子節點的軸是**宣告處**(sign 上／trait 上／trait 上的規則),**不是**維度化的 trait:P38 v0.2 的分類樹單一且維度中立,維度一律來自項目自己,理由與命名見裁定 **§1.1**;reach 住在 `TraitDiff` 裡與四元組**同層**(不進 `DiffCounts`,免得被當第五個計數加總),`global trait` 的 reach = 全部的詞(P6 自動引用,不經 `belongs`),落地判斷見 §3.1;第 4 步已重校準 `ExploratoryHeuristicV1`(新增 `trait_rule`=0.25／`trait_content`=0.5,傷害=事件數×reach×係數;一條音變後互通度 0.952,同一 changeset 要 9 條才切開方言群,§4 的硬約束由測試釘住,見 §4.1);**只剩第 5 步**(wire 與前端 `UI_SCHEMA_V1` → v2)。出境的 `DiffSummaryV1` **仍是扁平舊形狀**,故 bump 尚未發生 |
+| `architecture/年代切片與歷時分期_v1.0.md` | **P72–P74 權威**(§1;已裁定並實作 2026-08-11)。舊實作用**親子邊**算「方言群」,但方言是**共時**概念——純鏈狀專案因此得到「古/中/現代英語 = 兩個方言群」,而那是**歷時階段**。**P72**:拆成兩個函式——`periods`(沿主幹邊,答「何時變成另一個語言」;`TreeEdgeCut` 原封不動,`DialectGroupingStrategy` → `PeriodizationStrategy`)與 `dialect_groups`(**年代切片內任意兩點**,答「這個時代誰跟誰互通」);§6.2 的「鄰近點」因此有兩種讀法,各歸一個函式。**P73**:切片 = 圖的**反鏈**,判準走拓撲**不得改用** `EvolutionState::time`(自由字串,修補04 增修 A 明訂無運算依賴它);預設 = 葉節點;違反反鏈必須拒絕(`SLICE_NOT_AN_ANTICHAIN`)。**P74**:並存判準**只看主幹邊**,引用邊不構成祖裔(克里奧爾與來源語確實並存)。**三件未解**:群是連通分量非團、切片內仍可能因收斂併群(語言聯盟未建模)、平行創新低報互通度(實測兄弟各做相同九條音變 → 彼此 0.1429,要修得動 §6.1「以 id 對齊」)。`C(L,2)` 未稀疏化;**IPC/前端仍是分期**,改名隨 `UI_SCHEMA_V1` → v2 |
 | `architecture/接觸痕跡與語言聯盟_v0.1.md` | **問題陳述,未裁定**(S-a/S-b/S-c)。接觸痕跡**只記在節點層**(`.chg` 的 `donor`、`Edge::reference`),沒記在內容層:`Adopt` 不設 `origin`(而 `validate_origin_graph` 的 `::` 豁免因此無生產者)、`SoundChange` 不帶 donor。**語言聯盟(Sprachbund)全 repo 未建模**;§6.2 已把趨同動力學推到【N】multi-agent。附語言聯盟定義與其與借入/克里奧爾的對照 |
 | `architecture/資訊流D應用層框架_v0.1_提案.md` | **提案,未定案,不得引用為決策**(D-a–D-f 待裁)。應用層(步驟 21–22)參考框架:Query 純投影、Command 三分類(Language/View/ProjectData)、內容定址快取、互通度／分群只定接口。**Undo 按使用者活動分三條**:(A) 專案編輯=編輯一份寫到一半的 `.chg`(不落節點,**不需新格式或 `working/` 槽**)、(B) 演化 commit=app history stack(**非** graph parent 遍歷,children 在現行結構不可查)、views/data=文件編輯歷史。**§9 誌誤**記 v0.1 的四處錯 |
 | `architecture/演化專案結構與套件載入_v0.1.md` | **R 系列裁定的詳細推導**(程式碼註解引用 `裁定 W/E/S`、`R7′`、`R9-a`、`R11`–`R14` 者查此檔)。**權威分兩半**:套件載入組(W/E/S、R7′、R9-a、R11–R15)以《修補06》§8 為準,**已實作**;專案結構組(R1–R6:`project.toml`／`packages.lock.json`／`views/`／`data/`／`packages/`)**僅本檔、尚未實作、未編 P 號**(R10 裁定 2026-08-04),隨 M4 落地 |

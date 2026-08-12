@@ -219,21 +219,22 @@ impl Workspace {
         })
     }
 
-    /// 方言分群視圖。
+    /// **歷時分期**視圖(P72,沿主幹邊切)。
+    ///
+    /// 名字還叫 `grouping_view`,而出境契約仍是 `GroupingViewV1`——這是刻意的:
+    /// 前端目前把它顯示成「方言群」,而那個說法是錯的(見 `query::grouping`
+    /// 模組說明)。改名要連同 `UI_SCHEMA_V1` → v2 一起做,不在這一刀裡;在那之前
+    /// 至少讓引擎側的名字說對話。共時方言群走 `conlang_query::dialect_groups`,
+    /// 需要一個年代切片,尚未接上 IPC。
     pub fn grouping_view(
         &self,
-        strategy: &dyn conlang_query::DialectGroupingStrategy,
+        strategy: &dyn conlang_query::PeriodizationStrategy,
         measure: &dyn conlang_query::IntelligibilityMeasure,
         override_: &conlang_query::GroupingOverride,
     ) -> GroupingViewV1 {
         GroupingViewV1 {
             schema: UI_SCHEMA_V1.to_owned(),
-            grouping: conlang_query::dialect_groups(
-                self.session.graph(),
-                strategy,
-                measure,
-                override_,
-            ),
+            grouping: conlang_query::periods(self.session.graph(), strategy, measure, override_),
         }
     }
 }
