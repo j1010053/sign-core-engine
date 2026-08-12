@@ -190,6 +190,7 @@ fn golden_reanalyze_moves_belongs() {
         &AtomicRewrite::Reanalyze {
             sign: "book".to_owned(),
             target: ReanalysisTarget::Category,
+            from: None,
             to: "Aux".to_owned(),
         },
     );
