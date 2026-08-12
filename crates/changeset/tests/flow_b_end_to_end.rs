@@ -116,6 +116,7 @@ fn package() -> LibraryPackage {
         data_sources: vec![LibraryDataSource {
             path: "data/weights.tsv".to_owned(),
             source: WEIGHTS.to_owned(),
+            table_type: Some(conlang_language::table_type::WEIGHT_TABLE.to_owned()),
         }],
         function_paths: vec!["code/functions.chg".to_owned()],
         function_sources: Vec::new(),

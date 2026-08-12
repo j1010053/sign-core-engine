@@ -75,6 +75,12 @@ data = ["data/categories.tsv"]
         package.join("data/categories.tsv"),
         "id\tlabel\ncase\tCase\n",
     );
+    // 表型宣告(P29):消費者依穩定 ID 取表,故 loader 也得把 config/tables.tsv
+    // 讀進來——否則外部套件永遠只有「宣告不到表型」一種狀態。
+    write(
+        package.join("config/tables.tsv"),
+        "path\ttype\ndata/categories.tsv\tcatalog:persist-test:CategoryTable\n",
+    );
 }
 
 fn write_data_only_package_without_exports(store: &GraphStore) {
@@ -272,6 +278,14 @@ fn vendored_reader_preserves_manifest_order_and_resolves_offline() {
     );
     assert_eq!(reference.functions[0].path, "code/recipes.chg");
     assert_eq!(reference.data_files[0].path, "data/categories.tsv");
+    assert_eq!(
+        reference.tables, "path\ttype\ndata/categories.tsv\tcatalog:persist-test:CategoryTable\n",
+        "config/tables.tsv 應隨 vendored 套件讀入"
+    );
+    assert!(
+        data_only_tables_are_optional(&sources),
+        "缺 config/tables.tsv 合法,應得空字串"
+    );
     let mut installed_older = reference.clone();
     installed_older.config = installed_older.config.replace("1.2.3", "0.9.0");
     installed_older.source = PackageSource::Installed("cache/catalog/persist-test".to_owned());
@@ -403,4 +417,14 @@ fn vendored_reader_rejects_absolute_traversal_and_unsafe_optional_exports() {
             Err(StoreError::InvalidPackagePath { field: actual, .. }) if actual == field
         ));
     }
+}
+
+/// 缺 `config/tables.tsv` = 該套件沒有具型別的表,合法。
+fn data_only_tables_are_optional(sources: &[conlang_language::PackageSources]) -> bool {
+    sources
+        .iter()
+        .find(|source| source.config.contains("dataset:observations"))
+        .expect("data-only package")
+        .tables
+        .is_empty()
 }

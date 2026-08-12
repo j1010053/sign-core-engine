@@ -139,6 +139,7 @@ fn std_recipe_executes_in_order_on_a_temporary_language() {
     call.named.push(("tense".to_owned(), "FUTURE".to_owned()));
     call.named
         .push(("result_category".to_owned(), "Aux".to_owned()));
+    call.named.push(("delta".to_owned(), "0.3".to_owned()));
 
     let FunctionEvaluation::Executed(execution) =
         evaluate_function_offline(&table, &call, &base(), &LibrarySpec::default()).unwrap()
@@ -187,7 +188,10 @@ fn std_goal_returns_candidates_without_executing_them() {
         candidates.candidates[0].named,
         [
             ("tense".to_owned(), "FUTURE".to_owned()),
-            ("result_category".to_owned(), "Aux".to_owned())
+            ("result_category".to_owned(), "Aux".to_owned()),
+            // δ 已在候選階段自 data/paths.tsv 解成字面數字(P52):寫進 `.chg`
+            // 的是 0.3,replay 不重查那張表。
+            ("delta".to_owned(), "0.3".to_owned())
         ]
     );
     assert_eq!(document.source(), original);
@@ -235,7 +239,8 @@ fn perfect_goal_can_select_verb_to_bound_tense_marker() {
         candidate.named,
         [
             ("tense".to_owned(), "PERFECT".to_owned()),
-            ("result_category".to_owned(), "Bound".to_owned())
+            ("result_category".to_owned(), "Bound".to_owned()),
+            ("delta".to_owned(), "0.3".to_owned())
         ]
     );
     assert_eq!(document.source(), original, "a Goal cannot mutate state");
@@ -734,7 +739,7 @@ fn calling_a_goal_from_a_changeset_is_broken_input_not_a_conflict() {
     // 近似反例:非 Goal 的**真正**引數錯誤不得被靜態檢查吞掉,仍須報約束不符。
     let mut source = change_set_prelude(&document, &libraries, "evo:recipe-bad-arg").unwrap();
     source.push_str(
-        "\n    #0:\n        VerbToTense(sign(\"stone\"), tense: FUTURE, result_category: Aux)\n",
+        "\n    #0:\n        VerbToTense(sign(\"stone\"), tense: FUTURE, result_category: Aux, delta: 0.3)\n",
     );
     let error = UnresolvedChangeSet::parse(&source)
         .unwrap()
@@ -758,7 +763,7 @@ fn changeset_dispatches_recipe_and_stops_at_goal_candidates() {
     let libraries = LibrarySpec::default();
     let mut recipe_source = change_set_prelude(&document, &libraries, "evo:std-recipe").unwrap();
     recipe_source.push_str(
-        "\n    #0:\n        VerbToTense(sign(\"go\"), tense: FUTURE, result_category: Aux)\n",
+        "\n    #0:\n        VerbToTense(sign(\"go\"), tense: FUTURE, result_category: Aux, delta: 0.3)\n",
     );
     let recipe = UnresolvedChangeSet::parse(&recipe_source)
         .unwrap()

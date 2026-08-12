@@ -91,11 +91,14 @@ fn package(
         requires: Vec::new(),
         code_paths: Vec::new(),
         code_path: String::new(),
-        data_path: "data/weights.tsv".to_owned(),
-        data_paths: vec!["data/weights.tsv".to_owned()],
+        // 路徑刻意**不叫** `weights.tsv`:Weight DB 認的是表型宣告
+        // (`config/tables.tsv` → `engine:WeightTable`),不是檔名(P29)。
+        data_path: "data/step17/tuned.tsv".to_owned(),
+        data_paths: vec!["data/step17/tuned.tsv".to_owned()],
         data_sources: vec![LibraryDataSource {
-            path: "data/weights.tsv".to_owned(),
+            path: "data/step17/tuned.tsv".to_owned(),
             source: weights.to_owned(),
+            table_type: Some(conlang_language::table_type::WEIGHT_TABLE.to_owned()),
         }],
         function_paths: vec!["code/functions.chg".to_owned()],
         function_sources: Vec::new(),
@@ -463,6 +466,9 @@ fn embedded_perfect_goal_runs_through_weight_db_and_sampler() {
     call.named = vec![
         ("tense".to_owned(), "PERFECT".to_owned()),
         ("result_category".to_owned(), "Bound".to_owned()),
+        // δ 是字面數字:goal 在候選階段查過表了,recipe 本身不查
+        // (P52;來源概念在 `drift` 之後已被覆寫,那時查不到)。
+        ("delta".to_owned(), "0.3".to_owned()),
     ];
     // 對照:同一個表、把 Recipe 直接餵進去,回的是 `Executed` 而不是 `Candidates`。
     //

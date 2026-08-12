@@ -28,10 +28,13 @@ fn a_parameterised_path_carries_its_slot_style_constraint() {
     // P52:機制在 code(一個參數化 function),30–50 條路徑在 data。
     let table = load_functions(&catalog(), &LibrarySpec::default()).unwrap();
     let definition = table.get("VerbToTense").unwrap();
-    assert_eq!(definition.params.len(), 3);
+    assert_eq!(definition.params.len(), 4);
     assert_eq!(definition.params[0].name, "verb");
     assert_eq!(definition.params[1].name, "tense");
     assert_eq!(definition.params[2].name, "result_category");
+    // δ 是參數而不是寫死的數字:值由呼叫端在來源概念還讀得到時查
+    // data/paths.tsv 得來(P52 的「預設 δ」欄)。
+    assert_eq!(definition.params[3].name, "delta");
     assert_eq!(
         definition.params[0].constraint.as_deref(),
         Some("Verb"),
@@ -74,7 +77,7 @@ fn the_function_source_is_covered_by_the_library_lock() {
     let document = LanguageDocument::import_new_root("Symbol a\n", "evo:root").unwrap();
     let prelude = change_set_prelude(&document, &LibrarySpec::default(), "evo:x").unwrap();
     assert!(
-        prelude.contains("library std:grammaticalization@0.4.0 sha256:"),
+        prelude.contains("library std:grammaticalization@0.6.0 sha256:"),
         "路徑庫套件自動入鎖:\n{prelude}"
     );
     // 該 lock 必須能通過既有的 digest 驗證(不是隨便一個字串)。

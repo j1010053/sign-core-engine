@@ -51,6 +51,7 @@ pub use identity::{
     IdentityManifestV2, IdentityNamespace, LanguageDocument, NodeAddress, NodeEntryV1, NodeId,
     NodeKind, NodeRef, RefBindingV1, RefTargetV1, ResolvedTarget, IDENTITY_SCHEMA_V2,
 };
+pub use library::table_type;
 pub use library::{
     LibraryCatalog, LibraryDataSource, LibraryExport, LibraryExportKind, LibraryFunctionSource,
     LibraryId, LibraryKind, LibraryLoadError, LibraryPackage, LibrarySpec, PackageCapabilities,

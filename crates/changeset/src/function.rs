@@ -19,9 +19,9 @@ use crate::{
     split_named_argument, PrimitiveEdit, ReplayError, StatementRecord,
 };
 use conlang_language::{
-    compile_document, compile_document_with_packages, sample_weighted_index, LanguageDocument,
-    LibraryCatalog, LibraryExportKind, LibraryPackage, LibrarySpec, PackageLayer, ResolvedPackages,
-    SignItem,
+    compile_document, compile_document_with_packages, sample_weighted_index, table_type,
+    LanguageDocument, LibraryCatalog, LibraryExportKind, LibraryPackage, LibrarySpec, PackageLayer,
+    ResolvedPackages, SignItem,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -41,6 +41,23 @@ impl RuntimePackages<'_> {
         match self {
             Self::Legacy(spec) => Ok(compile_document(document, spec)?),
             Self::Resolved(packages) => Ok(compile_document_with_packages(document, packages)?),
+        }
+    }
+
+    /// P52 路徑庫,取自**這次求值實際選中的那組套件**。
+    ///
+    /// 與 `WeightDb` 由呼叫端傳入不同:權重是**選擇層**的輸入(選擇不屬於
+    /// 引擎層,P12/P70),路徑庫則是 recipe 求值途中要查的東西,和 function
+    /// 表同源同一組套件。從這裡取,`.chg` 的求值就不會出現「函數載入用一組
+    /// 套件、路徑表用另一組」的裂縫。
+    fn path_db(self) -> Result<PathDb, ReplayError> {
+        match self {
+            Self::Legacy(spec) => {
+                let catalog = LibraryCatalog::embedded()
+                    .map_err(|error| ReplayError::Parse(error.to_string()))?;
+                load_path_db(&catalog, spec)
+            }
+            Self::Resolved(packages) => load_path_db_from_resolved(packages),
         }
     }
 
@@ -132,6 +149,15 @@ pub enum FunctionError {
     WeightMissing { goal: String, recipe: String },
     #[error("GOAL_SAMPLING: Goal {goal:?} cannot be sampled: {message}")]
     Sampling { goal: String, message: String },
+    /// P52:候選已經成立(`path(...)` guard 過了),卻查不到 δ。這代表路徑表
+    /// 在 guard 與取值之間變了,或兩者查了不同的表——**環境**問題,不是誰寫錯。
+    /// 欄名是 `source_concept` 而不是 `source`:`thiserror` 把叫 `source` 的
+    /// 欄位當成錯誤鏈的上游來源,而這裡的 source 是路徑表的來源概念欄。
+    #[error("PATH_DB_MISSING: no grammaticalization path {source_concept:?} -> {target:?}")]
+    PathMissing {
+        source_concept: String,
+        target: String,
+    },
 
     // ── 呼叫端寫錯 ⇒ Broken ──
     #[error(
@@ -161,6 +187,27 @@ pub enum FunctionError {
     },
     #[error("FUNCTION_ARGUMENT: function {function:?} {message}")]
     Argument { function: String, message: String },
+    #[error("PATH_BUILTIN_ARITY: {function:?} {call:?} expects path(<sign>, <sense>, <target>)")]
+    PathBuiltinArity { function: String, call: String },
+    #[error("PATH_BUILTIN_SUBJECT: {function:?} {call:?} needs sign(\"…\"), got {value:?}")]
+    PathBuiltinSubject {
+        function: String,
+        call: String,
+        value: String,
+    },
+    #[error("PATH_BUILTIN_UNKNOWN_SIGN: {function:?} {call:?} references unknown sign {sign:?}")]
+    PathBuiltinUnknownSign {
+        function: String,
+        call: String,
+        sign: String,
+    },
+    #[error("PATH_BUILTIN_NO_SENSE: {function:?} {call:?}: sign {sign:?} has no sense {sense:?}")]
+    PathBuiltinNoSense {
+        function: String,
+        call: String,
+        sign: String,
+        sense: String,
+    },
     #[error("FUNCTION_UNEXPECTED_BLOCK: function {name:?} does not accept an indented block")]
     UnexpectedBlock { name: String },
 }
@@ -184,6 +231,7 @@ impl FunctionError {
             | FunctionError::NotVisible { .. }
             | FunctionError::Ambiguous { .. }
             | FunctionError::WeightMissing { .. }
+            | FunctionError::PathMissing { .. }
             | FunctionError::Sampling { .. } => FunctionErrorClass::Environment,
             // 呼叫端自己寫的東西壞了:引數對不上簽名、guard 讀不到主體、
             // 把候選函數直接當語句用。這些換幾個 base 都一樣錯。
@@ -194,6 +242,10 @@ impl FunctionError {
             | FunctionError::GuardSubjectNotASign { .. }
             | FunctionError::ConstraintNotASign { .. }
             | FunctionError::Argument { .. }
+            | FunctionError::PathBuiltinArity { .. }
+            | FunctionError::PathBuiltinSubject { .. }
+            | FunctionError::PathBuiltinUnknownSign { .. }
+            | FunctionError::PathBuiltinNoSense { .. }
             | FunctionError::UnexpectedBlock { .. } => FunctionErrorClass::Broken,
         }
     }
@@ -350,6 +402,69 @@ impl WeightDb {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PathEntry {
+    delta: f64,
+    package: String,
+    priority: i32,
+}
+
+/// P52 語法化路徑庫:**來源概念 → 目標語意** 加預設 δ。
+///
+/// 「GO→未來、WANT→未來、COME→未來…」機制完全相同,只有兩端的概念不同,
+/// 所以它們**不是 30–50 個 function**,而是一個參數化 function 加 30–50 行 data。
+/// 官方要加一條路徑,加一行 `source<TAB>target<TAB>delta` 即可——不碰 `.chg`、
+/// 不碰引擎。
+///
+/// 這張表**只在候選比對時被讀**(goal 的 `path(...)` guard 與
+/// `path_delta(...)` 值),讀出來的 δ 隨即固化成候選呼叫裡的字面數字。
+/// 因此寫進 `.chg` 的是數字不是查表指令,replay 不重讀這張表(P26 逐位元
+/// 可重現),而表本身仍受 library lock 的第三道 digest 保護。
+#[derive(Debug, Clone, Default)]
+pub struct PathDb {
+    entries: BTreeMap<(String, String), PathEntry>,
+}
+
+impl PathDb {
+    /// 這條路徑的預設 δ。
+    pub fn delta(&self, source: &str, target: &str) -> Result<f64, ReplayError> {
+        self.entries
+            .get(&(source.to_owned(), target.to_owned()))
+            .map(|entry| entry.delta)
+            .ok_or_else(|| {
+                FunctionError::PathMissing {
+                    source_concept: source.to_owned(),
+                    target: target.to_owned(),
+                }
+                .into()
+            })
+    }
+
+    /// 表上有沒有這條路徑。goal 的 `path(...)` guard 用它——**沒有不是錯**,
+    /// 那只是「這個詞不是這個目標的已知來源」,候選不成立而已(P70 零候選合法)。
+    pub fn contains(&self, source: &str, target: &str) -> bool {
+        self.entries
+            .contains_key(&(source.to_owned(), target.to_owned()))
+    }
+
+    /// 通往 `target` 的所有來源概念,鍵序固定。診斷訊息用。
+    pub fn sources_for(&self, target: &str) -> Vec<&str> {
+        self.entries
+            .keys()
+            .filter(|(_, entry_target)| entry_target == target)
+            .map(|(source, _)| source.as_str())
+            .collect()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
     }
 }
 
@@ -1031,13 +1146,108 @@ fn rewrite_guard(guard: &str, subject: &str, bindings: &BTreeMap<String, String>
 ///
 /// 與參數約束一致——約束走 `belongs` 閉包(`category_is_a`),guard 也該看得到繼承
 /// 下來的內容,否則「約束過得了、guard 過不了」會變成兩套可見範圍。
+/// `name(a, b, c)` → `["a", "b", "c"]`。不是這個內建就回 `None`。
+///
+/// 刻意只認**平坦的一層**:內建不是運算式語言的開端,它是兩個查表動作。
+/// 巢狀呼叫會在這裡被當成一個引數,`resolve_path_arguments` 隨即因為主體
+/// 不是 `sign("…")` 而報錯——不會靜默算出別的東西。
+fn parse_path_builtin<'a>(value: &'a str, name: &str) -> Option<Vec<&'a str>> {
+    let rest = value.trim().strip_prefix(name)?.trim_start();
+    let inner = rest.strip_prefix('(')?.strip_suffix(')')?;
+    Some(inner.split(',').map(str::trim).collect())
+}
+
+/// 一個 sign 的某個義項現在的 gloss = 這條語法化路徑的**來源概念**。
+///
+/// 讀的是 effective sign(含 trait 繼承),與 guard 求值同一份口徑。
+fn sense_gloss(
+    owner: &str,
+    call: &str,
+    sign_name: &str,
+    sense: &str,
+    document: &LanguageDocument,
+    libraries: RuntimePackages<'_>,
+) -> Result<String, ReplayError> {
+    let sign = document
+        .language()
+        .signs
+        .iter()
+        .find(|candidate| candidate.name == sign_name)
+        .ok_or_else(|| FunctionError::PathBuiltinUnknownSign {
+            function: owner.to_owned(),
+            call: call.to_owned(),
+            sign: sign_name.to_owned(),
+        })?;
+    let system = libraries.compile(document)?;
+    let effective = system.ontology.effective_sign(sign);
+    effective
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SignItem::Sense(value) if value.name == sense => Some(value.gloss.clone()),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            FunctionError::PathBuiltinNoSense {
+                function: owner.to_owned(),
+                call: call.to_owned(),
+                sign: sign_name.to_owned(),
+                sense: sense.to_owned(),
+            }
+            .into()
+        })
+}
+
+/// 內建的共同前半:把 `f(<sign>, <sense>, <target>)` 的三個引數解出來,
+/// 並把主體換成它的來源概念。回傳 `(source, target)`。
+fn path_builtin_key(
+    owner: &str,
+    call: &str,
+    args: &[&str],
+    bindings: &BTreeMap<String, String>,
+    document: &LanguageDocument,
+    libraries: RuntimePackages<'_>,
+) -> Result<(String, String), ReplayError> {
+    if args.len() != 3 || args.iter().any(|argument| argument.is_empty()) {
+        return Err(FunctionError::PathBuiltinArity {
+            function: owner.to_owned(),
+            call: call.to_owned(),
+        }
+        .into());
+    }
+    let subject = substitute(args[0], bindings);
+    let sign_name = sign_argument(&subject).ok_or_else(|| FunctionError::PathBuiltinSubject {
+        function: owner.to_owned(),
+        call: call.to_owned(),
+        value: subject.clone(),
+    })?;
+    let sense = substitute(args[1], bindings);
+    let target = substitute(args[2], bindings);
+    let source = sense_gloss(owner, call, sign_name, &sense, document, libraries)?;
+    Ok((source, target))
+}
+
 fn guard_holds(
     owner: &str,
     guard: &str,
     bindings: &BTreeMap<String, String>,
     document: &LanguageDocument,
     libraries: RuntimePackages<'_>,
+    paths: &PathDb,
 ) -> Result<bool, ReplayError> {
+    // ── P52 內建:`path(<sign>, <sense>, <target>)` ────────────────────
+    //
+    // 「這個詞是不是那個目標語意的**已知來源**」。答案住 `data/paths.tsv`,
+    // 所以官方加一條路徑(GO→未來、WANT→未來…)是加一行 data,而不是在
+    // 這裡多寫一個 `choose:` 分支、更不是多寫一個 function。
+    //
+    // **不在表上不是錯**,候選不成立而已——對一個沒有 GO 類動詞的語言跑
+    // 「動詞→未來」就該得到零候選(P70:零候選是合法結果)。
+    if let Some(args) = parse_path_builtin(guard, "path") {
+        let (source, target) =
+            path_builtin_key(owner, guard, &args, bindings, document, libraries)?;
+        return Ok(paths.contains(&source, &target));
+    }
     let subjects = guard_subjects(guard, bindings);
     let subject = match subjects.len() {
         1 => subjects.into_iter().next().expect("len == 1"),
@@ -1113,6 +1323,9 @@ fn bind_call(call: &FunctionCall, bindings: &BTreeMap<String, String>) -> Functi
 struct EvaluationState<'a> {
     table: &'a FunctionTable,
     libraries: RuntimePackages<'a>,
+    /// P52 路徑庫。**唯讀**,且只在候選比對階段被查(`path` guard 與
+    /// `path_delta` 值),不在執行階段。
+    paths: PathDb,
     document: LanguageDocument,
     edits: Vec<PrimitiveEdit>,
     trace: Vec<FunctionTraceStep>,
@@ -1122,6 +1335,47 @@ struct EvaluationState<'a> {
 }
 
 impl EvaluationState<'_> {
+    /// 綁定參數,並就地解掉 P52 的 `path_delta(...)` 值。
+    ///
+    /// ## 為什麼在這裡解、解成字面數字
+    ///
+    /// 這條路徑的 δ 必須在**來源概念還在**的時候查。recipe 的第一步
+    /// `drift(verb, sense: core, gloss: tense)` 會把 core 的 gloss 從 `GO`
+    /// 改寫成 `FUTURE`;P51 的接力展開讓後續每一步都讀得到前一步的結果,
+    /// 所以 recipe 走到 `entrench` 那行時,表上的來源鍵**已經不存在了**。
+    /// 在候選比對階段(凍結文件、drift 之前)解掉,問題不會發生。
+    ///
+    /// 解出來的是字面數字,於是應用層寫進 `.chg` 的候選呼叫是
+    /// `VerbToTense(sign("go"), …, delta: 0.3)`——replay 不重查這張表
+    /// (P26 逐位元可重現),表本身仍由 library lock 的第三道 digest 看著。
+    fn bound_call(
+        &self,
+        owner: &str,
+        call: &FunctionCall,
+        bindings: &BTreeMap<String, String>,
+    ) -> Result<FunctionCall, ReplayError> {
+        let mut bound = bind_call(call, bindings);
+        for value in bound
+            .positional
+            .iter_mut()
+            .chain(bound.named.iter_mut().map(|(_, value)| value))
+        {
+            let Some(args) = parse_path_builtin(value, "path_delta") else {
+                continue;
+            };
+            let (source, target) = path_builtin_key(
+                owner,
+                value,
+                &args,
+                bindings,
+                &self.document,
+                self.libraries,
+            )?;
+            *value = self.paths.delta(&source, &target)?.to_string();
+        }
+        Ok(bound)
+    }
+
     fn evaluate(
         &mut self,
         invocation: &FunctionCall,
@@ -1144,6 +1398,7 @@ impl EvaluationState<'_> {
                 &bindings,
                 &self.document,
                 self.libraries,
+                &self.paths,
             )? {
                 return Err(FunctionError::GuardUnsatisfied {
                     function: definition.name.clone(),
@@ -1157,7 +1412,7 @@ impl EvaluationState<'_> {
         let result = match &definition.body {
             FunctionBody::Sequence(calls) => {
                 for call in calls {
-                    let call = bind_call(call, &bindings);
+                    let call = self.bound_call(&definition.name, call, &bindings)?;
                     self.evaluate_call(&call)?;
                 }
                 None
@@ -1177,6 +1432,7 @@ impl EvaluationState<'_> {
                             &bindings,
                             &self.document,
                             self.libraries,
+                            &self.paths,
                         )?,
                     };
                     if matched {
@@ -1189,7 +1445,8 @@ impl EvaluationState<'_> {
                 let branch = selected.ok_or_else(|| FunctionError::CaseNoBranch {
                     function: definition.name.clone(),
                 })?;
-                self.evaluate_call(&bind_call(&branch.call, &bindings))?;
+                let call = self.bound_call(&definition.name, &branch.call, &bindings)?;
+                self.evaluate_call(&call)?;
                 None
             }
             // `when:` = **所有成立的分支依序執行**(`.lang` 的 `CaseSelection::Accumulate`)。
@@ -1205,7 +1462,8 @@ impl EvaluationState<'_> {
                 let hits = self.match_branches(&definition.name, branches, &bindings)?;
                 for (branch, hit) in branches.iter().zip(hits) {
                     if hit {
-                        self.evaluate_call(&bind_call(&branch.call, &bindings))?;
+                        let call = self.bound_call(&definition.name, &branch.call, &bindings)?;
+                        self.evaluate_call(&call)?;
                     }
                 }
                 None
@@ -1218,8 +1476,8 @@ impl EvaluationState<'_> {
                     .iter()
                     .zip(hits)
                     .filter(|(_, hit)| *hit)
-                    .map(|(branch, _)| bind_call(&branch.call, &bindings))
-                    .collect::<Vec<_>>();
+                    .map(|(branch, _)| self.bound_call(&definition.name, &branch.call, &bindings))
+                    .collect::<Result<Vec<_>, ReplayError>>()?;
                 for candidate in &candidates {
                     let target = &self
                         .table
@@ -1279,9 +1537,14 @@ impl EvaluationState<'_> {
             let hit = match &branch.condition {
                 BranchCondition::Always => true,
                 BranchCondition::Else => !any_matched,
-                BranchCondition::Guard(guard) => {
-                    guard_holds(owner, guard, bindings, &self.document, self.libraries)?
-                }
+                BranchCondition::Guard(guard) => guard_holds(
+                    owner,
+                    guard,
+                    bindings,
+                    &self.document,
+                    self.libraries,
+                    &self.paths,
+                )?,
             };
             any_matched |= hit;
             hits.push(hit);
@@ -1378,6 +1641,7 @@ fn evaluate_function_runtime(
     let mut state = EvaluationState {
         table,
         libraries,
+        paths: libraries.path_db()?,
         document: document.clone(),
         edits: Vec::new(),
         trace: Vec::new(),
@@ -1517,15 +1781,136 @@ pub fn load_weight_db_from_resolved(packages: &ResolvedPackages) -> Result<Weigh
     weight_db_from_packages(&packages.packages().iter().collect::<Vec<_>>())
 }
 
+pub fn load_path_db(catalog: &LibraryCatalog, spec: &LibrarySpec) -> Result<PathDb, ReplayError> {
+    let selection = catalog
+        .select(spec)
+        .map_err(|error| ReplayError::Parse(error.to_string()))?;
+    let chosen = selection
+        .packages
+        .iter()
+        .map(|id| {
+            catalog
+                .packages()
+                .iter()
+                .find(|package| &package.id == id)
+                .expect("catalog selection returns catalog IDs")
+        })
+        .collect::<Vec<_>>();
+    path_db_from_packages(&chosen)
+}
+
+pub fn load_path_db_from_resolved(packages: &ResolvedPackages) -> Result<PathDb, ReplayError> {
+    path_db_from_packages(&packages.packages().iter().collect::<Vec<_>>())
+}
+
+/// P52 路徑庫載入。與 [`weight_db_from_packages`] 同形:認表型不認路徑(P29),
+/// 同一條路徑被多個套件宣告時走 priority 四層,同優先級撞號**強制消歧**。
+pub fn path_db_from_packages(packages: &[&LibraryPackage]) -> Result<PathDb, ReplayError> {
+    let mut database = PathDb::default();
+    for package in packages.iter().copied() {
+        let priority = package_priority(package);
+        for source in package.tables(table_type::GRAMMATICALIZATION_PATH_TABLE) {
+            parse_path_source(
+                &mut database,
+                package,
+                priority,
+                &source.path,
+                &source.source,
+            )?;
+        }
+    }
+    Ok(database)
+}
+
+fn parse_path_source(
+    database: &mut PathDb,
+    package: &LibraryPackage,
+    priority: i32,
+    path: &str,
+    source: &str,
+) -> Result<(), ReplayError> {
+    let mut lines = source.lines().enumerate();
+    let Some((_, header)) = lines.find(|(_, line)| !line.trim().is_empty()) else {
+        return Err(ReplayError::Parse(format!(
+            "PATH_DB_SCHEMA: {}:{path} is empty",
+            package.id
+        )));
+    };
+    if header.trim_end() != "source\ttarget\tdelta" {
+        return Err(ReplayError::Parse(format!(
+            "PATH_DB_SCHEMA: {}:{path} expects header source\\ttarget\\tdelta",
+            package.id
+        )));
+    }
+    let mut local = BTreeSet::new();
+    for (line_index, line) in lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let columns = line.split('\t').collect::<Vec<_>>();
+        if columns.len() != 3 || columns[0].is_empty() || columns[1].is_empty() {
+            return Err(ReplayError::Parse(format!(
+                "PATH_DB_SCHEMA: {}:{path}:{} expects source, target, delta",
+                package.id,
+                line_index + 1
+            )));
+        }
+        let delta = columns[2].parse::<f64>().map_err(|_| {
+            ReplayError::Parse(format!(
+                "PATH_DB_DELTA: {}:{path}:{} has invalid delta {:?}",
+                package.id,
+                line_index + 1,
+                columns[2]
+            ))
+        })?;
+        if !delta.is_finite() || delta < 0.0 {
+            return Err(ReplayError::Parse(format!(
+                "PATH_DB_DELTA: {}:{path}:{} delta must be finite and non-negative, got {delta}",
+                package.id,
+                line_index + 1
+            )));
+        }
+        let key = (columns[0].to_owned(), columns[1].to_owned());
+        if !local.insert(key.clone()) {
+            return Err(ReplayError::Parse(format!(
+                "PATH_DB_DUPLICATE: {}:{path}:{} repeats path {:?} -> {:?}",
+                package.id,
+                line_index + 1,
+                key.0,
+                key.1
+            )));
+        }
+        if let Some(existing) = database.entries.get(&key) {
+            if existing.priority == priority {
+                return Err(ReplayError::Parse(format!(
+                    "PATH_DB_AMBIGUOUS: path {:?} -> {:?} is defined by {:?} and {} at equal priority",
+                    key.0, key.1, existing.package, package.id
+                )));
+            }
+            if existing.priority > priority {
+                continue;
+            }
+        }
+        database.entries.insert(
+            key,
+            PathEntry {
+                delta,
+                package: package.id.to_string(),
+                priority,
+            },
+        );
+    }
+    Ok(())
+}
+
 pub fn weight_db_from_packages(packages: &[&LibraryPackage]) -> Result<WeightDb, ReplayError> {
     let mut database = WeightDb::default();
     for package in packages.iter().copied() {
         let priority = package_priority(package);
-        for source in package
-            .data_sources
-            .iter()
-            .filter(|source| source.path.ends_with("/weights.tsv"))
-        {
+        // 表型宣告(`config/tables.tsv`)是唯一入口。此處**曾經**是
+        // `path.ends_with("/weights.tsv")`——那讓套件內部檔名變成跨套件契約,
+        // 正是 P29 禁止的;套件既不能換路徑,也無從宣告新表型。
+        for source in package.tables(table_type::WEIGHT_TABLE) {
             parse_weight_source(
                 &mut database,
                 package,

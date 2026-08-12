@@ -1,0 +1,5 @@
+# Binds this package's data files to stable table-type IDs (P29): consumers
+# select tables by type, never by file path or file name.
+path	type
+data/weights.tsv	engine:WeightTable
+data/paths.tsv	engine:GrammaticalizationPathTable

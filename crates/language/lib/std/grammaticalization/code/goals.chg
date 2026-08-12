@@ -1,17 +1,23 @@
 /* Standard evolution goals.
 
    Goal is an authoring-time file grouping only. `choose:` supplies candidate
-   function calls; it does not select or execute a candidate. */
+   function calls; it does not select or execute a candidate.
+
+   The `path(...)` guard and the `path_delta(...)` argument both read
+   data/paths.tsv (P52). Neither this file nor recipes.chg names a source
+   concept: adding GO, WANT, COME or any other source to a target is one new
+   data row. A verb whose core sense is not a listed source for the target
+   simply yields no candidate, which is a legitimate result (P70). */
 
 package std:grammaticalization:
     schema = conlang.functions/v1
 
 function Future(target [Verb]):
     choose:
-        VerbToTense(target, tense: FUTURE, result_category: Aux)
+        VerbToTense(target, tense: FUTURE, result_category: Aux, delta: path_delta(target, core, FUTURE)) / path(target, core, FUTURE)
 
 /* A FINISH verb may supply a perfect function and become a bound marker.
    Goal evaluation only yields the candidate; selection remains explicit. */
 function Perfect(target [Verb]):
     choose:
-        VerbToTense(target, tense: PERFECT, result_category: Bound)
+        VerbToTense(target, tense: PERFECT, result_category: Bound, delta: path_delta(target, core, PERFECT)) / path(target, core, PERFECT)
