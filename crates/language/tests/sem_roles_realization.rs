@@ -37,14 +37,14 @@ trait TestSemantic:
     belongs TestSemantic
     syn:
         feature:
-            number = enum(singular, plural)
+            number = enum(singular, plural)?
 trait TestHuman:
     belongs TestEntity
 trait TestTransferFrame:
     belongs TestSemantic
     sem:
         feature:
-            number = enum(singular, plural)
+            number = enum(singular, plural)?
         roles:
             agent [TestHuman]
             theme [TestEntity]
@@ -528,7 +528,7 @@ fn feature_rules_share_stable_stage_dispatch_with_ordinary_rules() {
 trait Plain:
     syn:
         feature:
-            value = enum(ready)
+            value = enum(ready)?
             value => ready @stage phrase
 sign Ordered:
     belongs Typed

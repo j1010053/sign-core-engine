@@ -15,7 +15,7 @@ trait TutorialNominal:
     syn:
         feature:
             number = enum(singular, plural)
-            case = enum(nominative, accusative)
+            case = enum(nominative, accusative)?
 
 trait TutorialPredicate:
     belongs Semantic
@@ -43,7 +43,7 @@ sign TutorialNP:
             stem [TutorialNominal]
     sem:
         feature:
-            interpreted_case = enum(nominative, accusative)
+            interpreted_case = enum(nominative, accusative)?
             interpreted_case => $self.syn.case
         roles:
             referent [TutorialEntity]

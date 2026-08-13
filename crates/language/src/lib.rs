@@ -276,6 +276,15 @@ pub struct FeatureDecl {
     pub dim: Dim,
     pub name: String,
     pub values: Vec<String>,
+    /// P75:尾綴 `?` = **這條 feature 可以沒有值**。
+    ///
+    /// 與 `slot NAME [C]?` / `role NAME [C]?` 同形同義——`?` 在本語言裡只有一個
+    /// 意思(可以不提供),而且一律住在**宣告**處,讀取處繼承。沒有 `?` 時,讀到
+    /// 缺席是執行期 Error 而非靜默 `Unmatched`。
+    ///
+    /// **canonical 上可省略**:`false` 不印,故未使用此語法的套件其 canonical form
+    /// 與 library lock digest 逐位元不變(P75 §3 b)。
+    pub optional: bool,
     pub source: SourceLocation,
 }
 

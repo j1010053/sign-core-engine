@@ -24,7 +24,7 @@ sign Example:
             number => $self.syn.number
 ```
 
-`NAME = enum(...)` 是 declaration；`NAME = VALUE` 是 assignment；`NAME => EXPR` 是 feature rule。未宣告的欄位、domain 外值，以及跨 dimension 的 `unify` 都是 compile error。衝突 declaration 依 library priority、繼承距離、`belongs` 順序和 local source 順序選出 winner，並保留 winner/shadowed warning；role contract 則不使用此覆寫規則。
+`NAME = enum(...)` 是 declaration；`NAME = VALUE` 是 assignment；`NAME => EXPR` 是 feature rule。declaration 可帶尾綴 `?`（`NAME = enum(...)?`）＝**這條 feature 可以沒有值**，與 `slot`／`role` 的 `?` 同形同義；沒有 `?` 而讀取時沒有值是**執行期 Error**，不再靜默 `Unmatched`（P75，見 `feature缺席語意與optional標記_v1.0.md`）。`?` 貼在 assignment 上是 parse error。未宣告的欄位、domain 外值，以及跨 dimension 的 `unify` 都是 compile error。衝突 declaration 依 library priority、繼承距離、`belongs` 順序和 local source 順序選出 winner，並保留 winner/shadowed warning；role contract 則不使用此覆寫規則。
 
 `syn.class` 不是 feature。類別是 `belongs` 的 ontology membership；例如 copula 應寫 `belongs Copula`，而不是 `syn.class = copula`。
 

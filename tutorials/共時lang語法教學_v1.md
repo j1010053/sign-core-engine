@@ -29,12 +29,14 @@ sign dog:
 
 資料欄位必須先宣告：`number = enum(...)` 是 domain，`number = plural` 是值，`target => expression` 是規則。`$self` 唯讀；規則只能寫自己所在維度。執行順序是 Syn→Sem→Prag，所以 Sem 可讀 finalized Syn，Prag 可讀 finalized Syn/Sem。
 
+宣告尾綴 `?`（如下例的 `case`）表示**這條 feature 可以沒有值**——和 `slot NAME [C]?`、`role NAME [C]?` 的 `?` 是同一個意思，一律寫在宣告處。沒有 `?` 的 feature 若在讀取時沒有值，是執行期錯誤而不是靜默跳過；下面的 `case` 之所以要 `?`，是因為它由外層構式在組合時填入（見 §5 的 `slot_features:`），詞條自己不一定有。
+
 ```lang
 trait TutorialNominal:
     syn:
         feature:
             number = enum(singular, plural)
-            case = enum(nominative, accusative)
+            case = enum(nominative, accusative)?
 
 sign plural-dog:
     belongs TutorialNominal
@@ -161,7 +163,7 @@ trait TutorialNominal:
     syn:
         feature:
             number = enum(singular, plural)
-            case = enum(nominative, accusative)
+            case = enum(nominative, accusative)?
 
 trait TutorialPredicate:
     belongs Semantic
@@ -189,7 +191,7 @@ sign TutorialNP:
             stem [TutorialNominal]
     sem:
         feature:
-            interpreted_case = enum(nominative, accusative)
+            interpreted_case = enum(nominative, accusative)?
             interpreted_case => $self.syn.case
         roles:
             referent [TutorialEntity]

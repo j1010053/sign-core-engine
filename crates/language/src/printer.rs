@@ -372,10 +372,13 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                 for item in items {
                     match item {
                         SignItem::FeatureDecl(feature) if feature.dim == parsed_dim => {
+                            // P75 §3 b:`?` **可省略**——`optional == false` 不印,
+                            // 未用此語法的套件 canonical form 逐位元不變(零 digest churn)。
                             out.push_str(&format!(
-                                "            {} = enum({})\n",
+                                "            {} = enum({}){}\n",
                                 feature.name,
-                                feature.values.join(", ")
+                                feature.values.join(", "),
+                                if feature.optional { "?" } else { "" }
                             ));
                         }
                         SignItem::FeatureValue(feature) if feature.dim == parsed_dim => {

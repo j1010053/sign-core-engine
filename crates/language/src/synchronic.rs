@@ -2,6 +2,8 @@
 //! construction tokens. Token rules may read immutable filler snapshots with
 //! `$slot.<name>.<dim>.<path>` and `unify(...)`.
 
+use std::collections::BTreeSet;
+
 use crate::construction::{slots_of, FillerSnapshot};
 use crate::ontology::OntologyRegistry;
 use crate::path::parse_path;
@@ -353,6 +355,147 @@ pub(crate) fn rule_target_violations(rule: &crate::Rule) -> Vec<String> {
         .collect()
 }
 
+/// P71 增修 D:**guard 讀的欄位路徑亦受封閉清單約束**。
+///
+/// guard 與 Def／規則目標是同一個路徑空間(都經 `sign.project(dim).get(path)`),
+/// 差別只在方向。§7 A1 關掉了寫入側門後,讀取端仍是 §2.1 記載的原狀:欄位名
+/// 打錯回 `Unmatched`,不發任何診斷——規則於是永遠不觸發,而作者看不到訊號。
+///
+/// 白名單 = 封閉清單 ∪ 主體可見的 typed feature。兩半缺一不可:只有封閉清單
+/// 的話連 R2 的正解出口都會擋掉——`feature:` 的值投影進的正是同一個扁平路徑
+/// 空間(`projection.rs` 的 `<dim>.<feature.name>`)。
+///
+/// 「主體可見」按主體是否**靜態已知**分兩檔(呼叫端決定傳哪一份):
+/// - 具體 sign 的 `$self`(含裸欄位 = 本規則維度上的 `$self`):feature 集合封閉,
+///   用它**有效**(含繼承)的宣告嚴查,與寫入側 `FEATURE_RULE_UNDECLARED` 同判準。
+/// - `$slot.NAME` 的 filler、以及 **trait 裡的 `$self`**:靜態未知——`[*]` 槽可填
+///   任何 sign、filler 能自帶本地 feature、trait 是模板(菱形下可合法 guard 在
+///   兄弟 trait 的 feature 上)。改用**語言全域**的 feature 宣告集:這是不會誤擋
+///   的最強上界,全語言沒有任何一處宣告過的名字,沒有任何主體能有它。
+///
+/// **`FeatureRule` 也走這條**(與 `rule_target_violations` 相反)——豁免 `FeatureRule`
+/// 的理由是它的**目標**已有兩道檢查,那個理由不及於它的 guard。
+pub(crate) fn rule_guard_violations(
+    rule: &crate::Rule,
+    self_features: &BTreeSet<(Dim, String)>,
+    filler_features: &BTreeSet<(Dim, String)>,
+) -> Vec<String> {
+    std::iter::once(rule.body.as_str())
+        .chain(rule.else_chain.iter().map(String::as_str))
+        .chain(rule.then_chain.iter().map(String::as_str))
+        .enumerate()
+        .filter_map(|(index, branch)| {
+            let parsed = parse_dim_rule(branch).ok()?;
+            let violation = guard_read_violation(
+                parsed.guard.as_ref()?,
+                rule.dim,
+                self_features,
+                filler_features,
+            )?;
+            Some(format!("branch {index}: {violation}"))
+        })
+        .collect()
+}
+
+/// 單一 guard 的讀取路徑檢查。範疇守衛(`[Cat]`／`$self == [Cat]`／
+/// `$slot.x == [Cat]`)讀的是本體樹不是路徑空間,已有 unknown category 檢查,
+/// 不在此處重複。
+fn guard_read_violation(
+    guard: &Guard,
+    dim: Dim,
+    self_features: &BTreeSet<(Dim, String)>,
+    filler_features: &BTreeSet<(Dim, String)>,
+) -> Option<String> {
+    match guard {
+        // 裸欄位 = 本規則所在維度上的 `$self` 讀取(見 `guard_matches` 的 `FieldEq`)。
+        Guard::FieldEq(field, _) => read_path_violation(dim, field, "$self", self_features),
+        Guard::SelfFieldEq(access, _) => {
+            read_path_violation(access.dim, &access.path, "$self", self_features)
+        }
+        Guard::SlotFieldEq(access, _) => read_path_violation(
+            access.dim,
+            &access.path,
+            &format!("$slot.{}", access.slot),
+            filler_features,
+        ),
+        Guard::IsA(_) | Guard::SelfIsA(_) | Guard::SlotIsA(_, _) => None,
+    }
+}
+
+/// P71 增修 E:**值表達式讀的欄位路徑亦受封閉清單約束**。
+///
+/// 與增修 D 是同一個洞的兩半:`field => $self.<dim>.<path>` /
+/// `$slot.N.<dim>.<path>` / `unify(…)` / `require(…)` 走的是同一組 `read_self`
+/// `read_slot`,路徑打錯同樣回 `Unmatched` 且不發診斷。判準與可見範圍完全沿用
+/// D2/D3(白名單 = 封閉清單 ∪ 主體可見的 typed feature;主體靜態已知才嚴查)。
+///
+/// **後果比 guard 重**:guard 打錯只是規則不觸發(no-op);值打錯讓規則
+/// `Unmatched`,依 P43 的 Else 三分**落進 `else` 分支**——靜默失敗在這裡是有輸出的,
+/// 產出的是一個錯的值而不是不動作。
+///
+/// 一個分支可能有多個違規讀取(`unify` 兩個運算元都打錯),故逐個回報而非只回第一個。
+pub(crate) fn rule_value_violations(
+    rule: &crate::Rule,
+    self_features: &BTreeSet<(Dim, String)>,
+    filler_features: &BTreeSet<(Dim, String)>,
+) -> Vec<String> {
+    std::iter::once(rule.body.as_str())
+        .chain(rule.else_chain.iter().map(String::as_str))
+        .chain(rule.then_chain.iter().map(String::as_str))
+        .enumerate()
+        .flat_map(|(index, branch)| {
+            let Ok(parsed) = parse_dim_rule(branch) else {
+                return Vec::new();
+            };
+            value_accesses(&parsed.value)
+                .into_iter()
+                .filter_map(|access| {
+                    let violation = access_read_violation(access, self_features, filler_features)?;
+                    Some(format!("branch {index}: {violation}"))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn value_accesses(value: &ValueExpr) -> Vec<&Access> {
+    match value {
+        ValueExpr::Literal(_) => Vec::new(),
+        ValueExpr::Access(access) => vec![access],
+        ValueExpr::Unify(values) | ValueExpr::Require(values) => values.iter().collect(),
+    }
+}
+
+fn access_read_violation(
+    access: &Access,
+    self_features: &BTreeSet<(Dim, String)>,
+    filler_features: &BTreeSet<(Dim, String)>,
+) -> Option<String> {
+    match access {
+        Access::Self_(access) => {
+            read_path_violation(access.dim, &access.path, "$self", self_features)
+        }
+        Access::Slot(access) => read_path_violation(
+            access.dim,
+            &access.path,
+            &format!("$slot.{}", access.slot),
+            filler_features,
+        ),
+    }
+}
+
+fn read_path_violation(
+    dim: Dim,
+    tail: &str,
+    subject: &str,
+    declared: &BTreeSet<(Dim, String)>,
+) -> Option<String> {
+    let path = format!("{}.{}", dim.keyword(), tail);
+    let allowed =
+        crate::system::def_path_allowed(&path) || declared.contains(&(dim, tail.to_owned()));
+    (!allowed).then(|| crate::system::read_path_hint(&path, subject))
+}
+
 pub(crate) fn validate_rule(
     rule: &crate::Rule,
     registry: &OntologyRegistry,
@@ -434,6 +577,23 @@ fn read_slot(
     });
     match (filler, value) {
         (_, Some(value)) => ReadResult::Value(value),
+        // P75:filler 在,但它宣告過(且沒有 `?`)的 feature 沒有值 → Error。
+        // 宣告住在 filler 上,所以判斷依據是 snapshot 帶過來的 `required_features`。
+        (Some(snapshot), None)
+            if snapshot
+                .required_features
+                .contains(&(access.dim, access.path.clone())) =>
+        {
+            ReadResult::Error(format!(
+                "$slot.{}.{}.{} has no value on filler {:?}; \
+                 assign it, or declare it `{} = enum(...)?` if absence is expected (P75)",
+                access.slot,
+                access.dim.keyword(),
+                access.path,
+                snapshot.name,
+                access.path,
+            ))
+        }
         (Some(_), None) => ReadResult::Unmatched,
         (None, None) if slot.optional => ReadResult::Unmatched,
         (None, None) => ReadResult::Error(format!(
@@ -530,9 +690,62 @@ fn read_self(
         path: access.path.clone(),
         value: value.clone(),
     });
-    value
-        .map(ReadResult::Value)
-        .unwrap_or(ReadResult::Unmatched)
+    match value {
+        Some(value) => ReadResult::Value(value),
+        // P75:宣告過、但**沒有** `?` 的 feature,缺席是 Error 而非靜默 `Unmatched`。
+        // 封閉清單座標(找不到宣告)不在此列——P75 §3 a 裁定範圍限 typed feature。
+        None => match required_feature(sign.items.iter(), access.dim, &access.path) {
+            Some(declaration) => ReadResult::Error(absent_feature_message(
+                "$self",
+                access.dim,
+                &access.path,
+                &sign.name,
+                declaration,
+            )),
+            None => ReadResult::Unmatched,
+        },
+    }
+}
+
+/// 找出 `(dim, name)` 的 feature 宣告,**且它沒有 `?`**(即缺席為 Error 的那種)。
+///
+/// 由後往前找,與 `system.rs` 既有的 declaration winner 慣例一致(後寫者勝)。
+/// 傳入的 items 必須來自**已 `effective_sign` 解析**的視野,否則看不到繼承來的宣告。
+fn required_feature<'a>(
+    items: impl Iterator<Item = &'a SignItem>,
+    dim: Dim,
+    name: &str,
+) -> Option<&'a crate::FeatureDecl> {
+    items
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .find_map(|item| match item {
+            SignItem::FeatureDecl(declaration)
+                if declaration.dim == dim && declaration.name == name =>
+            {
+                Some(declaration)
+            }
+            _ => None,
+        })
+        .filter(|declaration| !declaration.optional)
+}
+
+/// 訊息**必須指出正解**(與 P71 §4.2 同一條原則):作者要嘛給它值,要嘛把宣告
+/// 標成 `?`。只說「沒有值」會讓人以為是資料錯,而不知道 `?` 才是表達「本來就可能沒有」的寫法。
+fn absent_feature_message(
+    subject: &str,
+    dim: Dim,
+    name: &str,
+    owner: &str,
+    declaration: &crate::FeatureDecl,
+) -> String {
+    format!(
+        "{subject}.{}.{name} has no value on {owner:?}; \
+         assign it, or declare `{name} = enum({})?` if absence is expected (P75)",
+        dim.keyword(),
+        declaration.values.join(", ")
+    )
 }
 
 fn source_package(id: &RuleId) -> Option<String> {
@@ -574,10 +787,14 @@ enum GuardResult {
     Error(String),
 }
 
+/// realization 與 typed `case:` 分支的 guard(system.rs 的 `CASE_INVALID_GUARD` 站)。
+/// P71 增修 D 同樣適用:這裡讀的是同一個路徑空間,只是語法位置不同。
 pub(crate) fn validate_realization_guard(
     source: &str,
     registry: &OntologyRegistry,
     slots: &[Slot],
+    self_features: &BTreeSet<(Dim, String)>,
+    filler_features: &BTreeSet<(Dim, String)>,
 ) -> Result<(), String> {
     match parse_guard(source)? {
         Guard::IsA(category) | Guard::SelfIsA(category) => registry
@@ -593,12 +810,26 @@ pub(crate) fn validate_realization_guard(
                 .then_some(())
                 .ok_or_else(|| format!("unknown category guard [{category}]"))
         }
-        Guard::SlotFieldEq(access, _) => slots
-            .iter()
-            .any(|item| item.name == access.slot)
-            .then_some(())
-            .ok_or_else(|| format!("unknown slot reference {:?}", access.slot)),
-        Guard::SelfFieldEq(_, _) => Ok(()),
+        Guard::SlotFieldEq(access, _) => {
+            if !slots.iter().any(|item| item.name == access.slot) {
+                return Err(format!("unknown slot reference {:?}", access.slot));
+            }
+            match read_path_violation(
+                access.dim,
+                &access.path,
+                &format!("$slot.{}", access.slot),
+                filler_features,
+            ) {
+                Some(violation) => Err(violation),
+                None => Ok(()),
+            }
+        }
+        Guard::SelfFieldEq(access, _) => {
+            match read_path_violation(access.dim, &access.path, "$self", self_features) {
+                Some(violation) => Err(violation),
+                None => Ok(()),
+            }
+        }
         Guard::FieldEq(_, _) => {
             Err("realization guards require explicit `$self` or `$slot` reads".to_owned())
         }

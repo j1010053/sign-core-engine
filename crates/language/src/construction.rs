@@ -19,7 +19,7 @@ use crate::{
     CaseCondition, Dim, Expression, Language, SignDef, SignItem, Slot, SlotConstraint,
     SourceLocation, TypedCase,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use tshiatun_dsl::{build_phrase, run_program, surface_phrase, Program};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -282,6 +282,9 @@ pub struct FillerSnapshot {
     pub sem: SemNode,
     pub prag: Vec<(String, String)>,
     pub provenance: FillerProvenance,
+    /// P75:filler 上宣告過**且沒有** `?` 的 feature。`$slot` 讀到這些路徑缺席時
+    /// 是 Error 而非靜默 `Unmatched`——與 `$self` 同一條規約,只是宣告住在 filler 上。
+    pub required_features: BTreeSet<(Dim, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -721,6 +724,8 @@ struct FillerMaterial {
     prag: Vec<(String, String)>,
     provenance: FillerProvenance,
     feature_domains: BTreeMap<String, Vec<String>>,
+    /// P75:宣告過**且沒有** `?` 的 feature——`$slot` 讀到它們缺席是 Error。
+    required_features: BTreeSet<(Dim, String)>,
     occurrence_sign: Option<SignDef>,
     base_sign: Option<SignDef>,
     occurrence_token: Option<DerivedToken>,
@@ -805,6 +810,20 @@ pub fn validate_slot_mapping(sign: &SignDef, extra: &SlotMap) -> Result<(), CxgE
     validate_slot_map(&slots_of(sign), &mapping).map(|_| ())
 }
 
+/// P75:宣告過**且沒有** `?` 的 feature 集合(缺席即 Error 的那些)。
+///
+/// 四維一起收:`$slot` 讀取可以指定任何維度,而 `?` 的意思與維度無關。
+fn required_feature_set<'a>(items: impl Iterator<Item = &'a SignItem>) -> BTreeSet<(Dim, String)> {
+    items
+        .filter_map(|item| match item {
+            SignItem::FeatureDecl(feature) if !feature.optional => {
+                Some((feature.dim, feature.name.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 fn sign_material(sign: &SignDef, reg: &OntologyRegistry) -> Result<FillerMaterial, CxgError> {
     let base_sign = reg.effective_sign(sign);
     let (sign, probe_rules) = evaluate_occurrence_sign(&base_sign, reg)?;
@@ -835,6 +854,7 @@ fn sign_material(sign: &SignDef, reg: &OntologyRegistry) -> Result<FillerMateria
                 _ => None,
             })
             .collect(),
+        required_features: required_feature_set(sign.items.iter()),
         occurrence_sign: Some(sign),
         base_sign: Some(base_sign),
         occurrence_token: None,
@@ -882,6 +902,7 @@ fn committed_sign_material(
                 _ => None,
             })
             .collect(),
+        required_features: required_feature_set(sign.items.iter()),
         occurrence_sign: Some(sign.clone()),
         base_sign: Some(base_sign.clone()),
         occurrence_token: None,
@@ -916,6 +937,7 @@ fn token_material(token: &DerivedToken) -> Result<FillerMaterial, CxgError> {
                 _ => None,
             })
             .collect(),
+        required_features: required_feature_set(token.rule_sign.items.iter()),
         occurrence_sign: None,
         base_sign: None,
         occurrence_token: Some(token.clone()),
@@ -2380,6 +2402,7 @@ fn apply_with_committed<'a>(
             sem: filler.sem.clone(),
             prag: filler.prag.clone(),
             provenance: filler.provenance.clone(),
+            required_features: filler.required_features.clone(),
         })
         .collect();
     let occurrence_records = provided

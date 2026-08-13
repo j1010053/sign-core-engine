@@ -1185,6 +1185,11 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                 return Err(err(no, "feature name must be a single identifier"));
             }
             let value = value.trim();
+            // P75:`NAME = enum(...)?` 的尾綴 `?` = 可以沒有值(與 slot/role 同形)。
+            let (value, optional) = match value.strip_suffix('?') {
+                Some(stripped) => (stripped.trim_end(), true),
+                None => (value, false),
+            };
             if let Some(domain) = value
                 .strip_prefix("enum(")
                 .and_then(|v| v.strip_suffix(')'))
@@ -1212,9 +1217,17 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                         dim: dim.to_dim(),
                         name: name.to_owned(),
                         values,
+                        optional,
                         source: SourceLocation::line(no),
                     }));
             } else {
+                // `?` 只對宣告有意義:賦值沒有「可以沒有值」這回事。
+                if optional {
+                    return Err(err(
+                        no,
+                        "`?` marks an optional feature *declaration* (`NAME = enum(...)?`), not an assignment",
+                    ));
+                }
                 if !ident_ok(value) {
                     return Err(err(no, "feature value must be a single enum identifier"));
                 }

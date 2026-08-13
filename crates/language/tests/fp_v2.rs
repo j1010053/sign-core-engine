@@ -1239,6 +1239,7 @@ fn typed_features_are_supported_in_prag_but_not_phon() {
             dim,
             name: "register".to_owned(),
             values: vec!["formal".to_owned(), "informal".to_owned()],
+            optional: false,
             source: SourceLocation::unknown(),
         })]
     };

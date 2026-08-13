@@ -2,7 +2,10 @@
 
 > **狀態:已裁定**(擁有者 2026-08-01),**Phase 1 實作完成**(2026-08-02)。
 > 增修 A(§7,寫入通道)、B(§8,`feature[…]` selector)、C(§9,`prag` 支援
-> `feature:`)均已裁定並落地;§3 的量測數字已由 A4 重新量測取代,見 §7.5。
+> `feature:`)均已裁定並落地;**D(§10,讀取通道——guard 的欄位路徑)與
+> E(§11,讀取通道的另一半——值表達式)裁定並落地於 2026-08-12**,
+> 補上 §2.1 記載卻只做了寫入那半的部分。
+> §3 的量測數字已由 A4 重新量測取代,見 §7.5。
 > 承 P30(資料層永不含邏輯,只存名字引用)、P48/P69(body 形狀)、
 > `case_when與context_fragment_v2.md`、`共時lang_FP_expression_typed_case_constraint_v2.md`。
 > 本檔記錄裁定、量測與切法,供實作直接執行。
@@ -169,6 +172,16 @@ DEF_PATH_ALLOWLIST =
 
 > **§7 增修 A(P71-A)已裁定**(2026-08-01):①②的「封閉清單」**同時約束
 > synchronic rule 目標路徑**;`gloss` 非法為規則目標(A2)。細節見 §7。
+>
+> **§10 增修 D(P71-D)已裁定並落地**(2026-08-12):封閉清單**同時約束 guard 讀的
+> 欄位路徑**,讀取白名單 = 封閉清單 ∪ 主體可見的 typed feature;`FeatureRule` 的
+> guard 不豁免。§2.1 的「guard 欄位名打錯靜默 `false`」自此關閉。細節與**未納入的
+> 讀取通道**見 §10。
+>
+> **§11 增修 E(P71-E)已裁定並落地**(2026-08-12):同一份清單**再涵蓋值表達式的
+> 讀取**(`$self.` / `$slot.` / `unify` / `require`),判準完全沿用 D2/D3,
+> 新診斷碼 `RULE_VALUE_NOT_ALLOWED`。值打錯的後果比 guard 重——會**落進 `else`
+> 分支產出錯的值**而非不動作。細節見 §11。
 
 ---
 
@@ -186,6 +199,14 @@ DEF_PATH_ALLOWLIST =
   `NodeUpdate::FeatureAssignment`(只改值,才進得了 `.chg` 的 `field = value` 語法)。
 - **(§9 C1)** `crates/language/src/parser.rs` 與 `system.rs`:`feature:` 開放至
   `prag`;`FEATURE_DIMENSION_UNSUPPORTED` 適用範圍縮為 `phon`。
+- **(§10 D1–D4)** `crates/language/src/synchronic.rs`:`rule_guard_violations` /
+  `guard_read_violation` / `read_path_violation` 驗 guard 讀的路徑;
+  `validate_realization_guard` 增宣告集參數(realization 與 typed `case:` 共用)。
+  `crates/language/src/system.rs`:`read_path_hint`、`visible_features`、
+  `language_wide_features`、`ItemContext`;新診斷碼 `RULE_GUARD_NOT_ALLOWED`。
+- **(§11 E1–E4)** `crates/language/src/synchronic.rs`:`rule_value_violations` /
+  `value_accesses` / `access_read_violation`(與 D 共用 `read_path_violation`);
+  `system.rs` 新診斷碼 `RULE_VALUE_NOT_ALLOWED`,與 D 同一個掛載站。
 - **實作過程中發現並修掉的既有缺陷**(非 P71 引入,但被 P71 的遷移揭露):
   `Def` 是少數**不帶 `SourceLocation`** 的項目型別,而
   `FeatureDecl`/`FeatureValue`/`Sense`/… 都帶且參與 `PartialEq`。
@@ -198,13 +219,15 @@ DEF_PATH_ALLOWLIST =
 
 ### 6.1 出口證據
 
-`crates/language/tests/p71_closed_list.rs`(9 案)——封閉清單的正反例、訊息指向
-`feature:`、三維皆關、`gloss` 兩種寫法皆拒、規則目標與分支目標、`feature:` 兩道
-檢查;每條否定斷言均配正向控制組。`crates/changeset/tests/feature_selector.rs`
-(4 案)——`feature[…]` 定位/改值/維度限定/與 `def[…]` 互不冒認。
+`crates/language/tests/p71_closed_list.rs`(**25 案**:原 9 案 + §10 增修 D 的 10 案
++ §11 增修 E 的 6 案)——封閉清單的正反例、訊息指向 `feature:`、三維皆關、`gloss`
+兩種寫法皆拒、規則目標與分支目標、`feature:` 兩道檢查,以及讀取端的 guard(§10.4)
+與值表達式(§11.4);每條否定斷言均配正向控制組。`crates/changeset/tests/feature_selector.rs`(4 案)——`feature[…]`
+定位/改值/維度限定/與 `def[…]` 互不冒認。
 
 §7.4 的突變測試已實跑:漏掉引擎自有路徑 `phon` → 318 紅;封閉清單一律放行 →
-5 紅;規則目標不檢查 → 3 紅。
+5 紅;規則目標不檢查 → 3 紅。§10 的六個突變見 §10.4、§11 的四個見 §11.4,
+兩組首輪全紅。
 
 ---
 
@@ -368,3 +391,154 @@ std 的 prag 內容之所以倖存,只因它們是被允許的套件座標。
 C1 使 R2 **完備**:每個作者可寫的維度都有一條「先宣告值域、再賦值/寫規則」的
 通道,`FEATURE_UNDECLARED` 與 `FEATURE_VALUE_OUT_OF_DOMAIN` 兩道檢查隨之覆蓋
 prag——這正是 §2.1 指出裸 Def 所缺的兩道。
+
+---
+
+## 10. 增修 D(P71-D):讀取通道——guard 的欄位路徑
+
+> **狀態:已裁定並落地**(擁有者 2026-08-12)。本節不改 §1 的裁定,補上
+> §2.1 記載卻在 Phase 1 與增修 A 都只處理了一半的那條:**讀取端**。
+
+### 10.1 為何 A1 之後仍留一半
+
+§2.1 把「guard 欄位名打錯是靜默 `false`」列為關閉逃生口的**理由之一**,
+但 §4.2 與 A1 動的都是**寫入**(`Def`、規則目標)。讀取端原封未動:
+
+| 位置 | 行為 |
+|---|---|
+| `guard_matches` 的 `FieldEq` | `project(dim).get(path)` 對不上 → `Unmatched`,無診斷 |
+| `read_self`(`$self.<dim>.<path>`) | 讀不到 → `Unmatched`,無診斷 |
+| `validate_rule` | 只驗 category guard 與 slot 名,**從不看 guard 的欄位路徑** |
+| `validate_realization_guard` 的 `SelfFieldEq` | 直接 `Ok(())` |
+
+寫入端關上後這個症狀較難踩到(寫不進去的路徑,guard 讀了必然永遠 `Unmatched`),
+但**沒有關掉**:`syn.tam.presnet == 1` 這種第三段錯字兩端都過得去
+(封閉清單是前綴比對,尾段不查),結果是一條永遠不觸發的規則加上零訊號。
+
+### 10.2 裁定
+
+| # | 條款 |
+|---|---|
+| **D1** | 封閉清單**同時約束 guard 讀的欄位路徑**。新診斷碼 `RULE_GUARD_NOT_ALLOWED`(規則 guard)與既有 `CASE_INVALID_GUARD`(realization / typed `case:` 分支 guard);訊息與 §4.2 同樣**必須指向 `feature:`**。 |
+| **D2** | 讀取白名單 = **封閉清單 ∪ 主體可見的 typed feature**。缺第二半等於把 R2 的正解出口一起關掉——§2.1 明說「凡 guard 要讀的東西,`feature:` 嚴格優於裸 def」,而 feature 值投影進的正是同一個扁平路徑空間(`<dim>.<feature.name>`)。 |
+| **D3** | 「主體可見」按主體是否**靜態已知**分兩檔:**具體 sign 的 `$self`**(含裸欄位)用它有效(含繼承)的宣告**嚴查**;**`$slot.NAME` 的 filler 與 trait 裡的 `$self`** 用**語言全域**宣告集。 |
+| **D4** | **`FeatureRule` 的 guard 也查**。A1 豁免 `FeatureRule` 的理由是它的**目標**已有兩道檢查,那個理由不及於它的 guard。 |
+| **D5** | 範疇守衛(`[Cat]` / `$self == [Cat]` / `$slot.x == [Cat]`)讀的是本體樹不是路徑空間,不在此列;其 unknown category 檢查照舊。 |
+
+**D3 的兩檔不是妥協,是主體可知性的直接後果**。filler 靜態未知(`[*]` 槽可填
+任何 sign,具名約束的 filler 也能自帶本地 feature);trait 是模板,合成後的 sign
+帶什麼不由它決定——菱形繼承下 `Right` 的規則合法地 guard 在**兄弟** `Left` 宣告的
+feature 上(`m1pp_system::inherited_rules_are_diamond_deduplicated_and_keep_source_order`
+即此形狀),用 trait 自己的繼承視野嚴查會誤擋。全域集合是**不會誤擋的最強上界**:
+全語言沒有任何一處宣告過的名字,沒有任何主體能有它。嚴查留給具體 sign,
+因為它的 feature 集合是封閉的。
+
+### 10.3 未納入的讀取通道(明列,不是漏掉)
+
+| 通道 | 現況 | 未納入的理由 |
+|---|---|---|
+| ~~**值表達式的讀取**~~ | ~~不查~~ | **已由增修 E 補上(§11,2026-08-12)**,不再是殘留 |
+| **`.chg` 歷時 function guard**(`crates/changeset/src/function.rs`) | 完全不查路徑 | **不是**因為語意分歧——`guard_holds` 把參數改寫成 `$self` 後交給 `synchronic::guard_matches_sign`,與 `.lang` **共用同一個求值器**。障礙是**時機**:function 定義依《修補10》§11.2 完全 base-independent,載入時沒有 language 可查宣告集。invoke 時則資訊完整(`guard_holds` 手上有 document、ontology 與具體 effective sign)。要補得先裁定:base-independent 的 function,在某個 base 上讀不到的路徑算錯誤還是合法的 false?**另立條款** |
+| **typed `case:` 的 `scrutinee`**(`CaseCondition::Equals`) | 走 `scalar()`,不查 | 非 guard;且其路徑空間與 def 路徑**不同構**——唯一的生產形狀是槽投影(`case stem.phon:`),頭是槽名不是維度,套 `def_path_allowed` 前得先分清兩種形狀 |
+
+**D/E 只管路徑合不合法,不管值在不在。** 合法路徑在某個主體上沒有值,D/E 之後
+仍是靜默 `Unmatched`(依 P43 落進 `else`)。那一半由 **P75** 處理
+(`feature缺席語意與optional標記_v1.0.md`:宣告尾綴 `?` = 可以沒有值;無 `?`
+而讀到缺席是執行期 Error)。兩者是正交的:D/E 問「這條路徑能不能寫在這裡」,
+P75 問「這條路徑沒有值時算不算錯」。
+
+**另外一條不是通道問題,是清單自己的問題**:`def_path_allowed` 對套件座標是
+**前綴比對**,尾段一律放行且深度不限,故第三段以後的錯字**寫入端與讀取端都過**
+(實測 `syn: tam.presnet = 1` 與 `/ tam.presnet == 1` 皆零診斷)。增修 D 讓 guard
+共用同一份清單,因此也**共用這個盲區**。收緊它需要「這個座標系有哪些軸、每軸值域
+為何」的宣告機制——正是 §5 ④ 的 Phase 2 題目;在引擎側硬編尾段枚舉與 P71 ④
+「由硬編改為宣告驅動」的方向相反,不採。
+
+### 10.4 落地與出口證據
+
+- `crates/language/src/synchronic.rs`:`rule_guard_violations` + `guard_read_violation`
+  + `read_path_violation`;`validate_realization_guard` 增兩個宣告集參數。
+- `crates/language/src/system.rs`:`read_path_hint`(讀取端專用訊息——白名單多一半,
+  訊息若不說出這半,作者會以為宣告了 feature 也不能讀)、`visible_features`、
+  `language_wide_features`、`ItemContext`;`RULE_GUARD_NOT_ALLOWED` 掛在
+  `validate_defs_and_rules`,`CASE_INVALID_GUARD` 站補傳兩個集合。
+- 出口:`crates/language/tests/p71_closed_list.rs` §10 段共 **10 案**——`$self`/裸欄位/
+  else 分支/普通規則與 `FeatureRule` 兩側/slot 全域集合/trait 兄弟 feature/typed
+  `case:` guard,每條否定斷言均配正向控制組(宣告過的 feature、清單上的路徑、
+  範疇守衛三種)。
+- **突變測試 6/6 首輪全紅**:①檢查一律放行(7 紅)②砍掉 feature 白名單那半
+  (4 紅)③放過裸欄位守衛(2 紅)④`case:` guard 不查(1 紅)⑤trait 改用自己的
+  繼承視野嚴查(1 紅)⑥slot guard 不查(1 紅)。
+- 回歸:`cargo test --workspace --exclude langcraft-desktop --tests` **966 綠、0 警告**
+  (新增 10 案前為 956)。std / natural 套件與既有 fixture **零遷移**——現行所有
+  guard 讀的不是封閉清單上的路徑,就是宣告過的 feature。
+
+---
+
+## 11. 增修 E(P71-E):讀取通道的另一半——值表達式
+
+> **狀態:已裁定並落地**(擁有者 2026-08-12)。§10.3 原列為「未納入」的第一條,
+> 經細查後判定判準可原樣複用、生產用例零遷移,故隨 D 一併補上。
+
+### 11.1 與 D 是同一個洞的兩半
+
+`field => <value>` 的右端有四種讀取形狀,全部走 `read_self` / `read_slot`
+——與 guard **同一組函式**:
+
+| 形狀 | 例 |
+|---|---|
+| `$self.<dim>.<path>` | `number => $self.syn.number` |
+| `$slot.NAME.<dim>.<path>` | `copied => $slot.head.syn.number` |
+| `unify(…)` | `number => unify($slot.controller.syn.number, $slot.target.syn.number)` |
+| `require(…)` | `subject_case => require($slot.subject.syn.case, $slot.predicate.syn.subject_case)` |
+
+靜態驗證原本是**刻意只做一半**的:`accesses()` 對 `Access::Self_` 直接回 `None`,
+只收 slot access 給槽名檢查用——即 `$self` 的值讀取一道檢查也沒有,
+slot 的值讀取也只驗槽名不驗路徑。
+
+### 11.2 後果比 guard 重
+
+| 通道 | 路徑打錯的結果 |
+|---|---|
+| guard | 規則 `Unmatched` → **不觸發**(no-op) |
+| **值** | 規則 `Unmatched` → 依 P43 Else 三分**落進 `else` 分支** → **產出一個錯的值** |
+
+即:guard 的靜默失敗是「什麼都沒發生」,值的靜默失敗**是有輸出的**。
+
+執行期原有的三種行為亦不一致,可作對照:`read_self` 讀不到 → `Unmatched` 無訊息;
+`read_slot` 槽已填但讀不到 → `Unmatched` 無訊息;**必填槽未填** → `Error` 且訊息帶路徑;
+`require` 把 `Unmatched` 升為 `Error`,但訊息是 `required typed reference has no value`,
+**不帶路徑**。
+
+另有一條同語言內的難堪對照:`SlotFeatureBinding`
+(`subject.case = $slot.predicate.syn.subject_case`,`en-standard/grammar.lang:426`)
+**早就**在驗來源 feature(`SLOT_FEATURE_INVALID_SOURCE` /
+`SLOT_FEATURE_DOMAIN_MISMATCH`),而且是拿**來源槽的約束範疇**去查
+(`category_feature_domain`)——比增修 D/E 還嚴。兩條寫法幾乎相同的通道,
+一條驗得很嚴、一條完全不驗。
+
+### 11.3 裁定
+
+| # | 條款 |
+|---|---|
+| **E1** | 封閉清單**同時約束值表達式讀的欄位路徑**。新診斷碼 `RULE_VALUE_NOT_ALLOWED`;訊息與 §4.2 同樣**必須指向 `feature:`**(與 D 共用 `read_path_hint`)。 |
+| **E2** | 白名單與可見範圍**完全沿用 D2/D3**,不另立判準:`$self` 在具體 sign 上嚴查,`$slot` 的 filler 與 trait 的 `$self` 用語言全域上界。通道不同不構成改判理由。 |
+| **E3** | `unify` / `require` 的**每個運算元**各自檢查並各自回報。只查第一個等於「把違規放第二個就能繞過」。 |
+| **E4** | `FeatureRule` 的值**也查**(理由同 D4:豁免只及於目標)。字面值不是讀取,不在此列。 |
+
+### 11.4 落地與出口證據
+
+- `crates/language/src/synchronic.rs`:`rule_value_violations` + `value_accesses`
+  + `access_read_violation`;`read_path_violation` 與 D 共用。
+- `crates/language/src/system.rs`:`RULE_VALUE_NOT_ALLOWED` 掛在
+  `validate_defs_and_rules`,與 D 同一個站。
+- 出口:`p71_closed_list.rs` §11 段 **6 案**——`$self`/`$slot` 反例、
+  `unify` 兩個運算元各報一次(斷言計數 == 2)、`require` 第二個運算元、
+  else 分支與普通規則兩側、trait 全域上界;正向控制組**取自套件實際寫法**
+  (cxg 的 `unify`、en-standard 的 `require`、`$self` 讀自己宣告的 feature、字面值)。
+- **突變 4/4 首輪全紅**:①值檢查一律放行(5 紅)②`unify`/`require` 只查第一個
+  運算元(1 紅)③放過 slot 值讀取(2 紅)④只查 body 不查 else/then(1 紅)。
+- 回歸:**972 綠、0 警告**(D 之後為 966)。**零遷移**——`std:cxg` 與
+  `natural:en-standard` 現有的 `unify`/`require` 讀的不是清單上的路徑
+  (`syn.number`),就是宣告過的 feature(`syn.case` / `syn.subject_case` /
+  `syn.object_case`)。

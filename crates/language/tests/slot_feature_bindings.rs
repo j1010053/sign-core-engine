@@ -8,7 +8,7 @@ trait LocalCaseBearer:
     belongs Noun
     syn:
         feature:
-            case = enum(nominative, accusative)
+            case = enum(nominative, accusative)?
 
 trait LocalCaseAssigner:
     belongs Predicate

@@ -11,8 +11,12 @@
    **P1–P64、P69–P70(架構修補層;P1–P19 權威=《架構修補彙整 01–04》§1，
    P20–P64 權威=《架構修補彙整 05–11》§1，
    **P69–P70 權威=`specifications/function分支語意與選擇層_v1.0.md` §6，
-   P71（含增修 A/B/C）權威=`specifications/Def路徑封閉清單與feature分工_v1.0.md` §5、§7–§9
-   （已裁定，**Phase 1 已落地 2026-08-02**；Phase 2 待 M4），
+   P71（含增修 A/B/C/**D/E**）權威=`specifications/Def路徑封閉清單與feature分工_v1.0.md` §5、§7–§11
+   （已裁定，**Phase 1 已落地 2026-08-02**；**增修 D＝guard 讀取路徑、E＝值表達式讀取路徑
+   亦受封閉清單約束，均已裁定並落地 2026-08-12**；Phase 2 待 M4），
+   **P75 權威=`specifications/feature缺席語意與optional標記_v1.0.md` §1
+   （已裁定並實作 2026-08-12：feature 宣告尾綴 `?` ＝可以沒有值／無 `?` 而讀到缺席是
+   執行期 Error／範圍限 typed feature／`?` 在 canonical 上可省略故 digest 零 churn）**，
    **P72–P74 權威=`architecture/年代切片與歷時分期_v1.0.md` §1
    （已裁定並實作 2026-08-11：方言群與歷時分期分離／切片=反鏈、判準走拓撲不走 `time`／
    並存判準只看主幹邊）**；
@@ -50,7 +54,8 @@
 | `specifications/分層結構檔本體論_v0.1.md` | 模組 C(節點內部):sign 統一本體、四維特徵結構、組合=運算、固化=語法化、層作視圖投影(v0.1.1 修補)。**設計層,SYN 欄位待 A/B 驅動** |
 | `architecture/AB模組需求分配_v0.2.md` | A=完整 sign 生產者(含組合造詞、借詞、entrenchment 初值);B=**原語集三層定稿**(L1 資料/L2 語言/L3 理論宏),已回填 06 的 ChangeEntry op=L1∪L2。命名分層規約見本檔 §6 |
 | `specifications/Sign生成引擎本體論_v0.1.md` | 模組 A 核心:Sign 稀疏容器、四維、Need→Generator→Builder→Store 職責契約、五連接關係、兩種構詞、生命週期;附 18 案折磨測試(0 破壞)。**設計層** |
-| `specifications/Def路徑封閉清單與feature分工_v1.0.md` | **P71 權威**:`Def` 路徑限封閉清單、自造欄位一律走 `feature:`、`sem.gloss` 併入 `senses`。增修 **A**=封閉清單同時約束 synchronic rule 目標(`gloss` 非法為規則目標)、**B**=`.chg` 新增 `feature[<dim>.<name>]` selector、**C**=`feature:` 開放至 `prag`(`phon` 仍不支援)。§7.5 為 A4 重新量測(§3 的數字是執行次數,已作廢)。**Phase 1 已落地;Phase 2 待 M4** |
+| `specifications/Def路徑封閉清單與feature分工_v1.0.md` | **P71 權威**:`Def` 路徑限封閉清單、自造欄位一律走 `feature:`、`sem.gloss` 併入 `senses`。增修 **A**=封閉清單同時約束 synchronic rule 目標(`gloss` 非法為規則目標)、**B**=`.chg` 新增 `feature[<dim>.<name>]` selector、**C**=`feature:` 開放至 `prag`(`phon` 仍不支援)、**D**(§10,2026-08-12)=**同時約束 guard 讀的欄位路徑**(`RULE_GUARD_NOT_ALLOWED`／`CASE_INVALID_GUARD`;白名單=封閉清單 ∪ **主體可見的 typed feature**,缺後者等於連 R2 正解出口一起關掉;主體靜態已知的具體 sign 嚴查,filler 與 trait 的 `$self` 用語言全域上界;`FeatureRule` 的 guard **不**豁免)。**E**(§11,2026-08-12)=同一份清單**再涵蓋值表達式的讀取**(`$self.`／`$slot.`／`unify`／`require`,`RULE_VALUE_NOT_ALLOWED`;判準沿用 D2/D3,`unify`/`require` 逐運算元查)。§2.1 的「欄位名打錯靜默 `false`」至此在 guard 與值兩側都關閉;**仍未納入**的讀取通道(`.chg` 歷時 function guard、typed `case:` 的 scrutinee)見 §10.3,明列非漏列——前者的障礙是 function 依《修補10》§11.2 為 base-independent,載入時無 language 可查,要補得先裁定「某 base 上讀不到的路徑算錯誤還是合法 false」。⚠ 清單本身對套件座標是**前綴比對**,第三段以後的錯字寫入端與讀取端**都過**(`syn.tam.presnet`),D/E 共用這個盲區,收緊屬 Phase 2。§7.5 為 A4 重新量測(§3 的數字是執行次數,已作廢)。**Phase 1 已落地;Phase 2 待 M4** |
+| `specifications/feature缺席語意與optional標記_v1.0.md` | **P75 權威**:feature 宣告的尾綴 `?` ＝**這條 feature 可以沒有值**;無 `?` 而讀到缺席是**執行期 Error**(不再靜默 `Unmatched` → 不再依 P43 落進 `else` 產出錯的值)。與 `slot N [C]?`／`role N [C]?` 同形同義——`?` 一律住**宣告**處、讀取處繼承,故現有讀取點零改動。**檢查只在「宣告在該主體上可見、但值不存在」時觸發**:非成員看不到宣告,故不受影響(`stone` 讀 trait 上的 `telic` 仍是合法的缺席即假)。範圍**限 typed feature**(封閉清單座標無宣告處可掛,待 P71 Phase 2);`?` canonical **可省略** → 套件 digest **零 churn**(實測套件側缺席讀取 = 0)。未納入:編譯期「必然缺席」警告(c-乙,擱置) |
 | `specifications/function分支語意與選擇層_v1.0.md` | **P69–P70 權威**:歷時 function body 的四種形狀(序列/`case:`/`when:`/`choose:`)、分支條件三選一、frozen matching;選擇移出引擎層(零候選為合法結果)。與 `case_when與context_fragment_v2.md` 逐條對齊 |
 | `specifications/統計先驗與抽樣引擎_v0.1.md` | 模組 E:唯讀先驗庫(PHOIBLE/Grambank/WALS/CLICS,附網址與授權)+ 無狀態抽樣;有效分佈=手動>導入 provider>投影>E1 先驗,覆寫層住節點。**設計層;01–10 設計鏈至此閉合** |
 | `verification/測試案例集總索引_v0.1.md` | **全專案測試索引**:DSL 範例 8.1–8.6、18 案折磨測試、十實例、Rust 測試、Lexurgy 黑盒的統一映射與狀態;動工任一模組前先查其驗收案例 |

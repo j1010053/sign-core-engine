@@ -70,7 +70,7 @@ fn resumed_construction_uses_internal_committed_and_autofilled_occurrences() {
         r#"trait BoundAtom:
     syn:
         feature:
-            mark = enum(plain, marked)
+            mark = enum(plain, marked)?
     sem:
         feature:
             interpreted = enum(plain, marked)
@@ -407,7 +407,7 @@ Class vowel {s}
 trait Contextual:
     syn:
         feature:
-            mark = enum(plain, marked)
+            mark = enum(plain, marked)?
     sem:
         feature:
             interpretation = enum(plain, marked)

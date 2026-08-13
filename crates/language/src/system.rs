@@ -376,6 +376,66 @@ pub(crate) fn def_path_allowed(path: &str) -> bool {
         })
 }
 
+/// 一個(已 `effective_sign` 解析過的)sign 上可見的 typed feature 名。
+/// P71 增修 D 的讀取白名單第二半;主體是 `$self` 時用它。
+fn visible_features(effective: &SignDef) -> BTreeSet<(Dim, String)> {
+    effective
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SignItem::FeatureDecl(feature) => Some((feature.dim, feature.name.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 全語言(含 registry 帶進來的套件節點)宣告過的 typed feature 名。
+///
+/// `$slot.NAME` 的主體是 filler,靜態未知——`[*]` 槽可填任何 sign,具名約束的
+/// filler 也能自帶本地 feature,故不能用槽的約束範疇去收窄。取全域集合是**不會
+/// 誤擋**的最強上界:全語言沒有任何一處宣告過的名字,沒有任何 filler 能有它。
+fn language_wide_features(
+    language: &Language,
+    registry: &OntologyRegistry,
+) -> BTreeSet<(Dim, String)> {
+    let mut features = BTreeSet::new();
+    let mut absorb = |items: &[SignItem]| {
+        for item in items {
+            if let SignItem::FeatureDecl(feature) = item {
+                features.insert((feature.dim, feature.name.clone()));
+            }
+        }
+    };
+    for sign in &language.signs {
+        absorb(&sign.items);
+    }
+    for trait_def in &language.traits {
+        for block in &trait_def.blocks {
+            absorb(&block.items);
+        }
+    }
+    for name in registry.names() {
+        if let Some(node) = registry.node(name) {
+            absorb(&node.items);
+        }
+    }
+    features
+}
+
+/// P71 增修 D:guard **讀**到清單外路徑時的指路訊息。與 `closed_list_hint` 分開,
+/// 因為讀取端的白名單多一半(可見的 typed feature),訊息若不說出這半,作者會
+/// 以為宣告了 feature 也還是不能讀。
+pub(crate) fn read_path_hint(path: &str, subject: &str) -> String {
+    let dim = path_dimension(path)
+        .map(|dim| dim.keyword())
+        .unwrap_or("syn");
+    format!(
+        "guard reads {subject}.{path}, which is neither on the closed list (P71) \
+         nor a feature declared on that subject; \
+         fields a guard reads must be declared under `{dim}: feature:` with an enum domain"
+    )
+}
+
 /// 不在清單上時給作者的指路訊息(§4.2:訊息**必須指向 `feature:`**,
 /// 否則只看到一句 invalid Definition 而不知正解)。
 pub(crate) fn closed_list_hint(path: &str) -> String {
@@ -388,15 +448,30 @@ pub(crate) fn closed_list_hint(path: &str) -> String {
     )
 }
 
+/// `validate_items` 需要的 sign/trait 局部脈絡。合成一個結構而非再加一個閉包參數,
+/// 是為了不讓 130 行的閉包本體因參數表變長而整段重排。
+struct ItemContext<'a> {
+    slots: &'a [crate::Slot],
+    /// P71 增修 D:guard 讀取白名單的第二半。具體 sign 傳自己的有效宣告(嚴查),
+    /// trait 傳語言全域集合(`$self` 靜態未知)——理由見
+    /// [`synchronic::rule_guard_violations`]。
+    subject_features: &'a BTreeSet<(Dim, String)>,
+}
+
 fn validate_defs_and_rules(
     language: &Language,
     registry: &OntologyRegistry,
     report: &mut ValidationReport,
 ) {
+    let filler_features = language_wide_features(language, registry);
     let mut validate_items = |owner: &str,
                               items: &[SignItem],
                               sign_metadata: bool,
-                              slots: &[crate::Slot]| {
+                              context: &ItemContext<'_>| {
+        let ItemContext {
+            slots,
+            subject_features,
+        } = context;
         let mut slot_feature_targets = BTreeSet::new();
         // 同一個 sign/trait 內重複宣告同名義項 = 撰寫錯誤(繼承層的覆寫走 effective)。
         let mut seen_senses: Vec<&str> = Vec::new();
@@ -495,6 +570,33 @@ fn validate_defs_and_rules(
                             );
                         }
                     }
+                    // P71 增修 D:guard 讀的路徑同受約束。**兩種規則都查**——
+                    // 上面豁免 `FeatureRule` 的理由只及於它的目標,不及於 guard。
+                    for error in
+                        synchronic::rule_guard_violations(rule, subject_features, &filler_features)
+                    {
+                        report.push(
+                            Diagnostic::new(
+                                Severity::Error,
+                                "RULE_GUARD_NOT_ALLOWED",
+                                format!("{owner:?}: {error}"),
+                            )
+                            .with_sources(source()),
+                        );
+                    }
+                    // P71 增修 E:值表達式的讀取同理(理由同上,兩種規則都查)。
+                    for error in
+                        synchronic::rule_value_violations(rule, subject_features, &filler_features)
+                    {
+                        report.push(
+                            Diagnostic::new(
+                                Severity::Error,
+                                "RULE_VALUE_NOT_ALLOWED",
+                                format!("{owner:?}: {error}"),
+                            )
+                            .with_sources(source()),
+                        );
+                    }
                 }
                 SignItem::SlotFeatureBinding(binding)
                     if !slot_feature_targets
@@ -530,15 +632,27 @@ fn validate_defs_and_rules(
             items: vec![SignItem::Belongs(trait_def.name.clone())],
         };
         let effective = registry.effective_sign(&synthetic);
-        let slots = construction::slots_of(&effective);
+        // P71 增修 D:**trait 的 `$self` 靜態未知**,故與 filler 同樣用全域上界。
+        // trait 是模板,合成後的 sign 帶什麼 feature 不由它決定:菱形繼承下
+        // `Right` 的規則合法地 guard 在**兄弟** `Left` 宣告的 feature 上
+        // (`m1pp_system::inherited_rules_are_diamond_deduplicated_…` 即此形狀),
+        // 用 trait 自己的繼承視野去嚴查會誤擋。嚴查留給具體 sign——它的
+        // feature 集合是封閉的。
+        let context = ItemContext {
+            slots: &construction::slots_of(&effective),
+            subject_features: &filler_features,
+        };
         for block in &trait_def.blocks {
-            validate_items(&trait_def.name, &block.items, false, &slots);
+            validate_items(&trait_def.name, &block.items, false, &context);
         }
     }
     for sign in &language.signs {
         let effective = registry.effective_sign(sign);
-        let slots = construction::slots_of(&effective);
-        validate_items(&sign.name, &sign.items, true, &slots);
+        let context = ItemContext {
+            slots: &construction::slots_of(&effective),
+            subject_features: &visible_features(&effective),
+        };
+        validate_items(&sign.name, &sign.items, true, &context);
     }
 }
 
@@ -1618,10 +1732,12 @@ fn validate_fp_expressions(
     }
 
     let mut calls = BTreeMap::<String, Vec<String>>::new();
+    let filler_features = language_wide_features(language, registry);
     for local in &language.signs {
         let effective = registry.effective_sign(local);
         let local_parameters = construction::parameters_of(&effective);
         let local_slots = construction::slots_of(&effective);
+        let local_features = visible_features(&effective);
         let mut cases = effective
             .items
             .iter()
@@ -1707,6 +1823,8 @@ fn validate_fp_expressions(
                                 conjunct,
                                 registry,
                                 &local_slots,
+                                &local_features,
+                                &filler_features,
                             ) {
                                 report.push(
                                     Diagnostic::new(
