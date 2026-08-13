@@ -3327,6 +3327,13 @@ fn update_for(reference: &NodeRef, field: &str, value: &str) -> Result<NodeUpdat
             }),
         (NodeKind::Slot, "optional") => Ok(NodeUpdate::SlotOptional(parse_bool(value)?)),
         (NodeKind::Belongs, "target") => Ok(NodeUpdate::Belongs(value.to_owned())),
+        // `trait_use["Foo"].target = Bar[1]` —— 值的文法**與 `.lang` 表面一致**:
+        // `Name[n]` 指定塊,裸 `Name` 是整個 trait(`block: None`)。
+        //
+        // 用一個欄位承載 name + block 而不是拆兩個,是因為 `.chg` 的
+        // `field = value` 只給得起一個字串,而 `update_for` 拿不到文件、
+        // 讀不到「另一半現在是什麼」。塞進同一個值就不必為此開放文件存取。
+        (NodeKind::TraitUse, "target") => parse_trait_use_target(value),
         (NodeKind::Rule | NodeKind::FeatureRule, "dim") => Ok(NodeUpdate::RuleDimension(
             Dim::parse(value)
                 .ok_or_else(|| ReplayError::Selector(format!("unknown dim {value:?}")))?,
@@ -3338,6 +3345,35 @@ fn update_for(reference: &NodeRef, field: &str, value: &str) -> Result<NodeUpdat
             "field {field:?} is not editable on {:?}",
             reference.expected
         ))),
+    }
+}
+
+/// `Bar[1]` / `Bar` → [`NodeUpdate::TraitUse`]。與 [`dump_trait_use_target`] 互為反函數。
+fn parse_trait_use_target(value: &str) -> Result<NodeUpdate, ReplayError> {
+    let text = value.trim();
+    let Some((name, rest)) = text.split_once('[') else {
+        return Ok(NodeUpdate::TraitUse {
+            name: text.to_owned(),
+            block: None,
+        });
+    };
+    let index = rest.strip_suffix(']').ok_or_else(|| {
+        ReplayError::Selector(format!("trait use target must be `Name[n]` or `Name`, got {value:?}"))
+    })?;
+    let block = index.trim().parse::<u32>().map_err(|_| {
+        ReplayError::Selector(format!("trait use block must be a number, got {index:?}"))
+    })?;
+    Ok(NodeUpdate::TraitUse {
+        name: name.trim().to_owned(),
+        block: Some(block),
+    })
+}
+
+/// [`parse_trait_use_target`] 的反向。
+fn dump_trait_use_target(name: &str, block: Option<u32>) -> String {
+    match block {
+        Some(index) => format!("{name}[{index}]"),
+        None => name.to_owned(),
     }
 }
 
@@ -3909,6 +3945,62 @@ fn dump_value(value: &str) -> String {
     }
 }
 
+/// 一種 update 排不排得成 `.chg` 的 `field = value` 一行。
+///
+/// # 為什麼是**窮盡** match
+///
+/// 原本以 `_ => None` 收尾,而呼叫端遇到 `None` 時**什麼都不做**——那條編輯就
+/// 從排出來的 `.chg` 裡消失了,沒有錯誤、沒有標記。`ResolvedChangeSet::dump()`
+/// 是工作副本存檔的路徑(`Session::save_working_copy`),所以那是**存檔會掉編輯**。
+///
+/// 窮盡 match 讓「新增一個 `NodeUpdate` 變體卻忘了想它怎麼排」變成編譯錯誤
+/// ——同 `kind_keyword` 那次的修法(見 `tests/belongs_addressing.rs` 的誌誤)。
+/// 回 `None` 仍然合法,但現在是**寫出來的決定**,而且呼叫端會把它變成錯誤而非丟棄。
+///
+/// 回 `None` 的那些不是懶:它們的酬載是結構(`FeatureValue` 整個節點、
+/// `SlotMap` 的操作、typed `case:` 的分支…),一個字串裝不下。要支援得先給
+/// 它們各自的表面語法,不是在這裡硬湊。
+/// `NodeUpdate` 的變體名,只給 [`DumpError`] 報訊息用。
+fn update_kind_name(change: &NodeUpdate) -> &'static str {
+    match change {
+        NodeUpdate::Rename(_) => "Rename",
+        NodeUpdate::TraitGlobal(_) => "TraitGlobal",
+        NodeUpdate::DslDeclaration(_) => "DslDeclaration",
+        NodeUpdate::Distribution { .. } => "Distribution",
+        NodeUpdate::DefinitionPath(_) => "DefinitionPath",
+        NodeUpdate::DefinitionValue(_) => "DefinitionValue",
+        NodeUpdate::RuleName(_) => "RuleName",
+        NodeUpdate::RuleBody(_) => "RuleBody",
+        NodeUpdate::RuleStage(_) => "RuleStage",
+        NodeUpdate::RuleDimension(_) => "RuleDimension",
+        NodeUpdate::RuleBranchBody(_) => "RuleBranchBody",
+        NodeUpdate::Propagate(_) => "Propagate",
+        NodeUpdate::SenseGloss(_) => "SenseGloss",
+        NodeUpdate::SenseEdgeKind(_) => "SenseEdgeKind",
+        NodeUpdate::SenseEdgeTransparency(_) => "SenseEdgeTransparency",
+        NodeUpdate::SlotName(_) => "SlotName",
+        NodeUpdate::SlotConstraint(_) => "SlotConstraint",
+        NodeUpdate::SlotOptional(_) => "SlotOptional",
+        NodeUpdate::TraitUse { .. } => "TraitUse",
+        NodeUpdate::Belongs(_) => "Belongs",
+        NodeUpdate::FeatureDeclaration(_) => "FeatureDeclaration",
+        NodeUpdate::FeatureValue(_) => "FeatureValue",
+        NodeUpdate::FeatureAssignment(_) => "FeatureAssignment",
+        NodeUpdate::SlotFeatureBinding(_) => "SlotFeatureBinding",
+        NodeUpdate::SlotMap(_) => "SlotMap",
+        NodeUpdate::RoleDeclaration(_) => "RoleDeclaration",
+        NodeUpdate::RoleBinding(_) => "RoleBinding",
+        NodeUpdate::CaseSelection(_) => "CaseSelection",
+        NodeUpdate::CaseHeader { .. } => "CaseHeader",
+        NodeUpdate::CaseBranch(_) => "CaseBranch",
+        NodeUpdate::SignApplication(_) => "SignApplication",
+        NodeUpdate::ExpressionItem(_) => "ExpressionItem",
+        NodeUpdate::Realization(_) => "Realization",
+        NodeUpdate::PhonBlockRoot(_) => "PhonBlockRoot",
+        NodeUpdate::Constraint(_) => "Constraint",
+    }
+}
+
 fn dump_update(change: &NodeUpdate) -> Option<(&'static str, String)> {
     match change {
         NodeUpdate::Rename(value) => Some(("name", value.clone())),
@@ -3936,14 +4028,49 @@ fn dump_update(change: &NodeUpdate) -> Option<(&'static str, String)> {
         }
         NodeUpdate::SlotOptional(value) => Some(("optional", value.to_string())),
         NodeUpdate::Belongs(value) => Some(("target", value.clone())),
+        NodeUpdate::TraitUse { name, block } => {
+            Some(("target", dump_trait_use_target(name, *block)))
+        }
         NodeUpdate::RuleDimension(dim) => Some(("dim", dim.keyword().to_owned())),
         NodeUpdate::RuleStage(stage) => Some(("stage", stage_keyword(*stage).to_owned())),
-        _ => None,
+        // `phon_block:` 有自己的多行排法,由呼叫端處理,不走 `field = value`。
+        NodeUpdate::PhonBlockRoot(_) => None,
+        // 以下酬載是結構,一個字串裝不下——要支援得先給它們各自的表面語法。
+        // **列在這裡是決定,不是遺漏**;窮盡 match 保證新變體不會靜靜落進來。
+        NodeUpdate::DslDeclaration(_)
+        | NodeUpdate::Distribution { .. }
+        | NodeUpdate::RuleName(_)
+        | NodeUpdate::SlotConstraint(_)
+        | NodeUpdate::FeatureDeclaration(_)
+        | NodeUpdate::FeatureValue(_)
+        | NodeUpdate::SlotFeatureBinding(_)
+        | NodeUpdate::SlotMap(_)
+        | NodeUpdate::RoleDeclaration(_)
+        | NodeUpdate::RoleBinding(_)
+        | NodeUpdate::CaseHeader { .. }
+        | NodeUpdate::CaseBranch(_)
+        | NodeUpdate::SignApplication(_)
+        | NodeUpdate::ExpressionItem(_)
+        | NodeUpdate::Realization(_)
+        | NodeUpdate::Constraint(_) => None,
     }
 }
 
+/// `dump()` 遇到排不出來的編輯。
+///
+/// **不排出來就必須報錯,不能丟掉。** `dump()` 是工作副本存檔的路徑
+/// (`Session::save_working_copy`),靜默丟棄等於存出一份**不等於記憶體狀態**的
+/// `.chg`——replay 回來會少那些編輯,而 base digest 驗的是基底不是結果,擋不到。
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("CHANGESET_DUMP_UNREPRESENTABLE: {kind} 的這種改動排不成 `.chg` 的一行 `field = value`;\
+         它的酬載是結構,需要先給它表面語法")]
+pub struct DumpError {
+    /// 排不出來的那種 update(`NodeUpdate` 的變體名)。
+    pub kind: &'static str,
+}
+
 impl ResolvedChangeSet {
-    pub fn dump(&self) -> String {
+    pub fn dump(&self) -> Result<String, DumpError> {
         let mut output = format!(
             "changeset {}:\n    schema = {}\n    base_source = sha256:{}\n    base_identities = sha256:{}\n",
             self.namespace, self.schema, self.base_source, self.base_identities
@@ -3963,18 +4090,24 @@ impl ResolvedChangeSet {
                 match edit {
                     PrimitiveEdit::Update { node, change } => {
                         if let NodeUpdate::PhonBlockRoot(block) = change {
-                            if let Some(fragment) = render_phon_root_block(block) {
-                                output.push_str(&format!(
-                                    "        update {}.phon_block:\n",
-                                    dump_node(node)
-                                ));
-                                for line in fragment.lines() {
-                                    output.push_str("            ");
-                                    output.push_str(line);
-                                    output.push('\n');
-                                }
+                            let fragment = render_phon_root_block(block).ok_or(DumpError {
+                                kind: "PhonBlockRoot",
+                            })?;
+                            output.push_str(&format!(
+                                "        update {}.phon_block:\n",
+                                dump_node(node)
+                            ));
+                            for line in fragment.lines() {
+                                output.push_str("            ");
+                                output.push_str(line);
+                                output.push('\n');
                             }
-                        } else if let Some((field, value)) = dump_update(change) {
+                        } else {
+                            // **排不出來就報錯,不得跳過。** 跳過會讓存出來的 `.chg`
+                            // 少一條編輯,而那份檔案看起來完全正常。
+                            let (field, value) = dump_update(change).ok_or(DumpError {
+                                kind: update_kind_name(change),
+                            })?;
                             output.push_str(&format!(
                                 "        update {}.{} = {}\n",
                                 dump_node(node),
@@ -4120,7 +4253,7 @@ impl ResolvedChangeSet {
                 }
             }
         }
-        output
+        Ok(output)
     }
 }
 

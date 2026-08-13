@@ -45,7 +45,7 @@ fn the_legacy_statement_keyword_still_parses() {
 fn a_dump_always_uses_the_hash_form() {
     // 舊形進、新形出:正規化為不動點。
     let resolved = resolve(&format!("\n    statement 0:\n{UPDATE}")).unwrap();
-    let dump = resolved.dump();
+    let dump = resolved.dump().expect("dump");
     assert!(dump.contains("\n    #0:\n"), "canonical 用 #N::\n{dump}");
     assert!(!dump.contains("statement 0:"), "舊形不再出現:\n{dump}");
 
@@ -55,7 +55,7 @@ fn a_dump_always_uses_the_hash_form() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    assert_eq!(round.dump(), dump, "不動點");
+    assert_eq!(round.dump().expect("dump"), dump, "不動點");
 }
 
 #[test]

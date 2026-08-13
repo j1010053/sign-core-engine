@@ -43,13 +43,13 @@ fn rule_addressed_by_label_receives_an_else_branch() {
         .resolve(&base, &spec)
         .unwrap();
     // label 定址 → stable node(rule,@…);round-trip 穩定。
-    let dump = resolved.dump();
+    let dump = resolved.dump().expect("dump");
     assert!(dump.contains("insert into node(rule, @"));
     let round = UnresolvedChangeSet::parse(&dump)
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    assert_eq!(round.dump(), dump);
+    assert_eq!(round.dump().expect("dump"), dump);
 
     let doc = ChangeInterpreter::new(base, spec, "evo:named")
         .unwrap()
@@ -116,7 +116,7 @@ fn named_case_and_branch_round_trip_and_address() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    assert!(resolved.dump().contains("update node(case, @"));
+    assert!(resolved.dump().expect("dump").contains("update node(case, @"));
     let doc = ChangeInterpreter::new(base.clone(), spec.clone(), "evo:case")
         .unwrap()
         .run(&resolved)
@@ -137,7 +137,7 @@ fn named_case_and_branch_round_trip_and_address() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    assert!(resolved2.dump().contains("delete node(case_branch, @"));
+    assert!(resolved2.dump().expect("dump").contains("delete node(case_branch, @"));
 }
 
 /// Step-14 補完:往具名 case 插入一個 case-branch(SignContext guard 分支),
@@ -158,7 +158,7 @@ fn inserts_a_case_branch_into_a_named_case() {
         .resolve(&base, &spec)
         .unwrap();
     assert_eq!(resolved.statements[0].edits.len(), 1);
-    let dump = resolved.dump();
+    let dump = resolved.dump().expect("dump");
     assert!(dump.contains("insert into node(case, @"), "{dump}");
     assert!(dump.contains("$self.syn.number == plural"), "{dump}");
 
@@ -166,7 +166,7 @@ fn inserts_a_case_branch_into_a_named_case() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    assert_eq!(round.dump(), dump, "case-branch round-trip 穩定");
+    assert_eq!(round.dump().expect("dump"), dump, "case-branch round-trip 穩定");
 
     let doc = ChangeInterpreter::new(base, spec, "evo:cb")
         .unwrap()

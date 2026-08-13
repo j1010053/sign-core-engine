@@ -134,13 +134,13 @@ fn a_failed_commit_preserves_the_pending_changeset() {
             change: NodeUpdate::Rename("a".to_owned()),
         }])
         .expect("stage");
-    let before = session.pending().expect("pending").dump();
+    let before = session.pending().expect("pending").dump().expect("dump");
 
     // `b → a` 會造成重名，因此 commit 必須失敗；這正是從前會把 pending take 掉的路徑。
     assert!(session.commit(None).is_err(), "重名不可提交");
 
     assert_eq!(
-        session.pending().map(|pending| pending.dump()),
+        session.pending().map(|pending| pending.dump().expect("dump")),
         Some(before),
         "失敗後必須保留可修正、可重試的原草稿"
     );

@@ -46,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prelude = change_set_prelude(&base, &libraries, "evo:en-standard-restore")?;
     let mut resolved = UnresolvedChangeSet::parse(&prelude)?.resolve(&base, &libraries)?;
     resolved.statements = vec![ResolvedStatement { ordinal: 0, edits }];
-    let regenerated = resolved.dump();
+    let regenerated = resolved.dump().expect("dump");
 
     let previous = std::fs::read_to_string(&path).unwrap_or_default();
     if previous == regenerated {

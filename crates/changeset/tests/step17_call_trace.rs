@@ -144,7 +144,7 @@ fn the_trace_is_observation_only_and_never_reaches_the_dump() {
     .expect("resolves");
 
     assert!(!resolved.calls.is_empty());
-    let dump = resolved.dump();
+    let dump = resolved.dump().expect("dump");
     assert!(
         !dump.contains("VerbToTense"),
         "trace 不得留痕於 dump:\n{dump}"
@@ -157,7 +157,7 @@ fn the_trace_is_observation_only_and_never_reaches_the_dump() {
         .resolve(&document, &libraries)
         .expect("回讀可解析");
     assert!(round.calls.is_empty(), "{:?}", round.calls);
-    assert_eq!(round.dump(), dump);
+    assert_eq!(round.dump().expect("dump"), dump);
 }
 
 #[test]

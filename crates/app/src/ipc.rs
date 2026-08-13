@@ -1735,7 +1735,7 @@ impl UiSession {
     pub fn pending_change(&self) -> Result<PendingChangeV1, UiError> {
         let session = self.workspace.session();
         let source = session
-            .pending_source()
+            .pending_source()?
             .ok_or_else(|| ui_error("APP_NO_PENDING_CHANGE", "no pending .chg"))?;
         let statements = session
             .pending()

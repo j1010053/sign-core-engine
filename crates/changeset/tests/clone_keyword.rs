@@ -92,7 +92,7 @@ fn clone_lowers_to_a_single_insert_primitive_and_leaves_no_trace() {
         }
     ));
 
-    let dump = resolved.dump();
+    let dump = resolved.dump().expect("dump");
     assert!(dump.contains("insert sign under node(language, @"));
     assert!(dump.contains("at end:"));
     assert!(dump.contains("sign hound:"));
@@ -102,7 +102,7 @@ fn clone_lowers_to_a_single_insert_primitive_and_leaves_no_trace() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    assert_eq!(round.dump(), dump);
+    assert_eq!(round.dump().expect("dump"), dump);
 }
 
 /// 反例:clone 不存在的 sign → replay 前的 selector 錯,base 未污染。

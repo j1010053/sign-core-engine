@@ -58,7 +58,7 @@ fn reconstructs_the_english_grammar_through_a_dumped_changeset() {
         .expect("prelude resolves");
     resolved.statements = vec![ResolvedStatement { ordinal: 0, edits }];
 
-    let dumped = resolved.dump();
+    let dumped = resolved.dump().expect("dump");
 
     // ── 兩段分開比,理由見檔頭 ─────────────────────────────────────────
     //
@@ -140,7 +140,7 @@ fn reconstructs_the_english_grammar_through_a_dumped_changeset() {
         "evo:en-standard-restore",
         "new grammar nodes retain ChangeSet provenance"
     );
-    assert_eq!(reparsed.dump(), dumped, ".chg dump is canonical");
+    assert_eq!(reparsed.dump().expect("dump"), dumped, ".chg dump is canonical");
 }
 
 #[test]

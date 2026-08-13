@@ -88,6 +88,10 @@ pub enum AppError {
     Evolution(#[from] EvolutionError),
     #[error(transparent)]
     Replay(#[from] ReplayError),
+    /// pending 裡有一種 `.chg` 排不出來的編輯。**寧可存不了,也不能存出一份
+    /// 少了那條編輯的檔案**——後者看起來完全正常,replay 回來卻不是同一份文件。
+    #[error(transparent)]
+    Dump(#[from] conlang_changeset::DumpError),
     #[error(transparent)]
     Compile(#[from] crate::compile::CompileServiceError),
     /// `project.toml` 宣告的套件解析不開。
@@ -322,8 +326,15 @@ impl Session {
     }
 
     /// 目前 pending `.chg` 的 canonical source。
-    pub fn pending_source(&self) -> Option<String> {
-        self.pending.as_ref().map(ResolvedChangeSet::dump)
+    ///
+    /// `None` = 沒有 pending;`Err` = 有 pending 但其中一條編輯排不成 `.chg`
+    /// (見 [`conlang_changeset::DumpError`])。兩者刻意分開:前者不是錯誤。
+    pub fn pending_source(&self) -> Result<Option<String>, AppError> {
+        self.pending
+            .as_ref()
+            .map(|pending| pending.dump())
+            .transpose()
+            .map_err(AppError::from)
     }
 
     /// Materialize the document seen by the next structured authoring action.
@@ -445,7 +456,7 @@ impl Session {
         let dumped = {
             let pending = self.pending.as_ref().ok_or(AppError::NoActiveNode)?;
             self.replay_change_set(document, pending)?;
-            pending.dump()
+            pending.dump()?
         };
 
         let id = self.graph.commit(
@@ -512,7 +523,7 @@ impl Session {
     /// `UnresolvedChangeSet::parse` 讀回。app 不擁有格式(§2.2)。
     pub fn save_working_copy(&self, path: &Path) -> Result<(), AppError> {
         let pending = self.pending.as_ref().ok_or(AppError::NoActiveNode)?;
-        std::fs::write(path, pending.dump()).map_err(|source| AppError::Io {
+        std::fs::write(path, pending.dump()?).map_err(|source| AppError::Io {
             path: path.display().to_string(),
             source,
         })

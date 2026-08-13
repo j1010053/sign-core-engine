@@ -25,7 +25,7 @@
 use conlang_changeset::reconstruct::reconstruct;
 use conlang_changeset::{
     apply_edit, change_set_prelude, ChangeInterpreter, NodeUpdate, PrimitiveEdit, ReplayError,
-    ResolvedStatement, UnresolvedChangeSet,
+    ResolvedChangeSet, ResolvedStatement, UnresolvedChangeSet,
 };
 use conlang_language::{LanguageDocument, LibrarySpec, NodeKind, NodeRef};
 
@@ -116,7 +116,7 @@ fn kind_keyword_round_trips_for_every_node_kind() {
                 change: NodeUpdate::Belongs("Nouny".to_owned()),
             }],
         }];
-        let dump = resolved.dump();
+        let dump = resolved.dump().expect("dump");
         assert!(
             !dump.contains("node(node,"),
             "{kind:?} 沒有自己的關鍵字,排成了兜底的 `node`:\n{dump}"
@@ -166,7 +166,7 @@ fn a_hand_edited_belongs_reconstructs_into_a_readable_changeset() {
         .resolve(&before, &LibrarySpec::default())
         .expect("resolves");
     resolved.statements = vec![ResolvedStatement { ordinal: 0, edits }];
-    let dump = resolved.dump();
+    let dump = resolved.dump().expect("dump");
     assert!(dump.contains("node(belongs, @"), "{dump}");
 
     // 回讀 → 重解析 → 跑起來必須等於 `after`(不是只求 parse 不報錯)。
@@ -251,4 +251,150 @@ fn the_selector_picks_the_named_belongs_out_of_several() {
     assert!(rendered.contains("belongs D"), "{rendered}");
     assert!(rendered.contains("belongs C"), "{rendered}");
     assert!(!rendered.contains("belongs B"), "{rendered}");
+}
+
+// ── ③ TraitUse:與 `belongs` 對稱的那一半 ────────────────────────────────────
+//
+// `belongs` 的定址與欄位在 ①② 補齊了,`Foo[n]`(`TraitUse`)沒有——它排不出
+// `.chg`、也讀不回來,而 `dump()` 遇到排不出的編輯是**靜靜丟掉**。那條路是
+// 工作副本的存檔路徑(`Session::save_working_copy`),丟掉等於存出一份
+// 「看起來正常、replay 回來卻少一條編輯」的檔案。
+
+const MACRO_SOURCE: &str = r#"trait Verby:
+
+trait Nouny:
+
+sign go:
+    Verby[0]
+    entrenchment = 0.2
+"#;
+
+fn macro_base() -> LanguageDocument {
+    LanguageDocument::import_new_root(MACRO_SOURCE, "evo:macro").expect("fixture parses")
+}
+
+fn trait_use_node(document: &LanguageDocument) -> NodeRef {
+    let entry = document
+        .identities()
+        .nodes
+        .iter()
+        .find(|entry| entry.kind == NodeKind::TraitUse)
+        .expect("fixture has a trait use node");
+    NodeRef::new(entry.id.clone(), NodeKind::TraitUse)
+}
+
+/// 🔑 手改 `.lang` 的 `Foo[n]` → `reconstruct` → `dump` → **回讀成功**。
+///
+/// 與 `a_hand_edited_belongs_reconstructs_into_a_readable_changeset` 同一條路,
+/// 只是換成 macro 引用。原本這條路在 `dump` 那一步斷掉:`dump_update` 對
+/// `TraitUse` 回 `None`,那條 update 直接從輸出裡消失。
+#[test]
+fn a_hand_edited_trait_use_reconstructs_into_a_readable_changeset() {
+    let before = macro_base();
+    let after = apply_edit(
+        &before,
+        PrimitiveEdit::Update {
+            node: trait_use_node(&before),
+            change: NodeUpdate::TraitUse {
+                name: "Nouny".to_owned(),
+                block: Some(0),
+            },
+        },
+        &LibrarySpec::default(),
+    )
+    .expect("trait use 可更新")
+    .document;
+    assert!(after.source().contains("Nouny[0]"), "{}", after.source());
+
+    let edits = reconstruct(&before, &after).expect("還原");
+    assert_eq!(edits.len(), 1, "{edits:?}");
+
+    // dump 出來的那一句必須**存在**且讀得回去
+    let resolved = UnresolvedChangeSet::parse(&changeset(
+        &before,
+        "evo:m1",
+        "\n    #0:\n        update sign(\"go\").trait_use[\"Verby\"].target = Nouny[0]\n",
+    ))
+    .expect("parses")
+    .resolve(&before, &LibrarySpec::default())
+    .expect("resolves");
+    let dumped = resolved.dump().expect("dump");
+    // dump 走穩定 id 形式(`node(trait_use, @id)`),路徑形式是給人手寫的入口;
+    // 值含 `[]` 會被 `dump_value` 加引號,回讀時脫掉——正確性由下面的 round-trip 驗。
+    assert!(
+        dumped.contains("node(trait_use, @") && dumped.contains("Nouny[0]"),
+        "{dumped}"
+    );
+
+    // 排出來的東西讀得回去,且 replay 結果與模型層一致
+    let round = UnresolvedChangeSet::parse(&dumped)
+        .expect("回讀")
+        .resolve(&before, &LibrarySpec::default())
+        .expect("回讀後 resolve");
+    let replayed = ChangeInterpreter::new(
+        before.clone(),
+        LibrarySpec::default(),
+        "evo:m1".to_owned(),
+    )
+    .expect("interpreter")
+    .run(&round)
+    .expect("runs")
+    .document;
+    assert!(replayed.source().contains("Nouny[0]"), "{}", replayed.source());
+}
+
+/// 裸 `Foo`(整個 trait,`block: None`)也要能來回。
+#[test]
+fn a_whole_trait_use_round_trips_without_an_index() {
+    let before = macro_base();
+    let resolved = UnresolvedChangeSet::parse(&changeset(
+        &before,
+        "evo:m2",
+        "\n    #0:\n        update sign(\"go\").trait_use[\"Verby\"].target = Nouny\n",
+    ))
+    .expect("parses")
+    .resolve(&before, &LibrarySpec::default())
+    .expect("resolves");
+    let dumped = resolved.dump().expect("dump");
+    assert!(
+        dumped.contains(".target = Nouny\n"),
+        "裸名字要原樣排回去(不得補上 [0]):{dumped}"
+    );
+}
+
+/// 🔑 **排不出來的編輯必須報錯,不得靜默丟棄。**
+///
+/// 判別性:舊行為下 `dump()` 會回一份「少了那一句」的 `.chg`——而且它 parse 得過、
+/// replay 得動,只是產物不對。所以這裡驗的不是「有沒有錯誤訊息」,是
+/// **不會拿到一份沉默的壞檔案**。
+#[test]
+fn an_update_that_cannot_be_written_as_a_field_is_an_error_not_a_silent_drop() {
+    let before = macro_base();
+    let entry = before
+        .identities()
+        .nodes
+        .iter()
+        .find(|entry| entry.kind == NodeKind::Definition)
+        .expect("fixture has a definition");
+    let node = NodeRef::new(entry.id.clone(), NodeKind::Definition);
+
+    // `SlotMap` 的酬載是一個操作,不是字串——`dump_update` 對它回 `None`
+    // 走正常路徑拿一份 resolved,再把其中一條編輯換成排不出來的那種
+    let mut resolved = UnresolvedChangeSet::parse(&changeset(
+        &before,
+        "evo:m3",
+        "\n    #0:\n        update sign(\"go\").trait_use[\"Verby\"].target = Nouny[0]\n",
+    ))
+    .expect("parses")
+    .resolve(&before, &LibrarySpec::default())
+    .expect("resolves");
+    resolved.statements[0].edits = vec![PrimitiveEdit::Update {
+        node,
+        change: NodeUpdate::SlotMap(conlang_language::SlotMapOp::Internalize {
+            slot: "AGENT".to_owned(),
+        }),
+    }];
+
+    let error = resolved.dump().expect_err("排不出來就該報錯");
+    assert_eq!(error.kind, "SlotMap");
 }

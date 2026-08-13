@@ -51,14 +51,14 @@ fn explicit_flat_to_structured_update_and_leaf_insert_round_trip_through_dump() 
             ..
         }]
     ));
-    let dump = resolved.dump();
+    let dump = resolved.dump().expect("dump");
     assert!(dump.contains(".phon_block:"));
     assert!(dump.contains("Then propagate:"));
     let reparsed = UnresolvedChangeSet::parse(&dump)
         .unwrap()
         .resolve(&base, &libraries)
         .unwrap();
-    assert_eq!(reparsed.dump(), dump);
+    assert_eq!(reparsed.dump().expect("dump"), dump);
 
     let outcome = ChangeInterpreter::new(base, libraries, "evo:phon-author".to_owned())
         .unwrap()

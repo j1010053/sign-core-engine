@@ -30,7 +30,7 @@ fn promotes_a_trait_to_global_and_round_trips() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    let dump = resolved.dump();
+    let dump = resolved.dump().expect("dump");
     assert!(dump.contains(".global = true"), "dump:\n{dump}");
 
     // dump→parse→resolve→dump 穩定。
@@ -38,7 +38,7 @@ fn promotes_a_trait_to_global_and_round_trips() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    assert_eq!(round.dump(), dump);
+    assert_eq!(round.dump().expect("dump"), dump);
 
     // apply：LocalNoun 變 global（printer 以 `global trait` 輸出）。
     let doc = ChangeInterpreter::new(base, spec, "evo:global")

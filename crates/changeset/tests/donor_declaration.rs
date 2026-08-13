@@ -92,7 +92,7 @@ fn donors_survive_resolve_and_dump() {
         .expect("resolves");
     assert_eq!(resolved.donors, parsed.donors, "resolve 不得丟掉宣告");
 
-    let dumped = resolved.dump();
+    let dumped = resolved.dump().expect("dump");
     let again = UnresolvedChangeSet::parse(&dumped).expect("dump 可再解析");
     assert_eq!(again.donors, parsed.donors, "dump 不得丟掉宣告");
     assert!(
@@ -139,7 +139,7 @@ fn a_changeset_without_donors_is_unchanged() {
         .resolve(&base(), &spec)
         .unwrap();
     assert!(resolved.donors.is_empty());
-    assert!(!resolved.dump().contains("donor"));
+    assert!(!resolved.dump().expect("dump").contains("donor"));
 }
 
 #[test]
