@@ -16,7 +16,7 @@
 | **R1** | feature 宣告可帶尾綴 `?`:`NAME = enum(...)?` 表示**這條 feature 可以沒有值**。 |
 | **R2** | 讀到**宣告過、但沒有 `?`** 的 feature 而它沒有值 → **執行期 Error**(`RuleStatus::Error`),不是靜默 `Unmatched`。有 `?` → `Unmatched`(可落 `else`),即今日行為,但現在是被授權的。 |
 | **R3** | 範圍**限 typed feature**。封閉清單座標(`syn.tam.present` 等)沒有宣告處可掛 `?`,維持缺席容忍;收緊屬 P71 Phase 2 的座標宣告機制。 |
-| **R4** | `?` 在 canonical form 上**可省略**:`optional == false` 不印。未使用此語法的套件 canonical 逐位元不變,library lock digest **零 churn**。 |
+| **R4** | `?` 在 canonical form 上**可省略**:`optional == false` 不印,故**未使用此語法的宣告**其 canonical 逐位元不變、不產生無謂的 library lock churn。(真的需要 `?` 的套件當然會變——實例與代價見 §4.1。) |
 | **R5** | `?` 只對**宣告**有意義。貼到賦值(`n = sg?`)是明確的 parse error,不是默默忽略。 |
 
 ---
@@ -105,8 +105,8 @@ optional-value => $slot.optional.syn.number
 - 全 workspace **13 次缺席讀取 / 8 條路徑**。
 - 其中會觸發 P75 Error 的:**8 個站點**(`syn.case`×2、`syn.mark`×2、`syn.value`、
   `syn.number`、`sem.number`、`sem.interpreted_case`)。
-- **套件側(std / natural)= 0**。全部落在 test fixture 與 tutorial
-  → 依 R4 的可省略設計,**shipped `.lang` 一個 `?` 都不用加,digest churn 為零**。
+- **套件側(std / natural)= 0**——但這是**測試套件跑得到的範圍**,不是全部,
+  見 §4.1。
 - `slot-filled`(filler 在、feature 沒值)**實測 0 次**——規約上的洞照樣補齊,
   但補起來零風險。
 - 預設翻轉後**只有 1 個測試觀察得到失敗**
@@ -115,6 +115,32 @@ optional-value => $slot.optional.syn.number
 
 遷移共 8 處宣告加 `?` + 教學文件 3 處同步(`tutorial_examples` 的文件對照測試
 會抓到 `.lang` fixture 與教學正文的漂移,已一併更新並補一段 `?` 的說明)。
+
+### 4.1 補量測:測試覆蓋之外的套件(**修正 §4 的「套件側 = 0」**)
+
+§4 的執行期量測只看得到**測試套件實際跑過**的路徑。補做兩輪覆蓋全套件的掃描:
+
+1. **靜態**(每個 sign × 每條可見且無 `?` 的宣告,投影裡有沒有值):
+   en-standard **37 個 (sign, path) 候選 / 8 條路徑**,std **0**。
+   但這份清單**大量偽陽**——由規則在求值期寫入的 feature(`finite_form`、
+   `subject_case` 等)在未求值的 sign 上一律顯示為無值。
+2. **執行期**(替每個構式自動挑滿足約束的 filler 後 `derive`):
+   真正觸發 P75 的 **只有 1 個**——`EnglishCountNounForm` 讀 `$self.syn.number`。
+
+該讀取的值由 `DerivationContext` 注入(`grammar.lang` 的註解即如此寫),
+故宣告端 `AgreementBearer.number`(**std:core**)加 `?`。同一 trait 的 `person`
+**不加**:兩輪掃描都沒有任何讀取會在它缺席時觸發,不無憑據放寬檢查。
+
+**因此 R4 的「零 churn」在本次不成立**:std:core 的內容變了,其
+`library std:core@0.1.0 sha256:` 隨之改變,簽入的
+`tutorials/en-standard-reconstruction/restore.chg` 需重新 bless
+(`cargo run -p conlang-changeset --example bless_en_standard_restore`,
+diff 僅該一行,statements 未變)。
+
+R4 的正確表述是:**沒有用到 `?` 的宣告不會產生 churn**;真的需要 `?` 的套件
+當然會變。前者仍成立且是 R4 的目的(避免全庫無謂重印),後者是內容確實改變的
+必然結果。教訓:「套件側零影響」不能只靠測試套件的執行覆蓋推得,要對套件本身
+做覆蓋掃描。
 
 ---
 
@@ -130,12 +156,14 @@ optional-value => $slot.optional.syn.number
   `required_features`(宣告住在 filler 上,`$slot` 讀取才判斷得了)。
 - 出口:`crates/language/tests/p75_optional_feature.rs`(**10 案**)——值/guard
   兩種讀取的正反例、`else` 接手、封閉清單座標不受影響(R3)、canonical 省略
-  (R4,digest 零 churn 的**直接證據**而非推論)、round-trip 不動點、賦值拒絕
+  (R4,「未用到就不重印」的**直接證據**而非推論;真需要 `?` 的套件仍會變,見 §4.1)、
+  round-trip 不動點、賦值拒絕
   (R5)、`$slot` 兩案;每條否定斷言均配正向控制組。
 - **突變 5/5 首輪全紅**:①`$self` 檢查永不觸發(2 紅)②忽略 `?` 一律 Error
   (3 紅)③一律印 `?`(1 紅)④parser 吃掉 `?` 但不記錄(6 紅)⑤slot 側不查(1 紅)。
+- 覆蓋掃描與 std:core 的 `?`(§4.1)+ `restore.chg` 重 bless。
 - 回歸:`cargo test --workspace --exclude langcraft-desktop --tests`
-  **984 綠、0 警告**。
+  **987 綠、0 失敗**。
 
 ---
 

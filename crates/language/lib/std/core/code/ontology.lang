@@ -13,10 +13,13 @@ trait Entity:
 trait Relation:
     belongs Semantic
 
+/* P75:`number` 帶 `?` —— agreement number 依定義是**由脈絡供給**的
+   (DerivationContext 注入,或外層構式經 slot_features 設定),詞條自己不一定有。
+   `person` 不標:實測沒有任何讀取路徑會在它缺席時觸發,不無憑據放寬。 */
 trait AgreementBearer:
     syn:
         feature:
-            number = enum(singular, plural)
+            number = enum(singular, plural)?
             person = enum(first, second, third)
 
 trait Predicate:
