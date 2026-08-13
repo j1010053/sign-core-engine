@@ -1827,6 +1827,7 @@ fn address_list_position(address: &NodeAddress) -> Result<(ListKey, usize), Edit
 
 fn item_kind(item: &SignItem) -> NodeKind {
     match item {
+        SignItem::Pass => NodeKind::Pass,
         SignItem::TraitUse { .. } => NodeKind::TraitUse,
         SignItem::Belongs(_) => NodeKind::Belongs,
         SignItem::Slot(_) => NodeKind::Slot,
@@ -2258,6 +2259,7 @@ fn parse_kind(value: &str) -> Result<NodeKind, ReplayError> {
         "block" => Ok(NodeKind::Block),
         "trait_use" => Ok(NodeKind::TraitUse),
         "belongs" => Ok(NodeKind::Belongs),
+        "pass" => Ok(NodeKind::Pass),
         "definition" | "def" => Ok(NodeKind::Definition),
         "slot" => Ok(NodeKind::Slot),
         "slot_map" => Ok(NodeKind::SlotMap),
@@ -2301,6 +2303,7 @@ fn parse_kind(value: &str) -> Result<NodeKind, ReplayError> {
 /// 補上對應的一行。兩表的一致性由 `kind_keyword_round_trips_for_every_node_kind` 釘住。
 fn kind_keyword(kind: NodeKind) -> &'static str {
     match kind {
+        NodeKind::Pass => "pass",
         NodeKind::Language => "language",
         NodeKind::DslDeclaration => "dsl_declaration",
         NodeKind::Distribution => "distribution",
@@ -3613,6 +3616,7 @@ fn render_phon_root_block(block: &PhonBlock) -> Option<String> {
     fragment.traits.push(TraitDef {
         name: FRAGMENT_PHON_TRAIT.to_owned(),
         global: true,
+        marker: false,
         blocks: vec![Block {
             items: vec![SignItem::Rule(Rule {
                 id: conlang_language::RuleId::local(0),
@@ -4800,6 +4804,8 @@ fn dim_base(dim: Dim) -> u16 {
 
 fn item_group(item: &SignItem) -> u16 {
     match item {
+        // `pass` 與內容互斥(驗證擋),故與 `belongs` 同組不會造成排序歧義
+        SignItem::Pass => 0,
         SignItem::Belongs(_) => 0,
         SignItem::TraitUse { .. } => 1,
         SignItem::Def(def) if def_dimension(&def.path).is_none() => 2,
@@ -5911,8 +5917,9 @@ fn rewrite_slot_consumers(language: &mut Language, scope: &SlotRenameScope, old:
 fn rewrite_local_slot_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
     for item in items {
         match item {
-            // 義項/衍生邊不持 slot 引用。
-            SignItem::Slot(_)
+            // 義項/衍生邊與 `pass` 不持 slot 引用。
+            SignItem::Pass
+            | SignItem::Slot(_)
             | SignItem::FeatureDecl(_)
             | SignItem::FeatureValue(_)
             | SignItem::Sense(_)

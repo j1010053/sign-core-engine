@@ -94,6 +94,66 @@ fn trait_items(t: &TraitDef) -> Vec<SignItem> {
         .collect()
 }
 
+
+/// `pass` / 空塊 / `marker` 三條塊形狀規則。
+///
+/// - **空塊發警告**(不是錯誤):空塊一直是合法的,問題是它**啞**——看不出是刻意
+///   留白還是寫到一半。寫 `pass` 就閉嘴。用警告而非錯誤,是因為既有檔案裡的空塊
+///   是合法且 round-trip 穩定的,一刀變錯誤會讓它們全部失效;而 B9 本來就有分級
+///   診斷,「該說但不該擋」正是警告的用途。
+/// - **`pass` 與內容互斥**:兩者同時出現代表作者自相矛盾,那是錯誤。
+/// - **`marker trait` 不得有內容**:它承諾的就是這件事,不強制就只是註解。
+///   marker 的塊當然是空的,故**豁免空塊警告**——宣告行已經說明理由了。
+fn block_shape_diagnostics(langs: &[&Language]) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    for lang in langs {
+        for def in &lang.traits {
+            for (index, block) in def.blocks.iter().enumerate() {
+                let passes = block
+                    .items
+                    .iter()
+                    .filter(|item| matches!(item, SignItem::Pass))
+                    .count();
+                let others = block.items.len() - passes;
+                if def.marker && others > 0 {
+                    out.push(Diagnostic::new(
+                        Severity::Error,
+                        "TRAIT_MARKER_HAS_CONTENT",
+                        format!(
+                            "marker trait {:?} 不得有內容(block {index} 有 {others} 項);\
+                             要帶內容請改成一般 `trait`",
+                            def.name
+                        ),
+                    ));
+                }
+                if passes > 0 && others > 0 {
+                    out.push(Diagnostic::new(
+                        Severity::Error,
+                        "BLOCK_PASS_WITH_CONTENT",
+                        format!(
+                            "{:?} 的 block {index} 同時有 `pass` 與內容;`pass` 的意思是這一塊\
+                             故意留白",
+                            def.name
+                        ),
+                    ));
+                }
+                if block.items.is_empty() && !def.marker {
+                    out.push(Diagnostic::new(
+                        Severity::Warning,
+                        "BLOCK_EMPTY_WITHOUT_PASS",
+                        format!(
+                            "{:?} 的 block {index} 是空的;若是刻意留白請寫 `pass`,\
+                             若這個 trait 純粹是分類節點請改宣告為 `marker trait`",
+                            def.name
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    out
+}
+
 impl OntologyRegistry {
     /// 自一組 Language 建 registry(順序 = 覆蓋層:stdlib 在前,使用者在後)。
     pub fn build(langs: &[&Language]) -> (OntologyRegistry, Vec<OntologyDiag>) {
@@ -593,6 +653,7 @@ impl OntologyRegistry {
         legacy: &[OntologyDiag],
     ) -> ValidationReport {
         let mut report = ValidationReport::new();
+        report.extend(block_shape_diagnostics(langs));
         for diagnostic in legacy {
             match diagnostic {
                 OntologyDiag::UnknownTrait { referrer, target } => report.push(

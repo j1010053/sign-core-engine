@@ -23,6 +23,7 @@ Language {
         TraitDef {
             name: "CorePhonology",
             global: true,
+            marker: false,
             blocks: [
                 Block {
                     items: [
@@ -95,6 +96,7 @@ Language {
         TraitDef {
             name: "VerbCommon",
             global: false,
+            marker: false,
             blocks: [
                 Block {
                     items: [

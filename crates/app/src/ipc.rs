@@ -430,6 +430,7 @@ fn ensure_authoring_revision(document: &LanguageDocument, expected: &str) -> Res
 
 fn source_kind(kind: NodeKind) -> &'static str {
     match kind {
+        NodeKind::Pass => "pass",
         NodeKind::Language => "language",
         NodeKind::DslDeclaration => "dsl_declaration",
         NodeKind::Distribution => "distribution",

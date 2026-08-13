@@ -242,6 +242,12 @@ fn push_body(out: &mut String, blocks: &[Block]) {
             out.push_str("    ==\n"); // P27 block 邊界
         }
         let items = &block.items;
+        // 0) `pass`:故意留白的塊。它與內容互斥(驗證擋),故獨佔一塊時就是全部。
+        for it in items {
+            if matches!(it, SignItem::Pass) {
+                out.push_str("    pass\n");
+            }
+        }
         // 1) belongs(保序)
         for it in items {
             if let SignItem::Belongs(n) = it {
@@ -534,7 +540,13 @@ fn rule_dim(r: &crate::Rule) -> &'static str {
 }
 
 fn push_trait(out: &mut String, t: &TraitDef) {
-    let kw = if t.global { "global trait" } else { "trait" };
+    let kw = if t.global {
+        "global trait"
+    } else if t.marker {
+        "marker trait"
+    } else {
+        "trait"
+    };
     out.push_str(&format!("{kw} {}:\n", t.name));
     push_body(out, &t.blocks);
 }
@@ -601,6 +613,7 @@ mod tests {
             let a = TraitDef {
                 name: "Alpha".into(),
                 global: false,
+                marker: false,
                 blocks: vec![Block {
                     items: vec![SignItem::Belongs("Beta".into())],
                 }],
@@ -608,6 +621,7 @@ mod tests {
             let b = TraitDef {
                 name: "Beta".into(),
                 global: false,
+                marker: false,
                 blocks: vec![Block::default()],
             };
             if flip {

@@ -677,6 +677,9 @@ pub struct Block {
 
 /// Trait:**維度中立的分類節點 / macro 模板**(修補07 P38 v0.2:單一分類樹)。
 /// - `global = true` = phon-rule macro,預設自動引用(P6),codegen 收入 phon 側;
+/// - `marker = true` = **純分類節點**,以 `marker trait` 宣告:承諾**永不帶內容**,
+///   由驗證強制。它讓「這個 trait 只是個標記」成為**契約**而不是當下的事實
+///   ——差別在於改變它必須改宣告行(看得見),而不是往 body 裡塞一行(看不見);
 /// - 一般 trait = 分類節點(`belongs` 建單一繼承樹)+ 可帶 dimension 內容(繼承給
 ///   後代,projection 解析)。`Name[n]` block-indexed macro(P5/P27)仍支援。
 ///   **無 `syn trait` 維度標記**(維度是內容面向,非分類樹)。
@@ -684,6 +687,8 @@ pub struct Block {
 pub struct TraitDef {
     pub name: String,
     pub global: bool,
+    /// **純分類節點**(`marker trait`):承諾永不帶內容。見型別說明。
+    pub marker: bool,
     pub blocks: Vec<Block>,
 }
 
@@ -724,6 +729,17 @@ impl SignItem {
 /// sign 內項目:trait 引用位置有語意(P5),故與 Def/Rule 同列保序。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SignItem {
+    /// `pass`:**這一塊是故意空的**。
+    ///
+    /// 空塊本身一直是合法的,問題是它**啞**——看不出是刻意留白還是寫到一半。
+    /// `pass` 讓作者說出來,而沒有 `pass` 的空塊會發診斷(警告,不是錯誤)。
+    ///
+    /// 做成語法而不是註解,是因為 canonical printer 由 AST 印出,**註解過不了
+    /// 一次 `dump()`**——而 `.chg` 的 replay、reconstruct、工作副本存檔全走
+    /// canonical 形式。要活過往返的意圖就必須是語法。
+    ///
+    /// 與其他項目**互斥**:`pass` 和內容同時出現是錯誤(驗證擋)。
+    Pass,
     /// trait macro 引用(P5/P27)。`block`:**0 起算**——
     /// - `Some(n)` = `Name[n]`,只引用第 n 個 block(indexed 須覆蓋全部 block,P5);
     /// - `None` = **整個 trait**(裸 `Name` 或 `Name[]`,全 block 依序 inline)。

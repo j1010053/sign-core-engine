@@ -578,6 +578,7 @@ fn projection(sign: &SignDef, dim: Option<Dim>) -> Vec<SignItem> {
 /// 判定,「排在 sem 區段」和「算進 sem 分量」會慢慢對不起來。
 fn item_dimension(item: &SignItem) -> Option<Dim> {
     match item {
+        SignItem::Pass => None,
         SignItem::Belongs(_) | SignItem::TraitUse { .. } => None,
         SignItem::Constraint(_) | SignItem::SignExpression(_) => None,
         SignItem::Def(def) => def_dimension(&def.path),

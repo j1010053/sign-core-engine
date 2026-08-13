@@ -1706,6 +1706,8 @@ fn validate_fp_expressions(
 
     fn item_allowed_in_context(item: &SignItem, dim: Dim) -> bool {
         match item {
+            // `pass` 是塊層級的標記,不屬於任何維度區塊
+            SignItem::Pass => false,
             SignItem::FeatureDecl(value) => value.dim == dim,
             SignItem::FeatureValue(value) => value.dim == dim,
             SignItem::FeatureExpression(value) => value.dim == dim,

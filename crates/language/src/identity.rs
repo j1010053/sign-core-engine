@@ -92,6 +92,8 @@ pub enum NodeKind {
     Case,
     CaseBranch,
     Constraint,
+    /// `pass`:故意留白的塊標記。
+    Pass,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -763,6 +765,7 @@ fn validate_manifest_namespaces(manifest: &IdentityManifestV2) -> Result<(), Ide
 
 fn item_kind(item: &SignItem) -> NodeKind {
     match item {
+        SignItem::Pass => NodeKind::Pass,
         SignItem::TraitUse { .. } => NodeKind::TraitUse,
         SignItem::Belongs(_) => NodeKind::Belongs,
         SignItem::Slot(_) => NodeKind::Slot,

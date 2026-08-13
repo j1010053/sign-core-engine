@@ -64,6 +64,8 @@ enum ReconstructCapability {
 /// addressable kind therefore forces reconstruct to make an explicit choice.
 fn capability(kind: NodeKind) -> ReconstructCapability {
     match kind {
+        // `pass` 沒有欄位:改變它只能靠 delete/insert,沒有 typed update 可言。
+        NodeKind::Pass => ReconstructCapability::Immutable,
         NodeKind::Language => ReconstructCapability::Immutable,
         NodeKind::Block => ReconstructCapability::StructuralContainer,
         NodeKind::RealizationBranch => ReconstructCapability::Unsupported,

@@ -59,7 +59,7 @@ fn indent_of(raw: &str) -> usize {
 
 /// 容器頭 `<kw> Name:` → (kw, name)?
 fn container_head(text: &str) -> Option<(&'static str, &str)> {
-    for kw in ["global trait", "trait", "sign"] {
+    for kw in ["global trait", "marker trait", "trait", "sign"] {
         if let Some(rest) = text.strip_prefix(kw) {
             if let Some(name) = rest.strip_suffix(':') {
                 let name = name.trim();
@@ -1001,7 +1001,13 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             in_edges = false;
             in_realization = false;
             in_constraints = false;
-            if text == "==" {
+            if text == "pass" {
+                blocks
+                    .last_mut()
+                    .unwrap()
+                    .items
+                    .push(SignItem::Pass);
+            } else if text == "==" {
                 blocks.push(Block::default());
             } else if text == "constraints:" {
                 in_constraints = true;
@@ -1721,6 +1727,7 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
                 _ => lang.add_trait(TraitDef {
                     name,
                     global: kw == "global trait",
+                    marker: kw == "marker trait",
                     blocks,
                 }),
             }
