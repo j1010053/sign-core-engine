@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { useDirtyDraft } from "../dirtyGuard";
 import { api } from "../ipc";
 
 export function SourcePage() {
@@ -15,15 +16,20 @@ export function SourcePage() {
   const tree = useQuery({ queryKey: ["tree"], queryFn: api.tree });
   const [draft, setDraft] = useState("");
   const [syncedNode, setSyncedNode] = useState("");
+  const [syncedSource, setSyncedSource] = useState("");
   const [rebaseNode, setRebaseNode] = useState("");
   const [rebaseOnto, setRebaseOnto] = useState("");
 
   useEffect(() => {
-    if (source.data && source.data.node !== syncedNode) {
-      setDraft(source.data.source);
-      setSyncedNode(source.data.node);
-    }
-  }, [source.data, syncedNode]);
+    const data = source.data;
+    if (!data || (data.node === syncedNode && data.source === syncedSource)) return;
+    // A query hydration/refetch may finish after the user has already typed.
+    // Only adopt Rust source while the editor still equals the version it was
+    // synchronized from; otherwise keep the local draft for the route guard.
+    if (draft === syncedSource) setDraft(data.source);
+    setSyncedNode(data.node);
+    setSyncedSource(data.source);
+  }, [draft, source.data, syncedNode, syncedSource]);
 
   const reconcile = useMutation({
     mutationFn: () => api.reconcileSource(draft),
@@ -50,6 +56,13 @@ export function SourcePage() {
     },
   });
   const dirty = Boolean(source.data && draft !== source.data.source);
+  useDirtyDraft(
+    "expert-source",
+    dirty && !project.data?.has_pending,
+    async () => {
+      await reconcile.mutateAsync();
+    },
+  );
 
   return (
     <div className="page source-page">

@@ -193,8 +193,7 @@ impl Workspace {
         // explicit Save Project boundary, that node has no hash-external files
         // to read yet.  An existing node directory is different: failures below
         // it must still propagate so damaged metadata is never hidden.
-        let node_dir = store.root().join("nodes").join(id.as_str());
-        let (state, annotations) = if node_dir.exists() {
+        let (state, annotations) = if store.contains_node(id) {
             (
                 store.read_state(id)?,
                 store

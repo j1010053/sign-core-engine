@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import { DiffSummary } from "../components/DiffSummary";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { StructuredAuthoring } from "../components/StructuredAuthoring";
+import { useDirtyDraft } from "../dirtyGuard";
 import { api } from "../ipc";
 
 export function EvolutionPage() {
@@ -29,11 +30,14 @@ export function EvolutionPage() {
   const [syncedSource, setSyncedSource] = useState("");
   const [label, setLabel] = useState("");
   useEffect(() => {
-    if (pending.data?.source && pending.data.source !== syncedSource) {
-      setDraft(pending.data.source);
-      setSyncedSource(pending.data.source);
-    }
-  }, [pending.data?.source, syncedSource]);
+    const source = pending.data?.source;
+    if (source === undefined || source === syncedSource) return;
+    // Query hydration/refetch must not overwrite text the user has already
+    // changed. Adopt the backend source only while the editor still matches
+    // the previous synchronized version.
+    if (draft === syncedSource) setDraft(source);
+    setSyncedSource(source);
+  }, [draft, pending.data?.source, syncedSource]);
   const localDirty = draft !== syncedSource;
 
   const refresh = async () => {
@@ -55,12 +59,14 @@ export function EvolutionPage() {
     mutationFn: () => api.replacePendingSource(draft),
     onSuccess: async (data) => { setDraft(data.source); setSyncedSource(data.source); await refresh(); },
   });
+  useDirtyDraft("evolution-source", localDirty, async () => {
+    await sync.mutateAsync();
+  });
   const discard = useMutation({ mutationFn: api.discardLastEdit, onSuccess: refresh });
   const commit = useMutation({ mutationFn: () => api.commit(label || undefined), onSuccess: async () => { setDraft(""); setSyncedSource(""); setLabel(""); await refresh(); } });
   const persist = useMutation({ mutationFn: api.saveProject, onSuccess: refresh });
   const navigate = useMutation({ mutationFn: (direction: "undo" | "redo") => direction === "undo" ? api.undo() : api.redo(), onSuccess: refresh });
   const remove = useMutation({ mutationFn: api.removeActiveLeaf, onSuccess: refresh });
-  const error = begin.error ?? sync.error ?? discard.error ?? commit.error ?? persist.error ?? navigate.error ?? remove.error ?? catalog.error;
 
   const staged = async (data: Awaited<ReturnType<typeof api.pendingChange>>) => {
     setDraft(data.source);
@@ -70,14 +76,21 @@ export function EvolutionPage() {
     await refresh();
   };
 
-  const saveCopy = async () => {
-    const path = await save({ filters: [{ name: "LangCraft ChangeSet", extensions: ["chg"] }] });
-    if (path) await api.saveWorkingCopy(path);
-  };
+  const saveCopy = useMutation({
+    mutationFn: async () => {
+      const path = await save({ filters: [{ name: "LangCraft ChangeSet", extensions: ["chg"] }] });
+      if (!path) return null;
+      return api.saveWorkingCopySource(path, draft);
+    },
+    onSuccess: async (data) => {
+      if (data) await staged(data);
+    },
+  });
   const loadCopy = async () => {
     const path = await open({ multiple: false, filters: [{ name: "LangCraft ChangeSet", extensions: ["chg"] }] });
     if (typeof path === "string") { const data = await api.loadWorkingCopy(path); setDraft(data.source); setSyncedSource(data.source); await refresh(); }
   };
+  const error = begin.error ?? sync.error ?? saveCopy.error ?? discard.error ?? commit.error ?? persist.error ?? navigate.error ?? remove.error ?? catalog.error;
 
   return (
     <div className="page evolution-page">
@@ -94,7 +107,7 @@ export function EvolutionPage() {
       <div className="workbench-grid">
         {project.data?.has_pending ? (
           <section className="panel code-panel">
-            <div className="section-heading"><div><p className="eyebrow">RAW .CHG</p><h2>{t("editor.pending", { count: pending.data?.statements ?? 0 })}</h2></div><div className="toolbar compact"><button className="icon-button" type="button" title={t("editor.load")} onClick={loadCopy}><FileUp /></button><button className="icon-button" type="button" title={t("editor.saveAs")} onClick={saveCopy}><FileDown /></button></div></div>
+            <div className="section-heading"><div><p className="eyebrow">RAW .CHG</p><h2>{t("editor.pending", { count: pending.data?.statements ?? 0 })}</h2></div><div className="toolbar compact"><button className="icon-button" type="button" title={t("editor.load")} onClick={loadCopy}><FileUp /></button><button className="icon-button" type="button" title={t("editor.saveAs")} onClick={() => saveCopy.mutate()} disabled={pending.isPending || saveCopy.isPending}><FileDown /></button></div></div>
             <CodeMirror value={draft} height="540px" theme="dark" onChange={setDraft} basicSetup={{ foldGutter: true, lineNumbers: true, highlightActiveLine: true }} />
             <div className={`editor-status ${localDirty ? "warning" : "success"}`}>{localDirty ? t("editor.invalid") : <><CheckCircle2 />{t("editor.valid")}</>}</div>
             <button className="button primary" type="button" onClick={() => sync.mutate()} disabled={!localDirty || sync.isPending}>{t("editor.validate")}</button>

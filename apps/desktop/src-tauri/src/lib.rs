@@ -27,15 +27,20 @@ fn locked<'r>(
     })
 }
 
+// Tauri runs synchronous commands on the Windows UI thread, whose PE stack
+// reserve is only 1 MiB. Even read-looking DTO commands can compile, replay, or
+// diff language state below `conlang-app`, so every domain IPC enters through
+// the async runtime. The ProjectSlot mutex remains the single serialization
+// boundary for reads and mutations.
 #[tauri::command]
-fn project_summary(
+async fn project_summary(
     state: State<'_, Mutex<ProjectSlot>>,
 ) -> Result<Option<ProjectSummaryV1>, UiError> {
     Ok(locked(&state)?.summary())
 }
 
 #[tauri::command]
-fn open_project(
+async fn open_project(
     state: State<'_, Mutex<ProjectSlot>>,
     path: String,
     discard_dirty: bool,
@@ -45,7 +50,7 @@ fn open_project(
 
 /// `source_path` 省略 ⇒ **空白專案**(P28:canonical empty root 永遠存在)。
 #[tauri::command]
-fn create_project(
+async fn create_project(
     state: State<'_, Mutex<ProjectSlot>>,
     path: String,
     source_path: Option<String>,
@@ -57,17 +62,22 @@ fn create_project(
 }
 
 #[tauri::command]
-fn close_project(state: State<'_, Mutex<ProjectSlot>>, discard_dirty: bool) -> Result<(), UiError> {
+async fn close_project(
+    state: State<'_, Mutex<ProjectSlot>>,
+    discard_dirty: bool,
+) -> Result<(), UiError> {
     locked(&state)?.close(discard_dirty)
 }
 
 #[tauri::command]
-fn package_catalog(state: State<'_, Mutex<ProjectSlot>>) -> Result<PackageCatalogV1, UiError> {
+async fn package_catalog(
+    state: State<'_, Mutex<ProjectSlot>>,
+) -> Result<PackageCatalogV1, UiError> {
     locked(&state)?.session()?.package_catalog()
 }
 
 #[tauri::command]
-fn configure_packages(
+async fn configure_packages(
     state: State<'_, Mutex<ProjectSlot>>,
     input: PackageSelectionInput,
 ) -> Result<ProjectSummaryV1, UiError> {
@@ -75,12 +85,12 @@ fn configure_packages(
 }
 
 #[tauri::command]
-fn weight_config(state: State<'_, Mutex<ProjectSlot>>) -> Result<WeightConfigV1, UiError> {
+async fn weight_config(state: State<'_, Mutex<ProjectSlot>>) -> Result<WeightConfigV1, UiError> {
     locked(&state)?.session()?.weight_config()
 }
 
 #[tauri::command]
-fn set_weights(
+async fn set_weights(
     state: State<'_, Mutex<ProjectSlot>>,
     entries: Vec<SegmentWeight>,
 ) -> Result<WeightConfigV1, UiError> {
@@ -88,17 +98,20 @@ fn set_weights(
 }
 
 #[tauri::command]
-fn tree(state: State<'_, Mutex<ProjectSlot>>) -> Result<EvolutionTreeV1, UiError> {
+async fn tree(state: State<'_, Mutex<ProjectSlot>>) -> Result<EvolutionTreeV1, UiError> {
     Ok(locked(&state)?.session()?.tree())
 }
 
 #[tauri::command]
-fn select_node(state: State<'_, Mutex<ProjectSlot>>, id: String) -> Result<NodeDetailV1, UiError> {
+async fn select_node(
+    state: State<'_, Mutex<ProjectSlot>>,
+    id: String,
+) -> Result<NodeDetailV1, UiError> {
     locked(&state)?.session_mut()?.select_node(&id)
 }
 
 #[tauri::command]
-fn lexicon(
+async fn lexicon(
     state: State<'_, Mutex<ProjectSlot>>,
     query: LexiconQuery,
 ) -> Result<LexiconViewV1, UiError> {
@@ -106,12 +119,12 @@ fn lexicon(
 }
 
 #[tauri::command]
-fn node_detail(state: State<'_, Mutex<ProjectSlot>>) -> Result<NodeDetailV1, UiError> {
+async fn node_detail(state: State<'_, Mutex<ProjectSlot>>) -> Result<NodeDetailV1, UiError> {
     locked(&state)?.session()?.node_detail()
 }
 
 #[tauri::command]
-fn set_label(
+async fn set_label(
     state: State<'_, Mutex<ProjectSlot>>,
     label: Option<String>,
 ) -> Result<NodeDetailV1, UiError> {
@@ -119,7 +132,7 @@ fn set_label(
 }
 
 #[tauri::command]
-fn set_state(
+async fn set_state(
     state: State<'_, Mutex<ProjectSlot>>,
     value: EvolutionState,
 ) -> Result<NodeDetailV1, UiError> {
@@ -127,7 +140,7 @@ fn set_state(
 }
 
 #[tauri::command]
-fn write_annotation(
+async fn write_annotation(
     state: State<'_, Mutex<ProjectSlot>>,
     path: String,
     content: String,
@@ -138,12 +151,15 @@ fn write_annotation(
 }
 
 #[tauri::command]
-fn read_annotation(state: State<'_, Mutex<ProjectSlot>>, path: String) -> Result<String, UiError> {
+async fn read_annotation(
+    state: State<'_, Mutex<ProjectSlot>>,
+    path: String,
+) -> Result<String, UiError> {
     locked(&state)?.session()?.read_annotation(&path)
 }
 
 #[tauri::command]
-fn begin_edit(
+async fn begin_edit(
     state: State<'_, Mutex<ProjectSlot>>,
     namespace: String,
 ) -> Result<PendingChangeV1, UiError> {
@@ -151,12 +167,12 @@ fn begin_edit(
 }
 
 #[tauri::command]
-fn pending_change(state: State<'_, Mutex<ProjectSlot>>) -> Result<PendingChangeV1, UiError> {
+async fn pending_change(state: State<'_, Mutex<ProjectSlot>>) -> Result<PendingChangeV1, UiError> {
     locked(&state)?.session()?.pending_change()
 }
 
 #[tauri::command]
-fn replace_pending_source(
+async fn replace_pending_source(
     state: State<'_, Mutex<ProjectSlot>>,
     source: String,
 ) -> Result<PendingChangeV1, UiError> {
@@ -166,12 +182,14 @@ fn replace_pending_source(
 }
 
 #[tauri::command]
-fn authoring_catalog(state: State<'_, Mutex<ProjectSlot>>) -> Result<AuthoringCatalogV1, UiError> {
+async fn authoring_catalog(
+    state: State<'_, Mutex<ProjectSlot>>,
+) -> Result<AuthoringCatalogV1, UiError> {
     locked(&state)?.session()?.authoring_catalog()
 }
 
 #[tauri::command]
-fn authoring_move_options(
+async fn authoring_move_options(
     state: State<'_, Mutex<ProjectSlot>>,
     target: String,
     revision: String,
@@ -182,7 +200,7 @@ fn authoring_move_options(
 }
 
 #[tauri::command]
-fn stage_structured_edit(
+async fn stage_structured_edit(
     state: State<'_, Mutex<ProjectSlot>>,
     input: StructuredEditInput,
 ) -> Result<PendingChangeV1, UiError> {
@@ -190,7 +208,7 @@ fn stage_structured_edit(
 }
 
 #[tauri::command]
-fn stage_sound_change(
+async fn stage_sound_change(
     state: State<'_, Mutex<ProjectSlot>>,
     input: SoundChangeInput,
 ) -> Result<PendingChangeV1, UiError> {
@@ -198,17 +216,33 @@ fn stage_sound_change(
 }
 
 #[tauri::command]
-fn discard_last_edit(state: State<'_, Mutex<ProjectSlot>>) -> Result<PendingChangeV1, UiError> {
+async fn discard_last_edit(
+    state: State<'_, Mutex<ProjectSlot>>,
+) -> Result<PendingChangeV1, UiError> {
     locked(&state)?.session_mut()?.discard_last_edit()
 }
 
 #[tauri::command]
-fn save_working_copy(state: State<'_, Mutex<ProjectSlot>>, path: String) -> Result<(), UiError> {
+async fn save_working_copy(
+    state: State<'_, Mutex<ProjectSlot>>,
+    path: String,
+) -> Result<(), UiError> {
     locked(&state)?.session()?.save_working_copy(path)
 }
 
 #[tauri::command]
-fn load_working_copy(
+async fn save_working_copy_source(
+    state: State<'_, Mutex<ProjectSlot>>,
+    path: String,
+    source: String,
+) -> Result<PendingChangeV1, UiError> {
+    locked(&state)?
+        .session_mut()?
+        .save_working_copy_source(path, &source)
+}
+
+#[tauri::command]
+async fn load_working_copy(
     state: State<'_, Mutex<ProjectSlot>>,
     path: String,
 ) -> Result<PendingChangeV1, UiError> {
@@ -216,7 +250,7 @@ fn load_working_copy(
 }
 
 #[tauri::command]
-fn commit_change(
+async fn commit_change(
     state: State<'_, Mutex<ProjectSlot>>,
     label: Option<String>,
 ) -> Result<NodeDetailV1, UiError> {
@@ -224,27 +258,29 @@ fn commit_change(
 }
 
 #[tauri::command]
-fn save_project(state: State<'_, Mutex<ProjectSlot>>) -> Result<ProjectSummaryV1, UiError> {
+async fn save_project(state: State<'_, Mutex<ProjectSlot>>) -> Result<ProjectSummaryV1, UiError> {
     locked(&state)?.session_mut()?.save_project()
 }
 
 #[tauri::command]
-fn undo_navigation(state: State<'_, Mutex<ProjectSlot>>) -> Result<NodeDetailV1, UiError> {
+async fn undo_navigation(state: State<'_, Mutex<ProjectSlot>>) -> Result<NodeDetailV1, UiError> {
     locked(&state)?.session_mut()?.undo_navigation()
 }
 
 #[tauri::command]
-fn redo_navigation(state: State<'_, Mutex<ProjectSlot>>) -> Result<NodeDetailV1, UiError> {
+async fn redo_navigation(state: State<'_, Mutex<ProjectSlot>>) -> Result<NodeDetailV1, UiError> {
     locked(&state)?.session_mut()?.redo_navigation()
 }
 
 #[tauri::command]
-fn remove_active_leaf(state: State<'_, Mutex<ProjectSlot>>) -> Result<EvolutionTreeV1, UiError> {
+async fn remove_active_leaf(
+    state: State<'_, Mutex<ProjectSlot>>,
+) -> Result<EvolutionTreeV1, UiError> {
     locked(&state)?.session_mut()?.remove_active_leaf()
 }
 
 #[tauri::command]
-fn propose(
+async fn propose(
     state: State<'_, Mutex<ProjectSlot>>,
     query: ProposalQuery,
 ) -> Result<ProposalsViewV1, UiError> {
@@ -252,7 +288,7 @@ fn propose(
 }
 
 #[tauri::command]
-fn adopt_proposal(
+async fn adopt_proposal(
     state: State<'_, Mutex<ProjectSlot>>,
     query: ProposalQuery,
     index: usize,
@@ -261,7 +297,7 @@ fn adopt_proposal(
 }
 
 #[tauri::command]
-fn stats(
+async fn stats(
     state: State<'_, Mutex<ProjectSlot>>,
     inventory: Vec<String>,
 ) -> Result<StatsViewV1, UiError> {
@@ -269,7 +305,7 @@ fn stats(
 }
 
 #[tauri::command]
-fn grouping(
+async fn grouping(
     state: State<'_, Mutex<ProjectSlot>>,
     query: GroupingQuery,
 ) -> Result<GroupingViewV1, UiError> {
@@ -277,7 +313,7 @@ fn grouping(
 }
 
 #[tauri::command]
-fn assign_group(
+async fn assign_group(
     state: State<'_, Mutex<ProjectSlot>>,
     query: GroupingQuery,
     node: String,
@@ -287,7 +323,7 @@ fn assign_group(
 }
 
 #[tauri::command]
-fn label_group(
+async fn label_group(
     state: State<'_, Mutex<ProjectSlot>>,
     query: GroupingQuery,
     group: String,
@@ -297,7 +333,7 @@ fn label_group(
 }
 
 #[tauri::command]
-fn intelligibility(
+async fn intelligibility(
     state: State<'_, Mutex<ProjectSlot>>,
     source: String,
     target: String,
@@ -306,7 +342,7 @@ fn intelligibility(
 }
 
 #[tauri::command]
-fn derivation(
+async fn derivation(
     state: State<'_, Mutex<ProjectSlot>>,
     sign: String,
 ) -> Result<DerivationViewV1, UiError> {
@@ -314,12 +350,12 @@ fn derivation(
 }
 
 #[tauri::command]
-fn source(state: State<'_, Mutex<ProjectSlot>>) -> Result<SourceViewV1, UiError> {
+async fn source(state: State<'_, Mutex<ProjectSlot>>) -> Result<SourceViewV1, UiError> {
     locked(&state)?.session()?.source()
 }
 
 #[tauri::command]
-fn reconcile_source(
+async fn reconcile_source(
     state: State<'_, Mutex<ProjectSlot>>,
     source: String,
 ) -> Result<SourceReconcileV1, UiError> {
@@ -327,7 +363,7 @@ fn reconcile_source(
 }
 
 #[tauri::command]
-fn preview_rebase(
+async fn preview_rebase(
     state: State<'_, Mutex<ProjectSlot>>,
     node: String,
     onto: String,
@@ -336,7 +372,7 @@ fn preview_rebase(
 }
 
 #[tauri::command]
-fn apply_rebase(
+async fn apply_rebase(
     state: State<'_, Mutex<ProjectSlot>>,
     node: String,
     onto: String,
@@ -382,6 +418,7 @@ pub fn run() {
             stage_sound_change,
             discard_last_edit,
             save_working_copy,
+            save_working_copy_source,
             load_working_copy,
             commit_change,
             save_project,

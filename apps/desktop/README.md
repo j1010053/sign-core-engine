@@ -93,28 +93,17 @@ corepack enable          # pnpm 版本由根 package.json 的 packageManager 決
 
 見 CLAUDE.md §4.1。
 
-### E2E 在 Windows 上失敗(**已知未解**)
+### Windows E2E 的 stack 預算
 
-CI 的 `Tauri E2E (Windows)` 目前是 `continue-on-error: true`。**它是壞的,
-不是不重要**——降級只是為了不擋合併,訊號留著。
+Windows PE 的 UI 主執行緒預設只保留 1 MiB stack。`stage_sound_change` 會在一次
+IPC 內完成 lower、候選 ChangeSet replay 與 diff preview；若把它宣告成同步 Tauri
+command，這些工作會在 UI 主執行緒執行並以 `thread 'main' has overflowed its stack`
+終止 app。WebDriver 使用 embedded provider，因此表面症狀會是 `fetch failed`，後續
+請求則全為 `ECONNREFUSED`。
 
-症狀:app 行程在 `workbench.e2e.ts` 前段無訊息死掉,WebDriver 端看到
-`TypeError: fetch failed`,之後對 driver 的每個請求都是 `ECONNREFUSED`
-(driver 內嵌在 app 行程裡,行程沒了它就沒了)。Linux 同一組 spec 全綠。
-
-已排除的假設,別再走一次:
-
-| 假設 | 結果 |
-|---|---|
-| `spawn` `pnpm.cmd` 需要 `shell: true` | **真缺陷,已修**;build 現在會過,但 E2E 仍失敗 |
-| 前一個 spec 的 `deleteSession()` 殺掉共用 app | 改成 spec group 後只剩單一 session,**仍死在同樣那兩條測試** |
-| `maxInstances: 2` 讓兩個 spec 各拿一個 app | **錯的**。embedded provider 只生一個 app,結果是兩個 worker 搶同一個 `ProjectSlot` |
-| `panic = "abort"` 把 panic 變成 abort | profile 裡沒有 |
-
-下一步該做的是**捕捉 app 的 stdout/stderr**,而不是再猜。若是 Windows 主
-執行緒 1 MB 堆疊被打爆(Linux 是 8 MB),stderr 會直說。
-
-修好之後把 `.github/workflows/ci.yml` 裡的 `continue-on-error` 拿掉。
+所有領域 command 都必須保持 async，讓 Tauri runtime 執行可能包含 compile／replay
+的工作；`ProjectSlot` mutex 仍負責序列化 session mutation。WDIO 同時啟用 backend
+log capture，Windows E2E 是阻塞式 CI gate，避免 app stderr 再被次生連線錯誤掩蓋。
 
 ## 發佈
 

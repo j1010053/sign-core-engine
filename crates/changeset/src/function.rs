@@ -2102,50 +2102,93 @@ pub fn functions_from_packages(packages: &[&LibraryPackage]) -> Result<FunctionT
 /// 跨套件的循環偵測(P48):單一套件內的環由 `parse_functions` 擋掉,
 /// 合併表可能出現跨套件的環。
 fn check_table_cycles(table: &FunctionTable) -> Result<(), ReplayError> {
-    let mut graph: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for (name, found) in &table.entries {
-        let mut callees = Vec::new();
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    struct FunctionKey<'a> {
+        package: &'a str,
+        symbol: &'a str,
+    }
+
+    impl std::fmt::Display for FunctionKey<'_> {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(formatter, "{}::{}", self.package, self.symbol)
+        }
+    }
+
+    fn walk_graph<'a>(
+        node: FunctionKey<'a>,
+        graph: &BTreeMap<FunctionKey<'a>, Vec<FunctionKey<'a>>>,
+        state: &mut BTreeMap<FunctionKey<'a>, u8>,
+        stack: &mut Vec<FunctionKey<'a>>,
+    ) -> Result<(), Vec<FunctionKey<'a>>> {
+        match state.get(&node) {
+            Some(1) => {
+                let start = stack
+                    .iter()
+                    .position(|candidate| *candidate == node)
+                    .unwrap_or(0);
+                let mut cycle = stack[start..].to_vec();
+                cycle.push(node);
+                return Err(cycle);
+            }
+            Some(2) => return Ok(()),
+            _ => {}
+        }
+        state.insert(node, 1);
+        stack.push(node);
+        for &next in graph.get(&node).into_iter().flatten() {
+            if graph.contains_key(&next) {
+                walk_graph(next, graph, state, stack)?;
+            }
+        }
+        stack.pop();
+        state.insert(node, 2);
+        Ok(())
+    }
+
+    // 節點 identity 必須包含套件。只用裸名會把兩個套件各自的 private `Helper`
+    // 合成同一節點，憑空製造不存在的回邊。
+    let mut graph: BTreeMap<FunctionKey<'_>, Vec<FunctionKey<'_>>> = BTreeMap::new();
+    for found in table.entries.values() {
         for entry in found {
-            match &entry.definition.body {
-                FunctionBody::Sequence(calls) => {
-                    callees.extend(calls.iter().map(|call| call.name.as_str()))
-                }
+            let owner = FunctionKey {
+                package: entry.package.as_str(),
+                symbol: entry.definition.name.as_str(),
+            };
+            let calls: Vec<&FunctionCall> = match &entry.definition.body {
+                FunctionBody::Sequence(calls) => calls.iter().collect(),
                 FunctionBody::Case(branches)
                 | FunctionBody::When(branches)
                 | FunctionBody::Choose(branches) => {
-                    callees.extend(branches.iter().map(|branch| branch.call.name.as_str()))
+                    branches.iter().map(|branch| &branch.call).collect()
                 }
-            }
+            };
+            let callees = calls
+                .into_iter()
+                // 與執行期共用同一套 export/private/priority/qualified-name 解析語意。
+                // 無法解析或有歧義的呼叫本來就不能執行，因此不構成可執行的循環邊；
+                // 它們仍在真正 invoke 時沿用既有的 Unknown/NotVisible/Ambiguous 錯誤。
+                .filter_map(|call| table.resolve(&call.name, Some(entry.package.as_str())).ok())
+                .map(|resolved| FunctionKey {
+                    package: resolved.package.as_str(),
+                    symbol: resolved.definition.name.as_str(),
+                })
+                .collect();
+            graph.insert(owner, callees);
         }
-        graph.insert(name.as_str(), callees);
     }
-    let mut state: BTreeMap<&str, u8> = BTreeMap::new();
-    for name in graph.keys() {
-        if let Err(cycle) = walk_graph(name, &graph, &mut state) {
+    let mut state: BTreeMap<FunctionKey<'_>, u8> = BTreeMap::new();
+    let mut stack = Vec::new();
+    for &name in graph.keys() {
+        if let Err(cycle) = walk_graph(name, &graph, &mut state, &mut stack) {
+            let path = cycle
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(" -> ");
             return Err(ReplayError::Parse(format!(
-                "function {cycle:?} takes part in a call cycle across packages"
+                "function call cycle across packages: {path}"
             )));
         }
     }
-    Ok(())
-}
-
-fn walk_graph<'a>(
-    node: &'a str,
-    graph: &BTreeMap<&'a str, Vec<&'a str>>,
-    state: &mut BTreeMap<&'a str, u8>,
-) -> Result<(), String> {
-    match state.get(node) {
-        Some(1) => return Err(node.to_owned()),
-        Some(2) => return Ok(()),
-        _ => {}
-    }
-    state.insert(node, 1);
-    for next in graph.get(node).into_iter().flatten() {
-        if graph.contains_key(next) {
-            walk_graph(next, graph, state)?;
-        }
-    }
-    state.insert(node, 2);
     Ok(())
 }

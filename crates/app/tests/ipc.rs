@@ -379,6 +379,29 @@ fn an_invalid_raw_draft_never_replaces_the_last_valid_pending_changeset() {
     assert_eq!(still_valid.statements, 0);
 }
 
+#[test]
+fn save_as_persists_the_visible_source_across_the_ui_boundary() {
+    let temp = Temp::new("raw-save-visible");
+    let mut session = session(&temp);
+    let stale = session.begin_edit("ui:test:stale").expect("begin stale");
+    let visible = stale.source.replacen("ui:test:stale", "ui:test:visible", 1);
+    let path = temp.0.join("visible.chg");
+
+    let saved = session
+        .save_working_copy_source(&path, &visible)
+        .expect("save visible source");
+
+    assert_ne!(saved.source, stale.source);
+    assert_eq!(
+        fs::read_to_string(path).expect("read saved file"),
+        saved.source
+    );
+    assert_eq!(
+        session.pending_change().expect("pending").source,
+        saved.source
+    );
+}
+
 fn session_with_source(temp: &Temp, source: &str) -> UiSession {
     let store = GraphStore::init(&temp.0).expect("init");
     let spec = LibrarySpec::default();
@@ -1073,6 +1096,82 @@ fn structured_authoring_commits_in_memory_then_persists_only_on_explicit_save() 
     session.save_project().expect("explicit save");
     let saved = UiSession::open(&temp.0, LibrarySpec::default()).expect("reopen after save");
     assert_eq!(saved.tree().nodes.len(), before + 1);
+}
+
+#[test]
+fn a_freshly_committed_unsaved_leaf_can_be_deleted() {
+    let temp = Temp::new("delete-unsaved-leaf");
+    let mut session = session(&temp);
+    let before = session.tree().nodes.len();
+
+    session
+        .stage_sound_change(&SoundChangeInput {
+            rule: "t => k".to_owned(),
+            home: "Core".to_owned(),
+            revision: None,
+        })
+        .expect("stage");
+    let committed = session.commit(Some("temporary".to_owned())).expect("commit");
+    assert!(session.summary().graph_dirty);
+    assert_eq!(session.tree().nodes.len(), before + 1);
+
+    let tree = session.remove_active_leaf().expect("delete unsaved leaf");
+    assert_eq!(tree.nodes.len(), before);
+    assert!(tree.nodes.iter().all(|node| node.id != committed.id));
+    assert!(!session.summary().graph_dirty, "graph again matches disk");
+
+    session.save_project().expect("save restored graph");
+    let reopened = UiSession::open(&temp.0, LibrarySpec::default()).expect("reopen");
+    assert_eq!(reopened.tree().nodes.len(), before);
+}
+
+#[test]
+fn deleting_one_unsaved_leaf_keeps_dirty_when_an_earlier_commit_remains() {
+    let temp = Temp::new("delete-one-of-two-unsaved");
+    let mut session = session(&temp);
+    let before = session.tree().nodes.len();
+
+    for (rule, label) in [("t => k", "first"), ("k => t", "second")] {
+        session
+            .stage_sound_change(&SoundChangeInput {
+                rule: rule.to_owned(),
+                home: "Core".to_owned(),
+                revision: None,
+            })
+            .expect("stage");
+        session.commit(Some(label.to_owned())).expect("commit");
+    }
+    assert_eq!(session.tree().nodes.len(), before + 2);
+
+    session.remove_active_leaf().expect("delete latest leaf");
+    assert_eq!(session.tree().nodes.len(), before + 1);
+    assert!(session.summary().graph_dirty, "first commit is still memory-only");
+
+    session.remove_active_leaf().expect("delete remaining unsaved leaf");
+    assert_eq!(session.tree().nodes.len(), before);
+    assert!(!session.summary().graph_dirty);
+}
+
+#[test]
+fn deleting_a_persisted_leaf_still_removes_it_from_disk_immediately() {
+    let temp = Temp::new("delete-persisted-leaf");
+    let mut session = session(&temp);
+    let before = session.tree().nodes.len();
+
+    session
+        .stage_sound_change(&SoundChangeInput {
+            rule: "t => k".to_owned(),
+            home: "Core".to_owned(),
+            revision: None,
+        })
+        .expect("stage");
+    session.commit(Some("persisted".to_owned())).expect("commit");
+    session.save_project().expect("persist leaf");
+
+    session.remove_active_leaf().expect("delete persisted leaf");
+    assert!(!session.summary().graph_dirty);
+    let reopened = UiSession::open(&temp.0, LibrarySpec::default()).expect("reopen");
+    assert_eq!(reopened.tree().nodes.len(), before);
 }
 
 #[test]

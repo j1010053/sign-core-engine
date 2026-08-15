@@ -671,3 +671,73 @@ function Helper(x):
         "應走自己套件的 Helper(+0.4 → 0.6),不是外來的(+0.1 → 0.3):{source}"
     );
 }
+
+#[test]
+fn unrelated_private_functions_with_the_same_name_do_not_form_a_cross_package_cycle() {
+    // 真實圖是 guards::Public → guards::Helper，以及
+    // foreign::Helper → guards::Public → guards::Helper。foreign::Helper 沒有任何回邊。
+    // 若 cycle checker 只以裸名建圖，兩個 Helper 會被合併成
+    // Public → Helper → Public，因而誤判成環。
+    let owner = synthetic(WITH_PRIVATE, &["Public"]);
+    const FOREIGN: &str = r#"package plugin:foreign:
+    schema = conlang.functions/v1
+
+function Helper(x):
+    Public(x)
+"#;
+    let foreign_id = LibraryId::new(LibraryKind::Plugin, "foreign");
+    let mut foreign = synthetic(FOREIGN, &[]);
+    foreign.name = foreign_id.name.clone();
+    foreign.rule_namespace = foreign_id.to_string();
+    foreign.exports.clear();
+    foreign.id = foreign_id;
+
+    let table = functions_from_packages(&[&owner, &foreign])
+        .expect("不同套件的同名 private function 必須是不同節點");
+    let evaluation = evaluate_function_offline(
+        &table,
+        &call("Public", "go"),
+        &base(),
+        &LibrarySpec::default(),
+    )
+    .expect("Public 仍可呼叫自己套件的 Helper");
+    let (source, trace) = executed(evaluation);
+    assert_eq!(trace, vec!["entrench"]);
+    assert!(source.contains("entrenchment = 0.6"), "{source}");
+}
+
+#[test]
+fn a_real_cross_package_cycle_is_rejected() {
+    const OWNER: &str = r#"package plugin:guards:
+    schema = conlang.functions/v1
+
+function Public(x):
+    Loop(x)
+"#;
+    const FOREIGN: &str = r#"package plugin:foreign:
+    schema = conlang.functions/v1
+
+function Loop(x):
+    Public(x)
+"#;
+    let owner = synthetic(OWNER, &["Public"]);
+    let foreign_id = LibraryId::new(LibraryKind::Plugin, "foreign");
+    let mut foreign = synthetic(FOREIGN, &["Loop"]);
+    foreign.name = foreign_id.name.clone();
+    foreign.rule_namespace = foreign_id.to_string();
+    foreign.exports = vec![LibraryExport {
+        package: foreign_id.name.clone(),
+        package_id: foreign_id.clone(),
+        stable_id: "plugin:foreign:Loop".to_owned(),
+        kind: LibraryExportKind::Function,
+        alias: "Loop".to_owned(),
+    }];
+    foreign.id = foreign_id;
+
+    let error =
+        functions_from_packages(&[&owner, &foreign]).expect_err("真正的跨套件環仍必須在載入時拒絕");
+    let message = error.to_string();
+    assert!(message.contains("call cycle across packages"), "{message}");
+    assert!(message.contains("plugin:guards::Public"), "{message}");
+    assert!(message.contains("plugin:foreign::Loop"), "{message}");
+}

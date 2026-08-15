@@ -944,6 +944,15 @@ impl GraphStore {
         remove_dir_all(&node_dir)
     }
 
+    /// Whether this node already has a persistence entry.
+    ///
+    /// A freshly committed app node intentionally exists only in the in-memory
+    /// graph until Save Project. Callers use this distinction to avoid treating
+    /// an unpersisted leaf as a corrupt or unknown stored node.
+    pub fn contains_node(&self, id: &NodeId) -> bool {
+        self.node_dir(id).exists()
+    }
+
     /// 讀節點的 State(外部環境)。**雜湊外**,不存在時回預設空值。
     ///
     /// 裁定 (A):State 只在撰寫時被讀,**replay 不看它**——故它與

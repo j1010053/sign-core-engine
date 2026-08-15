@@ -1890,6 +1890,17 @@ impl UiSession {
         Ok(())
     }
 
+    pub fn save_working_copy_source(
+        &mut self,
+        path: impl AsRef<Path>,
+        source: &str,
+    ) -> Result<PendingChangeV1, UiError> {
+        self.workspace
+            .session_mut()
+            .save_working_copy_source(path.as_ref(), source)?;
+        self.pending_change()
+    }
+
     pub fn load_working_copy(
         &mut self,
         path: impl AsRef<Path>,
@@ -1946,8 +1957,19 @@ impl UiSession {
                 "only leaf nodes can be deleted",
             ));
         }
-        self.store.remove_node(&id)?;
+        // Commit is intentionally memory-only until Save Project. A fresh leaf
+        // therefore has no store directory to remove; persisted leaves still
+        // use the explicit destructive store operation before graph mutation.
+        if self.store.contains_node(&id) {
+            self.store.remove_node(&id)?;
+        }
         self.workspace.session_mut().remove_node(&id)?;
+        self.graph_dirty = self
+            .workspace
+            .session()
+            .graph()
+            .ids()
+            .any(|node| !self.store.contains_node(node));
         self.workspace.drop_caches();
         self.last_proposals = None;
         Ok(self.tree())

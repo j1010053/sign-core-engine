@@ -72,6 +72,9 @@ describe("LangCraft F1-F5 vertical workbench", () => {
     const unchanged = await invoke<{ statements: number }>("pending_change");
     expect(unchanged.statements).toBe(0);
 
+    // Windows regression: this must execute through the async Tauri command.
+    // A synchronous command runs lower/replay/diff on the 1 MiB UI-thread stack
+    // and terminates the app before DirectEval can return a response.
     const pending = await invoke<{ statements: number; diff: { phon: number } }>(
       "stage_sound_change",
       { input: { rule: "t => k", home: "Core" } },
