@@ -104,6 +104,94 @@ fn trait_items(t: &TraitDef) -> Vec<SignItem> {
 /// - **`pass` 與內容互斥**:兩者同時出現代表作者自相矛盾,那是錯誤。
 /// - **`marker trait` 不得有內容**:它承諾的就是這件事,不強制就只是註解。
 ///   marker 的塊當然是空的,故**豁免空塊警告**——宣告行已經說明理由了。
+/// [A] 第 1 步:**`belongs X` 卻沒有引用 X 的內容**。
+///
+/// 兩階段設計裡 `belongs X` 是**宣告本 sign 使用哪一種 trait**(身分與實參),
+/// `X[n]` 才是內容的落點。今天 `belongs` 仍然經投影供給內容,所以這條只發
+/// **警告**——行為零改變,它的用途是把遷移清單列出來。
+///
+/// 第 3 步會把投影關掉、警告升為錯誤;在那之前,寫了 `belongs` 而沒引用的地方
+/// 仍然拿得到內容,只是拿的方式即將改變。
+///
+/// # 豁免:沒有內容可引用的 trait
+///
+/// `marker trait`(承諾永不帶內容)與**所有塊都空**的 trait 都不要求引用
+/// ——強迫寫一行引用進來一個空集合是純噪音。空塊那側自有
+/// `BLOCK_EMPTY_WITHOUT_PASS` 在說話,不必在這裡重複。
+///
+/// # 為什麼「部分引用」不在這裡
+///
+/// 少寫一塊已經是 `IncompleteTraitUse`(compile error,P5 全 block 完整性);
+/// 這條只管**一塊都沒寫**的情形。
+///
+/// # 必須餵 ① Source
+///
+/// 展開(`expand_traits`)會把 `TraitUse` **消去**——餵展開後的語言,引用一律
+/// 看不見,於是每一個 `belongs` 都會誤報。故呼叫點在 `system.rs` 拿得到
+/// `effective_source` 的地方,不掛在 `validation_report` 裡(那裡兩條路徑
+/// 餵的東西不同,一條是 Source、一條是 ④ Ordered)。
+pub(crate) fn belongs_reference_diagnostics(langs: &[&Language]) -> Vec<Diagnostic> {
+    let mut content_bearing: BTreeMap<&str, bool> = BTreeMap::new();
+    for lang in langs {
+        for def in &lang.traits {
+            let has_content = !def.marker
+                && def
+                    .blocks
+                    .iter()
+                    .any(|block| block.items.iter().any(|item| !matches!(item, SignItem::Pass)));
+            content_bearing.insert(def.name.as_str(), has_content);
+        }
+    }
+
+    let mut out = Vec::new();
+    let mut check = |owner: &str, items: &[SignItem]| {
+        let used: BTreeSet<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                SignItem::TraitUse { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        for item in items {
+            let SignItem::Belongs(target) = item else {
+                continue;
+            };
+            if used.contains(target.as_str()) {
+                continue;
+            }
+            // 未知 trait 由 `ONTOLOGY_UNKNOWN_TRAIT` 負責;這裡不重複報。
+            if content_bearing.get(target.as_str()).copied().unwrap_or(false) {
+                out.push(Diagnostic::new(
+                    Severity::Warning,
+                    "BELONGS_WITHOUT_REFERENCE",
+                    format!(
+                        "{owner:?} declares `belongs {target}` but never references {target}'s \
+                         blocks; content still arrives by projection today, but the two-phase \
+                         design makes `{target}[n]` the only content channel",
+                    ),
+                ));
+            }
+        }
+    };
+
+    for lang in langs {
+        for sign in &lang.signs {
+            check(&sign.name, &sign.items);
+        }
+        for def in &lang.traits {
+            // trait 的項目住在 block 裡,而 `belongs` 與引用可以分屬不同塊
+            // ——身分是容器層的事實,故合起來看。
+            let items: Vec<SignItem> = def
+                .blocks
+                .iter()
+                .flat_map(|block| block.items.iter().cloned())
+                .collect();
+            check(&def.name, &items);
+        }
+    }
+    out
+}
+
 fn block_shape_diagnostics(langs: &[&Language]) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     for lang in langs {

@@ -140,3 +140,74 @@ fn marker_is_not_global() {
     assert!(def.global);
     assert!(!def.marker);
 }
+
+// ── ④ [A] 第 1 步:`belongs` 宣告了卻沒引用 ────────────────────────────────
+//
+// 兩階段設計:`belongs X` 宣告**本 sign 使用哪一種 trait**(身分與實參),
+// `X[n]` 才是內容落點。今天投影仍然供給內容,所以這條只發警告——它的用途是
+// 把遷移清單列出來,行為零改變。第 3 步才會關掉投影並升為錯誤。
+
+const CONTENTFUL: &str = "Symbol a\n\ntrait Contentful:\n    sem:\n        senses:\n            core = THING\n";
+
+fn belongs_codes(source: &str) -> Vec<String> {
+    let document = LanguageDocument::import_new_root(source, "evo:br").expect("parses");
+    let system = conlang_language::system::compile_document(&document, &LibrarySpec::default())
+        .expect("compiles");
+    system
+        .validation
+        .diagnostics()
+        .iter()
+        .filter(|d| &*d.code == "BELONGS_WITHOUT_REFERENCE" && d.message.contains("\"x\""))
+        .map(|d| d.code.to_string())
+        .collect()
+}
+
+#[test]
+fn belongs_without_a_reference_is_reported() {
+    let bare = format!("{CONTENTFUL}\nsign x:\n    belongs Contentful\n    phon:\n        /a/\n");
+    assert_eq!(belongs_codes(&bare), ["BELONGS_WITHOUT_REFERENCE"]);
+}
+
+#[test]
+fn referencing_the_trait_silences_it() {
+    for reference in ["Contentful[0]", "Contentful"] {
+        let source =
+            format!("{CONTENTFUL}\nsign x:\n    belongs Contentful\n    {reference}\n    phon:\n        /a/\n");
+        assert!(
+            belongs_codes(&source).is_empty(),
+            "`{reference}` 應該算數:{source}"
+        );
+    }
+}
+
+/// **沒有內容可引用的 trait 豁免**——強迫寫一行把空集合引用進來是純噪音。
+#[test]
+fn a_trait_with_nothing_to_inline_needs_no_reference() {
+    for declaration in ["marker trait Blank:\n", "trait Blank:\n    pass\n"] {
+        let source =
+            format!("Symbol a\n\n{declaration}\nsign x:\n    belongs Blank\n    phon:\n        /a/\n");
+        assert!(
+            belongs_codes(&source).is_empty(),
+            "{declaration} 不該要求引用:{source}"
+        );
+    }
+}
+
+/// trait 自己 `belongs` 另一個 trait 時同樣要引用——傳遞性是逐層各自結清的。
+#[test]
+fn a_trait_that_belongs_another_is_checked_too() {
+    let source = format!(
+        "{CONTENTFUL}\ntrait Middle:\n    belongs Contentful\n\nsign x:\n    belongs Middle\n    Middle[0]\n    phon:\n        /a/\n"
+    );
+    let document = LanguageDocument::import_new_root(&source, "evo:br").expect("parses");
+    let system = conlang_language::system::compile_document(&document, &LibrarySpec::default())
+        .expect("compiles");
+    assert!(
+        system
+            .validation
+            .diagnostics()
+            .iter()
+            .any(|d| &*d.code == "BELONGS_WITHOUT_REFERENCE" && d.message.contains("\"Middle\"")),
+        "Middle 對 Contentful 的引用也該被要求"
+    );
+}

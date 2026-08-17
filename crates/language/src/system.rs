@@ -2510,6 +2510,11 @@ fn validate_source_language(
     let (registry, ontology_diags) = OntologyRegistry::build(&[std, effective_source]);
     let registry = registry.with_available(available_exports.clone());
     let mut report = registry.validation_report(&[std, effective_source], &ontology_diags);
+    // [A] 第 1 步:只吃 ① Source——展開會把 `TraitUse` 消去
+    report.extend(crate::ontology::belongs_reference_diagnostics(&[
+        std,
+        effective_source,
+    ]));
     validate_duplicate_signs(effective_source, &mut report);
     validate_defs_and_rules(std, &registry, &mut report);
     validate_defs_and_rules(effective_source, &registry, &mut report);
@@ -2690,6 +2695,10 @@ pub fn compile_with_packages_ref(
     let (registry, ontology_diags) = OntologyRegistry::build(&[&std, &ordered]);
     let registry = registry.with_available(packages.available_exports().clone());
     let mut validation = registry.validation_report(&[&std, &ordered], &ontology_diags);
+    validation.extend(crate::ontology::belongs_reference_diagnostics(&[
+        &std,
+        &effective_source,
+    ]));
     validate_duplicate_signs(&ordered, &mut validation);
     validate_defs_and_rules(&ordered, &registry, &mut validation);
     validate_typed_schemas(&ordered, &registry, &mut validation);
