@@ -57,7 +57,10 @@ enum ReconstructCapability {
     Immutable,
     StructuralContainer,
     TypedUpdate,
-    Unsupported,
+    // `Unsupported` 已刪:它唯一的持有者是 V1 的 `NodeKind::RealizationBranch`,
+    // 該 kind 隨扁平 `RealizationBranch` 清單一併移除後,**每一種可持久化的
+    // NodeKind 都有 reconstruction contract**。若日後真的又出現沒有契約的 kind,
+    // 重新加回來要連同它為何無契約的理由一起寫。
 }
 
 /// Exhaustive capability map for every persisted `NodeKind`. Adding a new
@@ -68,7 +71,6 @@ fn capability(kind: NodeKind) -> ReconstructCapability {
         NodeKind::Pass => ReconstructCapability::Immutable,
         NodeKind::Language => ReconstructCapability::Immutable,
         NodeKind::Block => ReconstructCapability::StructuralContainer,
-        NodeKind::RealizationBranch => ReconstructCapability::Unsupported,
         NodeKind::DslDeclaration
         | NodeKind::Distribution
         | NodeKind::Trait
@@ -84,7 +86,6 @@ fn capability(kind: NodeKind) -> ReconstructCapability {
         | NodeKind::RoleBinding
         | NodeKind::Sense
         | NodeKind::SenseEdge
-        | NodeKind::Realization
         | NodeKind::FeatureRule
         | NodeKind::Definition
         | NodeKind::Rule
@@ -103,7 +104,8 @@ fn capability(kind: NodeKind) -> ReconstructCapability {
 enum ShallowNode {
     Detached(DetachedNode),
     ExpressionItem(SignItem),
-    Realization(Realization),
+    // `Realization` 已刪(2026-08-18):`SignItem::Realization` 現在塌陷成
+    // `NodeKind::Case`,其內容差異由 Case / CaseBranch 節點各自 diff。
     Case(TypedCase),
     CaseBranch(CaseBranch),
     Application(SignApplication),
@@ -140,12 +142,6 @@ pub fn reconstruct(
         match capability(old_entry.kind) {
             ReconstructCapability::Immutable | ReconstructCapability::StructuralContainer => {
                 continue;
-            }
-            ReconstructCapability::Unsupported => {
-                return Err(ReconstructError::Unsupported {
-                    kind: old_entry.kind,
-                    detail: "persisted node kind has no reconstruction contract".to_owned(),
-                });
             }
             ReconstructCapability::TypedUpdate => {}
         }
@@ -380,7 +376,7 @@ fn sequence_key(document: &LanguageDocument, entry: &NodeEntryV1) -> Option<Sequ
         ),
         AddressSegment::RuleElse(_) => (8, 0),
         AddressSegment::RuleThen(_) => (9, 0),
-        AddressSegment::RealizationBranches(_) => (10, 0),
+        // 10 = 已刪的 V1 `RealizationBranches`;序號留空。
         AddressSegment::CaseBranches(_) => (12, 0),
         AddressSegment::PhonLeaf(_) => (15, 0),
         AddressSegment::PhonThen(_) => (16, 0),
@@ -672,13 +668,6 @@ fn shallow_at(
         NodeKind::CaseBranch => Ok(ShallowNode::CaseBranch(
             crate::case_branch_at(language, &entry.address)?.clone(),
         )),
-        NodeKind::Realization => match item_at_address(language, &entry.address) {
-            Some(SignItem::Realization(value)) => Ok(ShallowNode::Realization(value.clone())),
-            _ => Err(ReconstructError::Unsupported {
-                kind: NodeKind::Realization,
-                detail: format!("realization address is stale: {:?}", entry.address),
-            }),
-        },
         _ => Ok(ShallowNode::Detached(detached_at(language, entry)?)),
     }
 }
@@ -691,12 +680,6 @@ fn shallow_state_updates(
         (ShallowNode::Detached(old), ShallowNode::Detached(new)) => shallow_updates(old, new),
         (ShallowNode::ExpressionItem(old), ShallowNode::ExpressionItem(new)) => {
             expression_item_updates(old, new)
-        }
-        (ShallowNode::Realization(old), ShallowNode::Realization(new)) => {
-            Ok(match (&old.expression, &new.expression) {
-                (None, None) | (Some(_), Some(_)) => Vec::new(),
-                _ => vec![NodeUpdate::Realization(new.clone())],
-            })
         }
         (ShallowNode::Case(old), ShallowNode::Case(new)) => Ok(case_updates(old, new)),
         (ShallowNode::CaseBranch(old), ShallowNode::CaseBranch(new)) => {
@@ -712,7 +695,6 @@ fn shallow_state_updates(
             kind: match new {
                 ShallowNode::Detached(value) => value.kind(),
                 ShallowNode::ExpressionItem(value) => crate::item_kind(value),
-                ShallowNode::Realization(_) => NodeKind::Realization,
                 ShallowNode::Case(_) => NodeKind::Case,
                 ShallowNode::CaseBranch(_) => NodeKind::CaseBranch,
                 ShallowNode::Application(_) => NodeKind::Application,

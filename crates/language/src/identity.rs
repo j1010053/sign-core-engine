@@ -76,7 +76,6 @@ pub enum NodeKind {
     Sense,
     /// 義項間的衍生邊(同上)。
     SenseEdge,
-    Realization,
     FeatureRule,
     Definition,
     Rule,
@@ -87,7 +86,6 @@ pub enum NodeKind {
     /// One element of a phon `PhonBlock::Then`/`Else` vec — itself a recursive
     /// `PhonBlock` (P46 S3).
     PhonBlockNode,
-    RealizationBranch,
     Application,
     Case,
     CaseBranch,
@@ -135,8 +133,6 @@ pub enum EditableField {
     SenseGloss,
     SenseEdgeKind,
     SenseEdgeTransparency,
-    RealizationTemplate,
-    RealizationGuard,
     CaseSelection,
 }
 
@@ -180,7 +176,6 @@ pub enum AddressSegment {
     PhonThen(usize),
     /// Index into a phon `PhonBlock::Else` element vec (P46 S3).
     PhonElse(usize),
-    RealizationBranches(usize),
     CaseExpression,
     CaseBranches(usize),
     CaseResult,
@@ -719,8 +714,6 @@ fn editable_field(kind: NodeKind, name: &str) -> Option<EditableField> {
         (NodeKind::SlotMap, "operation") => Some(EditableField::SlotMap),
         (NodeKind::RoleDeclaration, "constraint") => Some(EditableField::RoleConstraint),
         (NodeKind::RoleBinding, "slot") => Some(EditableField::RoleSlot),
-        (NodeKind::RealizationBranch, "template") => Some(EditableField::RealizationTemplate),
-        (NodeKind::RealizationBranch, "guard") => Some(EditableField::RealizationGuard),
         (NodeKind::Case, "selection") => Some(EditableField::CaseSelection),
         _ => None,
     }
@@ -777,7 +770,12 @@ fn item_kind(item: &SignItem) -> NodeKind {
         SignItem::RoleBinding(_) => NodeKind::RoleBinding,
         SignItem::Sense(_) => NodeKind::Sense,
         SignItem::SenseEdge(_) => NodeKind::SenseEdge,
-        SignItem::Realization(_) => NodeKind::Realization,
+        // 取徑 A:比照另外三個帶運算式的 SignItem **塌陷成自己的 expression root**。
+        // 先前它是唯一保留 wrapper kind 的一個(V1 扁平 `RealizationBranch` 清單的遺留),
+        // 於是它的 `Case` 成了 sign 的**孫**節點;而 `resolve_path_child` 只取直屬子節點、
+        // 又沒有 `"realization"` 這一支可下降——`case["X"]` 因此永遠解不到,
+        // realization 內的 `@name` 成了「印得出來卻到不了」的語法。
+        SignItem::Realization(_) => NodeKind::Case,
         SignItem::SignExpression(expression) => expression_root_kind(&expression.expression),
         SignItem::FeatureExpression(expression) => expression_root_kind(&expression.expression),
         SignItem::RoleExpression(expression) => expression_root_kind(&expression.expression),
@@ -1086,19 +1084,11 @@ fn enumerate_item_children(
                 enumerate_phon_block(block, address, parent, namespace, next, entries);
             }
         }
-        SignItem::Realization(Realization {
-            expression: Some(case),
-        }) => {
-            let case_address = address.child(AddressSegment::CaseExpression);
-            let case_id = push_entry(
-                entries,
-                namespace,
-                next,
-                NodeKind::Case,
-                Some(parent.clone()),
-                case_address.clone(),
-            );
-            enumerate_case(case, &case_address, &case_id, namespace, next, entries);
+        // 取徑 A(《修補08》更正欄):`Realization` 不再多一層 wrapper 節點——
+        // item 自己的 kind 就是 `Case`(見 `item_kind`),branches 直接掛在 item 位址上。
+        // 少掉的那一段 `CaseExpression` 正是先前讓 `case["X"]` 解不到的中間階。
+        SignItem::Realization(Realization { expression: case }) => {
+            enumerate_case(case, address, parent, namespace, next, entries);
         }
         SignItem::SignExpression(expression) => enumerate_root_expression_children(
             &expression.expression,
@@ -1463,11 +1453,8 @@ fn item_at<'a>(language: &'a Language, address: &NodeAddress) -> Option<&'a Sign
                 expression_item_at(&expression.expression, path)
             }
             SignItem::Realization(realization) => {
-                let [AddressSegment::CaseExpression, tail @ ..] = path else {
-                    return None;
-                };
-                let case = realization.expression.as_ref()?;
-                let [AddressSegment::CaseBranches(branch), rest @ ..] = tail else {
+                let case = &realization.expression;
+                let [AddressSegment::CaseBranches(branch), rest @ ..] = path else {
                     return None;
                 };
                 let result = &case.branches.get(*branch)?.result;
@@ -1570,10 +1557,7 @@ fn item_at_mut<'a>(language: &'a mut Language, address: &NodeAddress) -> Option<
                 expression_item_at_mut(&mut expression.expression, path)
             }
             SignItem::Realization(realization) => {
-                let [AddressSegment::CaseExpression, tail @ ..] = path else {
-                    return None;
-                };
-                case_item_at_mut(realization.expression.as_mut()?, tail)
+                case_item_at_mut(&mut realization.expression, path)
             }
             _ => None,
         }
@@ -1841,12 +1825,9 @@ fn collect_refs(language: &Language, entries: &[NodeEntryV1]) -> Vec<RefBindingV
                 &signs,
                 &mut refs,
             ),
-            SignItem::Realization(Realization {
-                expression: Some(case),
-                ..
-            }) => collect_case_refs(
+            SignItem::Realization(Realization { expression: case }) => collect_case_refs(
                 case,
-                &entry.address.child(AddressSegment::CaseExpression),
+                &entry.address,
                 None,
                 entries,
                 &traits,

@@ -29,8 +29,8 @@ sign en_3sg:
     phon:
         /{stem}+s/
         realization:
-            case stem.phon:
-                == SibilantFinal:
+            case:
+                $slot.stem == [SibilantFinal]:
                     /{stem}+es/
                 else:
                     /{stem}+s/
@@ -60,8 +60,104 @@ fn v2_round_trip_keeps_context_typed_case() {
     let parsed = Language::parse(FP_SOURCE).expect("V2 source parses");
     let canonical = parsed.dump();
     assert_eq!(Language::parse(&canonical).unwrap().dump(), canonical);
-    assert!(canonical.contains("case stem.phon:"));
+    assert!(canonical.contains("$slot.stem == [SibilantFinal]:"));
     assert!(canonical.contains("en_3sg({$self})"));
+}
+
+/// 🔑 `case <slot>.phon:` **被拒絕**(2026-08-17 移除)。
+///
+/// 該形式的 `.phon` 不讀音韻——執行期比的是 filler 的**範疇**,`.phon` 只是個
+/// 字面標記(`scrutinee.split_once('.')` 後比對後半是不是 `"phon"`)。名實不符,
+/// 而且整個 case 共用一個 scrutinee,強迫所有分支討論同一個槽。
+///
+/// **拒絕而非忽略**:比照舊 `schema conlang.lang/v2` 標頭——留著一個名實不符的
+/// 形式,作者會以為它在讀音韻。取代寫法是 guard 分支(下一個測試證明等價)。
+#[test]
+fn slot_phon_scrutinee_is_rejected() {
+    let source = r#"trait Atom:
+
+trait SibilantFinal:
+    belongs Atom
+
+sign en_3sg:
+    syn:
+        slots:
+            stem [Atom]
+    phon:
+        /{stem}+s/
+        realization:
+            case stem.phon:
+                == SibilantFinal:
+                    /{stem}+es/
+                else:
+                    /{stem}+s/
+"#;
+    let error = Language::parse(source).expect_err("`case <slot>.phon:` must be rejected");
+    let message = format!("{error:?}");
+    assert!(
+        message.contains("was removed"),
+        "診斷須說明它已移除:{message}"
+    );
+    assert!(
+        message.contains("$slot.stem == [Category]"),
+        "診斷須指出取代寫法:{message}"
+    );
+}
+
+/// 🔑 一個 `phon:` block 至多一個 `realization:`(2026-08-18)。
+///
+/// 未擋之前:兩個 `realization:` 會 parse 成兩個 `SignItem::Realization`,printer
+/// 把它們合併印在**一個**標頭下、兩個 `case:`,而那份 dump **重新 parse 會失敗**
+/// (「realization may contain one typed case」)——**P21 round-trip 恆等破**。
+/// 且求值端一律 `find_map` 只取第一個,第二個寫了不生效。
+#[test]
+fn a_phon_block_takes_at_most_one_realization() {
+    let source = r#"sign x:
+    syn:
+        feature:
+            n = enum(sg, pl)
+    phon:
+        /a/
+        realization:
+            case:
+                $self.syn.n == pl:
+                    /first/
+        realization:
+            case:
+                $self.syn.n == pl:
+                    /second/
+"#;
+    let error = Language::parse(source).expect_err("第二個 realization 必須被拒");
+    let message = format!("{error:?}");
+    assert!(
+        message.contains("at most one `realization:`"),
+        "診斷須說明限制:{message}"
+    );
+}
+
+/// 🔑 取代寫法**行為等價**,且嚴格更強:每支 guard 可測不同對象、可 `&&`,
+/// `[...]` 也明示這是範疇測試。
+#[test]
+fn slot_category_guard_replaces_the_removed_scrutinee() {
+    let system = compile_system(Language::parse(FP_SOURCE).expect("parses")).expect("compiles");
+    for (filler, expected) in [("hiss", "hiss+es"), ("walk", "walk+s")] {
+        let token = system
+            .evaluate_token(
+                system
+                    .apply_construction(
+                        "en_3sg",
+                        &[SlotFiller::sign("stem", filler)],
+                        &SlotMap::identity(),
+                    )
+                    .expect("apply"),
+            )
+            .expect("evaluate");
+        assert_eq!(
+            system.realize_phon(&token).expect("realize").input.as_str(),
+            expected,
+            "{filler}"
+        );
+    }
 }
 
 #[test]
@@ -492,20 +588,26 @@ fn sign_application_returns_a_full_typed_sign() {
         .feature(Dim::Syn, "number", "singular")
         .feature(Dim::Syn, "person", "third");
     let evaluated = system.evaluate_sign_expression("walk", &context).unwrap();
-    let SignValue::Applied(token) = evaluated.value else {
-        panic!("3sg case should apply the en_3sg Sign function")
-    };
-    assert!(token
+    let cases = evaluated.cases.len();
+    let token = evaluated
+        .value
+        .into_evaluated()
+        .expect("3sg case should apply the en_3sg Sign function");
+    let token_view = token.as_token();
+    assert!(token_view
         .syn_categories
         .iter()
         .any(|item| item == "ThirdSingular"));
-    assert!(token.syn_categories.iter().any(|item| item == "FiniteVerb"));
-    assert!(token.is_saturated());
+    assert!(token_view
+        .syn_categories
+        .iter()
+        .any(|item| item == "FiniteVerb"));
+    assert!(token_view.is_saturated());
     assert_eq!(
         system.realize_phon(&token).unwrap().input.as_str(),
         "walk+s"
     );
-    assert_eq!(evaluated.cases.len(), 1);
+    assert_eq!(cases, 1);
 
     let plural = DerivationContext::new()
         .feature(Dim::Syn, "number", "plural")
@@ -519,10 +621,14 @@ fn sign_application_returns_a_full_typed_sign() {
     ));
 
     let sibilant = system
-        .apply_construction(
-            "en_3sg",
-            &[SlotFiller::sign("stem", "hiss")],
-            &SlotMap::identity(),
+        .evaluate_token(
+            system
+                .apply_construction(
+                    "en_3sg",
+                    &[SlotFiller::sign("stem", "hiss")],
+                    &SlotMap::identity(),
+                )
+                .unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -906,10 +1012,14 @@ sign Outer:
     assert!(canonical.contains("/{Suffix({$self}).phon.ret}/"));
     let system = compile_system(language).unwrap();
     let token = system
-        .apply_construction(
-            "Outer",
-            &[SlotFiller::sign("stem", "x")],
-            &SlotMap::identity(),
+        .evaluate_token(
+            system
+                .apply_construction(
+                    "Outer",
+                    &[SlotFiller::sign("stem", "x")],
+                    &SlotMap::identity(),
+                )
+                .unwrap(),
         )
         .unwrap();
     assert_eq!(system.realize_phon(&token).unwrap().input.as_str(), "x!");
@@ -1673,14 +1783,15 @@ sign root:
     let completed = system
         .apply_arguments(&value, &[SlotFiller::sign("adjunct", "adjunct")])
         .unwrap();
-    let SignValue::Applied(completed) = completed else {
-        panic!("supplying the inherited slot must saturate the same Sign")
-    };
-    assert_eq!(completed.construction_id, wrapper_id);
-    assert_eq!(completed.provenance.construction, "Wrapper");
-    assert!(completed.is_saturated());
+    let completed = completed
+        .into_evaluated()
+        .expect("supplying the inherited slot must saturate the same Sign");
+    let view = completed.as_token();
+    assert_eq!(view.construction_id, wrapper_id);
+    assert_eq!(view.provenance.construction, "Wrapper");
+    assert!(view.is_saturated());
     assert_eq!(
-        completed.sem.role("theme").unwrap().source.sign,
+        view.sem.role("theme").unwrap().source.sign,
         "adjunct",
         "the inherited role schema and binding must execute after saturation"
     );

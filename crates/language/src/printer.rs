@@ -459,9 +459,7 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                 out.push_str("        realization:\n");
                 for item in items {
                     if let SignItem::Realization(realization) = item {
-                        if let Some(case) = &realization.expression {
-                            push_case(out, "            ", case);
-                        }
+                        push_case(out, "            ", &realization.expression);
                     }
                 }
             }

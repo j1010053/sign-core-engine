@@ -71,8 +71,8 @@ pub use system::{
     compile_system, compile_system_ref, compile_with_libraries, compile_with_libraries_ref,
     compile_with_packages_ref,
     CandidateSelectionTrace, CandidateSelector, CandidateSet, CaseBranchStatus, CaseRecord,
-    CompileSystemError, CompiledSystem, ConstructionCandidate, DerivationContext, PhonRealization,
-    COMPILER_SEMANTICS_VERSION,
+    CompileSystemError, CompiledSystem, ConstructionCandidate, DerivationContext, EvaluatedToken,
+    PhonRealization, COMPILER_SEMANTICS_VERSION,
     RealizedPhonInput, SignExpressionEvaluation, SignValue, SystemDerivation, SystemError,
 };
 pub use tshiatun_dsl::lower::Stage;
@@ -435,12 +435,18 @@ pub struct SenseEdge {
     pub source: SourceLocation,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// `Default` 已移除:沒有「空 realization」這個狀態(見 `expression` 的說明)。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Realization {
     /// Context-typed realization: a `PhonContext` `case:` selecting a full phon
     /// template by guard (shared typed-case machinery; the former flat V1
     /// `RealizationBranch` list was removed with the v1 path).
-    pub expression: Option<TypedCase>,
+    ///
+    /// **非 `Option`(2026-08-18)**:parser 只在 `case:` 到位時才建這個 item,
+    /// 所以「空 realization」在型別上不存在。此前它是 `Option`,而那個 `None`
+    /// 是 `NodeUpdate::Realization` 唯一承載的語意(None↔Some 切換);
+    /// 收掉 `Option` 之後那個 update 隨之不可達。
+    pub expression: TypedCase,
 }
 
 /// The type expected at an expression site.  `Feature` carries its declared

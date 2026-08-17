@@ -448,7 +448,6 @@ fn source_kind(kind: NodeKind) -> &'static str {
         NodeKind::RoleBinding => "role_binding",
         NodeKind::Sense => "sense",
         NodeKind::SenseEdge => "sense_edge",
-        NodeKind::Realization => "realization",
         NodeKind::FeatureRule => "feature_rule",
         NodeKind::Definition => "definition",
         NodeKind::Rule => "rule",
@@ -456,7 +455,6 @@ fn source_kind(kind: NodeKind) -> &'static str {
         NodeKind::RuleThenBranch => "then",
         NodeKind::PhonStatement => "phon_statement",
         NodeKind::PhonBlockNode => "phon_block",
-        NodeKind::RealizationBranch => "realization_branch",
         NodeKind::Application => "application",
         NodeKind::Case => "case",
         NodeKind::CaseBranch => "case_branch",
@@ -635,7 +633,6 @@ fn structurally_movable(snapshot: &NodeSnapshot) -> bool {
                 | AddressSegment::PhonLeaf(_)
                 | AddressSegment::PhonThen(_)
                 | AddressSegment::PhonElse(_)
-                | AddressSegment::RealizationBranches(_)
                 | AddressSegment::CaseBranches(_)
         )
     )
@@ -655,7 +652,6 @@ fn is_body_item(kind: NodeKind) -> bool {
             | NodeKind::RoleBinding
             | NodeKind::Sense
             | NodeKind::SenseEdge
-            | NodeKind::Realization
             | NodeKind::FeatureRule
             | NodeKind::Definition
             | NodeKind::Rule
@@ -684,7 +680,6 @@ fn parent_accepts_move(child: NodeKind, parent: NodeKind) -> bool {
             NodeKind::Rule | NodeKind::FeatureRule | NodeKind::PhonBlockNode
         ),
         NodeKind::CaseBranch => parent == NodeKind::Case,
-        NodeKind::RealizationBranch => parent == NodeKind::Realization,
         _ => false,
     }
 }

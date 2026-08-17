@@ -1784,7 +1784,8 @@ fn realize_stored_filler(
         });
         let mut selected: Option<String> = None;
         if let Some(realization) = realization {
-            if let Some(case) = &realization.expression {
+            {
+                let case = &realization.expression;
                 for branch in &case.branches {
                     let matched = match &branch.condition {
                         crate::CaseCondition::Else => true,
@@ -1873,7 +1874,8 @@ fn realize_stored_filler(
         return Ok(());
     };
     let mut selected = None;
-    if let Some(case) = &realization.expression {
+    {
+        let case = &realization.expression;
         for branch in &case.branches {
             let matched = match &branch.condition {
                 crate::CaseCondition::Else => true,

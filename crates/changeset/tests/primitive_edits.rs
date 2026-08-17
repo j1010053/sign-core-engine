@@ -1050,8 +1050,8 @@ sign root:
     )
     .unwrap();
     let root = before.ref_for_sign("root").unwrap();
-    let realization = child(&before, &root, NodeKind::Realization, 0);
-    let case = child(&before, &realization, NodeKind::Case, 0);
+    // 取徑 A 之後 realization item 自己就是 `Case` 節點,不再多一層 wrapper。
+    let case = child(&before, &root, NodeKind::Case, 0);
     let branch = child(&before, &case, NodeKind::CaseBranch, 0);
     let (mut language, identities) = before.clone().into_edit_parts();
     let realization = language
@@ -1066,7 +1066,7 @@ sign root:
             _ => None,
         })
         .unwrap();
-    let result = &mut realization.expression.as_mut().unwrap().branches[0].result;
+    let result = &mut realization.expression.branches[0].result;
     let Expression::PhonInterpolation(application) = result else {
         panic!("fixture must contain a phon interpolation")
     };

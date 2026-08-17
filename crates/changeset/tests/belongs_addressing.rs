@@ -86,7 +86,6 @@ fn kind_keyword_round_trips_for_every_node_kind() {
         NodeKind::RoleBinding,
         NodeKind::Sense,
         NodeKind::SenseEdge,
-        NodeKind::Realization,
         NodeKind::FeatureRule,
         NodeKind::Definition,
         NodeKind::Rule,
@@ -94,7 +93,6 @@ fn kind_keyword_round_trips_for_every_node_kind() {
         NodeKind::RuleThenBranch,
         NodeKind::PhonStatement,
         NodeKind::PhonBlockNode,
-        NodeKind::RealizationBranch,
         NodeKind::Application,
         NodeKind::Case,
         NodeKind::CaseBranch,
@@ -265,6 +263,7 @@ const MACRO_SOURCE: &str = r#"trait Verby:
 trait Nouny:
 
 sign go:
+    belongs Verby
     Verby[0]
     entrenchment = 0.2
 "#;

@@ -112,10 +112,8 @@ fn expand_item_expressions(
             expand_expression_contexts(src, sign, &mut expression.expression, active)
         }
         SignItem::Realization(realization) => {
-            if let Some(case) = &mut realization.expression {
-                for branch in &mut case.branches {
-                    expand_expression_contexts(src, sign, &mut branch.result, active)?;
-                }
+            for branch in &mut realization.expression.branches {
+                expand_expression_contexts(src, sign, &mut branch.result, active)?;
             }
             Ok(())
         }

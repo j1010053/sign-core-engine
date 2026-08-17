@@ -323,6 +323,27 @@ fn parse_typed_case(
     };
     let (scrutinee, case_name) = split_name_suffix(scrutinee);
     let case_name = validate_label(case_name, head.no)?;
+    // `case <slot>.phon:` 已移除(2026-08-17)。它的 `.phon` 不讀音——執行期比的是
+    // filler 的**範疇**,`.phon` 只是個字面標記,故名實不符;而且整個 case 共用一個
+    // scrutinee,強迫所有分支討論同一個槽。guard 分支 `$slot.<name> == [Category]:`
+    // 表達力嚴格更強(每支可測不同對象、可 `&&`),且 `[...]` 明示這是範疇測試。
+    //
+    // **拒絕而非忽略**:比照舊 `schema conlang.lang/v2` 標頭的處置——留著一個
+    // 名實不符的形式,作者會以為它在讀音韻。本專案未發布,無既有檔案需相容。
+    if let Some((slot, "phon")) = scrutinee
+        .trim()
+        .strip_prefix("$self.")
+        .unwrap_or(scrutinee.trim())
+        .split_once('.')
+    {
+        return Err(err(
+            head.no,
+            format!(
+                "`case {slot}.phon:` was removed — it tested the filler's category, not its \
+                 phonology. Use guard branches instead: `$slot.{slot} == [Category]:`"
+            ),
+        ));
+    }
     let scrutinee = (!scrutinee.is_empty()).then(|| scrutinee.to_owned());
     let mut index = start + 1;
     while index < body.len() && body[index].text.is_empty() {
@@ -958,6 +979,8 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
     let mut edges_indent = 0usize;
     let mut in_realization = false;
     let mut realization_indent = 0usize;
+    // `realization:` 標頭已見、其 `case:` 尚未到。區塊結束時仍是 `Some` = 空 realization。
+    let mut pending_realization: Option<usize> = None;
     let mut in_constraints = false;
     let mut constraints_indent = 0usize;
 
@@ -985,6 +1008,9 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             in_edges = false;
         }
         if in_realization && ind <= realization_indent {
+            if let Some(line) = pending_realization {
+                return Err(err(line, EMPTY_REALIZATION));
+            }
             in_realization = false;
         }
         if in_constraints && ind <= constraints_indent {
@@ -999,6 +1025,9 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             in_roles = false;
             in_senses = false;
             in_edges = false;
+            if let Some(line) = pending_realization.take() {
+                return Err(err(line, EMPTY_REALIZATION));
+            }
             in_realization = false;
             in_constraints = false;
             if text == "pass" {
@@ -1407,16 +1436,18 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
         }
         if in_realization {
             if text == "case:" || (text.starts_with("case ") && text.ends_with(':')) {
-                let (case, next) =
-                    parse_typed_case(lang, body, index - 1, ExpressionType::PhonContext)?;
-                let item = blocks.last_mut().unwrap().items.last_mut();
-                let Some(SignItem::Realization(realization)) = item else {
-                    return Err(err(no, "internal realization block state is invalid"));
-                };
-                if realization.expression.is_some() {
+                if pending_realization.is_none() {
                     return Err(err(no, "realization may contain one typed case"));
                 }
-                realization.expression = Some(case);
+                let (case, next) =
+                    parse_typed_case(lang, body, index - 1, ExpressionType::PhonContext)?;
+                // 標頭不建節點,`case:` 到了才建——`Realization` 因此在型別上不可能是空的。
+                blocks
+                    .last_mut()
+                    .unwrap()
+                    .items
+                    .push(SignItem::Realization(Realization { expression: case }));
+                pending_realization = None;
                 index = next;
                 continue;
             }
@@ -1483,11 +1514,34 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             if dim != DimKw::Phon {
                 return Err(err(no, "`realization:` is only valid under `phon:`"));
             }
-            blocks
-                .last_mut()
-                .unwrap()
-                .items
-                .push(SignItem::Realization(Realization::default()));
+            // **一個 block 至多一個 `realization:`**(2026-08-18)。
+            //
+            // 沒有這道檢查時,兩個 `realization:` 會 parse 成兩個 `SignItem::Realization`,
+            // printer 把它們合併印在**一個** `realization:` 標頭下、兩個 `case:`,
+            // 而重新 parse 那份 dump 會撞上「realization may contain one typed case」
+            // ——**P21 的 round-trip 恆等就破了**。實測:`ParseError line 10`。
+            //
+            // 而且求值端一律 `items.iter().find_map(Realization)` **只取第一個**
+            // (`system.rs` `realize_phon`、`construction.rs` filler 路徑),
+            // 第二個從頭到尾是死的:寫了不生效、存檔後讀不回來。
+            if pending_realization.is_some()
+                || blocks.last().is_some_and(|block| {
+                    block
+                        .items
+                        .iter()
+                        .any(|item| matches!(item, SignItem::Realization(_)))
+                })
+            {
+                return Err(err(
+                    no,
+                    "a `phon:` block may contain at most one `realization:` — \
+                     put every guard in the same `case:`",
+                ));
+            }
+            // 標頭本身不建 item(見下方 `case:` 分支):`Realization` 沒有「空」這個狀態,
+            // 型別上就不可能。標頭到 `case:` 之間的空檔由 `pending_realization` 記著,
+            // 區塊結束時仍未關掉就報錯。
+            pending_realization = Some(no);
             in_realization = true;
             realization_indent = ind;
             continue;
@@ -1598,8 +1652,16 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             blocks.last_mut().unwrap().items.push(SignItem::Rule(r));
         }
     }
+    if let Some(line) = pending_realization {
+        return Err(err(line, EMPTY_REALIZATION));
+    }
     Ok(blocks)
 }
+
+/// 空 `realization:` 的診斷。`REALIZATION_EMPTY`(check 期,Error)仍在,但那道太晚:
+/// 型別上要讓 `Realization` 沒有「空」這個狀態,parser 就不能產出它。
+const EMPTY_REALIZATION: &str =
+    "`realization:` must contain a `case:` selecting phon templates by guard";
 
 /// 剝除 `/* … */` 區塊註解(可跨行、行內、整行;非巢狀,首個 `*/` 結束;未閉合視為
 /// 至檔尾)。**保留換行**以維持行號一致(錯誤定位不漂移);註解內容以空白取代,

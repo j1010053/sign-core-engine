@@ -181,6 +181,85 @@ phon template 內的空白是結構性的詞界，不是事後排版：
 `surface_phrase` 在音變後自動把仍存在的詞界輸出為空格。language runtime 不再刪除
 這些空格。大小寫、標點與一般 orthographic pretty-print 仍不屬於 phon surface。
 
+### 4.1 `+`：詞幹域接縫（std 規範，2026-08-17）
+
+空白之外，template 內的 **`+` 是詞幹域接縫**，與詞界並列為第二種結構性標記。
+兩者都不是排版，都會跨界進入 Tshiatūn。
+
+```lang
+/{subject} {predicate}/     /* 空白 → MorphUnit::Word */
+/auf+{stem}t/               /* +   → MorphUnit::Stem  */
+```
+
+管道三層都已存在，**`.lang` 側無須任何引擎改動即可使用**：
+
+| 層 | 行為 | 位置 |
+|---|---|---|
+| 純度檢查 | 擋 `$self`／`$slot`／`{`／`}`／`/`，**不擋 `+` 與空白** | `system.rs` `realize_phon` |
+| 詞建構 | `pword.split('+')` → 每段一個 `MorphUnit::Stem` bracket；空段報 `InvalidPhrase{reason:"empty stem domain"}` | `tshiatun/crates/dsl/src/build.rs` |
+| 規則環境 | `+` = `Element::StemBoundary`；另有 `#`(詞界)、`##`(韻律詞接縫)、`\|\|`(語句邊緣)、`.`(音節界) | `tshiatun/crates/dsl/src/ast.rs` |
+
+三個必須知道的性質：
+
+1. **`+` 影響分段**。每個 component 獨立 tokenize，故 `t+s` 不會被宣告過的多碼位符號
+   `ts` 吞掉。漏寫 `+` 不只是丟失環境，可能直接切錯音段。
+2. **`+` 不是音節界**。音節化跑一次完整 pword，`.` 才是音節界。
+3. **`+` 會出現在表層**。`surface_phrase` 把仍存在的 stem seam 輸出回 `+`（比照詞界輸出為
+   空格）。故 surface 字串帶接縫標記，消費端須知它是**形態註記，不是音段**。
+
+**規範：接縫是語言學宣告，引擎不推。** `substitute` 照 template 字面展開，不會替 slot
+接縫自動補 `+`。同一個構式的相鄰槽，哪一個接縫是獨立詞幹域、哪一個是黏合的，
+必須由構式作者判斷並寫進 template：
+
+```lang
+/auf+sagt/     /* 對：可分前綴是獨立詞幹域，屈折 -t 黏合 */
+/auf+sag+t/    /* 錯：把屈折後綴當成獨立詞幹域 */
+/aufsagt/      /* 錯：前綴的域邊界對音韻隱形，且 tokenize 可能切錯 */
+```
+
+英語的 level-1（`-ity`，觸發重音移動）與 level-2（`-ness`，不觸發）是同一個判斷。
+
+**已知落差**：隨附的 `crates/language/tests/fixtures/german_present.lang` 寫的是
+`/{prefix}{stem}{suffix}/`，未標接縫，故 `auf-` 的域邊界目前對音韻隱形。
+這是庫內容的欠帳，不是引擎能力的欠帳。
+
+**`+` 的第二個作用（別漏）**：它同時決定 **`stage: stem` 的規則跑在哪些片段上**。
+`stage_domains`（`tshiatun/crates/dsl/src/exec.rs`）把 `Stage::Stem` 映到逐 stem bracket、
+`Stage::Word` 映到逐韻律詞、`Stage::Phrase` 映到整句——**這已經是層級音韻，且一趟跑完**。
+所以漏寫 `+` 不只是少一個可引用的環境，是**整個 stem 層級失效**（全詞被當成一個域）。
+多層嵌套循環的上限與相關提案見《架構修補13》。
+
+### 4.2 觀察：deep template 是 realization 的無條件分支（未裁定）
+
+**現況是一件事被拆成兩個 `SignItem`**：
+
+```lang
+phon:
+    /she/                       ← SignItem::Def(path = "phon")
+    realization:                ← SignItem::Realization
+        case:
+            $self.syn.case == accusative:
+                /her/
+```
+
+語意上 `/she/` 就是那個 case 的 `else`——`construction.rs` 選不到分支時回
+`token.phon_form()`，也就是 deep template。三個佐證：
+
+1. **default 已經是強制的**：construction 缺 phon template 直接報 `CONSTRUCTION_PHON_MISSING`。
+   不是「可有可無的預設值」，是「函數必須有值」。
+2. **兩個 item 之間沒有順序語意**：printer 把 `realization:` 印在 `/she/` **之前**，
+   而原始碼順序相反；誰先誰後不影響求值。
+3. **拆分本身製造了非法狀態**：realization 是獨立 item，所以它可以有 **0 個**
+   （由 `REALIZATION_EMPTY` 攔）也可以有 **2 個**（曾使 P21 round-trip 破，
+   2026-08-18 起於 parser 攔下）。若 phon 形只有一個 item，這兩種狀態在型別上不存在。
+
+**可能的形狀**（提案，未裁定）：一個 sign 的 phon 形是**一個** form function，
+`條件 → 模板`，且必含一個無條件分支。無交替的詞就是常數函數，`phon: /dog/`
+保留為表層糖、既有 `.lang` 一字不改。收益是上述三種非法狀態由型別消滅，
+而不是靠逐條 parser/check 檢查。
+
+**與《架構修補13》的關係**：獨立。13 談的是跨界回傳，這裡談的是同一側的 item 切分。
+
 ## 5. Semantic JSON v1
 
 未來 LLM 邊界只使用版本化 DTO，不提供 backend、provider、prompt 或網路 API。

@@ -179,3 +179,61 @@ fn inserts_a_case_branch_into_a_named_case() {
         doc.source()
     );
 }
+
+/// 🔑 **realization 內的 `@name` 現在定得到址**(取徑 A,2026-08-18)。
+///
+/// 此前:標籤 parse 得過、canonical dump 印得出來,但六條路徑全部解不到——
+/// `sign("x").case["X"]` 回 `cannot resolve … below <sign>`,
+/// `sign("x").realization[0]` 回 `unknown path selector "realization"`。
+/// 成因是 `SignItem::Realization` 保留了一層 V1 遺留的 wrapper 節點,
+/// 使 `Case` 成為 sign 的**孫**節點,而 `resolve_path_child` 只取直屬子節點。
+///
+/// 取徑 A 讓它比照另外三個帶運算式的 SignItem 塌陷成 expression root,
+/// 於是 realization 的 case 與 sign 層的 case **走完全同一條定址路徑**,
+/// selector 清單維持 15 支不新增。
+const REALIZATION_SOURCE: &str = r#"Symbol s
+Symbol h
+Symbol e
+Symbol r
+
+trait LocalPronoun:
+
+sign she:
+    belongs LocalPronoun
+    syn:
+        feature:
+            case = enum(nominative, accusative)
+    phon:
+        /she/
+        realization:
+            case @name pron_case:
+                $self.syn.case == accusative @name acc:
+                    /her/
+                else @name nom:
+                    /she/
+"#;
+
+#[test]
+fn a_named_realization_case_is_addressable_by_label() {
+    let base = LanguageDocument::import_new_root(REALIZATION_SOURCE, "evo:root").unwrap();
+    assert!(base.source().contains("@name pron_case"), "標籤進 IR");
+
+    let spec = LibrarySpec::default();
+    let mut source = change_set_prelude(&base, &spec, "evo:realization").unwrap();
+    source.push_str(
+        "\n    statement 0:\n        delete sign(\"she\").case[\"pron_case\"].branch[\"acc\"]\n",
+    );
+    let resolved = UnresolvedChangeSet::parse(&source)
+        .unwrap()
+        .resolve(&base, &spec)
+        .expect("realization 的具名 case/branch 必須解得到");
+
+    let doc = ChangeInterpreter::new(base, spec, "evo:realization")
+        .unwrap()
+        .run(&resolved)
+        .unwrap()
+        .document;
+    let rendered = doc.source();
+    assert!(!rendered.contains("/her/"), "acc 分支已刪:\n{rendered}");
+    assert!(rendered.contains("@name nom"), "其餘分支保留:\n{rendered}");
+}

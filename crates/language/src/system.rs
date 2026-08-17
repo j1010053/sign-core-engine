@@ -146,6 +146,34 @@ impl DerivationContext {
     }
 }
 
+/// 一個跑完 `evaluate_applied_sign`(token rules + sign-body `case:`)的 token。
+///
+/// 存在理由與 [`RealizedPhonInput`] 同一路數:用型別記錄「已經跨過哪一道關」。
+/// `DerivedToken` 一種型別涵蓋了兩個差很多的狀態——`apply_construction` 之後的
+/// 半成品,與完整求值後的成品——而 `realize_phon` 只對後者有意義。
+///
+/// 只由 [`CompiledSystem::evaluate_token`] 與內部的求值路徑產生。
+#[derive(Debug, Clone)]
+pub struct EvaluatedToken(DerivedToken);
+
+impl EvaluatedToken {
+    /// 只給已經走過 `evaluate_applied_sign` 的內部路徑用。crate 外無法構造,
+    /// 這正是這個型別的用處。
+    pub(crate) fn already_evaluated(token: DerivedToken) -> EvaluatedToken {
+        EvaluatedToken(token)
+    }
+
+    pub fn as_token(&self) -> &DerivedToken {
+        &self.0
+    }
+
+    /// **刻意不公開**:公開它等於開一條 `evaluate_token(x.into_token())` 的回頭路,
+    /// 而重跑一次 token rules 不是冪等的。crate 外只需要 [`Self::as_token`] 讀。
+    pub(crate) fn into_token(self) -> DerivedToken {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RealizedPhonInput(String);
 
@@ -192,6 +220,18 @@ pub enum SignValue {
 }
 
 impl SignValue {
+    /// 取出可實現的 token。`Stored` 回 `None`——它是尚未套用的 Sign,沒有可實現的
+    /// occurrence。
+    ///
+    /// 公開 API 交出的 `SignValue`(`evaluate_sign_expression`、`apply_arguments`)
+    /// 一律已走過 `evaluate_applied_sign`,故 `Applied` 就是 [`EvaluatedToken`]。
+    pub fn into_evaluated(self) -> Option<EvaluatedToken> {
+        match self {
+            SignValue::Applied(token) => Some(EvaluatedToken::already_evaluated(token)),
+            SignValue::Stored(_) => None,
+        }
+    }
+
     /// Saturation is a state of a Sign value, never a separate entity type.
     pub fn is_saturated(&self) -> bool {
         self.residual_parameters()
@@ -714,11 +754,7 @@ fn validate_typed_schemas(
                 collect_sign_fragments(&expression.expression, inherited, output)
             }
             SignItem::Realization(realization) => {
-                for branch in realization
-                    .expression
-                    .iter()
-                    .flat_map(|case| &case.branches)
-                {
+                for branch in &realization.expression.branches {
                     collect_sign_fragments(&branch.result, inherited, output);
                 }
             }
@@ -1439,14 +1475,10 @@ fn validate_typed_schemas(
             SignItem::Realization(realization) => Some(realization),
             _ => None,
         }) {
-            if realization.expression.is_none() {
-                report.push(Diagnostic::new(
-                    Severity::Error,
-                    "REALIZATION_EMPTY",
-                    format!("{owner:?} has an empty realization block"),
-                ));
-            }
-            if let Some(case) = &realization.expression {
+            // `REALIZATION_EMPTY` 已刪:`Realization.expression` 不再是 `Option`,
+            // 空 realization 由 parser 擋下(2026-08-18),型別上不可能到這裡。
+            {
+                let case = &realization.expression;
                 if case.branches.is_empty() {
                     report.push(Diagnostic::new(
                         Severity::Error,
@@ -1454,17 +1486,9 @@ fn validate_typed_schemas(
                         format!("{owner:?} has an empty phon case"),
                     ));
                 }
-                if let Some(scrutinee) = &case.scrutinee {
-                    if let Some((slot, "phon")) = scrutinee.split_once('.') {
-                        if !slots.iter().any(|candidate| candidate.name == slot) {
-                            report.push(Diagnostic::new(
-                                Severity::Error,
-                                "CASE_UNKNOWN_SLOT",
-                                format!("{owner:?} phon case reads unknown slot {slot:?}"),
-                            ));
-                        }
-                    }
-                }
+                // `CASE_UNKNOWN_SLOT` 已刪:它只在 `case <slot>.phon:` 這個形式上觸發,
+                // 而該形式已於 parser 拒絕(2026-08-17)。槽的存在性改由 guard 分支的
+                // `$slot.<name>` 解析負責。
                 for branch in &case.branches {
                     let mut pending = vec![&branch.result];
                     while let Some(result) = pending.pop() {
@@ -1642,11 +1666,7 @@ fn validate_fp_expressions(
                             applications(&expression.expression, output)
                         }
                         SignItem::Realization(realization) => {
-                            for branch in realization
-                                .expression
-                                .iter()
-                                .flat_map(|case| &case.branches)
-                            {
+                            for branch in &realization.expression.branches {
                                 applications(&branch.result, output);
                             }
                         }
@@ -1758,10 +1778,11 @@ fn validate_fp_expressions(
                     )),
                     _ => None,
                 },
-                SignItem::Realization(realization) => realization
-                    .expression
-                    .as_ref()
-                    .map(|case| (case, crate::ExpressionType::PhonContext, "phon.realization")),
+                SignItem::Realization(realization) => Some((
+                    &realization.expression,
+                    crate::ExpressionType::PhonContext,
+                    "phon.realization",
+                )),
                 SignItem::FeatureExpression(expression) => match &expression.expression {
                     Expression::Case(case) => Some((
                         case.as_ref(),
@@ -2027,13 +2048,11 @@ fn validate_fp_expressions(
                                 }
                             }
                             SignItem::Realization(realization) => {
-                                if let Some(nested) = &realization.expression {
-                                    cases.push((
-                                        nested,
-                                        crate::ExpressionType::PhonContext,
-                                        "sign.fragment.phon.realization",
-                                    ));
-                                }
+                                cases.push((
+                                    &realization.expression,
+                                    crate::ExpressionType::PhonContext,
+                                    "sign.fragment.phon.realization",
+                                ));
                             }
                             _ => {}
                         }
@@ -2328,14 +2347,10 @@ fn validate_constructions_and_local_phon(
                 SignItem::Realization(realization) => Some(realization),
                 _ => None,
             }) {
-                if let Some(case) = &realization.expression {
-                    if let Some((slot, "phon")) = case
-                        .scrutinee
-                        .as_deref()
-                        .and_then(|value| value.split_once('.'))
-                    {
-                        used_slots.insert(slot.to_owned());
-                    }
+                {
+                    // `case <slot>.phon:` 已於 parser 移除(2026-08-17),故不再從
+                    // scrutinee 收集槽引用;槽只可能出現在 guard 與模板裡。
+                    let case = &realization.expression;
                     for branch in &case.branches {
                         if let crate::CaseCondition::Guard(guard) = &branch.condition {
                             used_slots.extend(synchronic::realization_guard_slot_references(guard));
@@ -3204,28 +3219,12 @@ impl CompiledSystem {
         scrutinee: &str,
         expected: &str,
     ) -> Result<bool, SystemError> {
+        // `<slot>.phon` 的範疇測試分支已刪(2026-08-17):該 scrutinee 形式由 parser 拒絕,
+        // 取代寫法是 guard 分支 `$slot.<name> == [Category]:`(走 `case_guard_matches`)。
         let scrutinee = scrutinee
             .trim()
             .strip_prefix("$self.")
             .unwrap_or(scrutinee.trim());
-        if let SignValue::Applied(token) = value {
-            if let Some((slot, projection)) = scrutinee.split_once('.') {
-                if projection == "phon" {
-                    let filler = token.fillers.iter().find(|filler| filler.slot == slot);
-                    let Some(filler) = filler else {
-                        return Ok(false);
-                    };
-                    if !self.ontology.has(expected) {
-                        return Err(SystemError::InvalidSignExpression(format!(
-                            "unknown case category {expected:?}"
-                        )));
-                    }
-                    return Ok(self
-                        .ontology
-                        .categories_satisfy(&filler.categories, expected));
-                }
-            }
-        }
         Ok(Self::scalar_from_value(value, scrutinee) == Some(expected))
     }
 
@@ -3767,6 +3766,30 @@ impl CompiledSystem {
         Ok(SignExpressionEvaluation { value, cases })
     }
 
+    /// 把一個 `DerivedToken` 跑完 token rules 與 sign-body `case:`,得到可實現的
+    /// [`EvaluatedToken`]。這是 [`Self::apply_construction`] 與 [`Self::realize_phon`]
+    /// 之間缺的那一段——`derive_with_context` 內部走的也是同一段。
+    ///
+    /// sign-body 的 case 可以回傳**另一個** sign(如 `walk` 的 `en_3sg({$self})`);
+    /// 那種情形不是一個可實現的 token,故回 `InvalidSignExpression`,與
+    /// `derive_with_context` 的處置一致。
+    pub fn evaluate_token(&self, token: DerivedToken) -> Result<EvaluatedToken, SystemError> {
+        let stack = vec![token.construction.clone()];
+        let mut rules = Vec::new();
+        let mut cases = Vec::new();
+        let value = self.evaluate_applied_sign(token, &stack, &mut rules, &mut cases)?;
+        let SignValue::Applied(token) = value else {
+            return Err(SystemError::InvalidSignExpression(
+                "a saturated construction must evaluate to an applied Sign".to_owned(),
+            ));
+        };
+        Ok(EvaluatedToken(token))
+    }
+
+    /// **只跑到「filler 填進槽」**(§3.1:部分入口)。token rules 與 sign-body `case:`
+    /// 都還沒跑,故它的結果**不能**直接餵給 `realize_phon`——要嘛接 [`Self::evaluate_token`],
+    /// 要嘛整條用 [`Self::derive`]。保留公開是因為 SlotMap 變價、飽和性與槽授權的
+    /// 負例本來就該在這一層驗。
     pub fn apply_construction<'a>(
         &self,
         construction: &str,
@@ -4185,6 +4208,9 @@ impl CompiledSystem {
                             nested.missing_required(),
                         )));
                     }
+                    // `nested` 來自 `apply_sign_application` → `evaluate_applied_sign`,
+                    // 已是求值後的 token,故可直接標記。
+                    let nested = EvaluatedToken::already_evaluated(nested);
                     let realization = self.realize_phon(&nested)?;
                     cases.extend(realization.cases);
                     nested_rules.extend(realization.nested_rules);
@@ -4212,7 +4238,19 @@ impl CompiledSystem {
         Ok((default.to_owned(), None, SourceLocation::unknown()))
     }
 
-    pub fn realize_phon(&self, token: &DerivedToken) -> Result<PhonRealization, SystemError> {
+    /// 把一個**已求值**的 token 實現為 phon 輸入。
+    ///
+    /// 參數刻意是 [`EvaluatedToken`] 而非 `DerivedToken`:`apply_construction` 只跑到
+    /// 「filler 填進槽」,token rules 與 sign-body `case:` 都還沒跑,而真實管線裡
+    /// `realize_phon` **永遠**只拿到 `evaluate_applied_sign` 之後的 token。舊簽名收
+    /// `&DerivedToken` 時,`apply_construction(...) + realize_phon(...)` 是一個編譯得過、
+    /// 執行不報錯、卻在產品路徑上不存在的組合——guard 若讀 `$self.<由 token rule 算出的
+    /// 特徵>` 會讀到空值、靜默掉進 `else`,測試照樣綠燈。改型別讓這個組合寫不出來。
+    ///
+    /// 取得 [`EvaluatedToken`]:[`Self::evaluate_token`](完整求值但不跑音變)或
+    /// [`Self::derive`](一路到表層)。
+    pub fn realize_phon(&self, token: &EvaluatedToken) -> Result<PhonRealization, SystemError> {
+        let token = &token.0;
         let realization = token.rule_sign.items.iter().find_map(|item| match item {
             SignItem::Realization(realization) => Some(realization),
             _ => None,
@@ -4224,15 +4262,13 @@ impl CompiledSystem {
         let default = token.phon_form()?;
         let mut typed = None;
         if let Some(realization) = realization {
-            if let Some(case) = &realization.expression {
-                typed = Some(self.evaluate_phon_case(
-                    token,
-                    case,
-                    &default,
-                    &mut cases,
-                    &mut nested_rules,
-                )?);
-            }
+            typed = Some(self.evaluate_phon_case(
+                token,
+                &realization.expression,
+                &default,
+                &mut cases,
+                &mut nested_rules,
+            )?);
         }
         let (input, branch, source) = if let Some(result) = typed {
             result
@@ -4548,7 +4584,10 @@ impl CompiledSystem {
         occurrences.extend(final_occurrences);
 
         let program = self.phon_program(&token)?;
-        let realization = self.realize_phon(&token)?;
+        // `token` 是上方 `evaluate_applied_sign` 解構出來的 `SignValue::Applied`。
+        let evaluated = EvaluatedToken::already_evaluated(token);
+        let realization = self.realize_phon(&evaluated)?;
+        let mut token = evaluated.into_token();
         rules.extend(realization.nested_rules.iter().cloned());
         cases.extend(realization.cases.iter().cloned());
         token.record_realized_phon_input(realization.input.as_str().to_owned());

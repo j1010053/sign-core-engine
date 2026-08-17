@@ -439,7 +439,7 @@ feature 上(`m1pp_system::inherited_rules_are_diamond_deduplicated_and_keep_sour
 |---|---|---|
 | ~~**值表達式的讀取**~~ | ~~不查~~ | **已由增修 E 補上(§11,2026-08-12)**,不再是殘留 |
 | **`.chg` 歷時 function guard**(`crates/changeset/src/function.rs`) | 完全不查路徑 | **不是**因為語意分歧——`guard_holds` 把參數改寫成 `$self` 後交給 `synchronic::guard_matches_sign`,與 `.lang` **共用同一個求值器**。障礙是**時機**:function 定義依《修補10》§11.2 完全 base-independent,載入時沒有 language 可查宣告集。invoke 時則資訊完整(`guard_holds` 手上有 document、ontology 與具體 effective sign)。要補得先裁定:base-independent 的 function,在某個 base 上讀不到的路徑算錯誤還是合法的 false?**另立條款** |
-| **typed `case:` 的 `scrutinee`**(`CaseCondition::Equals`) | 走 `scalar()`,不查 | 非 guard;且其路徑空間與 def 路徑**不同構**——唯一的生產形狀是槽投影(`case stem.phon:`),頭是槽名不是維度,套 `def_path_allowed` 前得先分清兩種形狀 |
+| **typed `case:` 的 `scrutinee`**(`CaseCondition::Equals`) | 走 `scalar()`,不查 | 非 guard。~~且其路徑空間與 def 路徑**不同構**——唯一的生產形狀是槽投影(`case stem.phon:`),頭是槽名不是維度,套 `def_path_allowed` 前得先分清兩種形狀~~<br>**更正(2026-08-17):不同構的那一半已消失。** `case <slot>.phon:` 已於 parser 拒絕,取代寫法是 guard 分支 `$slot.<name> == [Category]:`。移除理由:它的 `.phon` **不讀音韻**——執行期比的是 filler 的範疇(`categories_satisfy`),`.phon` 只是個字面標記;且整個 case 共用一個 scrutinee,強迫所有分支討論同一個槽。scrutinee 的路徑空間現在只剩 `<dim>.<field>` 一種,**與 def 路徑同構**,日後要套 `def_path_allowed` 不必再先分辨兩種形狀 |
 
 **D/E 只管路徑合不合法,不管值在不在。** 合法路徑在某個主體上沒有值,D/E 之後
 仍是靜默 `Unmatched`(依 P43 落進 `else`)。那一半由 **P75** 處理

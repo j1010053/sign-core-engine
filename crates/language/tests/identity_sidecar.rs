@@ -34,11 +34,9 @@ fn source_sidecar_round_trip_is_deterministic_and_binds_runtime_ids() {
         reopened.ref_for_sign("dog").unwrap().id.namespace,
         IdentityNamespace::Document("evo:proto".to_owned())
     );
-    assert!(!reopened
-        .identities()
-        .nodes
-        .iter()
-        .any(|node| node.kind == NodeKind::RealizationBranch));
+    // 原本此處斷言「`NodeKind::RealizationBranch` 永不被產生」——那是 V1 扁平
+    // `RealizationBranch` 清單移除時裝的迴歸護欄。該 variant 現已從 `NodeKind`
+    // 整個刪除,不可產生由型別保證,執行期斷言因此多餘。
 
     let report = check_document(&reopened, &LibrarySpec::default());
     assert!(!report.has_errors(), "{:?}", report.diagnostics());

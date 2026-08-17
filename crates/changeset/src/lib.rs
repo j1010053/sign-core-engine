@@ -140,7 +140,6 @@ pub enum NodeUpdate {
     /// `RoleExpression`, `Projection`, interpolation vs application). This is
     /// deliberately restricted to an expression-bearing SignItem root.
     ExpressionItem(SignItem),
-    Realization(Realization),
     /// Explicit flat → structured phon authoring/update. A structural root
     /// replacement is never inferred from a child insert.
     PhonBlockRoot(PhonBlock),
@@ -284,7 +283,7 @@ fn sequence_tag(address: &NodeAddress) -> u8 {
         Some(AddressSegment::Items(_)) => 6,
         Some(AddressSegment::RuleElse(_)) => 7,
         Some(AddressSegment::RuleThen(_)) => 8,
-        Some(AddressSegment::RealizationBranches(_)) => 9,
+        // 9 = 已刪的 V1 `RealizationBranches`;序號留空,不重編以免動到既有相對次序。
         Some(AddressSegment::CaseExpression) => 10,
         Some(AddressSegment::CaseBranches(_)) => 11,
         Some(AddressSegment::CaseResult) => 12,
@@ -517,7 +516,6 @@ enum ListKey {
     PhonLeaf,
     PhonThen,
     PhonElse,
-    Realization,
     CaseBranches,
 }
 
@@ -534,7 +532,6 @@ fn segment(key: ListKey, index: usize) -> AddressSegment {
         ListKey::PhonLeaf => AddressSegment::PhonLeaf(index),
         ListKey::PhonThen => AddressSegment::PhonThen(index),
         ListKey::PhonElse => AddressSegment::PhonElse(index),
-        ListKey::Realization => AddressSegment::RealizationBranches(index),
         ListKey::CaseBranches => AddressSegment::CaseBranches(index),
     }
 }
@@ -551,8 +548,7 @@ fn segment_index(value: &AddressSegment, key: ListKey) -> Option<usize> {
         | (ListKey::RuleThen, AddressSegment::RuleThen(index))
         | (ListKey::PhonLeaf, AddressSegment::PhonLeaf(index))
         | (ListKey::PhonThen, AddressSegment::PhonThen(index))
-        | (ListKey::PhonElse, AddressSegment::PhonElse(index))
-        | (ListKey::Realization, AddressSegment::RealizationBranches(index)) => Some(*index),
+        | (ListKey::PhonElse, AddressSegment::PhonElse(index)) => Some(*index),
         (ListKey::CaseBranches, AddressSegment::CaseBranches(index)) => Some(*index),
         _ => None,
     }
@@ -1021,11 +1017,6 @@ fn child_addresses(
         NodeKind::PhonBlockNode => {
             let block = phon_container_block(language, address)?;
             push_phon_children(block, address, &mut children);
-        }
-        NodeKind::Realization => {
-            if realization_at(language, address)?.expression.is_some() {
-                children.push(address.child(AddressSegment::CaseExpression));
-            }
         }
         NodeKind::Case => {
             let case = case_at(language, address)
@@ -1503,10 +1494,6 @@ fn update_payload(
             *target = value;
             Ok(Some("case.references".to_owned()))
         }
-        (NodeKind::Realization, NodeUpdate::Realization(value)) => {
-            *item_at_address_mut(language, &node.address)? = SignItem::Realization(value);
-            Ok(Some("case.references".to_owned()))
-        }
         (NodeKind::Rule | NodeKind::FeatureRule, NodeUpdate::PhonBlockRoot(value)) => {
             let rule = rule_at_mut(language, &node.address)?;
             if rule.dim != Dim::Phon {
@@ -1812,7 +1799,6 @@ fn address_list_position(address: &NodeAddress) -> Result<(ListKey, usize), Edit
         AddressSegment::PhonLeaf(index) => (ListKey::PhonLeaf, *index),
         AddressSegment::PhonThen(index) => (ListKey::PhonThen, *index),
         AddressSegment::PhonElse(index) => (ListKey::PhonElse, *index),
-        AddressSegment::RealizationBranches(index) => (ListKey::Realization, *index),
         AddressSegment::CaseBranches(index) => (ListKey::CaseBranches, *index),
         AddressSegment::CaseExpression
         | AddressSegment::CaseResult
@@ -1839,7 +1825,9 @@ fn item_kind(item: &SignItem) -> NodeKind {
         SignItem::RoleBinding(_) => NodeKind::RoleBinding,
         SignItem::Sense(_) => NodeKind::Sense,
         SignItem::SenseEdge(_) => NodeKind::SenseEdge,
-        SignItem::Realization(_) => NodeKind::Realization,
+        // **必須與 `identity::item_kind` 一致**:取徑 A 之後 realization 塌陷成
+        // 自己的 expression root(`Case`)。兩表對不上就會排出自己讀不回來的 `.chg`。
+        SignItem::Realization(_) => NodeKind::Case,
         SignItem::SignExpression(expression) => {
             expression_node_kind(&expression.expression).unwrap_or(NodeKind::Case)
         }
@@ -2275,8 +2263,6 @@ fn parse_kind(value: &str) -> Result<NodeKind, ReplayError> {
         "sense" => Ok(NodeKind::Sense),
         "sense_edge" => Ok(NodeKind::SenseEdge),
         "phon_block" => Ok(NodeKind::PhonBlockNode),
-        "realization" => Ok(NodeKind::Realization),
-        "realization_branch" => Ok(NodeKind::RealizationBranch),
         "application" => Ok(NodeKind::Application),
         "case" => Ok(NodeKind::Case),
         "case_branch" => Ok(NodeKind::CaseBranch),
@@ -2329,8 +2315,6 @@ fn kind_keyword(kind: NodeKind) -> &'static str {
         NodeKind::Sense => "sense",
         NodeKind::SenseEdge => "sense_edge",
         NodeKind::PhonBlockNode => "phon_block",
-        NodeKind::Realization => "realization",
-        NodeKind::RealizationBranch => "realization_branch",
         NodeKind::Application => "application",
         NodeKind::Case => "case",
         NodeKind::CaseBranch => "case_branch",
@@ -3999,7 +3983,6 @@ fn update_kind_name(change: &NodeUpdate) -> &'static str {
         NodeUpdate::CaseBranch(_) => "CaseBranch",
         NodeUpdate::SignApplication(_) => "SignApplication",
         NodeUpdate::ExpressionItem(_) => "ExpressionItem",
-        NodeUpdate::Realization(_) => "Realization",
         NodeUpdate::PhonBlockRoot(_) => "PhonBlockRoot",
         NodeUpdate::Constraint(_) => "Constraint",
     }
@@ -4055,7 +4038,6 @@ fn dump_update(change: &NodeUpdate) -> Option<(&'static str, String)> {
         | NodeUpdate::CaseBranch(_)
         | NodeUpdate::SignApplication(_)
         | NodeUpdate::ExpressionItem(_)
-        | NodeUpdate::Realization(_)
         | NodeUpdate::Constraint(_) => None,
     }
 }
@@ -4779,7 +4761,6 @@ fn is_item_kind(kind: NodeKind) -> bool {
             | NodeKind::RoleBinding
             | NodeKind::Sense
             | NodeKind::SenseEdge
-            | NodeKind::Realization
             | NodeKind::Case
             | NodeKind::Constraint
             | NodeKind::FeatureRule
@@ -4891,11 +4872,6 @@ fn kind_at(language: &Language, address: &NodeAddress) -> Option<NodeKind> {
                         _ => None,
                     }
                 }
-                AddressSegment::CaseExpression => realization_at(language, &parent)
-                    .ok()?
-                    .expression
-                    .as_ref()
-                    .map(|_| NodeKind::Case),
                 AddressSegment::CaseBranches(index) => {
                     let case_parent = NodeAddress(path[..path.len() - 1].to_vec());
                     let case = case_at(language, &case_parent)?;
@@ -5072,12 +5048,8 @@ fn root_case<'a, 'b>(
         SignItem::RoleExpression(expression) => {
             expression_case(&expression.expression).map(|case| (case, tail))
         }
-        SignItem::Realization(realization) => match tail.split_first() {
-            Some((AddressSegment::CaseExpression, rest)) => {
-                realization.expression.as_ref().map(|case| (case, rest))
-            }
-            _ => None,
-        },
+        // 塌陷後不再有 `CaseExpression` 那一跳:branches 直接掛在 item 位址上。
+        SignItem::Realization(realization) => Some((&realization.expression, tail)),
         _ => None,
     }
 }
@@ -5096,12 +5068,7 @@ fn root_case_mut<'a, 'b>(
         SignItem::RoleExpression(expression) => {
             expression_case_mut(&mut expression.expression).map(|case| (case, tail))
         }
-        SignItem::Realization(realization) => match tail.split_first() {
-            Some((AddressSegment::CaseExpression, rest)) => {
-                realization.expression.as_mut().map(|case| (case, rest))
-            }
-            _ => None,
-        },
+        SignItem::Realization(realization) => Some((&mut realization.expression, tail)),
         _ => None,
     }
 }
@@ -5402,11 +5369,8 @@ fn item_at_address<'a>(language: &'a Language, address: &NodeAddress) -> Option<
                 expression_item_at(&expression.expression, path)
             }
             SignItem::Realization(realization) => {
-                let [AddressSegment::CaseExpression, tail @ ..] = path else {
-                    return None;
-                };
-                let case = realization.expression.as_ref()?;
-                let [AddressSegment::CaseBranches(branch), rest @ ..] = tail else {
+                let case = &realization.expression;
+                let [AddressSegment::CaseBranches(branch), rest @ ..] = path else {
                     return None;
                 };
                 let result = &case.branches.get(*branch)?.result;
@@ -5504,11 +5468,8 @@ fn item_at_address_mut_option<'a>(
                 expression_item_at_mut(&mut expression.expression, path)
             }
             SignItem::Realization(realization) => {
-                let [AddressSegment::CaseExpression, tail @ ..] = path else {
-                    return None;
-                };
-                let case = realization.expression.as_mut()?;
-                let [AddressSegment::CaseBranches(branch), rest @ ..] = tail else {
+                let case = &mut realization.expression;
+                let [AddressSegment::CaseBranches(branch), rest @ ..] = path else {
                     return None;
                 };
                 let result = &mut case.branches.get_mut(*branch)?.result;
@@ -5751,18 +5712,6 @@ fn phon_statement_at_mut<'a>(
     }
 }
 
-fn realization_at<'a>(
-    language: &'a Language,
-    address: &NodeAddress,
-) -> Result<&'a Realization, EditError> {
-    match item_at_address(language, address) {
-        Some(SignItem::Realization(value)) => Ok(value),
-        _ => Err(EditError::FieldMismatch(
-            "expected realization address".to_owned(),
-        )),
-    }
-}
-
 fn definition_at_mut<'a>(
     language: &'a mut Language,
     address: &NodeAddress,
@@ -5965,9 +5914,7 @@ fn rewrite_local_slot_refs_in_items(items: &mut [SignItem], old: &str, new: &str
             SignItem::Realization(realization) => {
                 // Typed realization case slot-renames flow through the shared
                 // case-expression rewrite; the former flat branches are gone.
-                if let Some(case) = &mut realization.expression {
-                    rewrite_local_slot_refs_in_case(case, old, new);
-                }
+                rewrite_local_slot_refs_in_case(&mut realization.expression, old, new);
             }
             SignItem::SignExpression(expression) => {
                 rewrite_local_slot_refs_in_expression(&mut expression.expression, old, new)
@@ -6058,7 +6005,8 @@ fn rewrite_application_parameters_in_items(
                 new,
             ),
             SignItem::Realization(realization) => {
-                if let Some(case) = &mut realization.expression {
+                {
+                    let case = &mut realization.expression;
                     for branch in &mut case.branches {
                         rewrite_application_parameters_in_expression(
                             &mut branch.result,
@@ -6195,7 +6143,8 @@ fn rewrite_sign_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
                 rewrite_sign_refs_in_expression(&mut expression.expression, old, new)
             }
             SignItem::Realization(realization) => {
-                if let Some(case) = &mut realization.expression {
+                {
+                    let case = &mut realization.expression;
                     rewrite_sign_refs_in_case(case, old, new);
                 }
             }
@@ -6273,7 +6222,8 @@ fn rewrite_trait_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
                 rewrite_trait_refs_in_expression(&mut expression.expression, old, new)
             }
             SignItem::Realization(realization) => {
-                if let Some(case) = &mut realization.expression {
+                {
+                    let case = &mut realization.expression;
                     rewrite_trait_refs_in_case(case, old, new);
                 }
             }
