@@ -152,6 +152,35 @@ pub(crate) fn belongs_reference_diagnostics(langs: &[&Language]) -> Vec<Diagnost
                 _ => None,
             })
             .collect();
+        let declared: BTreeSet<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                SignItem::Belongs(name) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        // **`X[n]` 不得獨立出現。** 身分(以及日後 P76 的實參)只存在 `belongs`
+        // 上一份,`X[n]` 是指向它的展開點——沒有那一份宣告,展開點就沒有可指的
+        // 東西,而它自己帶的名字只是個巧合般的重複。
+        //
+        // **暫為警告。** 這條的終點是把 `Belongs` 與 `TraitUse` 併成同一個
+        // `SignItem`(`block: None` = 宣告、`Some(n)` = 展開點),屆時它會變成
+        // **型別的良構條件**而不是外掛的檢查。在那之前發錯誤會擋掉兩個既有
+        // 用法(`.chg` 獨立改 trait_use 目標、結構化編輯的「插入 trait use」),
+        // 而那兩個正是合併時要一起修的東西——現在擋住只會逼出臨時修法。
+        for name in &used {
+            if !declared.contains(name) {
+                out.push(Diagnostic::new(
+                    Severity::Warning,
+                    "TRAIT_USE_WITHOUT_BELONGS",
+                    format!(
+                        "{owner:?} expands {name}[…] without declaring `belongs {name}`; \
+                         the mount is declared by `belongs`, and an expansion point cannot \
+                         stand on its own"
+                    ),
+                ));
+            }
+        }
         for item in items {
             let SignItem::Belongs(target) = item else {
                 continue;

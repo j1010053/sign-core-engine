@@ -14,12 +14,14 @@ trait FormMeaningConstruction:
 
 trait HeadProjection:
     belongs FormMeaningConstruction
+    FormMeaningConstruction[0]
     syn:
         slots:
             head [*]
 
 trait ControllerTargetAgreement:
     belongs FormMeaningConstruction
+    FormMeaningConstruction[0]
     syn:
         slots:
             controller [Nominal]
@@ -30,6 +32,7 @@ trait ControllerTargetAgreement:
 
 trait DeterminationConstruction:
     belongs FormMeaningConstruction
+    FormMeaningConstruction[0]
     syn:
         slots:
             determiner [*]
@@ -43,6 +46,7 @@ trait DeterminationConstruction:
 
 trait NumberMarkingConstruction:
     belongs FormMeaningConstruction
+    FormMeaningConstruction[0]
     syn:
         slots:
             nominal [Nominal]
@@ -56,6 +60,7 @@ trait NumberMarkingConstruction:
 
 trait AttributionConstruction:
     belongs FormMeaningConstruction
+    FormMeaningConstruction[0]
     syn:
         slots:
             attribute [*]
@@ -69,6 +74,7 @@ trait AttributionConstruction:
 
 trait PossessionConstruction:
     belongs FormMeaningConstruction
+    FormMeaningConstruction[0]
     syn:
         slots:
             possessor [Nominal]
@@ -82,6 +88,7 @@ trait PossessionConstruction:
 
 trait AdpositionConstruction:
     belongs FormMeaningConstruction
+    FormMeaningConstruction[0]
     syn:
         slots:
             marker [Adposition]
@@ -95,6 +102,7 @@ trait AdpositionConstruction:
 
 trait IntransitiveClauseConstruction:
     belongs FormMeaningConstruction
+    FormMeaningConstruction[0]
     syn:
         slots:
             subject [Nominal]
@@ -108,6 +116,7 @@ trait IntransitiveClauseConstruction:
 
 trait TransitiveClauseConstruction:
     belongs FormMeaningConstruction
+    FormMeaningConstruction[0]
     syn:
         slots:
             subject [Nominal]
@@ -126,6 +135,7 @@ trait TransitiveClauseConstruction:
    narrower: its behavioral evidence concerns predicate nominals. */
 trait CopularPredicationConstruction:
     belongs FormMeaningConstruction
+    FormMeaningConstruction[0]
     syn:
         slots:
             subject [Nominal]
@@ -143,6 +153,7 @@ trait CopularPredicationConstruction:
    not select one for every predicate-nominal construction in a language. */
 trait PredicateNominalConstruction:
     belongs FormMeaningConstruction
+    FormMeaningConstruction[0]
     syn:
         slots:
             subject [Nominal]
@@ -156,21 +167,25 @@ trait PredicateNominalConstruction:
 
 trait RequiredCopulaPredicateNominal:
     belongs PredicateNominalConstruction
+    PredicateNominalConstruction[0]
     syn:
         slots:
             copula [Copula]
 
 trait OptionalCopulaPredicateNominal:
     belongs PredicateNominalConstruction
+    PredicateNominalConstruction[0]
     syn:
         slots:
             copula [Copula]?
 
 trait ZeroCopulaPredicateNominal:
     belongs PredicateNominalConstruction
+    PredicateNominalConstruction[0]
 
 trait NegationConstruction:
     belongs FormMeaningConstruction
+    FormMeaningConstruction[0]
     syn:
         slots:
             predicate [Predicate]
@@ -184,6 +199,7 @@ trait NegationConstruction:
 
 trait PolarQuestionConstruction:
     belongs FormMeaningConstruction
+    FormMeaningConstruction[0]
     syn:
         slots:
             clause [Predicate]
@@ -196,6 +212,7 @@ trait PolarQuestionConstruction:
 
 trait PassiveConstruction:
     belongs FormMeaningConstruction
+    FormMeaningConstruction[0]
     syn:
         slots:
             patient [Nominal]
@@ -213,6 +230,7 @@ trait PassiveConstruction:
 
 trait SerialPredicateConstruction:
     belongs FormMeaningConstruction
+    FormMeaningConstruction[0]
     syn:
         slots:
             first [Predicate]

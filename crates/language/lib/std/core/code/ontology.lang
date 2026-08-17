@@ -47,6 +47,7 @@ marker trait Bound:
    換一個 std 就換一套推論(此前硬寫在 `sem.rs` 的 bridge)。 */
 trait Nominal:
     belongs AgreementBearer
+    AgreementBearer[0]
     belongs Entity
 trait Noun:
     belongs Nominal
@@ -75,6 +76,7 @@ trait TransferFrame:
             recipient [Animate]?
 trait Transfer:
     belongs TransferFrame
+    TransferFrame[0]
 
 marker trait Pragmatic:
 trait Illocution:

@@ -1273,6 +1273,13 @@ fn validate_package_code(package: &LibraryPackage) -> Result<Language, LibraryLo
                 if !matches!(
                     item,
                     SignItem::Belongs(_)
+                        // `belongs X` 載入並確定 trait,`X[n]` 是具體的展開點
+                        // ——**兩個語法形式指向同一份掛載**,`TraitUse` 不可能
+                        // 獨立出現。白名單允許 `Belongs` 卻禁止 `TraitUse`,
+                        // 等於允許宣告、禁止那個宣告強制要求的展開。
+                        | SignItem::TraitUse { .. }
+                        // `pass` 是塊形狀的標記,比任何內容都少
+                        | SignItem::Pass
                         | SignItem::Def(_)
                         | SignItem::Slot(_)
                         | SignItem::FeatureDecl(_)

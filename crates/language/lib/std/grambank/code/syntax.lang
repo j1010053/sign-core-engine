@@ -20,10 +20,12 @@ trait GrambankSyntaxFeature:
 /* Nominal determination: GB020. */
 trait GB020_DefiniteOrSpecificArticles:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB020 = ?
 trait GB020_Absent:
     belongs GB020_DefiniteOrSpecificArticles
+    GB020_DefiniteOrSpecificArticles[0]
     syn:
         typology.grambank.GB020 = 0
         determination.definite-article = unavailable
@@ -31,6 +33,7 @@ trait GB020_Absent:
         reference.identifiability = not-article-marked
 trait GB020_Present:
     belongs GB020_DefiniteOrSpecificArticles
+    GB020_DefiniteOrSpecificArticles[0]
     syn:
         typology.grambank.GB020 = 1
         determination.definite-article = available
@@ -40,10 +43,12 @@ trait GB020_Present:
 /* Nominal determination: GB021. */
 trait GB021_IndefiniteArticles:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB021 = ?
 trait GB021_Absent:
     belongs GB021_IndefiniteArticles
+    GB021_IndefiniteArticles[0]
     syn:
         typology.grambank.GB021 = 0
         determination.indefinite-article = unavailable
@@ -51,6 +56,7 @@ trait GB021_Absent:
         reference.indefiniteness = not-article-marked
 trait GB021_Present:
     belongs GB021_IndefiniteArticles
+    GB021_IndefiniteArticles[0]
     syn:
         typology.grambank.GB021 = 1
         determination.indefinite-article = common
@@ -60,10 +66,12 @@ trait GB021_Present:
 /* Pronominal clusivity: GB028. */
 trait GB028_InclusiveExclusiveDistinction:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB028 = ?
 trait GB028_Absent:
     belongs GB028_InclusiveExclusiveDistinction
+    GB028_InclusiveExclusiveDistinction[0]
     syn:
         typology.grambank.GB028 = 0
         pronoun.clusivity = neutralized
@@ -71,6 +79,7 @@ trait GB028_Absent:
         person.clusivity = not-contrastive
 trait GB028_Present:
     belongs GB028_InclusiveExclusiveDistinction
+    GB028_InclusiveExclusiveDistinction[0]
     syn:
         typology.grambank.GB028 = 1
         pronoun.clusivity = inclusive-exclusive
@@ -80,10 +89,12 @@ trait GB028_Present:
 /* Third-person pronoun gender: GB030. */
 trait GB030_ThirdPersonPronounGender:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB030 = ?
 trait GB030_Absent:
     belongs GB030_ThirdPersonPronounGender
+    GB030_ThirdPersonPronounGender[0]
     syn:
         typology.grambank.GB030 = 0
         pronoun.third-person-gender = undistinguished
@@ -91,6 +102,7 @@ trait GB030_Absent:
         reference.gender = not-pronoun-grammaticalized
 trait GB030_Present:
     belongs GB030_ThirdPersonPronounGender
+    GB030_ThirdPersonPronounGender[0]
     syn:
         typology.grambank.GB030 = 1
         pronoun.third-person-gender = distinguished
@@ -100,10 +112,12 @@ trait GB030_Present:
 /* Productive noun plural morphology: GB044. */
 trait GB044_NounPluralMorphology:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB044 = ?
 trait GB044_Absent:
     belongs GB044_NounPluralMorphology
+    GB044_NounPluralMorphology[0]
     syn:
         typology.grambank.GB044 = 0
         number.noun-plural = no-productive-morphology
@@ -111,6 +125,7 @@ trait GB044_Absent:
         number.plural = no-productive-morphological-marking
 trait GB044_Present:
     belongs GB044_NounPluralMorphology
+    GB044_NounPluralMorphology[0]
     syn:
         typology.grambank.GB044 = 1
         number.noun-plural = productive-morphology
@@ -120,10 +135,12 @@ trait GB044_Present:
 /* Numeral classifiers: GB057. */
 trait GB057_NumeralClassifiers:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB057 = ?
 trait GB057_Absent:
     belongs GB057_NumeralClassifiers
+    GB057_NumeralClassifiers[0]
     syn:
         typology.grambank.GB057 = 0
         numeral.classifier = unavailable
@@ -131,6 +148,7 @@ trait GB057_Absent:
         quantification.classification = absent
 trait GB057_Present:
     belongs GB057_NumeralClassifiers
+    GB057_NumeralClassifiers[0]
     syn:
         typology.grambank.GB057 = 1
         numeral.classifier = available
@@ -140,10 +158,12 @@ trait GB057_Present:
 /* Alienable/inalienable possessive construction split: GB059. */
 trait GB059_PossessiveAlienabilitySplit:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB059 = ?
 trait GB059_Absent:
     belongs GB059_PossessiveAlienabilitySplit
+    GB059_PossessiveAlienabilitySplit[0]
     syn:
         typology.grambank.GB059 = 0
         possession.alienability = uniform
@@ -151,6 +171,7 @@ trait GB059_Absent:
         possession.alienability = not-constructionally-coded
 trait GB059_Present:
     belongs GB059_PossessiveAlienabilitySplit
+    GB059_PossessiveAlienabilitySplit[0]
     syn:
         typology.grambank.GB059 = 1
         possession.alienability = split
@@ -160,15 +181,18 @@ trait GB059_Present:
 /* Verb-like predicative property concepts: GB068. */
 trait GB068_VerbLikePredicativeAdjectives:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB068 = ?
 trait GB068_Absent:
     belongs GB068_VerbLikePredicativeAdjectives
+    GB068_VerbLikePredicativeAdjectives[0]
     syn:
         typology.grambank.GB068 = 0
         predication.property-concept = not-verb-like
 trait GB068_Present:
     belongs GB068_VerbLikePredicativeAdjectives
+    GB068_VerbLikePredicativeAdjectives[0]
     syn:
         typology.grambank.GB068 = 1
         predication.property-concept = verb-like
@@ -176,15 +200,18 @@ trait GB068_Present:
 /* Morphological case on non-pronominal S/A/P: GB070. */
 trait GB070_CoreArgumentCase:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB070 = ?
 trait GB070_Absent:
     belongs GB070_CoreArgumentCase
+    GB070_CoreArgumentCase[0]
     syn:
         typology.grambank.GB070 = 0
         alignment.core-nominal-case = non-morphological
 trait GB070_Present:
     belongs GB070_CoreArgumentCase
+    GB070_CoreArgumentCase[0]
     syn:
         typology.grambank.GB070 = 1
         alignment.core-nominal-case = morphological
@@ -192,15 +219,18 @@ trait GB070_Present:
 /* Prepositions: GB074. */
 trait GB074_Prepositions:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB074 = ?
 trait GB074_Absent:
     belongs GB074_Prepositions
+    GB074_Prepositions[0]
     syn:
         typology.grambank.GB074 = 0
         adposition.preposition = unavailable
 trait GB074_Present:
     belongs GB074_Prepositions
+    GB074_Prepositions[0]
     syn:
         typology.grambank.GB074 = 1
         adposition.preposition = available
@@ -208,15 +238,18 @@ trait GB074_Present:
 /* Postpositions: GB075. */
 trait GB075_Postpositions:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB075 = ?
 trait GB075_Absent:
     belongs GB075_Postpositions
+    GB075_Postpositions[0]
     syn:
         typology.grambank.GB075 = 0
         adposition.postposition = unavailable
 trait GB075_Present:
     belongs GB075_Postpositions
+    GB075_Postpositions[0]
     syn:
         typology.grambank.GB075 = 1
         adposition.postposition = available
@@ -224,10 +257,12 @@ trait GB075_Present:
 /* Overt present-tense morphology on verbs: GB082. */
 trait GB082_PresentTenseMorphology:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB082 = ?
 trait GB082_Absent:
     belongs GB082_PresentTenseMorphology
+    GB082_PresentTenseMorphology[0]
     syn:
         typology.grambank.GB082 = 0
         tam.present = no-dedicated-overt-verbal-morphology
@@ -235,6 +270,7 @@ trait GB082_Absent:
         time.present = not-morphologically-marked
 trait GB082_Present:
     belongs GB082_PresentTenseMorphology
+    GB082_PresentTenseMorphology[0]
     syn:
         typology.grambank.GB082 = 1
         tam.present = overt-verbal-morphology
@@ -244,10 +280,12 @@ trait GB082_Present:
 /* Dedicated past-tense morphology on verbs: GB083. */
 trait GB083_PastTenseMorphology:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB083 = ?
 trait GB083_Absent:
     belongs GB083_PastTenseMorphology
+    GB083_PastTenseMorphology[0]
     syn:
         typology.grambank.GB083 = 0
         tam.past = no-dedicated-overt-verbal-morphology
@@ -255,6 +293,7 @@ trait GB083_Absent:
         time.past = not-morphologically-marked
 trait GB083_Present:
     belongs GB083_PastTenseMorphology
+    GB083_PastTenseMorphology[0]
     syn:
         typology.grambank.GB083 = 1
         tam.past = overt-verbal-morphology
@@ -264,10 +303,12 @@ trait GB083_Present:
 /* Dedicated future-tense morphology on verbs: GB084. */
 trait GB084_FutureTenseMorphology:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB084 = ?
 trait GB084_Absent:
     belongs GB084_FutureTenseMorphology
+    GB084_FutureTenseMorphology[0]
     syn:
         typology.grambank.GB084 = 0
         tam.future = no-dedicated-overt-verbal-morphology
@@ -275,6 +316,7 @@ trait GB084_Absent:
         time.future = not-morphologically-marked
 trait GB084_Present:
     belongs GB084_FutureTenseMorphology
+    GB084_FutureTenseMorphology[0]
     syn:
         typology.grambank.GB084 = 1
         tam.future = overt-verbal-morphology
@@ -284,10 +326,12 @@ trait GB084_Present:
 /* Morphological perfective/imperfective distinction: GB086. */
 trait GB086_PerfectiveImperfectiveMorphology:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB086 = ?
 trait GB086_Absent:
     belongs GB086_PerfectiveImperfectiveMorphology
+    GB086_PerfectiveImperfectiveMorphology[0]
     syn:
         typology.grambank.GB086 = 0
         tam.perfectivity = no-morphological-opposition
@@ -295,6 +339,7 @@ trait GB086_Absent:
         aspect.perfectivity = not-grammaticalized
 trait GB086_Present:
     belongs GB086_PerfectiveImperfectiveMorphology
+    GB086_PerfectiveImperfectiveMorphology[0]
     syn:
         typology.grambank.GB086 = 1
         tam.perfectivity = morphological-opposition
@@ -304,10 +349,12 @@ trait GB086_Present:
 /* Benefactive applicative marker on the verb: GB103. */
 trait GB103_BenefactiveApplicative:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB103 = ?
 trait GB103_Absent:
     belongs GB103_BenefactiveApplicative
+    GB103_BenefactiveApplicative[0]
     syn:
         typology.grambank.GB103 = 0
         valency.benefactive-applicative = no-verbal-marker
@@ -315,6 +362,7 @@ trait GB103_Absent:
         roles.beneficiary = not-applicative-licensed
 trait GB103_Present:
     belongs GB103_BenefactiveApplicative
+    GB103_BenefactiveApplicative[0]
     syn:
         typology.grambank.GB103 = 1
         valency.benefactive-applicative = verbal-marker
@@ -324,10 +372,12 @@ trait GB103_Present:
 /* Standard negation bound to or modifying the verb: GB107. */
 trait GB107_BoundVerbalNegation:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB107 = ?
 trait GB107_Absent:
     belongs GB107_BoundVerbalNegation
+    GB107_BoundVerbalNegation[0]
     syn:
         typology.grambank.GB107 = 0
         negation.standard.bound-verb = unavailable
@@ -335,6 +385,7 @@ trait GB107_Absent:
         polarity.standard-negation = no-verb-bound-strategy
 trait GB107_Present:
     belongs GB107_BoundVerbalNegation
+    GB107_BoundVerbalNegation[0]
     syn:
         typology.grambank.GB107 = 1
         negation.standard.bound-verb = available
@@ -344,10 +395,12 @@ trait GB107_Present:
 /* Copula for predicate nominals: GB117. */
 trait GB117_PredicateNominalCopula:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB117 = ?
 trait GB117_Absent:
     belongs GB117_PredicateNominalCopula
+    GB117_PredicateNominalCopula[0]
     syn:
         typology.grambank.GB117 = 0
         predication.nominal-copula = unavailable
@@ -355,6 +408,7 @@ trait GB117_Absent:
         predication.nominal-link = no-copula
 trait GB117_Present:
     belongs GB117_PredicateNominalCopula
+    GB117_PredicateNominalCopula[0]
     syn:
         typology.grambank.GB117 = 1
         predication.nominal-copula = available
@@ -364,10 +418,12 @@ trait GB117_Present:
 /* Serial verb constructions: GB118. */
 trait GB118_SerialVerbConstructions:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB118 = ?
 trait GB118_Absent:
     belongs GB118_SerialVerbConstructions
+    GB118_SerialVerbConstructions[0]
     syn:
         typology.grambank.GB118 = 0
         complex-predicate.serial-verb = unavailable
@@ -375,6 +431,7 @@ trait GB118_Absent:
         event.serialization = no-serial-verb-construction
 trait GB118_Present:
     belongs GB118_SerialVerbConstructions
+    GB118_SerialVerbConstructions[0]
     syn:
         typology.grambank.GB118 = 1
         complex-predicate.serial-verb = available
@@ -384,10 +441,12 @@ trait GB118_Present:
 /* Pragmatically unmarked verb-medial transitive order: GB132. */
 trait GB132_VerbMedialTransitiveOrder:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB132 = ?
 trait GB132_Absent:
     belongs GB132_VerbMedialTransitiveOrder
+    GB132_VerbMedialTransitiveOrder[0]
     syn:
         typology.grambank.GB132 = 0
         word-order.transitive.verb-medial = not-unmarked
@@ -395,6 +454,7 @@ trait GB132_Absent:
         information-structure.transitive-order = not-verb-medial-default
 trait GB132_Present:
     belongs GB132_VerbMedialTransitiveOrder
+    GB132_VerbMedialTransitiveOrder[0]
     syn:
         typology.grambank.GB132 = 1
         word-order.transitive.verb-medial = unmarked
@@ -404,15 +464,18 @@ trait GB132_Present:
 /* Morphological passive on the lexical verb: GB147. */
 trait GB147_MorphologicalPassive:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB147 = ?
 trait GB147_Absent:
     belongs GB147_MorphologicalPassive
+    GB147_MorphologicalPassive[0]
     syn:
         typology.grambank.GB147 = 0
         voice.passive = no-lexical-verb-morphology
 trait GB147_Present:
     belongs GB147_MorphologicalPassive
+    GB147_MorphologicalPassive[0]
     syn:
         typology.grambank.GB147 = 1
         voice.passive = lexical-verb-morphology
@@ -420,10 +483,12 @@ trait GB147_Present:
 /* Causative affix or clitic on the verb: GB155. */
 trait GB155_MorphologicalCausative:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB155 = ?
 trait GB155_Absent:
     belongs GB155_MorphologicalCausative
+    GB155_MorphologicalCausative[0]
     syn:
         typology.grambank.GB155 = 0
         valency.causative = no-verbal-affix-or-clitic
@@ -431,6 +496,7 @@ trait GB155_Absent:
         causation = no-morphological-construction
 trait GB155_Present:
     belongs GB155_MorphologicalCausative
+    GB155_MorphologicalCausative[0]
     syn:
         typology.grambank.GB155 = 1
         valency.causative = verbal-affix-or-clitic
@@ -440,10 +506,12 @@ trait GB155_Present:
 /* Clause-initial polar interrogative particle: GB262. */
 trait GB262_InitialPolarQuestionParticle:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB262 = ?
 trait GB262_Absent:
     belongs GB262_InitialPolarQuestionParticle
+    GB262_InitialPolarQuestionParticle[0]
     syn:
         typology.grambank.GB262 = 0
         interrogative.polar-particle.initial = unavailable
@@ -451,6 +519,7 @@ trait GB262_Absent:
         illocution.polar-question = no-initial-particle-strategy
 trait GB262_Present:
     belongs GB262_InitialPolarQuestionParticle
+    GB262_InitialPolarQuestionParticle[0]
     syn:
         typology.grambank.GB262 = 1
         interrogative.polar-particle.initial = available
@@ -460,10 +529,12 @@ trait GB262_Present:
 /* Grammatical marking of direct evidence: GB322. */
 trait GB322_DirectEvidential:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB322 = ?
 trait GB322_Absent:
     belongs GB322_DirectEvidential
+    GB322_DirectEvidential[0]
     syn:
         typology.grambank.GB322 = 0
         evidential.direct = no-grammatical-marker
@@ -471,6 +542,7 @@ trait GB322_Absent:
         evidence.direct = not-grammatically-marked
 trait GB322_Present:
     belongs GB322_DirectEvidential
+    GB322_DirectEvidential[0]
     syn:
         typology.grambank.GB322 = 1
         evidential.direct = grammatical-marker
@@ -480,10 +552,12 @@ trait GB322_Present:
 /* Context-licensed omission of S or A: GB522. */
 trait GB522_ProDrop:
     belongs GrambankSyntaxFeature
+    GrambankSyntaxFeature[0]
     syn:
         typology.grambank.GB522 = ?
 trait GB522_Absent:
     belongs GB522_ProDrop
+    GB522_ProDrop[0]
     syn:
         typology.grambank.GB522 = 0
         argument.subject.omission = not-context-licensed
@@ -491,6 +565,7 @@ trait GB522_Absent:
         reference.subject = overt-required-in-unmarked-clause
 trait GB522_Present:
     belongs GB522_ProDrop
+    GB522_ProDrop[0]
     syn:
         typology.grambank.GB522 = 1
         argument.subject.omission = context-licensed

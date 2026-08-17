@@ -2,9 +2,9 @@ changeset evo:en-standard-restore:
     schema = conlang.changeset/v1
     base_source = sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
     base_identities = sha256:b60d365862eecde76dd4557a2e82f7487a492c0635b61c10d0d4404af130a9c8
-    library std:core@0.1.0 sha256:6bf7a9c852b930351462f26258bde8087a39ffbd36ec70a10d49d11c8e84e4bd
-    library std:cxg@0.1.0 sha256:aee53c11251c216d58a6d5f3d62076c5431bfcd3997555c9bd926a67a4151b85
-    library std:grambank@1.0-subset.1 sha256:9f8a01abbb8f5c1795bac21616cc7a3719e69e45ccd83b89ddc77bd86b75bed9
+    library std:core@0.1.0 sha256:ba59a480c593673c8440e6493a9f78901ba52b934425dd089132800aa31371e2
+    library std:cxg@0.1.0 sha256:4f28489ca26541632c2a7888afc884de18d829dac5c57b1e9df4e5e15b5ff59f
+    library std:grambank@1.0-subset.1 sha256:ff23ec9ce86a3857f5ed83bb52ba02ffb687cab85061784dcac36f698a078618
     library std:grammaticalization@0.4.0 sha256:b54ed634ac782ed69a5245fb3e5b373c4cce64d05f6d4e1fd2127c2d63a51975
 
     #0:

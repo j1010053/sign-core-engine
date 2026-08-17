@@ -211,3 +211,41 @@ fn a_trait_that_belongs_another_is_checked_too() {
         "Middle 對 Contentful 的引用也該被要求"
     );
 }
+
+/// **`X[n]` 不得獨立出現**:身分住在 `belongs` 上,展開點沒有可指的東西就不成立。
+///
+/// 暫為警告——這條的終點是把 `Belongs` 與 `TraitUse` 併成同一個 `SignItem`
+/// (`block: None` = 宣告、`Some(n)` = 展開點),屆時它是**型別的良構條件**。
+#[test]
+fn an_expansion_point_without_its_declaration_is_reported() {
+    let source = format!("{CONTENTFUL}\nsign x:\n    Contentful[0]\n    phon:\n        /a/\n");
+    let document = LanguageDocument::import_new_root(&source, "evo:orphan").expect("parses");
+    let system = conlang_language::system::compile_document(&document, &LibrarySpec::default())
+        .expect("compiles");
+    assert!(
+        system
+            .validation
+            .diagnostics()
+            .iter()
+            .any(|d| &*d.code == "TRAIT_USE_WITHOUT_BELONGS" && d.message.contains("\"x\"")),
+        "沒有 `belongs Contentful` 的 `Contentful[0]` 該被指出"
+    );
+}
+
+/// 配上宣告就安靜——判別性:否則上一條測的可能是「這條規則永遠在叫」。
+#[test]
+fn an_expansion_point_with_its_declaration_is_fine() {
+    let source =
+        format!("{CONTENTFUL}\nsign x:\n    belongs Contentful\n    Contentful[0]\n    phon:\n        /a/\n");
+    let document = LanguageDocument::import_new_root(&source, "evo:paired").expect("parses");
+    let system = conlang_language::system::compile_document(&document, &LibrarySpec::default())
+        .expect("compiles");
+    assert!(
+        !system
+            .validation
+            .diagnostics()
+            .iter()
+            .any(|d| &*d.code == "TRAIT_USE_WITHOUT_BELONGS" && d.message.contains("\"x\"")),
+        "配對齊全就不該有話說"
+    );
+}
