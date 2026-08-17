@@ -137,15 +137,15 @@ Language {
             ),
             name: "go",
             items: [
-                TraitUse {
+                TraitMount {
                     name: "VerbCommon",
-                    block: Some(
+                    kind: Block(
                         0,
                     ),
                 },
-                TraitUse {
+                TraitMount {
                     name: "VerbCommon",
-                    block: Some(
+                    kind: Block(
                         1,
                     ),
                 },

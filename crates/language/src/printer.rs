@@ -250,16 +250,20 @@ fn push_body(out: &mut String, blocks: &[Block]) {
         }
         // 1) belongs(保序)
         for it in items {
-            if let SignItem::Belongs(n) = it {
+            if let SignItem::TraitMount { name: n, kind: crate::TraitMountKind::Declaration } = it {
                 out.push_str(&format!("    belongs {n}\n"));
             }
         }
         // 2) trait macro 引用(保序):None = 裸 Name(整個 trait)、Some(n) = Name[n]
         for it in items {
-            if let SignItem::TraitUse { name, block } = it {
-                match block {
-                    Some(n) => out.push_str(&format!("    {name}[{n}]\n")),
-                    None => out.push_str(&format!("    {name}\n")),
+            if let SignItem::TraitMount { name, kind } = it {
+                match kind {
+                    // 宣告那一份由 belongs 區段印,這裡只印展開點
+                    crate::TraitMountKind::Declaration => {}
+                    crate::TraitMountKind::Block(n) => {
+                        out.push_str(&format!("    {name}[{n}]\n"))
+                    }
+                    crate::TraitMountKind::Whole => out.push_str(&format!("    {name}\n")),
                 }
             }
         }
@@ -613,7 +617,7 @@ mod tests {
                 global: false,
                 marker: false,
                 blocks: vec![Block {
-                    items: vec![SignItem::Belongs("Beta".into())],
+                    items: vec![SignItem::TraitMount { name: "Beta".into(), kind: crate::TraitMountKind::Declaration }],
                 }],
             };
             let b = TraitDef {

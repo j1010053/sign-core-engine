@@ -893,7 +893,7 @@ fn validate_constraint(
     if !definition.items.iter().any(|item| {
         matches!(
             item,
-            SignItem::Belongs(name)
+            SignItem::TraitMount { name: name, kind: conlang_language::TraitMountKind::Declaration }
                 if name == constraint || system.ontology.category_is_a(name, constraint)
         )
     }) {

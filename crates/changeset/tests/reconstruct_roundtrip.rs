@@ -514,7 +514,7 @@ fn reorder_with_insert_and_delete_keeps_final_item_order() {
         PrimitiveEdit::Insert {
             parent: root,
             anchor: Anchor::Before(definitions[1].clone()),
-            subtree: DetachedNode::Item(conlang_language::SignItem::Belongs("D".to_owned())),
+            subtree: DetachedNode::Item(conlang_language::SignItem::TraitMount { name: "D".to_owned(), kind: conlang_language::TraitMountKind::Declaration }),
         },
         &LibrarySpec::default(),
     )

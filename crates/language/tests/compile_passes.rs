@@ -66,7 +66,7 @@ fn expansion_inlines_traituse_and_keeps_all_traits() {
         .signs
         .iter()
         .flat_map(|s| &s.items)
-        .all(|i| !matches!(i, SignItem::TraitUse { .. })));
+        .all(|i| !matches!(i, SignItem::TraitMount { kind: conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_), .. })));
     assert!(e.trait_named("CorePhonology").is_some());
     assert!(e.trait_named("VerbCommon").is_some());
     // inline 於引用位置:go 前兩項為 VerbCommon 兩 block 的內容
@@ -240,7 +240,7 @@ fn bare_and_empty_brackets_inline_whole_trait() {
     assert!(!x
         .items
         .iter()
-        .any(|i| matches!(i, SignItem::TraitUse { .. })));
+        .any(|i| matches!(i, SignItem::TraitMount { kind: conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_), .. })));
 
     // 未分塊 trait(1 block)寫 `T[]` → 整個 trait(等同裸 T),canonical 印為裸 `T`
     let unsplit =

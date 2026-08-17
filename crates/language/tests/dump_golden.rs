@@ -66,9 +66,9 @@ fn lang_dump_golden_matches_patch05_sample() {
     l.add_sign(
         "go",
         vec![
-            SignItem::TraitUse {
+            SignItem::TraitMount {
                 name: "VerbCommon".into(),
-                block: Some(0),
+                kind: conlang_language::TraitMountKind::Block(0),
             },
             SignItem::Def(Def {
                 path: "phon".into(),
@@ -78,9 +78,9 @@ fn lang_dump_golden_matches_patch05_sample() {
                 path: "sem.senses".into(),
                 value: "[ sense s1 { concept = GO } ]".into(),
             }),
-            SignItem::TraitUse {
+            SignItem::TraitMount {
                 name: "VerbCommon".into(),
-                block: Some(1),
+                kind: conlang_language::TraitMountKind::Block(1),
             },
             SignItem::Def(Def {
                 path: "entrenchment".into(),

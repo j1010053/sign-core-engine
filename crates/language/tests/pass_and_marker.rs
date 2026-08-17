@@ -249,3 +249,72 @@ fn an_expansion_point_with_its_declaration_is_fine() {
         "配對齊全就不該有話說"
     );
 }
+
+// ── ⑤ `belongs` 與 `X[n]` 是同一個項目 ────────────────────────────────────
+//
+// `X[n]` 不可能獨立出現(它是展開點,指哪一個掛載由 `belongs` 決定),而有
+// `belongs` 就必須把展開點寫出來(否則內容不會進來)。兩者拆成兩種項目時,
+// trait 名得在每一處重複帶一份,而「哪一份是權威」沒有型別上的答案。
+
+/// 三種語法形式都映到 `SignItem::TraitMount`,靠 `kind` 區分。
+#[test]
+fn all_three_mount_forms_are_one_item_kind() {
+    use conlang_language::{SignItem, TraitMountKind};
+    let language = Language::parse(
+        "trait Multi:\n    pass\n    ==\n    pass\n\nsign x:\n    belongs Multi\n    Multi[0]\n    Multi[1]\n",
+    )
+    .expect("parses");
+    let kinds: Vec<&TraitMountKind> = language
+        .signs
+        .iter()
+        .find(|s| s.name == "x")
+        .expect("x")
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SignItem::TraitMount { kind, .. } => Some(kind),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            &TraitMountKind::Declaration,
+            &TraitMountKind::Block(0),
+            &TraitMountKind::Block(1)
+        ],
+        "belongs 是宣告,X[n] 是展開點,三者同一個項目型別"
+    );
+}
+
+/// 🔑 **宣告必須活過展開。** 它是分類邊,不是展開對象——被當成「展開出空集合」
+/// 的話,ontology 樹會在 ② 之後整棵消失。
+#[test]
+fn a_declaration_survives_expansion_while_the_expansion_point_is_consumed() {
+    use conlang_language::{SignItem, TraitMountKind};
+    let language = Language::parse(
+        "trait Rich:\n    sem:\n        senses:\n            core = THING\n\nsign x:\n    belongs Rich\n    Rich[0]\n",
+    )
+    .expect("parses");
+    let expanded = conlang_language::compile::compile(&language).expect("compiles").expanded;
+    let items = &expanded.signs.iter().find(|s| s.name == "x").expect("x").items;
+
+    assert!(
+        items.iter().any(|item| matches!(
+            item,
+            SignItem::TraitMount { kind: TraitMountKind::Declaration, .. }
+        )),
+        "分類邊要留下:{items:?}"
+    );
+    assert!(
+        !items.iter().any(|item| matches!(
+            item,
+            SignItem::TraitMount { kind: TraitMountKind::Block(_) | TraitMountKind::Whole, .. }
+        )),
+        "展開點要被消耗掉:{items:?}"
+    );
+    assert!(
+        items.iter().any(|item| matches!(item, SignItem::Sense(_))),
+        "而它帶進來的內容要在:{items:?}"
+    );
+}

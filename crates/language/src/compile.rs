@@ -129,11 +129,19 @@ fn expand_item_sequence(
 ) -> Result<Vec<SignItem>, CompileError> {
     let mut used: BTreeMap<&str, (bool, Vec<u32>)> = BTreeMap::new();
     for item in source {
-        if let SignItem::TraitUse { name, block } = item {
+        if let SignItem::TraitMount { name, kind } = item {
+            // **宣告不進這張表。** 它不展開,故不參與完整性計算;更重要的是
+            // 這張表的每個鍵稍後都會在 `src.traits` 裡查一次,而 `belongs` 指得到
+            // **std 的 trait**(不在使用者語言裡)——把宣告放進來會讓每一個
+            // 指向 std 的 `belongs` 都報 `UnknownTrait`。
+            if kind.is_declaration() {
+                continue;
+            }
             let entry = used.entry(name).or_default();
-            match block {
-                None => entry.0 = true,
-                Some(index) => entry.1.push(*index),
+            match kind {
+                crate::TraitMountKind::Declaration => {}
+                crate::TraitMountKind::Whole => entry.0 = true,
+                crate::TraitMountKind::Block(index) => entry.1.push(*index),
             }
         }
     }
@@ -172,7 +180,13 @@ fn expand_item_sequence(
     let mut output = Vec::new();
     for item in source {
         match item {
-            SignItem::TraitUse { name, block } => {
+            // **宣告原樣留下。** `belongs X` 是分類邊,不是展開對象——它必須
+            // 活到 ②③④ 與 ontology 建樹那一刻。把它當成「展開出空集合」會讓
+            // 分類邊在展開後消失,整棵 ontology 樹跟著垮。
+            SignItem::TraitMount { kind, .. } if kind.is_declaration() => {
+                output.push(item.clone());
+            }
+            SignItem::TraitMount { name, kind } => {
                 if let Some(start) = active.iter().position(|candidate| candidate == name) {
                     let mut path = active[start..].to_vec();
                     path.push(name.clone());
@@ -189,13 +203,17 @@ fn expand_item_sequence(
                         sign: sign.to_owned(),
                         name: name.clone(),
                     })?;
-                let selected = match block {
-                    None => trait_def
+                let selected = match kind {
+                    // 上面那條 arm 已經接走,這裡不可能是宣告
+                    crate::TraitMountKind::Declaration => Vec::new(),
+                    crate::TraitMountKind::Whole => trait_def
                         .blocks
                         .iter()
                         .flat_map(|block| block.items.iter().cloned())
                         .collect::<Vec<_>>(),
-                    Some(index) => trait_def.blocks[*index as usize].items.clone(),
+                    crate::TraitMountKind::Block(index) => {
+                        trait_def.blocks[*index as usize].items.clone()
+                    }
                 };
                 active.push(name.clone());
                 output.extend(expand_item_sequence(src, sign, &selected, active)?);
@@ -322,7 +340,7 @@ pub fn compile(src: &Language) -> Result<Pipeline, CompileError> {
     }
     for s in &src.signs {
         for it in &s.items {
-            if let SignItem::TraitUse { name, .. } = it {
+            if let SignItem::TraitMount { name, kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_) } = it {
                 let v = trait_index.entry(name.clone()).or_default();
                 if !v.contains(&s.name) {
                     v.push(s.name.clone());

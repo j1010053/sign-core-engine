@@ -1054,15 +1054,20 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                     }));
                 index = next;
             } else if let Some(t) = belongs_target(text, no)? {
-                blocks.last_mut().unwrap().items.push(SignItem::Belongs(t));
+                blocks.last_mut().unwrap().items.push(SignItem::TraitMount { name: t, kind: crate::TraitMountKind::Declaration });
             } else if let Some(dim) = DimKw::parse(text) {
                 cur_dim = Some(dim);
             } else if let Some((name, block)) = trait_use(text) {
+                // 裸 `X` = 全塊展開;`X[n]` = 第 n 塊。宣告那一份由 `belongs` 產生。
+                let kind = match block {
+                    Some(index) => crate::TraitMountKind::Block(index),
+                    None => crate::TraitMountKind::Whole,
+                };
                 blocks
                     .last_mut()
                     .unwrap()
                     .items
-                    .push(SignItem::TraitUse { name, block });
+                    .push(SignItem::TraitMount { name, kind });
             } else if !text.contains("=>")
                 && text
                     .split_once('=')

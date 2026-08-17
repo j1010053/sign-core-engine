@@ -669,7 +669,7 @@ fn validate_defs_and_rules(
         let synthetic = SignDef {
             id: crate::SignId::synthetic(),
             name: format!("{}#rule-validation", trait_def.name),
-            items: vec![SignItem::Belongs(trait_def.name.clone())],
+            items: vec![SignItem::TraitMount { name: trait_def.name.clone(), kind: crate::TraitMountKind::Declaration }],
         };
         let effective = registry.effective_sign(&synthetic);
         // P71 增修 D:**trait 的 `$self` 靜態未知**,故與 filler 同樣用全域上界。
@@ -787,7 +787,7 @@ fn validate_typed_schemas(
         let synthetic = SignDef {
             id: crate::SignId::synthetic(),
             name: format!("{category}#slot-feature-schema"),
-            items: vec![SignItem::Belongs(category.to_owned())],
+            items: vec![SignItem::TraitMount { name: category.to_owned(), kind: crate::TraitMountKind::Declaration }],
         };
         registry
             .effective_sign(&synthetic)
@@ -901,7 +901,7 @@ fn validate_typed_schemas(
         let source = SignDef {
             id: crate::SignId::synthetic(),
             name: trait_def.name.clone(),
-            items: vec![SignItem::Belongs(trait_def.name.clone())],
+            items: vec![SignItem::TraitMount { name: trait_def.name.clone(), kind: crate::TraitMountKind::Declaration }],
         };
         validate_inherited_contracts(&trait_def.name, &source, registry, report);
     }
@@ -915,7 +915,7 @@ fn validate_typed_schemas(
         let synthetic = SignDef {
             id: crate::SignId::synthetic(),
             name: format!("{}#schema", trait_def.name),
-            items: vec![SignItem::Belongs(trait_def.name.clone())],
+            items: vec![SignItem::TraitMount { name: trait_def.name.clone(), kind: crate::TraitMountKind::Declaration }],
         };
         (trait_def.name.clone(), registry.effective_sign(&synthetic))
     }));
@@ -931,7 +931,7 @@ fn validate_typed_schemas(
             // ordered-language pass after the macro has been expanded.
             if fragment
                 .iter()
-                .any(|item| matches!(item, SignItem::TraitUse { .. }))
+                .any(|item| matches!(item, SignItem::TraitMount { kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_), .. }))
             {
                 continue;
             }
@@ -1749,7 +1749,7 @@ fn validate_fp_expressions(
             SignItem::RoleDecl(_) | SignItem::RoleBinding(_) | SignItem::RoleExpression(_) => {
                 dim == Dim::Sem
             }
-            SignItem::TraitUse { .. } | SignItem::Belongs(_) | SignItem::Realization(_) => false,
+            SignItem::TraitMount { kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_), .. } | SignItem::TraitMount { name: _, kind: crate::TraitMountKind::Declaration } | SignItem::Realization(_) => false,
         }
     }
 
@@ -1995,8 +1995,8 @@ fn validate_fp_expressions(
                     }
                     for item in items {
                         match item {
-                            SignItem::Belongs(category)
-                            | SignItem::TraitUse { name: category, .. }
+                            SignItem::TraitMount { name: category, kind: crate::TraitMountKind::Declaration }
+                            | SignItem::TraitMount { name: category, .. }
                                 if !registry.has(category) =>
                             {
                                 report.push(
@@ -2826,7 +2826,15 @@ impl CompiledSystem {
             let schema_sign = SignDef {
                 id: crate::SignId::synthetic(),
                 name: "#semantic-document-schema".to_owned(),
-                items: node.types.iter().cloned().map(SignItem::Belongs).collect(),
+                items: node
+                    .types
+                    .iter()
+                    .cloned()
+                    .map(|name| SignItem::TraitMount {
+                        name,
+                        kind: crate::TraitMountKind::Declaration,
+                    })
+                    .collect(),
             };
             let effective = system.ontology.effective_sign(&schema_sign);
             let features = effective
@@ -3490,7 +3498,7 @@ impl CompiledSystem {
     ) -> Result<SignValue, SystemError> {
         if items
             .iter()
-            .any(|item| matches!(item, SignItem::TraitUse { .. }))
+            .any(|item| matches!(item, SignItem::TraitMount { kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_), .. }))
         {
             return Err(SystemError::InvalidSignExpression(
                 "unexpanded trait use reached a SignContext fragment".to_owned(),
@@ -3557,9 +3565,9 @@ impl CompiledSystem {
                     if !source
                         .items
                         .iter()
-                        .any(|item| matches!(item, SignItem::Belongs(value) if value == category))
+                        .any(|item| matches!(item, SignItem::TraitMount { name: value, kind: crate::TraitMountKind::Declaration } if value == category))
                     {
-                        source.items.push(SignItem::Belongs(category.clone()));
+                        source.items.push(SignItem::TraitMount { name: category.clone(), kind: crate::TraitMountKind::Declaration });
                     }
                 }
                 let (evaluation, membership_cases) =
@@ -3573,9 +3581,9 @@ impl CompiledSystem {
                     if !source
                         .items
                         .iter()
-                        .any(|item| matches!(item, SignItem::Belongs(value) if value == category))
+                        .any(|item| matches!(item, SignItem::TraitMount { name: value, kind: crate::TraitMountKind::Declaration } if value == category))
                     {
-                        source.items.push(SignItem::Belongs(category.clone()));
+                        source.items.push(SignItem::TraitMount { name: category.clone(), kind: crate::TraitMountKind::Declaration });
                     }
                 }
                 self.rebuild_applied_with_source(&token, source, stack, rules, records)

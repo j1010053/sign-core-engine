@@ -732,6 +732,42 @@ impl SignItem {
     }
 }
 
+/// 一次 trait 掛載的三種語法形式(見 [`SignItem::TraitMount`])。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TraitMountKind {
+    /// `belongs X` —— **載入並確定 trait**:分類邊的來源,身分的唯一權威。
+    /// 它本身**不展開內容**。
+    Declaration,
+    /// 裸 `X` —— 在此處展開**全部**塊(繞過 P5 的逐塊完整性)。
+    Whole,
+    /// `X[n]` —— 在此處展開第 n 塊(0 起算;indexed 須覆蓋全部塊,P5)。
+    Block(u32),
+}
+
+impl TraitMountKind {
+    /// 展開點的塊索引。**宣告沒有索引**(它不展開),裸 `X` 也沒有(它是全塊)。
+    pub fn block(&self) -> Option<u32> {
+        match self {
+            TraitMountKind::Block(index) => Some(*index),
+            TraitMountKind::Declaration | TraitMountKind::Whole => None,
+        }
+    }
+
+    /// 這是不是「載入並確定 trait」的那一份。
+    pub fn is_declaration(&self) -> bool {
+        matches!(self, TraitMountKind::Declaration)
+    }
+
+    /// `.chg` 舊契約的 `block: Option<u32>` → 展開點。**不會產生宣告**
+    /// ——宣告走 `NodeKind::Belongs`,不經這條路。
+    pub fn from_block(block: Option<u32>) -> TraitMountKind {
+        match block {
+            Some(index) => TraitMountKind::Block(index),
+            None => TraitMountKind::Whole,
+        }
+    }
+}
+
 /// sign 內項目:trait 引用位置有語意(P5),故與 Def/Rule 同列保序。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SignItem {
@@ -746,15 +782,22 @@ pub enum SignItem {
     ///
     /// 與其他項目**互斥**:`pass` 和內容同時出現是錯誤(驗證擋)。
     Pass,
-    /// trait macro 引用(P5/P27)。`block`:**0 起算**——
-    /// - `Some(n)` = `Name[n]`,只引用第 n 個 block(indexed 須覆蓋全部 block,P5);
-    /// - `None` = **整個 trait**(裸 `Name` 或 `Name[]`,全 block 依序 inline)。
-    TraitUse {
+    /// **掛載一個 trait**:`belongs X` 與 `X[n]` 是同一件事的兩半,故是同一個項目。
+    ///
+    /// # 為什麼合成一個
+    ///
+    /// `X[n]` **不可能獨立出現**——它是展開點,指的是哪一個掛載由 `belongs`
+    /// 決定;而有 `belongs` 就必須把展開點寫出來(否則內容不會進來)。兩者拆成
+    /// 兩種項目時,trait 名(以及日後 P76 的實參)得在每一處重複帶一份,而
+    /// 「哪一份是權威」沒有型別上的答案——`.chg` 因此可以只改展開點的目標、
+    /// 留下指向舊 trait 的 `belongs`,產生一個不連貫的文件。
+    ///
+    /// 合成一個之後,**身分只有一個來源**([`crate::TraitMountKind::Declaration`]),
+    /// 展開點只說「在這裡展開哪一塊」。
+    TraitMount {
         name: String,
-        block: Option<u32>,
+        kind: TraitMountKind,
     },
-    /// `belongs Transitive`(P40):sign 掛入某 ontology 節點;閉包由 registry 走。
-    Belongs(String),
     /// `slot NAME [Filler]`(可尾綴 `?` = optional;P41 valence=slots,I21)。
     /// 帶 ≥1 slot 的 sign = construction(P42);filler 是 syn ontology 範疇約束。
     Slot(Slot),
