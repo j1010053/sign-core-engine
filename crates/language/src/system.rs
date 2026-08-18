@@ -2534,13 +2534,30 @@ fn validate_source_language(
         effective_source,
     ]));
     validate_duplicate_signs(effective_source, &mut report);
+
+    // [A] 3-3:**內容級的驗證看展開後的形態。**
+    //
+    // 兩階段之後 trait 的內容從展開來,而這條路是 `.chg` 每一次原語編輯都會走的
+    // (`apply_edit` → `check_document`)。餵 ① Source 的話,`X[n]` 帶進來的內容
+    // 在驗證眼裡還不存在——規則引用的 slot、schema 的 feature 全都會誤報找不到。
+    //
+    // 展開失敗時退回 ① Source:那類錯誤(環、未知 trait)由 registry 與編譯路徑
+    // 各自報,這裡不重複;而退回讓其餘檢查仍然跑得完,不會因為一個展開錯誤就
+    // 讓整份報告變空。
+    //
+    // 成本實測:展開佔 `check_document` 的 **1–4%**(20/100/400 signs,release)
+    // ——`check_document` 本身有約 3.5 ms 的固定開銷(每次重建 std registry),
+    // 展開相對它是雜訊。
+    let expanded = crate::compile::expand_traits_with(effective_source, &[std])
+        .unwrap_or_else(|_| effective_source.clone());
+
     validate_defs_and_rules(std, &[], &registry, &mut report);
-    validate_defs_and_rules(effective_source, &[std], &registry, &mut report);
+    validate_defs_and_rules(&expanded, &[std], &registry, &mut report);
     validate_typed_schemas(std, &[], &registry, &mut report);
-    validate_typed_schemas(effective_source, &[std], &registry, &mut report);
-    validate_fp_expressions(effective_source, &registry, &mut report);
+    validate_typed_schemas(&expanded, &[std], &registry, &mut report);
+    validate_fp_expressions(&expanded, &registry, &mut report);
     validate_origin_graph(effective_source, &mut report);
-    validate_constructions_and_local_phon(effective_source, &registry, None, &mut report);
+    validate_constructions_and_local_phon(&expanded, &registry, None, &mut report);
     report
 }
 
