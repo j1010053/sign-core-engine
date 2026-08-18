@@ -149,6 +149,22 @@ fn expand_item_sequence(
     source: &[SignItem],
     active: &mut Vec<String>,
 ) -> Result<Vec<SignItem>, CompileError> {
+    expand_item_sequence_with(src, externals, sign, source, active, false)
+}
+
+/// `expand_declarations`:`belongs X` 要不要也展開。
+///
+/// 正式的編譯路徑傳 `false`——宣告是分類邊,展開由 `X[n]` 負責(兩階段)。
+/// [`trait_view`] 傳 `true`,因為視圖問的是「這個 trait **有效**有什麼」,
+/// 而那包含它從父輩繼承來的;不展開宣告就只看得到它自己寫的那一層。
+fn expand_item_sequence_with(
+    src: &Language,
+    externals: &[&Language],
+    sign: &str,
+    source: &[SignItem],
+    active: &mut Vec<String>,
+    expand_declarations: bool,
+) -> Result<Vec<SignItem>, CompileError> {
     let mut used: BTreeMap<&str, (bool, Vec<u32>)> = BTreeMap::new();
     for item in source {
         if let SignItem::TraitMount { name, kind } = item {
@@ -202,8 +218,32 @@ fn expand_item_sequence(
             // **宣告原樣留下。** `belongs X` 是分類邊,不是展開對象——它必須
             // 活到 ②③④ 與 ontology 建樹那一刻。把它當成「展開出空集合」會讓
             // 分類邊在展開後消失,整棵 ontology 樹跟著垮。
-            SignItem::TraitMount { kind, .. } if kind.is_declaration() => {
+            SignItem::TraitMount { name, kind } if kind.is_declaration() => {
                 output.push(item.clone());
+                if !expand_declarations {
+                    continue;
+                }
+                let Some(trait_def) = find_trait(src, externals, name) else {
+                    continue;
+                };
+                if active.iter().any(|candidate| candidate == name) {
+                    continue;
+                }
+                let selected: Vec<SignItem> = trait_def
+                    .blocks
+                    .iter()
+                    .flat_map(|block| block.items.iter().cloned())
+                    .collect();
+                active.push(name.clone());
+                output.extend(expand_item_sequence_with(
+                    src,
+                    externals,
+                    sign,
+                    &selected,
+                    active,
+                    expand_declarations,
+                )?);
+                active.pop();
             }
             SignItem::TraitMount { name, kind } => {
                 if let Some(start) = active.iter().position(|candidate| candidate == name) {
@@ -232,7 +272,14 @@ fn expand_item_sequence(
                     }
                 };
                 active.push(name.clone());
-                output.extend(expand_item_sequence(src, externals, sign, &selected, active)?);
+                output.extend(expand_item_sequence_with(
+                    src,
+                    externals,
+                    sign,
+                    &selected,
+                    active,
+                    expand_declarations,
+                )?);
                 active.pop();
             }
             other => {
@@ -243,6 +290,31 @@ fn expand_item_sequence(
         }
     }
     Ok(output)
+}
+
+/// 一個 **trait 的有效內容視圖**:把它當成「一個只掛載它的 sign」展開。
+///
+/// # 為什麼需要這個
+///
+/// trait 不是 sign,但 trait 上可以寫規則,而驗證那些規則得知道它引用的 slot /
+/// feature 存不存在。舊做法是造一個只寫 `belongs X` 的合成 sign,再靠**投影**
+/// 把 X 的內容攤出來——那用的是投影的「內容」那一半,而兩階段要把那一半關掉。
+///
+/// # 為什麼走展開而不是直接讀 X 的 blocks
+///
+/// 直接讀只看得到 **X 自己寫的**,看不到它從父輩繼承來的。若某條規則引用的 slot
+/// 宣告在祖先上,直接讀會誤報「找不到」。走展開則遞迴把祖先的內容一併拉進來,
+/// 而且**與真實編譯走同一條路**——驗證看到的與編譯產出的不會分岔。
+pub fn trait_view(
+    src: &Language,
+    externals: &[&Language],
+    trait_name: &str,
+) -> Result<Vec<SignItem>, CompileError> {
+    let mount = SignItem::TraitMount {
+        name: trait_name.to_owned(),
+        kind: crate::TraitMountKind::Whole,
+    };
+    expand_item_sequence_with(src, externals, trait_name, &[mount], &mut Vec::new(), true)
 }
 
 /// Pass ①→②:Trait Expansion(I16-a/b)。

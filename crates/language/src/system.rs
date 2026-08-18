@@ -500,6 +500,7 @@ struct ItemContext<'a> {
 
 fn validate_defs_and_rules(
     language: &Language,
+    externals: &[&Language],
     registry: &OntologyRegistry,
     report: &mut ValidationReport,
 ) {
@@ -666,12 +667,15 @@ fn validate_defs_and_rules(
         }
     };
     for trait_def in &language.traits {
-        let synthetic = SignDef {
+        // [A] 3-2:trait 的視圖走**展開**,不走投影的內容那一半。展開會遞迴把
+        // 祖先的內容拉進來,而且與真實編譯同一條路——驗證看到的不會與編譯產出分岔。
+        // 展開失敗時退回空視圖:那個錯誤由編譯路徑自己報,這裡不重複也不假裝。
+        let effective = SignDef {
             id: crate::SignId::synthetic(),
             name: format!("{}#rule-validation", trait_def.name),
-            items: vec![SignItem::TraitMount { name: trait_def.name.clone(), kind: crate::TraitMountKind::Declaration }],
+            items: crate::compile::trait_view(language, externals, &trait_def.name)
+                .unwrap_or_default(),
         };
-        let effective = registry.effective_sign(&synthetic);
         // P71 增修 D:**trait 的 `$self` 靜態未知**,故與 filler 同樣用全域上界。
         // trait 是模板,合成後的 sign 帶什麼 feature 不由它決定:菱形繼承下
         // `Right` 的規則合法地 guard 在**兄弟** `Left` 宣告的 feature 上
@@ -698,6 +702,7 @@ fn validate_defs_and_rules(
 
 fn validate_typed_schemas(
     language: &Language,
+    externals: &[&Language],
     registry: &OntologyRegistry,
     report: &mut ValidationReport,
 ) {
@@ -777,6 +782,8 @@ fn validate_typed_schemas(
     }
 
     fn category_feature_domain(
+        language: &Language,
+        externals: &[&Language],
         registry: &OntologyRegistry,
         category: &str,
         feature: &str,
@@ -784,14 +791,8 @@ fn validate_typed_schemas(
         if !registry.has(category) {
             return None;
         }
-        let synthetic = SignDef {
-            id: crate::SignId::synthetic(),
-            name: format!("{category}#slot-feature-schema"),
-            items: vec![SignItem::TraitMount { name: category.to_owned(), kind: crate::TraitMountKind::Declaration }],
-        };
-        registry
-            .effective_sign(&synthetic)
-            .items
+        crate::compile::trait_view(language, externals, category)
+            .unwrap_or_default()
             .into_iter()
             .find_map(|item| match item {
                 SignItem::FeatureDecl(declaration)
@@ -901,7 +902,8 @@ fn validate_typed_schemas(
         let source = SignDef {
             id: crate::SignId::synthetic(),
             name: trait_def.name.clone(),
-            items: vec![SignItem::TraitMount { name: trait_def.name.clone(), kind: crate::TraitMountKind::Declaration }],
+            items: crate::compile::trait_view(language, externals, &trait_def.name)
+                .unwrap_or_default(),
         };
         validate_inherited_contracts(&trait_def.name, &source, registry, report);
     }
@@ -915,9 +917,10 @@ fn validate_typed_schemas(
         let synthetic = SignDef {
             id: crate::SignId::synthetic(),
             name: format!("{}#schema", trait_def.name),
-            items: vec![SignItem::TraitMount { name: trait_def.name.clone(), kind: crate::TraitMountKind::Declaration }],
+            items: crate::compile::trait_view(language, externals, &trait_def.name)
+                .unwrap_or_default(),
         };
-        (trait_def.name.clone(), registry.effective_sign(&synthetic))
+        (trait_def.name.clone(), synthetic)
     }));
     let roots = candidates.clone();
     for (owner, effective) in roots {
@@ -1040,7 +1043,7 @@ fn validate_typed_schemas(
                 continue;
             };
             let target_domain =
-                category_feature_domain(registry, target_category, &binding.feature);
+                category_feature_domain(language, externals, registry, target_category, &binding.feature);
             if target_domain.is_none() {
                 report.push(
                     Diagnostic::new(
@@ -1084,7 +1087,7 @@ fn validate_typed_schemas(
                     continue;
                 };
                 let source_domain =
-                    category_feature_domain(registry, source_category, source_feature);
+                    category_feature_domain(language, externals, registry, source_category, source_feature);
                 if source_domain.is_none() {
                     report.push(
                         Diagnostic::new(
@@ -2531,10 +2534,10 @@ fn validate_source_language(
         effective_source,
     ]));
     validate_duplicate_signs(effective_source, &mut report);
-    validate_defs_and_rules(std, &registry, &mut report);
-    validate_defs_and_rules(effective_source, &registry, &mut report);
-    validate_typed_schemas(std, &registry, &mut report);
-    validate_typed_schemas(effective_source, &registry, &mut report);
+    validate_defs_and_rules(std, &[], &registry, &mut report);
+    validate_defs_and_rules(effective_source, &[std], &registry, &mut report);
+    validate_typed_schemas(std, &[], &registry, &mut report);
+    validate_typed_schemas(effective_source, &[std], &registry, &mut report);
     validate_fp_expressions(effective_source, &registry, &mut report);
     validate_origin_graph(effective_source, &mut report);
     validate_constructions_and_local_phon(effective_source, &registry, None, &mut report);
@@ -2716,8 +2719,8 @@ pub fn compile_with_packages_ref(
         &effective_source,
     ]));
     validate_duplicate_signs(&ordered, &mut validation);
-    validate_defs_and_rules(&ordered, &registry, &mut validation);
-    validate_typed_schemas(&ordered, &registry, &mut validation);
+    validate_defs_and_rules(&ordered, &[&std], &registry, &mut validation);
+    validate_typed_schemas(&ordered, &[&std], &registry, &mut validation);
     validate_fp_expressions(&ordered, &registry, &mut validation);
     validate_origin_graph(&ordered, &mut validation);
     validate_constructions_and_local_phon(
