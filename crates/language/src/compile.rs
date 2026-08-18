@@ -69,26 +69,27 @@ fn check_names(l: &Language) -> Result<(), CompileError> {
 
 fn expand_expression_contexts(
     src: &Language,
+    externals: &[&Language],
     sign: &str,
     expression: &mut crate::Expression,
     active: &mut Vec<String>,
 ) -> Result<(), CompileError> {
     match expression {
         crate::Expression::SignFragment(items) => {
-            *items = expand_item_sequence(src, sign, items, active)?;
+            *items = expand_item_sequence(src, externals, sign, items, active)?;
         }
         crate::Expression::DimFragment { items, .. } => {
             for item in items {
-                expand_item_expressions(src, sign, item, active)?;
+                expand_item_expressions(src, externals, sign, item, active)?;
             }
         }
         crate::Expression::Case(case) => {
             for branch in &mut case.branches {
-                expand_expression_contexts(src, sign, &mut branch.result, active)?;
+                expand_expression_contexts(src, externals, sign, &mut branch.result, active)?;
             }
         }
         crate::Expression::Projection { value, .. } => {
-            expand_expression_contexts(src, sign, value, active)?;
+            expand_expression_contexts(src, externals, sign, value, active)?;
         }
         _ => {}
     }
@@ -97,23 +98,24 @@ fn expand_expression_contexts(
 
 fn expand_item_expressions(
     src: &Language,
+    externals: &[&Language],
     sign: &str,
     item: &mut SignItem,
     active: &mut Vec<String>,
 ) -> Result<(), CompileError> {
     match item {
         SignItem::SignExpression(expression) => {
-            expand_expression_contexts(src, sign, &mut expression.expression, active)
+            expand_expression_contexts(src, externals, sign, &mut expression.expression, active)
         }
         SignItem::FeatureExpression(expression) => {
-            expand_expression_contexts(src, sign, &mut expression.expression, active)
+            expand_expression_contexts(src, externals, sign, &mut expression.expression, active)
         }
         SignItem::RoleExpression(expression) => {
-            expand_expression_contexts(src, sign, &mut expression.expression, active)
+            expand_expression_contexts(src, externals, sign, &mut expression.expression, active)
         }
         SignItem::Realization(realization) => {
             for branch in &mut realization.expression.branches {
-                expand_expression_contexts(src, sign, &mut branch.result, active)?;
+                expand_expression_contexts(src, externals, sign, &mut branch.result, active)?;
             }
             Ok(())
         }
@@ -121,8 +123,28 @@ fn expand_item_expressions(
     }
 }
 
+/// 找一個 trait:**先看本語言,再看外部來源**(std / 套件)。
+///
+/// 展開原本只查 `src.traits`,而投影用的 registry 是 `[std, user]` 兩份建的
+/// ——於是 `belongs 某個 std trait` 配上顯式的 `X[n]` 會報 `UnknownTrait`,
+/// **顯式引用只對同一份文件裡宣告的 trait 有效**。那個缺口讓兩階段的主幹道不通。
+///
+/// 本語言優先:同名 trait 在別處已由 `ONTOLOGY_DUPLICATE_TRAIT` 擋下,這裡的順序
+/// 只是讓「文件自己宣告的東西」在任何情況下都不會被套件蓋掉。
+fn find_trait<'a>(
+    src: &'a Language,
+    externals: &[&'a Language],
+    name: &str,
+) -> Option<&'a crate::TraitDef> {
+    src.traits
+        .iter()
+        .chain(externals.iter().flat_map(|lang| lang.traits.iter()))
+        .find(|trait_def| trait_def.name == name)
+}
+
 fn expand_item_sequence(
     src: &Language,
+    externals: &[&Language],
     sign: &str,
     source: &[SignItem],
     active: &mut Vec<String>,
@@ -146,11 +168,8 @@ fn expand_item_sequence(
         }
     }
     for (name, (whole, indices)) in &used {
-        let trait_def = src
-            .traits
-            .iter()
-            .find(|trait_def| &trait_def.name == name)
-            .ok_or_else(|| CompileError::UnknownTrait {
+        let trait_def =
+            find_trait(src, externals, name).ok_or_else(|| CompileError::UnknownTrait {
                 sign: sign.to_owned(),
                 name: (*name).to_owned(),
             })?;
@@ -195,11 +214,8 @@ fn expand_item_sequence(
                         path: path.join(" -> "),
                     });
                 }
-                let trait_def = src
-                    .traits
-                    .iter()
-                    .find(|trait_def| trait_def.name == *name)
-                    .ok_or_else(|| CompileError::UnknownTrait {
+                let trait_def =
+                    find_trait(src, externals, name).ok_or_else(|| CompileError::UnknownTrait {
                         sign: sign.to_owned(),
                         name: name.clone(),
                     })?;
@@ -216,12 +232,12 @@ fn expand_item_sequence(
                     }
                 };
                 active.push(name.clone());
-                output.extend(expand_item_sequence(src, sign, &selected, active)?);
+                output.extend(expand_item_sequence(src, externals, sign, &selected, active)?);
                 active.pop();
             }
             other => {
                 let mut expanded = other.clone();
-                expand_item_expressions(src, sign, &mut expanded, active)?;
+                expand_item_expressions(src, externals, sign, &mut expanded, active)?;
                 output.push(expanded);
             }
         }
@@ -234,12 +250,21 @@ fn expand_item_sequence(
 /// path as top-level Sign items.  The fragment remains anonymous: expansion
 /// contributes Sign items but never creates another Sign node.
 pub fn expand_traits(src: &Language) -> Result<Language, CompileError> {
+    expand_traits_with(src, &[])
+}
+
+/// 同上,但可額外查**外部語言**的 trait(std / 套件)——見 [`find_trait`]。
+pub fn expand_traits_with(
+    src: &Language,
+    externals: &[&Language],
+) -> Result<Language, CompileError> {
     check_names(src)?;
     let mut out = src.clone();
     out.signs.clear();
     for sign in &src.signs {
         let mut expanded = sign.clone();
-        expanded.items = expand_item_sequence(src, &sign.name, &sign.items, &mut Vec::new())?;
+        expanded.items =
+            expand_item_sequence(src, externals, &sign.name, &sign.items, &mut Vec::new())?;
         out.signs.push(expanded);
     }
     Ok(out)
@@ -333,6 +358,14 @@ pub fn order_stages(resolved: &Language) -> Language {
 
 /// 全管線(① → ④)+ Trait 索引。
 pub fn compile(src: &Language) -> Result<Pipeline, CompileError> {
+    compile_with(src, &[])
+}
+
+/// 同上,但展開時可額外查**外部語言**的 trait(std / 套件)——見 [`find_trait`]。
+pub fn compile_with(
+    src: &Language,
+    externals: &[&Language],
+) -> Result<Pipeline, CompileError> {
     // Index Generation(Compile Artifact;自 ① 收集,展開後即不可得)
     let mut trait_index: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for t in src.traits.iter().filter(|t| !t.global) {
@@ -348,7 +381,7 @@ pub fn compile(src: &Language) -> Result<Pipeline, CompileError> {
             }
         }
     }
-    let expanded = expand_traits(src)?;
+    let expanded = expand_traits_with(src, externals)?;
     let resolved = resolve(&expanded);
     let ordered = order_stages(&resolved);
     Ok(Pipeline {

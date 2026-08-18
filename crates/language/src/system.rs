@@ -2705,7 +2705,8 @@ pub fn compile_with_packages_ref(
         return Err(CompileSystemError::Validation(pre_validation));
     }
 
-    let artifacts = codegen::compile_full(&effective_source)?;
+    // 展開要看得到 std 的 trait,否則顯式 `X[n]` 引用不到套件的東西
+    let artifacts = codegen::compile_full_with(&effective_source, &[&std])?;
     let ordered = artifacts.pipeline.ordered.clone();
     let (registry, ontology_diags) = OntologyRegistry::build(&[&std, &ordered]);
     let registry = registry.with_available(packages.available_exports().clone());

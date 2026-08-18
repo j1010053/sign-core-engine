@@ -318,3 +318,45 @@ fn a_declaration_survives_expansion_while_the_expansion_point_is_consumed() {
         "而它帶進來的內容要在:{items:?}"
     );
 }
+
+// ── ⑥ 展開看得到套件的 trait([A] 3-1)────────────────────────────────────
+//
+// 展開原本只查 `src.traits`(使用者語言自己的 trait),而投影用的 registry 是
+// `[std, user]` 兩份建的。於是**顯式引用只對同一份文件裡宣告的 trait 有效**
+// ——`belongs Noun` + `Noun[0]` 會報 `UnknownTrait`,而真實文件的 `belongs`
+// 大多指向 std。那個缺口讓兩階段的主幹道不通。
+
+/// 🔑 顯式引用一個 **std 的 trait**:先前是 `UnknownTrait`,現在要通得過。
+#[test]
+fn an_explicit_reference_to_a_package_trait_compiles() {
+    let source = "Symbol a\n\nsign x:\n    belongs Noun\n    Noun[0]\n    phon:\n        /a/\n";
+    let document = LanguageDocument::import_new_root(source, "evo:pkg").expect("parses");
+    conlang_language::system::compile_document(&document, &LibrarySpec::default())
+        .expect("套件的 trait 也要引用得到");
+}
+
+/// 本語言優先:同名時不會被套件的定義蓋掉。
+///
+/// 判別性:若查找順序反過來,`x` 會拿到 std `Noun` 的內容而不是本地的。
+#[test]
+fn a_local_trait_shadows_nothing_but_wins_the_lookup() {
+    use conlang_language::SignItem;
+    let source = "Symbol a\n\ntrait LocalOnly:\n    sem:\n        senses:\n            core = MINE\n\nsign x:\n    belongs LocalOnly\n    LocalOnly[0]\n    phon:\n        /a/\n";
+    let language = Language::parse(source).expect("parses");
+    let expanded = conlang_language::compile::compile(&language)
+        .expect("compiles")
+        .expanded;
+    let senses: Vec<String> = expanded
+        .signs
+        .iter()
+        .find(|s| s.name == "x")
+        .expect("x")
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SignItem::Sense(sense) => Some(sense.gloss.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(senses, ["MINE"], "本地宣告的 trait 要贏");
+}
