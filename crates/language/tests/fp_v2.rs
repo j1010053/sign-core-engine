@@ -220,7 +220,7 @@ sign walk:
         .sign
         .items
         .iter()
-        .any(|item| matches!(item, SignItem::TraitMount { name: name, kind: conlang_language::TraitMountKind::Declaration } if name == "FragmentThirdSingular")));
+        .any(|item| matches!(item, SignItem::TraitMount { name: name, kind: conlang_language::TraitMountKind::Declaration, .. } if name == "FragmentThirdSingular")));
     assert!(stored.sign.items.iter().any(|item| {
         matches!(item, SignItem::FeatureValue(value)
             if value.dim == Dim::Syn
@@ -256,7 +256,7 @@ sign walk:
         .sign
         .items
         .iter()
-        .any(|item| matches!(item, SignItem::TraitMount { name: name, kind: conlang_language::TraitMountKind::Declaration } if name == "FragmentThirdSingular")));
+        .any(|item| matches!(item, SignItem::TraitMount { name: name, kind: conlang_language::TraitMountKind::Declaration, .. } if name == "FragmentThirdSingular")));
 }
 
 #[test]

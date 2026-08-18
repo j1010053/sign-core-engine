@@ -41,6 +41,14 @@ use conlang_language::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+fn format_belongs_target(name: &str, args: &[String]) -> String {
+    if args.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{}<{}>", name, args.join(", "))
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ReconstructError {
     /// 這種節點的淺層欄位比對尚未實作——**明確拒絕,不默默漏掉改動**。
@@ -958,17 +966,18 @@ fn phon_block_kind(block: &PhonBlock) -> &'static str {
 fn item_updates(before: &SignItem, after: &SignItem) -> Result<Vec<NodeUpdate>, ReconstructError> {
     let mut updates = Vec::new();
     match (before, after) {
-        (SignItem::TraitMount { name: old, kind: conlang_language::TraitMountKind::Declaration }, SignItem::TraitMount { name: new, kind: conlang_language::TraitMountKind::Declaration }) => {
-            if old != new {
-                updates.push(NodeUpdate::Belongs(new.clone()));
+        (SignItem::TraitMount { name: old, kind: conlang_language::TraitMountKind::Declaration, args: old_args, .. }, SignItem::TraitMount { name: new, kind: conlang_language::TraitMountKind::Declaration, args: new_args, .. }) => {
+            if old != new || old_args != new_args {
+                updates.push(NodeUpdate::Belongs(format_belongs_target(new, new_args)));
             }
         }
         (
             SignItem::TraitMount {
                 name: old_name,
                 kind: old_kind,
+                ..
             },
-            SignItem::TraitMount { name, kind },
+            SignItem::TraitMount { name, kind, .. },
         ) => {
             if old_name != name || old_kind != kind {
                 updates.push(NodeUpdate::TraitUse {

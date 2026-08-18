@@ -250,13 +250,19 @@ fn push_body(out: &mut String, blocks: &[Block]) {
         }
         // 1) belongs(保序)
         for it in items {
-            if let SignItem::TraitMount { name: n, kind: crate::TraitMountKind::Declaration } = it {
-                out.push_str(&format!("    belongs {n}\n"));
+            if let SignItem::TraitMount { name: n, kind: crate::TraitMountKind::Declaration, args, .. } = it {
+                out.push_str(&format!("    belongs {n}"));
+                if !args.is_empty() {
+                    out.push('<');
+                    out.push_str(&args.join(", "));
+                    out.push('>');
+                }
+                out.push('\n');
             }
         }
         // 2) trait macro 引用(保序):None = 裸 Name(整個 trait)、Some(n) = Name[n]
         for it in items {
-            if let SignItem::TraitMount { name, kind } = it {
+            if let SignItem::TraitMount { name, kind, .. } = it {
                 match kind {
                     // 宣告那一份由 belongs 區段印,這裡只印展開點
                     crate::TraitMountKind::Declaration => {}
@@ -549,7 +555,22 @@ fn push_trait(out: &mut String, t: &TraitDef) {
     } else {
         "trait"
     };
-    out.push_str(&format!("{kw} {}:\n", t.name));
+    out.push_str(&format!("{kw} {}", t.name));
+    if !t.type_params.is_empty() {
+        out.push('<');
+        for (i, p) in t.type_params.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            out.push_str(&p.name);
+            if let Some(ref bound) = p.bound {
+                out.push_str(": ");
+                out.push_str(bound);
+            }
+        }
+        out.push('>');
+    }
+    out.push_str(":\n");
     push_body(out, &t.blocks);
 }
 
@@ -616,14 +637,16 @@ mod tests {
                 name: "Alpha".into(),
                 global: false,
                 marker: false,
+                type_params: vec![],
                 blocks: vec![Block {
-                    items: vec![SignItem::TraitMount { name: "Beta".into(), kind: crate::TraitMountKind::Declaration }],
+                    items: vec![SignItem::TraitMount { name: "Beta".into(), kind: crate::TraitMountKind::Declaration, args: vec![] }],
                 }],
             };
             let b = TraitDef {
                 name: "Beta".into(),
                 global: false,
                 marker: false,
+                type_params: vec![],
                 blocks: vec![Block::default()],
             };
             if flip {

@@ -1405,11 +1405,13 @@ fn update_payload(
             *item_at_address_mut(language, &node.address)? = SignItem::TraitMount {
                 name,
                 kind: conlang_language::TraitMountKind::from_block(block),
+                args: vec![],
             };
             Ok(Some("trait_use.name".to_owned()))
         }
         (NodeKind::Belongs, NodeUpdate::Belongs(value)) => {
-            *item_at_address_mut(language, &node.address)? = SignItem::TraitMount { name: value, kind: conlang_language::TraitMountKind::Declaration };
+            let (name, args) = parse_belongs_target(&value);
+            *item_at_address_mut(language, &node.address)? = SignItem::TraitMount { name, kind: conlang_language::TraitMountKind::Declaration, args };
             Ok(Some("belongs".to_owned()))
         }
         (NodeKind::FeatureDeclaration, NodeUpdate::FeatureDeclaration(value)) => {
@@ -1818,7 +1820,7 @@ fn item_kind(item: &SignItem) -> NodeKind {
     match item {
         SignItem::Pass => NodeKind::Pass,
         SignItem::TraitMount { kind: conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_), .. } => NodeKind::TraitUse,
-        SignItem::TraitMount { name: _, kind: conlang_language::TraitMountKind::Declaration } => NodeKind::Belongs,
+        SignItem::TraitMount { name: _, kind: conlang_language::TraitMountKind::Declaration, .. } => NodeKind::Belongs,
         SignItem::Slot(_) => NodeKind::Slot,
         SignItem::SlotMap(_) => NodeKind::SlotMap,
         SignItem::FeatureDecl(_) => NodeKind::FeatureDeclaration,
@@ -3202,7 +3204,7 @@ fn resolve_path_child(
                 entry.kind == NodeKind::Belongs
                     && matches!(
                         item_at_address(document.language(), &entry.address),
-                        Some(SignItem::TraitMount { name: target, kind: conlang_language::TraitMountKind::Declaration }) if target == name
+                        Some(SignItem::TraitMount { name: target, kind: conlang_language::TraitMountKind::Declaration, .. }) if target == name
                     )
             })
         }
@@ -3212,7 +3214,7 @@ fn resolve_path_child(
                 entry.kind == NodeKind::TraitUse
                     && matches!(
                         item_at_address(document.language(), &entry.address),
-                        Some(SignItem::TraitMount { name: target, kind })
+                        Some(SignItem::TraitMount { name: target, kind, .. })
                             if target == name && !kind.is_declaration()
                     )
             })
@@ -3605,6 +3607,7 @@ fn render_phon_root_block(block: &PhonBlock) -> Option<String> {
         name: FRAGMENT_PHON_TRAIT.to_owned(),
         global: true,
         marker: false,
+        type_params: vec![],
         blocks: vec![Block {
             items: vec![SignItem::Rule(Rule {
                 id: conlang_language::RuleId::local(0),
@@ -4791,7 +4794,7 @@ fn item_group(item: &SignItem) -> u16 {
     match item {
         // `pass` 與內容互斥(驗證擋),故與 `belongs` 同組不會造成排序歧義
         SignItem::Pass => 0,
-        SignItem::TraitMount { name: _, kind: conlang_language::TraitMountKind::Declaration } => 0,
+        SignItem::TraitMount { name: _, kind: conlang_language::TraitMountKind::Declaration, .. } => 0,
         SignItem::TraitMount { kind: conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_), .. } => 1,
         SignItem::Def(def) if def_dimension(&def.path).is_none() => 2,
         SignItem::Slot(_) => dim_base(Dim::Syn),
@@ -5227,6 +5230,17 @@ fn expression_node_kind(expression: &Expression) -> Option<NodeKind> {
         Expression::Case(_) => Some(NodeKind::Case),
         _ => None,
     }
+}
+
+fn parse_belongs_target(value: &str) -> (String, Vec<String>) {
+    if let Some(open) = value.find('<') {
+        let name = value[..open].to_owned();
+        if let Some(inside) = value[open + 1..].strip_suffix('>') {
+            let args = inside.split(',').map(|s| s.trim().to_owned()).collect();
+            return (name, args);
+        }
+    }
+    (value.to_owned(), vec![])
 }
 
 fn trait_at<'a>(language: &'a Language, address: &NodeAddress) -> Result<&'a TraitDef, EditError> {
@@ -5788,7 +5802,7 @@ fn slot_rename_scope(
                 let probe = SignDef {
                     id: conlang_language::SignId::synthetic(),
                     name: "__slot_rename_probe".to_owned(),
-                    items: vec![SignItem::TraitMount { name: trait_def.name.clone(), kind: conlang_language::TraitMountKind::Declaration }],
+                    items: vec![SignItem::TraitMount { name: trait_def.name.clone(), kind: conlang_language::TraitMountKind::Declaration, args: vec![] }],
                 };
                 let inherited_owner = registry
                     .inheritance_order(&probe)
@@ -5930,7 +5944,7 @@ fn rewrite_local_slot_refs_in_items(items: &mut [SignItem], old: &str, new: &str
                 rewrite_local_slot_refs_in_expression(&mut expression.expression, old, new)
             }
             SignItem::TraitMount { kind: conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_), .. }
-            | SignItem::TraitMount { name: _, kind: conlang_language::TraitMountKind::Declaration }
+            | SignItem::TraitMount { name: _, kind: conlang_language::TraitMountKind::Declaration, .. }
             | SignItem::RoleDecl(_)
             | SignItem::RoleBinding(_) => {}
         }
@@ -6199,7 +6213,7 @@ fn rewrite_trait_refs(language: &mut Language, old: &str, new: &str) {
 fn rewrite_trait_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
     for item in items {
         match item {
-            SignItem::TraitMount { name, kind: conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_) } | SignItem::TraitMount { name: name, kind: conlang_language::TraitMountKind::Declaration } if name == old => {
+            SignItem::TraitMount { name, kind: conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_), .. } | SignItem::TraitMount { name: name, kind: conlang_language::TraitMountKind::Declaration, .. } if name == old => {
                 *name = new.to_owned()
             }
             SignItem::Slot(slot) => {

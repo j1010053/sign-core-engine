@@ -579,7 +579,7 @@ fn projection(sign: &SignDef, dim: Option<Dim>) -> Vec<SignItem> {
 fn item_dimension(item: &SignItem) -> Option<Dim> {
     match item {
         SignItem::Pass => None,
-        SignItem::TraitMount { name: _, kind: conlang_language::TraitMountKind::Declaration } | SignItem::TraitMount { kind: conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_), .. } => None,
+        SignItem::TraitMount { name: _, kind: conlang_language::TraitMountKind::Declaration, .. } | SignItem::TraitMount { kind: conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_), .. } => None,
         SignItem::Constraint(_) | SignItem::SignExpression(_) => None,
         SignItem::Def(def) => def_dimension(&def.path),
         SignItem::Slot(_) | SignItem::SlotFeatureBinding(_) | SignItem::SlotMap(_) => {

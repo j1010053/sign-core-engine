@@ -98,7 +98,47 @@ sign TutorialGiving:
 
 `SemNode` 保存 types、typed features、recursive roles 與 provenance。`SemanticDocumentV1` 以 `conlang.semantic/v1` JSON 輸出／匯入 detached semantic value，未知 schema、trait、feature、role 或欄位均拒絕；它是未來 LLM 介面邊界，不是 provider API。
 
-## 5. `$slot`／`$self`、Then 與 Else
+## 5. 參數化 trait
+
+前面的 slot 與 role 都把 constraint 寫死（`[TutorialNominal]`、`[TutorialEntity]`）。如果多個 trait 只差在 constraint 類別，可以用 **type parameter** 把類別變成參數，由 `belongs` 提供具體值。
+
+```lang
+trait TutorialAgreement<C, T>:
+    syn:
+        slots:
+            controller [C]
+            target [T]
+```
+
+`<C, T>` 是宣告；使用時在 `belongs` 提供具體類別：
+
+```lang
+sign TutorialSVA:
+    belongs TutorialAgreement<TutorialNominal, TutorialPredicate>
+    TutorialAgreement
+```
+
+展開後 `controller` 的 constraint 變成 `[TutorialNominal]`，`target` 變成 `[TutorialPredicate]`——和手寫一模一樣，但只定義一次。
+
+**trait 之間的傳播**：一個 trait 可以只填部分參數，剩下的向上傳播給使用者：
+
+```lang
+trait TutorialSubjectAgreement<T>:
+    belongs TutorialAgreement<TutorialNominal, T>
+    TutorialAgreement
+```
+
+`TutorialSubjectAgreement` 把 `C` 固定為 `TutorialNominal`，但 `T` 仍是參數。sign 使用時填入最後一個：
+
+```lang
+sign TutorialSVA2:
+    belongs TutorialSubjectAgreement<TutorialPredicate>
+    TutorialSubjectAgreement
+```
+
+parameter 也可以加上 bound：`<C: TutorialEntity>` 表示 `C` 只接受 `TutorialEntity` 或其子類型。`marker trait` 和 `global trait` 不能有 type parameter。
+
+## 6. `$slot`／`$self`、Then 與 Else
 
 規則左側永遠寫目前維度；RHS 與 guard 才能唯讀 `$self` 或 frozen `$slot`。`Else` 是 first-match fallback，各分支看同一輸入；`Then` 是 sequential feeding，後一步看得到前一步已提交的值。平坦規則不可混用兩者，也不支援巢狀 Then／Else。
 
@@ -118,7 +158,7 @@ Sign，所有 guard 都只讀這份 snapshot，之後才把命中的匿名 fragm
 `syn:`、`sem:`、`prag:` context；phon／feature scalar／role scalar 的選擇仍使用 `case:`。
 完整範例見 `docs/specifications/case_when與context_fragment_v2.md`。
 
-## 6. 一個 deep sign，多個 surface realization
+## 7. 一個 deep sign，多個 surface realization
 
 `phon:` 的 `/.../` 是 deep/default template；`realization:` 依 finalized token 第一匹配選完整模板。選定後展開 `{slot}`，確認只剩純 phon 字串，才交給 Tshiatūn 音變。詞界由 phon phrase 保存，`surface_phrase` 最後映射成空格；surface 永不寫回 sign。
 
@@ -140,7 +180,7 @@ sign TutorialNP:
 
 Rust 端以 `DerivationContext::new().feature(Dim::Syn, "number", "plural")` 約束同一個 `TutorialNP` deep SignId。這是 occurrence constraint，不是 priority override；與固定值或規則結果衝突時在 phon 前失敗。
 
-## 7. 可執行完整範例
+## 8. 可執行完整範例
 
 以下區塊也是 integration fixture；測試會抽取、parse、compile、先 derive plural NP，再把該 derived token 放入 clause，由 outer `slot_features` 注入 nominative 並從 deep baseline 重跑。結果同時檢查 surface、四維 token、recursive roles、occurrence trace 與兩次執行決定性。
 
@@ -225,11 +265,11 @@ sign TutorialClause:
         /{subject} {predicate}/
 ```
 
-## 8. library、export 與 caller override
+## 9. library、export 與 caller override
 
 `compile_system` 自動載入 enabled std；`compile_with_libraries` 明選一個 natural package與 embedded plugins。`std/cxg` 提供 form–meaning schema、slots 與 rules；Grambank 保存 `0/1/?` 類型觀察；`natural:en-standard` 提供具體 English signs。package 的 `exports.tsv` 以 `stable_id<TAB>trait|sign<TAB>alias` 公開，rule ID 使用 `std:*`、`natural:*`、`plugin:*` namespace。effective language 依 dependency→std→natural→plugin→caller 疊加；`language()` 仍是 caller source，`effective_language()` 才供 runtime。
 
-## 9. Rust 任務流程
+## 10. Rust 任務流程
 
 ```rust
 let language = Language::parse(source)?;
@@ -252,7 +292,7 @@ let clause = system.derive(
 
 讀取 `SystemDerivation::{surface,token,rules,occurrences,realization,phon_steps,diagnostics}`；`OccurrenceRecord` 分開保存 probe 與 committed RuleRecords、constraints、是否重跑及 filler realization。
 
-## 10. diagnostics、Semantic JSON 與 `.lang`／`.chg` 邊界
+## 11. diagnostics、Semantic JSON 與 `.lang`／`.chg` 邊界
 
 `.lang` 保存可編譯的共時來源；`<name>.lang.ids.json` v2 保存 stable NodeId。`.chg` 只對 caller `LanguageDocument` 執行 Insert／Delete／Update／Move，不改 effective libraries、CompiledSystem、DerivedToken 或 surface。ChangeSet resolve 後 selector 固化為 `node(kind,@namespace:ordinal)`，每個 statement 原子 commit；compile 是 dirty revision 的 lazy cache。
 

@@ -1752,7 +1752,7 @@ fn validate_fp_expressions(
             SignItem::RoleDecl(_) | SignItem::RoleBinding(_) | SignItem::RoleExpression(_) => {
                 dim == Dim::Sem
             }
-            SignItem::TraitMount { kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_), .. } | SignItem::TraitMount { name: _, kind: crate::TraitMountKind::Declaration } | SignItem::Realization(_) => false,
+            SignItem::TraitMount { kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_), .. } | SignItem::TraitMount { name: _, kind: crate::TraitMountKind::Declaration, .. } | SignItem::Realization(_) => false,
         }
     }
 
@@ -1998,7 +1998,7 @@ fn validate_fp_expressions(
                     }
                     for item in items {
                         match item {
-                            SignItem::TraitMount { name: category, kind: crate::TraitMountKind::Declaration }
+                            SignItem::TraitMount { name: category, kind: crate::TraitMountKind::Declaration, .. }
                             | SignItem::TraitMount { name: category, .. }
                                 if !registry.has(category) =>
                             {
@@ -2854,6 +2854,7 @@ impl CompiledSystem {
                     .map(|name| SignItem::TraitMount {
                         name,
                         kind: crate::TraitMountKind::Declaration,
+                        args: vec![],
                     })
                     .collect(),
             };
@@ -3586,9 +3587,9 @@ impl CompiledSystem {
                     if !source
                         .items
                         .iter()
-                        .any(|item| matches!(item, SignItem::TraitMount { name: value, kind: crate::TraitMountKind::Declaration } if value == category))
+                        .any(|item| matches!(item, SignItem::TraitMount { name: value, kind: crate::TraitMountKind::Declaration, .. } if value == category))
                     {
-                        source.items.push(SignItem::TraitMount { name: category.clone(), kind: crate::TraitMountKind::Declaration });
+                        source.items.push(SignItem::TraitMount { name: category.clone(), kind: crate::TraitMountKind::Declaration, args: vec![] });
                     }
                 }
                 let (evaluation, membership_cases) =
@@ -3602,9 +3603,9 @@ impl CompiledSystem {
                     if !source
                         .items
                         .iter()
-                        .any(|item| matches!(item, SignItem::TraitMount { name: value, kind: crate::TraitMountKind::Declaration } if value == category))
+                        .any(|item| matches!(item, SignItem::TraitMount { name: value, kind: crate::TraitMountKind::Declaration, .. } if value == category))
                     {
-                        source.items.push(SignItem::TraitMount { name: category.clone(), kind: crate::TraitMountKind::Declaration });
+                        source.items.push(SignItem::TraitMount { name: category.clone(), kind: crate::TraitMountKind::Declaration, args: vec![] });
                     }
                 }
                 self.rebuild_applied_with_source(&token, source, stack, rules, records)

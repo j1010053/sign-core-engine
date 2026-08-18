@@ -27,6 +27,7 @@ fn lang_dump_golden_matches_patch05_sample() {
         name: "CorePhonology".into(),
         global: true,
         marker: false,
+        type_params: vec![],
         blocks: vec![
             Block {
                 items: vec![SignItem::Rule(r1)],
@@ -43,6 +44,7 @@ fn lang_dump_golden_matches_patch05_sample() {
         name: "VerbCommon".into(),
         global: false,
         marker: false,
+        type_params: vec![],
         blocks: vec![
             Block {
                 items: vec![
@@ -69,6 +71,7 @@ fn lang_dump_golden_matches_patch05_sample() {
             SignItem::TraitMount {
                 name: "VerbCommon".into(),
                 kind: conlang_language::TraitMountKind::Block(0),
+                args: vec![],
             },
             SignItem::Def(Def {
                 path: "phon".into(),
@@ -81,6 +84,7 @@ fn lang_dump_golden_matches_patch05_sample() {
             SignItem::TraitMount {
                 name: "VerbCommon".into(),
                 kind: conlang_language::TraitMountKind::Block(1),
+                args: vec![],
             },
             SignItem::Def(Def {
                 path: "entrenchment".into(),

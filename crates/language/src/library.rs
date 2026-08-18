@@ -1272,7 +1272,7 @@ fn validate_package_code(package: &LibraryPackage) -> Result<Language, LibraryLo
             for item in trait_def.blocks.iter().flat_map(|block| &block.items) {
                 if !matches!(
                     item,
-                    SignItem::TraitMount { name: _, kind: crate::TraitMountKind::Declaration }
+                    SignItem::TraitMount { name: _, kind: crate::TraitMountKind::Declaration, .. }
                         // `belongs X` 載入並確定 trait,`X[n]` 是具體的展開點
                         // ——**兩個語法形式指向同一份掛載**,`TraitUse` 不可能
                         // 獨立出現。白名單允許 `Belongs` 卻禁止 `TraitUse`,

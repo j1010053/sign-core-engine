@@ -272,12 +272,12 @@ fn perfect_goal_can_select_verb_to_bound_tense_marker() {
     assert!(evolved
         .items
         .iter()
-        .any(|item| matches!(item, SignItem::TraitMount { name: name, kind: conlang_language::TraitMountKind::Declaration } if name == "Bound")));
+        .any(|item| matches!(item, SignItem::TraitMount { name: name, kind: conlang_language::TraitMountKind::Declaration, .. } if name == "Bound")));
     assert!(
         !evolved
             .items
             .iter()
-            .any(|item| matches!(item, SignItem::TraitMount { name: name, kind: conlang_language::TraitMountKind::Declaration } if name == "MotionVerb")),
+            .any(|item| matches!(item, SignItem::TraitMount { name: name, kind: conlang_language::TraitMountKind::Declaration, .. } if name == "MotionVerb")),
         "舊範疇必須被取代,不是並存"
     );
     assert!(evolved.items.iter().any(|item| matches!(

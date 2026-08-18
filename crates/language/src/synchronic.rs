@@ -1332,7 +1332,7 @@ fn token_sign(token: &crate::construction::DerivedToken) -> SignDef {
         .filter(|item| {
             matches!(
                 item,
-                SignItem::TraitMount { name: _, kind: crate::TraitMountKind::Declaration }
+                SignItem::TraitMount { name: _, kind: crate::TraitMountKind::Declaration, .. }
                     | SignItem::Slot(_)
                     | SignItem::FeatureDecl(_)
                     | SignItem::RoleDecl(_)
@@ -1479,7 +1479,7 @@ pub fn run_token_dim_rules(
         .filter(|item| {
             matches!(
                 item,
-                SignItem::TraitMount { name: _, kind: crate::TraitMountKind::Declaration }
+                SignItem::TraitMount { name: _, kind: crate::TraitMountKind::Declaration, .. }
                     | SignItem::Slot(_)
                     | SignItem::FeatureDecl(_)
                     | SignItem::RoleDecl(_)

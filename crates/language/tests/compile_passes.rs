@@ -271,6 +271,7 @@ fn error_duplicate_names() {
         name: "T".into(),
         global: false,
         marker: false,
+        type_params: vec![],
         blocks: vec![Block::default()],
     };
     l.add_trait(t.clone());

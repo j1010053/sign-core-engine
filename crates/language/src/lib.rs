@@ -689,12 +689,22 @@ pub struct Block {
 /// - 一般 trait = 分類節點(`belongs` 建單一繼承樹)+ 可帶 dimension 內容(繼承給
 ///   後代,projection 解析)。`Name[n]` block-indexed macro(P5/P27)仍支援。
 ///   **無 `syn trait` 維度標記**(維度是內容面向,非分類樹)。
+/// P76:trait 型別參數。`trait Agreement<C: Nominal, T>:` 中的 `C: Nominal` 和 `T`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraitTypeParam {
+    pub name: String,
+    /// 上界:實例化時填入的範疇必須是此範疇的子範疇。`None` = 無約束(`[*]`)。
+    pub bound: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraitDef {
     pub name: String,
     pub global: bool,
     /// **純分類節點**(`marker trait`):承諾永不帶內容。見型別說明。
     pub marker: bool,
+    /// P76:型別參數列表。空 = 非泛型(今天的行為)。
+    pub type_params: Vec<TraitTypeParam>,
     pub blocks: Vec<Block>,
 }
 
@@ -797,6 +807,9 @@ pub enum SignItem {
     TraitMount {
         name: String,
         kind: TraitMountKind,
+        /// P76:型別實參。只有 `Declaration` 可帶實參(參數寫在 `belongs` 上);
+        /// `Whole`/`Block` 時為空,展開時回查同容器的 Declaration 取實參。
+        args: Vec<String>,
     },
     /// `slot NAME [Filler]`(可尾綴 `?` = optional;P41 valence=slots,I21)。
     /// 帶 ≥1 slot 的 sign = construction(P42);filler 是 syn ontology 範疇約束。

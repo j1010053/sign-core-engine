@@ -39,6 +39,15 @@ pub enum CompileError {
     DuplicateSign(String),
     #[error("trait expansion cycle in {sign:?}: {path}")]
     TraitExpansionCycle { sign: String, path: String },
+    #[error("sign {sign:?}: `belongs {name}` provides {given} type argument(s) but trait {name} expects {expected}")]
+    TypeParamArityMismatch {
+        sign: String,
+        name: String,
+        expected: usize,
+        given: usize,
+    },
+    #[error("trait {name:?} is a marker trait and cannot have type parameters")]
+    TypeParamOnMarkerTrait { name: String },
 }
 
 /// 全管線產物:各 stage 的 Language(皆可 dump)+ Trait 索引(Compile Artifact)。
@@ -142,6 +151,63 @@ fn find_trait<'a>(
         .find(|trait_def| trait_def.name == name)
 }
 
+/// P76:在項目向量中,把型別參數名替換為對應的實參。
+///
+/// 替換觸及 `SlotConstraint::Category`、`RoleDecl` constraint、
+/// 以及巢狀 `TraitMount::Declaration` 的 args(傳播)。
+fn substitute_type_params(items: &mut [SignItem], subst: &[(&str, &str)]) {
+    if subst.is_empty() {
+        return;
+    }
+    for item in items {
+        match item {
+            SignItem::Slot(slot) => {
+                if let crate::SlotConstraint::Category(ref mut cat) = slot.constraint {
+                    for &(param, arg) in subst {
+                        if cat.as_str() == param {
+                            *cat = arg.to_owned();
+                            break;
+                        }
+                    }
+                }
+            }
+            SignItem::RoleDecl(role) => {
+                if let crate::SlotConstraint::Category(ref mut cat) = role.constraint {
+                    for &(param, arg) in subst {
+                        if cat.as_str() == param {
+                            *cat = arg.to_owned();
+                            break;
+                        }
+                    }
+                }
+            }
+            SignItem::TraitMount { args, .. } => {
+                for a in args.iter_mut() {
+                    for &(param, arg) in subst {
+                        if a.as_str() == param {
+                            *a = arg.to_owned();
+                            break;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// P76:從同容器的 Declaration 中找出某個 trait 的型別實參。
+fn find_declaration_args<'a>(items: &'a [SignItem], trait_name: &str) -> Option<&'a [String]> {
+    for item in items {
+        if let SignItem::TraitMount { name, kind, args, .. } = item {
+            if kind.is_declaration() && name == trait_name {
+                return Some(args);
+            }
+        }
+    }
+    None
+}
+
 fn expand_item_sequence(
     src: &Language,
     externals: &[&Language],
@@ -167,7 +233,7 @@ fn expand_item_sequence_with(
 ) -> Result<Vec<SignItem>, CompileError> {
     let mut used: BTreeMap<&str, (bool, Vec<u32>)> = BTreeMap::new();
     for item in source {
-        if let SignItem::TraitMount { name, kind } = item {
+        if let SignItem::TraitMount { name, kind, .. } = item {
             // **宣告不進這張表。** 它不展開,故不參與完整性計算;更重要的是
             // 這張表的每個鍵稍後都會在 `src.traits` 裡查一次,而 `belongs` 指得到
             // **std 的 trait**(不在使用者語言裡)——把宣告放進來會讓每一個
@@ -218,7 +284,7 @@ fn expand_item_sequence_with(
             // **宣告原樣留下。** `belongs X` 是分類邊,不是展開對象——它必須
             // 活到 ②③④ 與 ontology 建樹那一刻。把它當成「展開出空集合」會讓
             // 分類邊在展開後消失,整棵 ontology 樹跟著垮。
-            SignItem::TraitMount { name, kind } if kind.is_declaration() => {
+            SignItem::TraitMount { name, kind, args, .. } if kind.is_declaration() => {
                 output.push(item.clone());
                 if !expand_declarations {
                     continue;
@@ -229,11 +295,22 @@ fn expand_item_sequence_with(
                 if active.iter().any(|candidate| candidate == name) {
                     continue;
                 }
-                let selected: Vec<SignItem> = trait_def
+                let mut selected: Vec<SignItem> = trait_def
                     .blocks
                     .iter()
                     .flat_map(|block| block.items.iter().cloned())
                     .collect();
+                if !trait_def.type_params.is_empty()
+                    && args.len() == trait_def.type_params.len()
+                {
+                    let subst: Vec<(&str, &str)> = trait_def
+                        .type_params
+                        .iter()
+                        .zip(args.iter())
+                        .map(|(p, a)| (p.name.as_str(), a.as_str()))
+                        .collect();
+                    substitute_type_params(&mut selected, &subst);
+                }
                 active.push(name.clone());
                 output.extend(expand_item_sequence_with(
                     src,
@@ -245,7 +322,7 @@ fn expand_item_sequence_with(
                 )?);
                 active.pop();
             }
-            SignItem::TraitMount { name, kind } => {
+            SignItem::TraitMount { name, kind, args: direct_args, .. } => {
                 if let Some(start) = active.iter().position(|candidate| candidate == name) {
                     let mut path = active[start..].to_vec();
                     path.push(name.clone());
@@ -259,8 +336,24 @@ fn expand_item_sequence_with(
                         sign: sign.to_owned(),
                         name: name.clone(),
                     })?;
-                let selected = match kind {
-                    // 上面那條 arm 已經接走,這裡不可能是宣告
+                // P76:取得型別實參——Declaration 的 args 或同容器 Declaration 的 args
+                let args: &[String] = if !direct_args.is_empty() {
+                    direct_args
+                } else {
+                    find_declaration_args(source, name).unwrap_or(&[])
+                };
+                // 驗證 arity
+                if !trait_def.type_params.is_empty() || !args.is_empty() {
+                    if args.len() != trait_def.type_params.len() {
+                        return Err(CompileError::TypeParamArityMismatch {
+                            sign: sign.to_owned(),
+                            name: name.clone(),
+                            expected: trait_def.type_params.len(),
+                            given: args.len(),
+                        });
+                    }
+                }
+                let mut selected = match kind {
                     crate::TraitMountKind::Declaration => Vec::new(),
                     crate::TraitMountKind::Whole => trait_def
                         .blocks
@@ -271,6 +364,16 @@ fn expand_item_sequence_with(
                         trait_def.blocks[*index as usize].items.clone()
                     }
                 };
+                // P76:參數替換
+                if !trait_def.type_params.is_empty() && !args.is_empty() {
+                    let subst: Vec<(&str, &str)> = trait_def
+                        .type_params
+                        .iter()
+                        .zip(args.iter())
+                        .map(|(p, a)| (p.name.as_str(), a.as_str()))
+                        .collect();
+                    substitute_type_params(&mut selected, &subst);
+                }
                 active.push(name.clone());
                 output.extend(expand_item_sequence_with(
                     src,
@@ -310,9 +413,13 @@ pub fn trait_view(
     externals: &[&Language],
     trait_name: &str,
 ) -> Result<Vec<SignItem>, CompileError> {
+    let args = find_trait(src, externals, trait_name)
+        .map(|t| t.type_params.iter().map(|p| p.name.clone()).collect())
+        .unwrap_or_default();
     let mount = SignItem::TraitMount {
         name: trait_name.to_owned(),
         kind: crate::TraitMountKind::Whole,
+        args,
     };
     expand_item_sequence_with(src, externals, trait_name, &[mount], &mut Vec::new(), true)
 }
@@ -445,7 +552,7 @@ pub fn compile_with(
     }
     for s in &src.signs {
         for it in &s.items {
-            if let SignItem::TraitMount { name, kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_) } = it {
+            if let SignItem::TraitMount { name, kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_), .. } = it {
                 let v = trait_index.entry(name.clone()).or_default();
                 if !v.contains(&s.name) {
                     v.push(s.name.clone());

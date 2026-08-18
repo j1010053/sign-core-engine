@@ -103,10 +103,10 @@ fn source_to_ast_shape() {
 
     let go = lang.sign_named("go").unwrap();
     assert!(
-        matches!(&go.items[0], SignItem::TraitMount { name, kind: conlang_language::TraitMountKind::Block(0) } if name == "VerbCommon")
+        matches!(&go.items[0], SignItem::TraitMount { name, kind: conlang_language::TraitMountKind::Block(0), .. } if name == "VerbCommon")
     );
     assert!(
-        matches!(&go.items[1], SignItem::TraitMount { name, kind: conlang_language::TraitMountKind::Block(1) } if name == "VerbCommon")
+        matches!(&go.items[1], SignItem::TraitMount { name, kind: conlang_language::TraitMountKind::Block(1), .. } if name == "VerbCommon")
     );
     assert!(go
         .items

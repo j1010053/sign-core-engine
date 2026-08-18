@@ -57,19 +57,96 @@ fn indent_of(raw: &str) -> usize {
     raw.chars().take_while(|c| *c == ' ').count()
 }
 
-/// 容器頭 `<kw> Name:` → (kw, name)?
+/// 容器頭 `<kw> Name:` 或 `<kw> Name<P1, P2>:` → (kw, name_with_params)?
+///
+/// name 部分可能帶角括號(P76 泛型 trait);呼叫端負責用
+/// [`split_type_params`] 拆出 base name 與參數列表。
 fn container_head(text: &str) -> Option<(&'static str, &str)> {
     for kw in ["global trait", "marker trait", "trait", "sign"] {
         if let Some(rest) = text.strip_prefix(kw) {
             if let Some(name) = rest.strip_suffix(':') {
                 let name = name.trim();
-                if !name.is_empty() && !name.contains(char::is_whitespace) {
+                if name.is_empty() {
+                    continue;
+                }
+                let base = match name.find('<') {
+                    Some(pos) => &name[..pos],
+                    None => name,
+                };
+                if !base.is_empty() && !base.contains(char::is_whitespace) {
                     return Some((kw, name));
                 }
             }
         }
     }
     None
+}
+
+/// P76:`Name<P1: Bound, P2>` → (base_name, params)。
+/// 無角括號時回傳空列表。
+fn split_type_params(name: &str, line: usize) -> Result<(&str, Vec<crate::TraitTypeParam>), ParseError> {
+    let Some(open) = name.find('<') else {
+        return Ok((name, vec![]));
+    };
+    let base = &name[..open];
+    let rest = &name[open + 1..];
+    let Some(inside) = rest.strip_suffix('>') else {
+        return Err(err(line, "unclosed `<` in type parameter list"));
+    };
+    let mut params = Vec::new();
+    for part in inside.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            return Err(err(line, "empty type parameter"));
+        }
+        if let Some((pname, bound)) = part.split_once(':') {
+            let pname = pname.trim();
+            let bound = bound.trim();
+            if !ident_ok(pname) {
+                return Err(err(line, format!("invalid type parameter name `{pname}`")));
+            }
+            if !ident_ok(bound) {
+                return Err(err(line, format!("invalid bound `{bound}`")));
+            }
+            params.push(crate::TraitTypeParam {
+                name: pname.to_owned(),
+                bound: Some(bound.to_owned()),
+            });
+        } else {
+            if !ident_ok(part) {
+                return Err(err(line, format!("invalid type parameter name `{part}`")));
+            }
+            params.push(crate::TraitTypeParam {
+                name: part.to_owned(),
+                bound: None,
+            });
+        }
+    }
+    Ok((base, params))
+}
+
+/// P76:`belongs Name<Arg1, Arg2>` → (name, args)。
+fn split_type_args(full: &str, line: usize) -> Result<(String, Vec<String>), ParseError> {
+    let Some(open) = full.find('<') else {
+        return Ok((full.to_owned(), vec![]));
+    };
+    let base = &full[..open];
+    let rest = &full[open + 1..];
+    let Some(inside) = rest.strip_suffix('>') else {
+        return Err(err(line, "unclosed `<` in type argument list"));
+    };
+    let mut args = Vec::new();
+    for part in inside.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            return Err(err(line, "empty type argument"));
+        }
+        if !ident_ok(part) {
+            return Err(err(line, format!("invalid type argument `{part}`")));
+        }
+        args.push(part.to_owned());
+    }
+    Ok((base.to_owned(), args))
 }
 
 fn is_language_head(text: &str) -> bool {
@@ -451,7 +528,7 @@ fn parse_typed_case(
                 index += 1;
                 continue;
             }
-            let Some(category) = belongs_target(&line.text, line.no)? else {
+            let Some((category, _args)) = belongs_target(&line.text, line.no)? else {
                 return Err(err(
                     line.no,
                     "only `belongs` may follow a Sign branch result",
@@ -540,16 +617,20 @@ fn ident_ok(s: &str) -> bool {
             .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
 }
 
-/// `belongs Name`。
-fn belongs_target(l: &str, line: usize) -> Result<Option<String>, ParseError> {
+/// `belongs Name` 或 `belongs Name<Arg1, Arg2>`(P76)。
+fn belongs_target(l: &str, line: usize) -> Result<Option<(String, Vec<String>)>, ParseError> {
     let Some(rest) = l.strip_prefix("belongs ") else {
         return Ok(None);
     };
-    let name = rest.trim();
-    if !ident_ok(name) {
+    let full = rest.trim();
+    if full.is_empty() {
+        return Err(err(line, "`belongs` expects a trait name"));
+    }
+    let (name, args) = split_type_args(full, line)?;
+    if !ident_ok(&name) {
         return Err(err(line, "`belongs` expects a single trait name"));
     }
-    Ok(Some(name.to_owned()))
+    Ok(Some((name, args)))
 }
 
 /// `name [Filler]` (+ optional `?`) → Slot(I21)。
@@ -1053,8 +1134,8 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                         expression: Expression::Case(Box::new(case)),
                     }));
                 index = next;
-            } else if let Some(t) = belongs_target(text, no)? {
-                blocks.last_mut().unwrap().items.push(SignItem::TraitMount { name: t, kind: crate::TraitMountKind::Declaration });
+            } else if let Some((name, args)) = belongs_target(text, no)? {
+                blocks.last_mut().unwrap().items.push(SignItem::TraitMount { name, kind: crate::TraitMountKind::Declaration, args });
             } else if let Some(dim) = DimKw::parse(text) {
                 cur_dim = Some(dim);
             } else if let Some((name, block)) = trait_use(text) {
@@ -1067,7 +1148,7 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                     .last_mut()
                     .unwrap()
                     .items
-                    .push(SignItem::TraitMount { name, kind });
+                    .push(SignItem::TraitMount { name, kind, args: vec![] });
             } else if !text.contains("=>")
                 && text
                     .split_once('=')
@@ -1764,9 +1845,9 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
                 lang.distribution
                     .push((k.trim().to_owned(), v.trim().to_owned()));
             }
-        } else if let Some((kw, name)) = container_head(&ln.text) {
+        } else if let Some((kw, name_raw)) = container_head(&ln.text) {
             let header_indent = ln.indent;
-            let name = name.to_owned();
+            let header_line = ln.no;
             i += 1;
             // 蒐集 body(縮排 > header 的非空行)
             let mut body: Vec<Line> = Vec::new();
@@ -1788,15 +1869,22 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
             let blocks = parse_body(&mut lang, &body)?;
             match kw {
                 "sign" => {
+                    if name_raw.contains('<') {
+                        return Err(err(header_line, "signs cannot have type parameters"));
+                    }
                     let items: Vec<SignItem> = blocks.into_iter().flat_map(|b| b.items).collect();
-                    lang.add_sign(name, items);
+                    lang.add_sign(name_raw.to_owned(), items);
                 }
-                _ => lang.add_trait(TraitDef {
-                    name,
-                    global: kw == "global trait",
-                    marker: kw == "marker trait",
-                    blocks,
-                }),
+                _ => {
+                    let (base_name, type_params) = split_type_params(name_raw, header_line)?;
+                    lang.add_trait(TraitDef {
+                        name: base_name.to_owned(),
+                        global: kw == "global trait",
+                        marker: kw == "marker trait",
+                        type_params,
+                        blocks,
+                    });
+                }
             }
         } else {
             return Err(err(ln.no, format!("unexpected line {:?}", ln.text)));

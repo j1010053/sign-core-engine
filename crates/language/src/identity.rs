@@ -760,7 +760,7 @@ fn item_kind(item: &SignItem) -> NodeKind {
     match item {
         SignItem::Pass => NodeKind::Pass,
         SignItem::TraitMount { kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_), .. } => NodeKind::TraitUse,
-        SignItem::TraitMount { name: _, kind: crate::TraitMountKind::Declaration } => NodeKind::Belongs,
+        SignItem::TraitMount { name: _, kind: crate::TraitMountKind::Declaration, .. } => NodeKind::Belongs,
         SignItem::Slot(_) => NodeKind::Slot,
         SignItem::SlotMap(_) => NodeKind::SlotMap,
         SignItem::FeatureDecl(_) => NodeKind::FeatureDeclaration,
@@ -1754,11 +1754,11 @@ fn collect_refs(language: &Language, entries: &[NodeEntryV1]) -> Vec<RefBindingV
             continue;
         };
         let binding = match item {
-            SignItem::TraitMount { name, kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_) } => Some((
+            SignItem::TraitMount { name, kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_), .. } => Some((
                 "trait_use.name".to_owned(),
                 reference_target(name, NodeKind::Trait, &traits),
             )),
-            SignItem::TraitMount { name: name, kind: crate::TraitMountKind::Declaration } => Some((
+            SignItem::TraitMount { name: name, kind: crate::TraitMountKind::Declaration, .. } => Some((
                 "belongs".to_owned(),
                 reference_target(name, NodeKind::Trait, &traits),
             )),

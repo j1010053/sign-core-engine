@@ -514,7 +514,7 @@ fn reorder_with_insert_and_delete_keeps_final_item_order() {
         PrimitiveEdit::Insert {
             parent: root,
             anchor: Anchor::Before(definitions[1].clone()),
-            subtree: DetachedNode::Item(conlang_language::SignItem::TraitMount { name: "D".to_owned(), kind: conlang_language::TraitMountKind::Declaration }),
+            subtree: DetachedNode::Item(conlang_language::SignItem::TraitMount { name: "D".to_owned(), kind: conlang_language::TraitMountKind::Declaration, args: vec![] }),
         },
         &LibrarySpec::default(),
     )
@@ -639,5 +639,42 @@ fn inserting_a_subtree_emits_one_insert_not_one_per_node() {
         edits.len(),
         1,
         "整棵子樹一次插入(承 P16「優先一次完整 Insert」):{edits:#?}"
+    );
+}
+
+#[test]
+fn belongs_type_args_roundtrip() {
+    let src = "trait Schema<C>:\n    pass\n\nsign Foo:\n    belongs Schema<Noun>\n    Schema\n";
+    let before = LanguageDocument::import_new_root(src, "evo:root").expect("parses");
+
+    let mut after_lang = before.language().clone();
+    for item in &mut after_lang.signs[0].items {
+        if let conlang_language::SignItem::TraitMount {
+            kind: conlang_language::TraitMountKind::Declaration,
+            args,
+            ..
+        } = item
+        {
+            args.clear();
+            args.push("Verb".to_owned());
+        }
+    }
+    let after = LanguageDocument::import_new_root(&after_lang.dump(), "evo:root").expect("re-parses");
+
+    assert_ne!(before.source(), after.source(), "precondition: sources differ");
+    let edits = reconstruct(&before, &after).expect("reconstruct");
+    assert!(!edits.is_empty(), "changing type args should produce edits");
+
+    let spec = LibrarySpec::default();
+    let mut replayed = before.clone();
+    for edit in &edits {
+        replayed = apply_edit(&replayed, edit.clone(), &spec)
+            .expect("replay")
+            .document;
+    }
+    assert_eq!(
+        replayed.source(),
+        after.source(),
+        "roundtrip: reconstructed edits must reproduce the target"
     );
 }
