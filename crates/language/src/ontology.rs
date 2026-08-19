@@ -47,6 +47,58 @@ pub struct TraitProvenance {
     pub precedence: usize,
 }
 
+/// 值項的合併鍵:泛型 `Def` 用路徑,`FeatureValue` 用 `dim.name`——兩者共用同一個
+/// 有效值命名空間(本地泛型賦值可以蓋掉繼承來的 typed 賦值,反之亦然)。
+fn value_key(item: &SignItem) -> String {
+    match item {
+        SignItem::Def(def) => def.path.clone(),
+        SignItem::FeatureValue(feature) => {
+            format!("{}.{}", feature.dim.keyword(), feature.name)
+        }
+        _ => unreachable!("effective value stream contains only values"),
+    }
+}
+
+/// 把一個項目併進累積器。
+///
+/// `sibling = true` 表示來源是**並列掛載的另一個包**:此時同路徑的兩個
+/// `FeatureValue` 取候選聯集(未定案),而不是挑一個贏家。`false` 表示來源是
+/// 本層自己寫的值,直接取代(P6:sign 顯式 / 本層宣告最高)。
+///
+/// 泛型 `Def` 沒有候選集合可以裝未定案,並列分歧時仍是後者勝——那條路上既有的
+/// `ONTOLOGY_DEF_CONFLICT_RESOLVED` warning 會報出來。
+fn merge_value(
+    acc: &mut BTreeMap<String, (usize, SignItem)>,
+    counter: &mut usize,
+    item: SignItem,
+    sibling: bool,
+) {
+    let key = value_key(&item);
+    *counter += 1;
+    let index = *counter;
+    match (acc.get_mut(&key), &item) {
+        (Some((_, SignItem::FeatureValue(kept))), SignItem::FeatureValue(incoming))
+            if sibling =>
+        {
+            for candidate in &incoming.values {
+                if !kept.values.contains(candidate) {
+                    kept.values.push(candidate.clone());
+                }
+            }
+        }
+        _ => {
+            acc.insert(key, (index, item));
+        }
+    }
+}
+
+/// 依插入序攤平累積器。
+fn flatten_values(acc: BTreeMap<String, (usize, SignItem)>) -> Vec<SignItem> {
+    let mut out: Vec<_> = acc.into_values().collect();
+    out.sort_by_key(|(index, _)| *index);
+    out.into_iter().map(|(_, item)| item).collect()
+}
+
 /// 單一分類樹 registry(P38 v0.2)。
 #[derive(Debug, Clone, Default)]
 pub struct OntologyRegistry {
@@ -477,6 +529,85 @@ impl OntologyRegistry {
         order
     }
 
+    /// 某 sign 繼承來的有效值(`Def` + `FeatureValue`),**逐包解析**。
+    ///
+    /// 每個直接掛載的 trait 先在自己那層解完(它的祖先鏈、它自己的覆寫),sign
+    /// 只看得到解完的包;於是「後代覆寫祖先」在包內部就結束了,不會冒到 sign
+    /// 這一層來假裝成兩個 trait 的分歧。
+    ///
+    /// 包與包之間對同一 feature 給不同值時取**候選聯集**(未定案),因為那多半
+    /// 不是矛盾而是這個 sign 在該維度本來就沒收斂——英語 *police* 同時是可數
+    /// 名詞(承繼 sg)與集合名詞(pl),而 *the police are* / *is* 的英美分歧
+    /// 正是這個未定案本身。挑一個贏家會把這個事實刪掉。
+    ///
+    /// 聯集可交換,所以**不需要任何優先序**(距離、書寫序、套件 priority)來裁
+    /// 並列的包誰贏。
+    pub fn inherited_values(&self, sign: &SignDef) -> Vec<SignItem> {
+        let mut memo = BTreeMap::new();
+        let mut acc = BTreeMap::new();
+        let mut counter = 0usize;
+        for mount in self.direct_mounts(sign) {
+            let mut stack = BTreeSet::new();
+            for item in self.resolve_node_values(&mount, &mut memo, &mut stack) {
+                merge_value(&mut acc, &mut counter, item, true);
+            }
+        }
+        flatten_values(acc)
+    }
+
+    /// sign 直接 `belongs` 的 trait,依書寫序。
+    fn direct_mounts(&self, sign: &SignDef) -> Vec<String> {
+        sign.items
+            .iter()
+            .filter_map(|item| match item {
+                SignItem::TraitMount {
+                    name,
+                    kind: crate::TraitMountKind::Declaration,
+                    ..
+                } if self.has(name) => Some(name.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// 解析單一 trait 節點的值包:先併入各祖先的包(並列取聯集),再套用本層
+    /// 自己寫的值(取代)。循環由 registry 的建構診斷負責報告,這裡只保證不會
+    /// 無限遞迴。
+    fn resolve_node_values(
+        &self,
+        name: &str,
+        memo: &mut BTreeMap<String, Vec<SignItem>>,
+        stack: &mut BTreeSet<String>,
+    ) -> Vec<SignItem> {
+        if let Some(cached) = memo.get(name) {
+            return cached.clone();
+        }
+        if !stack.insert(name.to_owned()) {
+            return Vec::new();
+        }
+        let mut acc = BTreeMap::new();
+        let mut counter = 0usize;
+        if let Some(node) = self.tree.get(name) {
+            for parent in &node.parents {
+                if !self.has(parent) {
+                    continue;
+                }
+                for item in self.resolve_node_values(parent, memo, stack) {
+                    merge_value(&mut acc, &mut counter, item, true);
+                }
+            }
+            for item in &node.items {
+                if matches!(item, SignItem::Def(_) | SignItem::FeatureValue(_)) {
+                    merge_value(&mut acc, &mut counter, item.clone(), false);
+                }
+            }
+        }
+        stack.remove(name);
+        let resolved = flatten_values(acc);
+        memo.insert(name.to_owned(), resolved.clone());
+        resolved
+    }
+
     /// Materialize inherited Def/slot/rule content for runtime evaluation.
     /// Classification markers stay local and remain queryable through the
     /// registry; inherited content is a compile artifact.
@@ -485,7 +616,9 @@ impl OntologyRegistry {
         // namespace.  Keep them in a single precedence stream so a local
         // generic assignment can beat an inherited typed assignment (and
         // vice versa) according to the normal inheritance order.
-        let mut inherited_values = Vec::new();
+        // 值走逐包解析(見 `inherited_values`);slot/rule/宣告等其餘內容仍走
+        // 閉包序,它們不是「同路徑選一個值」的問題,沒有這裡要解的分歧。
+        let inherited_values = self.inherited_values(sign);
         let mut inherited_slots = Vec::new();
         let mut inherited_slot_maps = Vec::new();
         let mut inherited_slot_features = Vec::new();
@@ -504,7 +637,8 @@ impl OntologyRegistry {
             if let Some(node) = self.node(&source.trait_name) {
                 for item in &node.items {
                     match item {
-                        SignItem::Def(def) => inherited_values.push(SignItem::Def(def.clone())),
+                        // Def/FeatureValue 已由 `inherited_values` 逐包解析,這裡不再收。
+                        SignItem::Def(_) => {}
                         SignItem::Slot(slot) => inherited_slots.push(slot.clone()),
                         SignItem::SlotMap(operation) => inherited_slot_maps.push(operation.clone()),
                         SignItem::SlotFeatureBinding(binding) => {
@@ -515,9 +649,7 @@ impl OntologyRegistry {
                             inherited_rules.push(SignItem::FeatureRule(rule.clone()))
                         }
                         SignItem::FeatureDecl(feature) => inherited_features.push(feature.clone()),
-                        SignItem::FeatureValue(feature) => {
-                            inherited_values.push(SignItem::FeatureValue(feature.clone()))
-                        }
+                        SignItem::FeatureValue(_) => {}
                         SignItem::FeatureExpression(expression) => {
                             inherited_feature_expressions.push(expression.clone())
                         }
@@ -605,23 +737,17 @@ impl OntologyRegistry {
             _ => None,
         });
 
-        let value_path = |item: &SignItem| match item {
-            SignItem::Def(def) => def.path.clone(),
-            SignItem::FeatureValue(feature) => {
-                format!("{}.{}", feature.dim.keyword(), feature.name)
-            }
-            _ => unreachable!("effective value stream contains only values"),
-        };
-        let mut values = BTreeMap::<String, (usize, SignItem)>::new();
-        for (index, item) in inherited_values
-            .into_iter()
-            .chain(local_values.cloned())
-            .enumerate()
-        {
-            values.insert(value_path(&item), (index, item));
+
+        // 繼承段已在 `inherited_values` 逐包解析完;本地值一律取代(P6 最高階)。
+        let mut value_acc = BTreeMap::new();
+        let mut value_counter = 0usize;
+        for item in inherited_values {
+            merge_value(&mut value_acc, &mut value_counter, item, false);
         }
-        let mut values: Vec<_> = values.into_values().collect();
-        values.sort_by_key(|(index, _)| *index);
+        for item in local_values.cloned() {
+            merge_value(&mut value_acc, &mut value_counter, item, false);
+        }
+        let values = flatten_values(value_acc);
 
         let mut slots = BTreeMap::<String, (usize, Slot)>::new();
         for (index, slot) in inherited_slots.into_iter().chain(local_slots).enumerate() {
@@ -738,7 +864,7 @@ impl OntologyRegistry {
             .collect();
         items.extend(senses.into_iter().map(|(_, sense)| SignItem::Sense(sense)));
         items.extend(sense_edges.into_iter().map(SignItem::SenseEdge));
-        items.extend(values.into_iter().map(|(_, item)| item));
+        items.extend(values);
         items.extend(slots.into_iter().map(|(_, slot)| SignItem::Slot(slot)));
         items.extend(
             slot_features
@@ -852,6 +978,50 @@ impl OntologyRegistry {
                     }),
             );
             for sign in &candidates {
+                // 未定案值域:並列掛載的 trait 對同一 feature 給了不同的值,已取
+                // 候選聯集。**這是合法狀態**(*fish* 單複同形、*police* 的英美
+                // 一致性分歧),所以是 Info 不是 Warning——它報告的是一個推導出來
+                // 的事實,不是要作者去修的缺陷。真要定案,在 sign 上顯式寫值即可
+                // (P6 最高階),或讓構式求交收斂。
+                for item in self.inherited_values(sign) {
+                    let SignItem::FeatureValue(feature) = item else {
+                        continue;
+                    };
+                    if !feature.is_undecided() {
+                        continue;
+                    }
+                    let path = format!("{}.{}", feature.dim.keyword(), feature.name);
+                    // sign 自己寫了值就已經定案(P6 最高階),繼承層的分歧已被取代
+                    // ——此時再報未定案是報一個不存在的狀態。
+                    let decided_locally = sign.items.iter().any(|item| match item {
+                        SignItem::FeatureValue(local) => {
+                            local.dim == feature.dim && local.name == feature.name
+                        }
+                        SignItem::Def(def) => def.path == path,
+                        _ => false,
+                    });
+                    if decided_locally {
+                        continue;
+                    }
+                    report.push(
+                        Diagnostic::new(
+                            Severity::Info,
+                            "FEATURE_UNRESOLVED_ACROSS_TRAITS",
+                            format!(
+                                "{} {path} is undecided across its mounted traits ({}); \
+                                 a construction can narrow it, or assign the value on the \
+                                 sign itself to decide it here",
+                                sign.name,
+                                feature.values.join(" | ")
+                            ),
+                        )
+                        .with_sources(vec![DiagnosticSource {
+                            owner: sign.name.clone(),
+                            path: Some(path),
+                            location: feature.source,
+                        }]),
+                    );
+                }
                 let order = self.inheritance_order(sign);
                 for dim in Dim::all() {
                     let mut by_path: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
@@ -877,11 +1047,32 @@ impl OntologyRegistry {
                             }
                         }
                     }
+                    // winner 必須取自**實際的合併結果**,不能自己用閉包序再算一次。
+                    // 值走的是逐包解析(`inherited_values`),與這裡的攤平序不是同
+                    // 一套;各算各的會讓警告報 X、引擎實際用 Y。
+                    let effective: BTreeMap<String, String> = self
+                        .inherited_values(sign)
+                        .into_iter()
+                        .chain(sign.items.iter().cloned())
+                        .filter_map(|item| match item {
+                            SignItem::Def(def) => Some((def.path, def.value)),
+                            _ => None,
+                        })
+                        .collect();
                     for (path, sources) in by_path {
                         let distinct: BTreeSet<_> =
                             sources.iter().map(|(_, value)| value).collect();
                         if sources.len() > 1 && distinct.len() > 1 {
-                            let (winner_owner, winner_value) = sources.last().expect("non-empty");
+                            let fallback = sources.last().expect("non-empty").clone();
+                            let winner_value = effective.get(&path).unwrap_or(&fallback.1);
+                            // owner 取最後一個「值與實際結果相同」的來源,讓訊息
+                            // 裡的值與出處指向同一件事。
+                            let winner_owner = sources
+                                .iter()
+                                .rev()
+                                .find(|(_, value)| value == winner_value)
+                                .map(|(owner, _)| owner)
+                                .unwrap_or(&fallback.0);
                             let mut provenance: Vec<_> = sources
                                 .iter()
                                 .rev()

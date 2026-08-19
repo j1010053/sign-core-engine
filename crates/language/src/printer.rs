@@ -399,8 +399,11 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                         }
                         SignItem::FeatureValue(feature) if feature.dim == parsed_dim => {
                             out.push_str(&format!(
+                                // 已定案(len==1)印回原樣 → 未用到多值的套件其
+                                // canonical form 逐位元不變,library lock digest 不動。
                                 "            {} = {}\n",
-                                feature.name, feature.value
+                                feature.name,
+                                feature.values.join(" | ")
                             ));
                         }
                         SignItem::FeatureRule(rule) if rule.dim == parsed_dim => {

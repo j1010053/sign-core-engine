@@ -362,7 +362,9 @@ Matched/Unmatched/Error(P43)、每維規則只改自己那維(P44)。
 projection。`crates/language/ontology.rs` 的 `OntologyRegistry` 自一組 Language 建成
 一棵分類樹；phon/syn/sem/prag 是正交內容投影，不各建同名分類樹。**最小本體 =
 額外引用的 stdlib `.lang`**；`std_ontology()`/`with_std()` 保持相容。`belongs` 閉包
-菱形去重、循環安全，有效內容依遠祖→近祖、同距離後寫 `belongs`、本地最後決議；
+菱形去重、循環安全；**值合併走逐包解析(I28)**——每個直接 `belongs` 的 trait
+先在自己那層解完，sign 只看到解完的包，並列包對同一 feature 分歧時取**候選聯集**
+(未定案值域，`FeatureValue.values`)，決議留給構式求交，sign 顯式最高(P6)；
 與 `Name[n]` macro 並存分工。建構期診斷涵蓋未知目標、循環、重名、Def winner
 provenance 與 slot conflict。出口見 `tests/ontology.rs` 與 M1++ 封板矩陣。
 

@@ -290,12 +290,42 @@ pub struct FeatureDecl {
 
 /// A typed feature value. Unlike a generic [`Def`], this is only valid when a
 /// matching [`FeatureDecl`] is visible on the effective sign.
+///
+/// **值域,不是宣告域。**`FeatureDecl.values` 說「哪些值合法」(型別,作者寫的
+/// schema);這裡的 `values` 說「這個主體實際是哪幾個」,恆為宣告域的子集。
+///
+/// * `len == 1` — 已定案,等同舊的單值語意。
+/// * `len >= 2` — **未定案值域**:此主體在該維度尚未收斂,候選就是這幾個。
+///   來源有二:作者直寫(`number = singular | plural`,如單複同形的 *fish*),
+///   或投影時多個掛載 trait 給了不同的值而取聯集。決議留給構式——同一個 sign
+///   在不同構式中收斂到不同的值,是語言事實而非錯誤,所以這裡不靠優先序挑一個
+///   贏家(挑了就把事實刪掉了)。
+///
+/// 空集合不合法:「沒有值」由**不寫這個項目**表示,那條路歸 P75 的 `?` 管。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeatureValue {
     pub dim: Dim,
     pub name: String,
-    pub value: String,
+    pub values: Vec<String>,
     pub source: SourceLocation,
+}
+
+impl FeatureValue {
+    /// 已定案時回傳那個唯一的值;未定案(`len >= 2`)回 `None`。
+    ///
+    /// 下游凡是「非得有一個值才能繼續」的地方都該走這裡,而不是 `values[0]`
+    /// ——取 `[0]` 會把未定案默默當成已定案,正是這個型別要擋掉的事。
+    pub fn decided(&self) -> Option<&str> {
+        match self.values.as_slice() {
+            [only] => Some(only),
+            _ => None,
+        }
+    }
+
+    /// 未定案 = 候選多於一個。
+    pub fn is_undecided(&self) -> bool {
+        self.values.len() > 1
+    }
 }
 
 /// A construction-local binding for a `syn` feature on one of its slots.

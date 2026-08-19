@@ -1178,13 +1178,21 @@ fn validate_typed_schemas(
                         location: value.source,
                     }]),
                 ),
-                Some(declaration) if !declaration.values.contains(&value.value) => report.push(
+                // 值域必須整個落在宣告域內:未定案(多候選)時每一個候選都要合法,
+                // 否則「留給構式決議」會把一個非法值一路帶到構式層才爆。
+                Some(declaration)
+                    if value
+                        .values
+                        .iter()
+                        .any(|candidate| !declaration.values.contains(candidate)) =>
+                {
+                    report.push(
                     Diagnostic::new(
                         Severity::Error,
                         "FEATURE_VALUE_OUT_OF_DOMAIN",
                         format!(
                             "{owner:?} assigns {:?} outside enum({}) for {}.{}",
-                            value.value,
+                            value.values.join(" | "),
                             declaration.values.join(", "),
                             value.dim.keyword(),
                             value.name
@@ -1195,7 +1203,8 @@ fn validate_typed_schemas(
                         path: Some(format!("{}.{}", value.dim.keyword(), value.name)),
                         location: value.source,
                     }]),
-                ),
+                    )
+                }
                 Some(_) => {}
             }
         }
@@ -3089,11 +3098,13 @@ impl CompiledSystem {
                 source_sign: sign.clone(),
                 context: DerivationContext::new(),
             });
-            let base = Self::scalar_from_value(
+            // 未定案原樣輸出:值域照傳,收斂留給構式。中途 Error 反而會把
+            // 「這個 sign 在此維度尚未收斂」這個事實擋在構式看得到它之前。
+            let base = Self::value_set_from_value(
                 &current,
                 &format!("{}.{}", dim.keyword(), expression.name),
             )
-            .map(str::to_owned);
+            .map(|values| values.join(" | "));
             let selected = self.evaluate_feature_case(
                 &current,
                 case,
@@ -3201,21 +3212,30 @@ impl CompiledSystem {
         Ok(true)
     }
 
-    fn scalar_from_value<'a>(value: &'a SignValue, path: &str) -> Option<&'a str> {
+    /// 讀出某路徑的**值域**。回 `Vec` 而不是單值,是因為 feature 的值本來就可能
+    /// 未定案(`len >= 2`)——把「是哪幾個」壓成一個 scalar 的動作必須發生在呼叫端,
+    /// 由呼叫端按自己的語意決定:產值處原樣傳遞,布林判定處拒答。
+    fn value_set_from_value(value: &SignValue, path: &str) -> Option<Vec<String>> {
         match value {
             SignValue::Stored(evaluation) => {
+                // 先定位最後一個相符項,再取值——不能在 `find_map` 裡對未定案回
+                // `None`,那會讓搜尋繼續往前,靜默拿到更早的某個值。未定案就是
+                // 沒有 scalar,必須在這裡停下。
                 evaluation
                     .sign
                     .items
                     .iter()
                     .rev()
-                    .find_map(|item| match item {
-                        SignItem::Def(def) if def.path == path => Some(def.value.as_str()),
-                        SignItem::FeatureValue(feature)
-                            if format!("{}.{}", feature.dim.keyword(), feature.name) == path =>
-                        {
-                            Some(feature.value.as_str())
+                    .find(|item| match item {
+                        SignItem::Def(def) => def.path == path,
+                        SignItem::FeatureValue(feature) => {
+                            format!("{}.{}", feature.dim.keyword(), feature.name) == path
                         }
+                        _ => false,
+                    })
+                    .and_then(|item| match item {
+                        SignItem::Def(def) => Some(vec![def.value.clone()]),
+                        SignItem::FeatureValue(feature) => Some(feature.values.clone()),
                         _ => None,
                     })
             }
@@ -3226,18 +3246,18 @@ impl CompiledSystem {
                         .syn
                         .iter()
                         .find(|(candidate, _)| candidate == path)
-                        .map(|(_, value)| value.as_str()),
-                    Dim::Sem => token.sem.features.get(field).map(String::as_str),
+                        .map(|(_, value)| vec![value.clone()]),
+                    Dim::Sem => token.sem.features.get(field).map(|v| vec![v.clone()]),
                     Dim::Prag => token
                         .prag
                         .iter()
                         .find(|(candidate, _)| candidate == path)
-                        .map(|(_, value)| value.as_str()),
+                        .map(|(_, value)| vec![value.clone()]),
                     Dim::Phon => token
                         .phon
                         .iter()
                         .find(|(candidate, _)| candidate == path)
-                        .map(|(_, value)| value.as_str()),
+                        .map(|(_, value)| vec![value.clone()]),
                 }
             }
         }
@@ -3255,7 +3275,17 @@ impl CompiledSystem {
             .trim()
             .strip_prefix("$self.")
             .unwrap_or(scrutinee.trim());
-        Ok(Self::scalar_from_value(value, scrutinee) == Some(expected))
+        // 對未定案的值問「等不等於 X」沒有答案。回 `false` 會說出「fish 不是單數」
+        // 這種錯話;回 `true` 會讓 `== singular` 和 `== plural` 兩個分支同時成立、
+        // 由分支順序默默決定贏家——那正是這套設計要消掉的東西。
+        match Self::value_set_from_value(value, scrutinee) {
+            Some(values) if values.len() > 1 => Err(SystemError::InvalidSignExpression(format!(
+                "{scrutinee} is undecided ({}); decide it on the sign or let a construction \
+                 narrow it before testing it with `==`",
+                values.join(" | ")
+            ))),
+            other => Ok(other.as_deref() == Some(std::slice::from_ref(&expected.to_owned()))),
+        }
     }
 
     fn contextual_base_sign(&self, evaluation: &SignEvaluation) -> Result<SignDef, SystemError> {

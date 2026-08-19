@@ -225,18 +225,18 @@ sign walk:
         matches!(item, SignItem::FeatureValue(value)
             if value.dim == Dim::Syn
                 && value.name == "inflection"
-                && value.value == "third")
+                && value.decided() == Some("third"))
     }));
     assert!(stored.sign.items.iter().any(
         |item| matches!(item, SignItem::Def(def) if def.path == "phon" && def.value == "/walks/")
     ));
     assert!(stored.sign.items.iter().any(|item| {
         matches!(item, SignItem::FeatureValue(value)
-            if value.dim == Dim::Sem && value.name == "exponent" && value.value == "third_singular")
+            if value.dim == Dim::Sem && value.name == "exponent" && value.decided() == Some("third_singular"))
     }));
     assert!(stored.sign.items.iter().any(|item| {
         matches!(item, SignItem::FeatureValue(value)
-            if value.dim == Dim::Prag && value.name == "selected" && value.value == "yes")
+            if value.dim == Dim::Prag && value.name == "selected" && value.decided() == Some("yes"))
     }));
 
     let unmatched = system
@@ -320,7 +320,7 @@ fn when_guards_share_one_frozen_pre_merge_snapshot() {
     };
     let feature = |name: &str| {
         stored.sign.items.iter().rev().find_map(|item| match item {
-            SignItem::FeatureValue(value) if value.name == name => Some(value.value.as_str()),
+            SignItem::FeatureValue(value) if value.name == name => Some(value.decided().unwrap_or_default()),
             _ => None,
         })
     };
@@ -336,11 +336,11 @@ fn when_guards_share_one_frozen_pre_merge_snapshot() {
     );
     assert!(stored.sign.items.iter().any(|item| {
         matches!(item, SignItem::FeatureValue(value)
-            if value.dim == Dim::Sem && value.name == "selected" && value.value == "semantic")
+            if value.dim == Dim::Sem && value.name == "selected" && value.decided() == Some("semantic"))
     }));
     assert!(stored.sign.items.iter().any(|item| {
         matches!(item, SignItem::FeatureValue(value)
-            if value.dim == Dim::Prag && value.name == "licensed" && value.value == "yes")
+            if value.dim == Dim::Prag && value.name == "licensed" && value.decided() == Some("yes"))
     }));
 
     let syn_records = evaluated
@@ -393,7 +393,7 @@ fn when_else_uses_the_same_external_default_policy() {
     };
     assert!(stored.sign.items.iter().rev().any(|item| {
         matches!(item, SignItem::FeatureValue(value)
-            if value.name == "result" && value.value == "fallback")
+            if value.name == "result" && value.decided() == Some("fallback"))
     }));
 }
 
@@ -442,7 +442,7 @@ sign atomic:
     let unchanged = system.evaluate_sign("atomic").unwrap();
     assert!(unchanged.sign.items.iter().rev().any(|item| {
         matches!(item, SignItem::FeatureValue(value)
-            if value.name == "outcome" && value.value == "base")
+            if value.name == "outcome" && value.decided() == Some("base"))
     }));
 }
 
@@ -527,7 +527,7 @@ fn sign_context_fragment_is_checked_as_a_typed_sign_body() {
     };
     assert!(evaluated.sign.items.iter().rev().any(|item| {
         matches!(item, SignItem::FeatureValue(value)
-            if value.name == "mode" && value.value == "b")
+            if value.name == "mode" && value.decided() == Some("b"))
     }));
 }
 

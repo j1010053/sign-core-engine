@@ -1178,6 +1178,12 @@ fn slot_feature_source(value: &str) -> Option<(&str, &str)> {
     }
 }
 
+/// 把投影出來的值拆成候選集合。未定案的 `FeatureValue` 在投影裡是
+/// `"singular | plural"`,已定案就是單一候選。
+fn value_candidates(raw: &str) -> Vec<&str> {
+    raw.split('|').map(str::trim).collect()
+}
+
 fn validate_occurrence_feature(
     slot: &str,
     feature: &str,
@@ -1608,23 +1614,36 @@ fn apply_occurrence_constraints(
         let mut constrained = base;
         for (feature, value) in constraints {
             let path = format!("syn.{feature}");
-            if let Some(actual) = constrained
+            let actual = constrained
                 .project(Dim::Syn, reg)
                 .defs
                 .iter()
                 .find(|(candidate, _)| candidate == &path)
-                .map(|(_, value)| value)
-            {
-                if actual != value {
-                    return Err(CxgError::SlotFeatureConflict {
-                        slot: slot.to_owned(),
-                        feature: feature.clone(),
-                        expected: value.clone(),
-                        actual: actual.clone(),
-                    });
+                .map(|(_, value)| value.clone());
+            match actual {
+                // 構式的要求與 filler 的值域**求交**。
+                //
+                // filler 未定案時(`"singular | plural"`),交集非空就是這個構式
+                // 把它收斂了——同一個 sign 在不同構式裡收斂到不同的值,正是
+                // *the police are* / *is*、*fish*(單複同形)這類語言事實,所以
+                // 收斂結果只寫進構式局部的副本,不回寫已存的 sign。
+                Some(actual) => {
+                    let candidates = value_candidates(&actual);
+                    if !candidates.contains(&value.as_str()) {
+                        return Err(CxgError::SlotFeatureConflict {
+                            slot: slot.to_owned(),
+                            feature: feature.clone(),
+                            expected: value.clone(),
+                            actual,
+                        });
+                    }
+                    if candidates.len() > 1 {
+                        constrained = Patch::syn().set(feature, value).apply(&constrained);
+                    }
                 }
-            } else {
-                constrained = Patch::syn().set(feature, value).apply(&constrained);
+                None => {
+                    constrained = Patch::syn().set(feature, value).apply(&constrained);
+                }
             }
         }
         let (evaluated, records) = evaluate_occurrence_sign(&constrained, reg)?;

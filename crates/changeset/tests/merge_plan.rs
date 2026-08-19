@@ -66,7 +66,7 @@ fn category_of(document: &LanguageDocument, id: &NodeId) -> Option<String> {
         conlang_language::SignItem::FeatureValue(value)
             if value.dim == conlang_language::Dim::Syn && value.name == "category" =>
         {
-            Some(value.value.clone())
+            Some(value.values.join(" | "))
         }
         _ => None,
     })

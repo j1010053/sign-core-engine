@@ -1425,7 +1425,9 @@ fn update_payload(
         (NodeKind::FeatureValue, NodeUpdate::FeatureAssignment(value)) => {
             // 只動值:維度與特徵名是這個節點的身分,改名要走 rename 通道。
             match item_at_address_mut(language, &node.address)? {
-                SignItem::FeatureValue(existing) => existing.value = value,
+                // `.chg` 的 `value = "X"` 維持既有語意:設成單元素值域(已定案)。
+                // 多候選的未定案值域走整節點替換 `NodeUpdate::FeatureValue`。
+                SignItem::FeatureValue(existing) => existing.values = vec![value],
                 _ => {
                     return Err(EditError::FieldMismatch(
                         "node is not a feature assignment".to_owned(),

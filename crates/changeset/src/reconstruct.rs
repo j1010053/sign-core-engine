@@ -1032,7 +1032,7 @@ fn item_updates(before: &SignItem, after: &SignItem) -> Result<Vec<NodeUpdate>, 
             }
         }
         (SignItem::FeatureValue(old), SignItem::FeatureValue(new)) => {
-            if old.dim != new.dim || old.name != new.name || old.value != new.value {
+            if old.dim != new.dim || old.name != new.name || old.values != new.values {
                 updates.push(NodeUpdate::FeatureValue(new.clone()));
             }
         }

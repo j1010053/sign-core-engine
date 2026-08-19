@@ -1349,8 +1349,23 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                         "`?` marks an optional feature *declaration* (`NAME = enum(...)?`), not an assignment",
                     ));
                 }
-                if !ident_ok(value) {
-                    return Err(err(no, "feature value must be a single enum identifier"));
+                // 值域:`NAME = VALUE` 是已定案,`NAME = A | B` 是**未定案值域**
+                // (候選為這幾個,留給構式收斂)。`|` 在本語言其餘語法與整個
+                // stdlib 語料中都未出現,故不與既有寫法相撞。
+                let values = value
+                    .split('|')
+                    .map(str::trim)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                if values.iter().any(|value| !ident_ok(value)) {
+                    return Err(err(
+                        no,
+                        "feature value must be an enum identifier, or `A | B` for an undecided value set",
+                    ));
+                }
+                let mut unique = std::collections::BTreeSet::new();
+                if values.iter().any(|value| !unique.insert(value.clone())) {
+                    return Err(err(no, "feature value alternatives must be unique"));
                 }
                 blocks
                     .last_mut()
@@ -1359,7 +1374,7 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                     .push(SignItem::FeatureValue(FeatureValue {
                         dim: dim.to_dim(),
                         name: name.to_owned(),
-                        value: value.to_owned(),
+                        values,
                         source: SourceLocation::line(no),
                     }));
             }

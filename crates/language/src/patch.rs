@@ -229,7 +229,7 @@ pub fn apply(sign: &SignDef, patch: &Patch) -> SignDef {
                 });
                 if let Some(feature) = typed {
                     s.items.push(SignItem::FeatureValue(FeatureValue {
-                        value: value.clone(),
+                        values: vec![value.clone()],
                         ..feature
                     }));
                 } else {
@@ -264,7 +264,7 @@ fn local_dim_values(sign: &SignDef, dim: Dim) -> BTreeMap<String, String> {
             SignItem::FeatureValue(feature) if feature.dim == dim => {
                 out.insert(
                     format!("{}.{}", dim.keyword(), feature.name),
-                    feature.value.clone(),
+                    feature.values.join(" | "),
                 );
             }
             _ => {}
