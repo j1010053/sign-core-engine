@@ -980,6 +980,8 @@ impl TraitDef {
     pub fn content_eq(&self, other: &TraitDef) -> bool {
         self.name == other.name
             && self.global == other.global
+            && self.marker == other.marker
+            && self.type_params == other.type_params
             && self.blocks.len() == other.blocks.len()
             && self
                 .blocks
