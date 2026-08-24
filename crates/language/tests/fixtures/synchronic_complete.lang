@@ -55,11 +55,11 @@ sign NP:
             licensing_register = enum(general)
             licensing_register = general
     phon:
-        /{det}{head}{tail}/
+        /{$slot.det}{$slot.head}{$slot.tail}/
     sem:
         roles:
             profile [*]
-            profile = {head}
+            profile = {$slot.head}
         feature:
             concept = enum(DEFINITE, DOG, DEFINITE_NP)
             concept = DEFINITE_NP

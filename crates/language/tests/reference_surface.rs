@@ -1,0 +1,156 @@
+//! `$` 引用在 `.lang` 表面的契約:**主體一律顯式**。
+//!
+//! 曾經有三種裸寫法(constraint 運算元、case scrutinee 讀 slot、case
+//! scrutinee 讀自己),主體靠「首段是不是維度關鍵字」猜。本檔釘住那些寫法
+//! 現在都被擋在入口,而顯式形照常運作。
+
+use conlang_language::{compile_system, Language};
+
+/// 兩個 slot、一個 phon 模板。`phon_tail` 縮排在 `phon:` 之下
+/// (realization case 住那裡),`sign_tail` 在 sign 層(constraints 住那裡)。
+fn source(phon_tail: &str, sign_tail: &str) -> String {
+    format!(
+        r#"Symbol a
+Symbol b
+
+trait RefEntity:
+    syn:
+        feature:
+            number = enum(singular, plural)
+
+sign one:
+    belongs RefEntity
+    phon:
+        /a/
+
+sign two:
+    belongs RefEntity
+    phon:
+        /b/
+
+sign pair:
+    belongs RefEntity
+    syn:
+        slots:
+            head [RefEntity]
+            tail [RefEntity]
+    phon:
+        /{{$slot.head}}{{$slot.tail}}/
+{phon_tail}{sign_tail}"#
+    )
+}
+
+fn compiles(phon_tail: &str, sign_tail: &str) -> Result<(), String> {
+    let language =
+        Language::parse(&source(phon_tail, sign_tail)).map_err(|error| error.to_string())?;
+    compile_system(language)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// `realization:` 底下一個以 `scrutinee` 為判準的 phon case。
+fn realization(scrutinee: &str) -> String {
+    format!(
+        "        realization:\n            case {scrutinee}:\n                == RefEntity:\n                    /{{$slot.head}}/\n                else:\n                    /{{$slot.head}}{{$slot.tail}}/\n"
+    )
+}
+
+// ── constraint 運算元 ────────────────────────────────────────────────────
+
+#[test]
+fn an_explicit_constraint_operand_compiles() {
+    compiles(
+        "",
+        "    constraints:\n        before($slot.head, $slot.tail)\n",
+    )
+    .expect("顯式形合法");
+    compiles(
+        "",
+        "    constraints:\n        equal($slot.head.syn.number, $slot.tail.syn.number)\n",
+    )
+    .expect("顯式欄位運算元合法");
+}
+
+#[test]
+fn a_bare_constraint_operand_is_rejected() {
+    compiles("", "    constraints:\n        before(head, tail)\n").expect_err("裸運算元不得再通過");
+}
+
+#[test]
+fn a_bare_field_constraint_operand_is_rejected() {
+    compiles(
+        "",
+        "    constraints:\n        equal(head.syn.number, tail.syn.number)\n",
+    )
+    .expect_err("裸欄位運算元不得再通過");
+}
+
+// ── case scrutinee ──────────────────────────────────────────────────────
+
+#[test]
+fn an_explicit_scrutinee_compiles() {
+    compiles(&realization("$slot.head.phon"), "").expect("`$slot.NAME.phon` 合法");
+}
+
+/// scrutinee 讀 slot 的**非 phon 欄位**——與 `$self.<dim>.<field>` 對稱。
+///
+/// 這一形先前不成立,但那是實作債而非規格:`FillerSnapshot` 一直帶著各維的
+/// 純量欄位,只是 scrutinee 沒去讀。沒有任何規格規定 scrutinee 只收 `.phon`。
+#[test]
+fn a_slot_scrutinee_may_read_a_scalar_field_not_only_phon() {
+    let source = source(
+        "",
+        "    syn:\n        feature:\n            outcome = enum(hit, miss)\n            outcome =>\n",
+    );
+    // 直接組一份 construction:讀 filler 的 syn.number 決定自己的 outcome。
+    let source = source.replace(
+        "            outcome =>\n",
+        "            outcome =>\n                case $slot.head.syn.number:\n                    == singular:\n                        hit\n                    else:\n                        miss\n",
+    );
+    let language = Language::parse(&source).expect("parse");
+    compile_system(language).expect("`$slot.NAME.syn.FIELD` 應為合法 scrutinee");
+}
+
+#[test]
+fn a_bare_slot_scrutinee_is_rejected() {
+    compiles(&realization("head.phon"), "").expect_err("裸 slot scrutinee 不得再通過");
+}
+
+/// 首段猜測消失的直接後果:一個**叫 `syn` 的 slot** 不再被靜默讀成
+/// 自己的 syn 維——因為根本沒有「省略主體」這回事了。
+#[test]
+fn a_slot_named_after_a_dimension_is_addressable() {
+    let source = source(&realization("$slot.syn.phon"), "")
+        .replace(
+            "            head [RefEntity]",
+            "            syn [RefEntity]",
+        )
+        .replace("{$slot.head}", "{$slot.syn}");
+    let language = Language::parse(&source).expect("parse");
+    compile_system(language).expect("`$slot.syn` 就是那個 slot,不是自己的 syn 維");
+}
+
+// ── canonical ───────────────────────────────────────────────────────────
+
+#[test]
+fn the_explicit_spelling_survives_a_round_trip() {
+    let source = source(
+        "",
+        "    constraints:\n        before($slot.head, $slot.tail)\n        equal($slot.head.syn.number, $slot.tail.syn.number)\n",
+    );
+    let language = Language::parse(&source).expect("parse");
+    let canonical = language.dump();
+    assert!(
+        canonical.contains("before($slot.head, $slot.tail)"),
+        "{canonical}"
+    );
+    assert!(
+        canonical.contains("equal($slot.head.syn.number, $slot.tail.syn.number)"),
+        "{canonical}"
+    );
+    assert_eq!(
+        Language::parse(&canonical).expect("re-parse").dump(),
+        canonical,
+        "不動點"
+    );
+}

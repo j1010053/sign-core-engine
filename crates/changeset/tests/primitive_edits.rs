@@ -70,21 +70,21 @@ sign wrap:
         slots:
             value [*]
     phon:
-        /{value}+w/
+        /{$slot.value}+w/
 
 sign alt:
     syn:
         slots:
             value [*]
     phon:
-        /{value}+a/
+        /{$slot.value}+a/
 
 sign outer:
     syn:
         slots:
             value [*]
     phon:
-        /<{value}>/
+        /<{$slot.value}>/
 
 sign atom:
     belongs Atom
@@ -106,9 +106,9 @@ sign sequence:
             left [*]
             right [*]
     phon:
-        /{left} {right}/
+        /{$slot.left} {$slot.right}/
     constraints:
-        before(left, right)
+        before($slot.left, $slot.right)
 "#;
 
 fn v2_document() -> LanguageDocument {
@@ -678,7 +678,7 @@ fn v2_typed_updates_preserve_case_application_and_constraint_identity() {
     assert!(constraint_update
         .document
         .source()
-        .contains("adjacent(left, right)"));
+        .contains("adjacent($slot.left, $slot.right)"));
 }
 
 #[test]
@@ -1036,7 +1036,7 @@ fn diff_observes_projection_and_interpolation_wrapper_changes() {
         slots:
             value [*]
     phon:
-        /{value}/
+        /{$slot.value}/
 
 sign root:
     phon:
@@ -1092,7 +1092,7 @@ sign wrap:
         slots:
             value [*]
     phon:
-        /{value}/
+        /{$slot.value}/
 
 sign target:
     belongs LocalEntity
@@ -1101,16 +1101,16 @@ sign target:
             subject [LocalEntity]
             object [LocalEntity]
     phon:
-        /{subject} {object}/
+        /{$slot.subject} {$slot.object}/
     sem:
         roles:
             agent [LocalEntity]
-            agent = {subject}
+            agent = {$slot.subject}
     constraints:
-        before(subject, object)
+        before($slot.subject, $slot.object)
     case:
         $slot.subject == [LocalEntity]:
-            wrap({subject})
+            wrap({$slot.subject})
         else:
             $self
 
@@ -1145,11 +1145,11 @@ sign caller:
     let source = renamed.document.source();
     for expected in [
         "actor [LocalEntity]",
-        "/{actor} {object}/",
-        "agent = {actor}",
-        "before(actor, object)",
+        "/{$slot.actor} {$slot.object}/",
+        "agent = {$slot.actor}",
+        "before($slot.actor, $slot.object)",
         "$slot.actor == [LocalEntity]:",
-        "wrap({actor})",
+        "wrap({$slot.actor})",
         "target(actor: {$self})",
     ] {
         assert!(source.contains(expected), "missing rewritten {expected:?}");
@@ -1183,9 +1183,9 @@ sign target:
             subject [LocalEntity]
             object [LocalEntity]
     phon:
-        /{subject} {object}/
+        /{$slot.subject} {$slot.object}/
     constraints:
-        equal($slot.subject.syn.number, object.syn.number)
+        equal($slot.subject.syn.number, $slot.object.syn.number)
 "#,
         "evo:slot-rename-sigil",
     )
@@ -1205,7 +1205,7 @@ sign target:
 
     let source = renamed.document.source();
     assert!(
-        source.contains("equal($slot.actor.syn.number, object.syn.number)"),
+        source.contains("equal($slot.actor.syn.number, $slot.object.syn.number)"),
         "顯式 `$slot.` 運算元必須跟著改名:\n{source}"
     );
     assert!(
@@ -1225,7 +1225,7 @@ fn trait_slot_rename_stops_at_an_intermediate_shadow() {
 trait Pass:
     belongs Base
     phon:
-        /p{subject}/
+        /p{$slot.subject}/
 
 trait Shadow:
     belongs Base
@@ -1233,12 +1233,12 @@ trait Shadow:
         slots:
             subject [*]
     phon:
-        /s{subject}/
+        /s{$slot.subject}/
 
 trait Leaf:
     belongs Shadow
     phon:
-        /l{subject}/
+        /l{$slot.subject}/
 "#,
         "evo:trait-slot-shadow",
     )
@@ -1263,10 +1263,10 @@ trait Leaf:
     );
     let source = renamed.document.source();
     assert!(source.contains("actor [*]"));
-    assert!(source.contains("/p{actor}/"));
+    assert!(source.contains("/p{$slot.actor}/"));
     assert!(source.contains("subject [*]"));
-    assert!(source.contains("/s{subject}/"));
-    assert!(source.contains("/l{subject}/"));
+    assert!(source.contains("/s{$slot.subject}/"));
+    assert!(source.contains("/l{$slot.subject}/"));
 }
 
 #[test]
@@ -1280,7 +1280,7 @@ sign wrap:
         slots:
             value [*]
     phon:
-        /{value}/
+        /{$slot.value}/
 
 sign atom:
     belongs Atom

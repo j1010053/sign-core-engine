@@ -38,8 +38,8 @@ trait DeterminationConstruction:
         roles:
             specifier [*]
             referent [Entity]
-            specifier = {determiner}
-            referent = {nominal}
+            specifier = {$slot.determiner}
+            referent = {$slot.nominal}
 
 trait NumberMarkingConstruction:
     belongs FormMeaningConstruction
@@ -51,8 +51,8 @@ trait NumberMarkingConstruction:
         roles:
             referent [Entity]
             marker [Semantic]?
-            referent = {nominal}
-            marker = {marker}
+            referent = {$slot.nominal}
+            marker = {$slot.marker}
 
 trait AttributionConstruction:
     belongs FormMeaningConstruction
@@ -64,8 +64,8 @@ trait AttributionConstruction:
         roles:
             property [*]
             referent [Entity]
-            property = {attribute}
-            referent = {nominal}
+            property = {$slot.attribute}
+            referent = {$slot.nominal}
 
 trait PossessionConstruction:
     belongs FormMeaningConstruction
@@ -77,8 +77,8 @@ trait PossessionConstruction:
         roles:
             possessor [Entity]
             possessed [Entity]
-            possessor = {possessor}
-            possessed = {possessed}
+            possessor = {$slot.possessor}
+            possessed = {$slot.possessed}
 
 trait AdpositionConstruction:
     belongs FormMeaningConstruction
@@ -90,8 +90,8 @@ trait AdpositionConstruction:
         roles:
             relation [Relation]
             ground [Entity]
-            relation = {marker}
-            ground = {complement}
+            relation = {$slot.marker}
+            ground = {$slot.complement}
 
 trait IntransitiveClauseConstruction:
     belongs FormMeaningConstruction
@@ -103,8 +103,8 @@ trait IntransitiveClauseConstruction:
         roles:
             actor [Entity]
             event [Event]
-            actor = {subject}
-            event = {predicate}
+            actor = {$slot.subject}
+            event = {$slot.predicate}
 
 trait TransitiveClauseConstruction:
     belongs FormMeaningConstruction
@@ -118,9 +118,9 @@ trait TransitiveClauseConstruction:
             agent [Entity]
             event [Event]
             patient [Entity]
-            agent = {subject}
-            event = {predicate}
-            patient = {object}
+            agent = {$slot.subject}
+            event = {$slot.predicate}
+            patient = {$slot.object}
 
 /* General copular predication, including property predicates. GB117 is
    narrower: its behavioral evidence concerns predicate nominals. */
@@ -135,8 +135,8 @@ trait CopularPredicationConstruction:
         roles:
             topic [Entity]
             predication [*]
-            topic = {subject}
-            predication = {predicate}
+            topic = {$slot.subject}
+            predication = {$slot.predicate}
 
 /* GB117-compatible abstract behavior. Required, optional, and zero-copula
    strategies are distinct construction schemas; the GB117 value alone does
@@ -151,8 +151,8 @@ trait PredicateNominalConstruction:
         roles:
             topic [Entity]
             predication [Entity]
-            topic = {subject}
-            predication = {predicate}
+            topic = {$slot.subject}
+            predication = {$slot.predicate}
 
 trait RequiredCopulaPredicateNominal:
     belongs PredicateNominalConstruction
@@ -180,7 +180,7 @@ trait NegationConstruction:
             polarity = negative
         roles:
             scope [Event]
-            scope = {predicate}
+            scope = {$slot.predicate}
 
 trait PolarQuestionConstruction:
     belongs FormMeaningConstruction
@@ -190,7 +190,7 @@ trait PolarQuestionConstruction:
     sem:
         roles:
             proposition [Event]
-            proposition = {clause}
+            proposition = {$slot.clause}
     prag:
         illocution = polar-question
 
@@ -207,9 +207,9 @@ trait PassiveConstruction:
             patient [Entity]
             event [Event]
             agent [Entity]?
-            patient = {patient}
-            event = {predicate}
-            agent = {agent}
+            patient = {$slot.patient}
+            event = {$slot.predicate}
+            agent = {$slot.agent}
 
 trait SerialPredicateConstruction:
     belongs FormMeaningConstruction
@@ -221,5 +221,5 @@ trait SerialPredicateConstruction:
         roles:
             first_event [Event]
             second_event [Event]
-            first_event = {first}
-            second_event = {second}
+            first_event = {$slot.first}
+            second_event = {$slot.second}

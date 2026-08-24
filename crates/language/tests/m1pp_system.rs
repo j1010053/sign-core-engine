@@ -49,8 +49,8 @@ sign Clause:
         roles:
             actor [*]
             action [*]?
-            actor = {subject}
-            action = {predicate}
+            actor = {$slot.subject}
+            action = {$slot.predicate}
         feature:
             frame = enum(event, occurrence)
             frame = event
@@ -60,7 +60,7 @@ sign Clause:
             register = enum(neutral, formal)
             register => neutral
     phon:
-        /{subject}{predicate}/
+        /{$slot.subject}{$slot.predicate}/
         o => u
 
 sign Wrapper:
@@ -71,9 +71,9 @@ sign Wrapper:
     sem:
         roles:
             content [*]
-            content = {clause}
+            content = {$slot.clause}
     phon:
-        /x{clause}/
+        /x{$slot.clause}/
 "#;
 
 #[test]
@@ -152,7 +152,7 @@ sign Phrase:
             left [*]
             right [*]
     phon:
-        /{left} {right}/
+        /{$slot.left} {$slot.right}/
         p => b / _ ## b @stage phrase
 "#;
     let system = compile_system(Language::parse(source).unwrap()).unwrap();
@@ -404,7 +404,7 @@ sign C:
             missed => no / [Known]
             broken => no / [Ghost]
     phon:
-        /{item}/
+        /{$slot.item}/
 "#;
     let language = Language::parse(source).unwrap();
     let (registry, ontology_diags) = ontology::with_std(&language);
@@ -489,7 +489,7 @@ sign atom:
 sign C:
     belongs Near
     phon:
-        /{item}/
+        /{$slot.item}/
 "#;
     let system = compile_system(Language::parse(source).unwrap()).unwrap();
     let token = system
@@ -531,7 +531,7 @@ sign atom:
 sign C:
     belongs ReadingChild
     phon:
-        /{item}/
+        /{$slot.item}/
 "#;
     let system = compile_system(Language::parse(source).unwrap()).unwrap();
     let derived = system

@@ -18,17 +18,17 @@ sign RenameTarget:
         slots:
             renamed [AliasAtom]
     phon:
-        /{renamed}/
+        /{$slot.renamed}/
 
 sign AliasSource:
     syn:
         slots:
             original [AliasAtom]
     phon:
-        /{original}/
+        /{$slot.original}/
     case:
         else:
-            RenameTarget(renamed: {original})
+            RenameTarget(renamed: {$slot.original})
 
 sign seed:
     phon:
@@ -95,7 +95,7 @@ sign Wrapper:
             value [BoundAtom]
             helper [BoundAtom]
     phon:
-        /{value}{helper}/
+        /{$slot.value}{$slot.helper}/
 
 sign Outer:
     syn:
@@ -108,10 +108,10 @@ sign Outer:
         slot_features:
             head.mark = marked
     phon:
-        /{head}{tail}{auto}/
+        /{$slot.head}{$slot.tail}{$slot.auto}/
     case:
         else:
-            Wrapper(value: {head}, helper: {auto})
+            Wrapper(value: {$slot.head}, helper: {$slot.auto})
 "#,
     )
     .unwrap();
@@ -183,7 +183,7 @@ sign Faulty:
                     $self.syn.trigger == on:
                         yes
     phon:
-        /{value}/
+        /{$slot.value}/
 "#,
     )
     .unwrap();
@@ -226,7 +226,7 @@ sign Good:
         feature:
             mode = enum(on, off)
     phon:
-        /{value}/
+        /{$slot.value}/
 
 sign FixedOff:
     belongs SelectableConstruction
@@ -237,7 +237,7 @@ sign FixedOff:
             mode = enum(on, off)
             mode = off
     phon:
-        /{value}/
+        /{$slot.value}/
 "#,
     )
     .unwrap();
@@ -305,7 +305,7 @@ sign NeedsMarked:
         slot_features:
             target.case = marked
     phon:
-        /{target}/
+        /{$slot.target}/
 
 sign Current:
     belongs CaseBearer
@@ -315,7 +315,7 @@ sign Current:
         feature:
             case = plain
     phon:
-        /{value}/
+        /{$slot.value}/
     case:
         $self == [CaseBearer]:
             NeedsMarked(target: {$self})
@@ -362,7 +362,7 @@ sign Wrapper:
         slots:
             value [*]
     phon:
-        /{value}/
+        /{$slot.value}/
 
 sign seed:
     belongs EvaluateOnce
@@ -419,7 +419,7 @@ sign Wrapper:
         slot_features:
             value.mark = marked
     phon:
-        /{value}/
+        /{$slot.value}/
 
 sign seed:
     belongs Contextual

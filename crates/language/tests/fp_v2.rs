@@ -27,13 +27,13 @@ sign en_3sg:
         slots:
             stem [TestVerb]
     phon:
-        /{stem}+s/
+        /{$slot.stem}+s/
         realization:
-            case stem.phon:
+            case $slot.stem.phon:
                 == SibilantFinal:
-                    /{stem}+es/
+                    /{$slot.stem}+es/
                 else:
-                    /{stem}+s/
+                    /{$slot.stem}+s/
 
 sign walk:
     belongs TestVerb
@@ -60,7 +60,7 @@ fn v2_round_trip_keeps_context_typed_case() {
     let parsed = Language::parse(FP_SOURCE).expect("V2 source parses");
     let canonical = parsed.dump();
     assert_eq!(Language::parse(&canonical).unwrap().dump(), canonical);
-    assert!(canonical.contains("case stem.phon:"));
+    assert!(canonical.contains("case $slot.stem.phon:"));
     assert!(canonical.contains("en_3sg({$self})"));
 }
 
@@ -327,7 +327,7 @@ sign atomic:
                 feature:
                     outcome = second
     phon:
-        /{subject}/
+        /{$slot.subject}/
 "#,
         )
         .unwrap(),
@@ -564,11 +564,11 @@ sign Agreement:
             subject [TestNominal]
             predicate [TestNominal]
     phon:
-        /{subject} {predicate}/
+        /{$slot.subject} {$slot.predicate}/
     constraints:
-        equal(subject.syn.number, predicate.syn.number)
-        before(subject, predicate)
-        adjacent(subject, predicate)
+        equal($slot.subject.syn.number, $slot.predicate.syn.number)
+        before($slot.subject, $slot.predicate)
+        adjacent($slot.subject, $slot.predicate)
 "#,
     )
     .unwrap();
@@ -624,7 +624,7 @@ sign Pairing:
         feature:
             selected => $slot.second.syn.mark
     phon:
-        /{first} {second}/
+        /{$slot.first} {$slot.second}/
 
 sign seed:
     belongs Piece
@@ -687,7 +687,7 @@ sign Inner:
         slots:
             stem [NestedPiece]
     phon:
-        /{stem}/
+        /{$slot.stem}/
 
 sign Pair:
     syn:
@@ -695,7 +695,7 @@ sign Pair:
             left [*]
             right [*]
     phon:
-        /{left} {right}/
+        /{$slot.left} {$slot.right}/
 
 sign seed:
     phon:
@@ -752,7 +752,7 @@ sign A:
         slots:
             value [Atom]
     phon:
-        /a {value}/
+        /a {$slot.value}/
 
 sign B:
     belongs CompetingConstruction
@@ -761,7 +761,7 @@ sign B:
         slots:
             value [Atom]
     phon:
-        /b {value}/
+        /b {$slot.value}/
 "#,
     )
     .unwrap();
@@ -886,7 +886,7 @@ sign Suffix:
         slots:
             base [OuterCategory]
     phon:
-        /{base}!/
+        /{$slot.base}!/
 
 sign Outer:
     belongs OuterCategory
@@ -894,7 +894,7 @@ sign Outer:
         slots:
             stem [ProjectionAtom]
     phon:
-        /{stem}/
+        /{$slot.stem}/
         realization:
             case:
                 $self == [OuterCategory]:
@@ -925,7 +925,7 @@ sign Wrapper:
         slots:
             value [*]
     phon:
-        /{value}/
+        /{$slot.value}/
 
 sign root:
     belongs Atom
@@ -951,7 +951,7 @@ sign root:
         slots:
             value [*]
     phon:
-        /{value}/
+        /{$slot.value}/
     case:
         else:
             B({$self})
@@ -961,7 +961,7 @@ sign B:
         slots:
             value [*]
     phon:
-        /{value}/
+        /{$slot.value}/
     case:
         else:
             A({$self})
@@ -1031,11 +1031,11 @@ sign Chooser:
             agent =
                 case:
                     $self.syn.selection == first:
-                        {first}
+                        {$slot.first}
                     else:
-                        {second}
+                        {$slot.second}
     phon:
-        /{first} {second}/
+        /{$slot.first} {$slot.second}/
 "#,
     )
     .unwrap();
@@ -1095,7 +1095,7 @@ sign MissingDefault:
                     $self.syn.trigger == on:
                         yes
     phon:
-        /{value}/
+        /{$slot.value}/
 "#,
     )
     .unwrap();
@@ -1139,7 +1139,7 @@ sign Prefix:
             committed = enum(no, yes)
             committed => yes
     phon:
-        /pre {base}/
+        /pre {$slot.base}/
 
 sign Root:
     syn:
@@ -1148,7 +1148,7 @@ sign Root:
         feature:
             apply = enum(no, yes)
     phon:
-        /{value}/
+        /{$slot.value}/
     case:
         $self.syn.apply == yes:
             Prefix({$self})
@@ -1345,21 +1345,21 @@ sign NestedChoice:
                     $self.syn.trigger == on:
                         case:
                             else:
-                                {value}
+                                {$slot.value}
                     else:
-                        {value}
+                        {$slot.value}
     phon:
-        /{value}/
+        /{$slot.value}/
         realization:
             case:
                 $self.syn.trigger == on:
                     case:
                         $self.syn.trigger == on:
-                            /x {value}/
+                            /x {$slot.value}/
                         else:
                             /never/
                 else:
-                    /{value}/
+                    /{$slot.value}/
 "#,
     )
     .unwrap();
@@ -1418,14 +1418,14 @@ sign Wrapper:
         slots:
             base [*]
     phon:
-        /wrapped {base}/
+        /wrapped {$slot.base}/
 
 sign Root:
     syn:
         slots:
             value [NestedAtom]
     phon:
-        /{value}/
+        /{$slot.value}/
     case:
         else:
             case:
@@ -1482,7 +1482,7 @@ sign Holder:
         slots:
             item [CaseUnit]
     phon:
-        /{item}/
+        /{$slot.item}/
 "#,
     )
     .unwrap();
@@ -1525,12 +1525,12 @@ trait EnrichedContract:
     sem:
         roles:
             theme [ContractEntity]
-            theme = {adjunct}
+            theme = {$slot.adjunct}
     phon:
         realization:
             case:
                 $self.syn.committed == yes:
-                    /{adjunct}/
+                    /{$slot.adjunct}/
 
 sign seed:
     belongs ContractAtom
@@ -1547,7 +1547,7 @@ sign Wrapper:
         slots:
             stem [ContractAtom]
     phon:
-        /{stem}/
+        /{$slot.stem}/
 
 sign stored_root:
     belongs ContractAtom

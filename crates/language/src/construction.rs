@@ -631,77 +631,43 @@ fn phon_value(sign: &SignDef) -> String {
         .unwrap_or_default()
 }
 
-/// `{slot}` 代入 + 字面素材直通。未填的鍵代入空(飽和性由呼叫端先驗)。
+/// `{$slot.NAME}` 代入 + 字面素材直通。未填的鍵代入空(飽和性由呼叫端先驗)。
 fn substitute(template: &str, filled: &[(String, String)]) -> String {
-    let lookup = |name: &str| {
-        filled
-            .iter()
-            .find(|(k, _)| k == name)
-            .map(|(_, v)| v.as_str())
-            .unwrap_or("")
-    };
-    let mut out = String::new();
-    let mut chars = template.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '{' {
-            let mut name = String::new();
-            for c2 in chars.by_ref() {
-                if c2 == '}' {
-                    break;
-                }
-                name.push(c2);
-            }
-            out.push_str(lookup(name.trim()));
-        } else {
-            out.push(c);
-        }
-    }
-    out
+    reference::substitute_interpolations(template, |found| {
+        let name = found.slot()?;
+        Some(
+            filled
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+                .unwrap_or_default(),
+        )
+    })
 }
 
+/// 同上,但**未填的鍵原樣保留**——未飽和的 Sign 之後還要再代一次。
 fn substitute_symbolic(template: &str, filled: &[(String, String)]) -> String {
-    let mut out = String::new();
-    let mut chars = template.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '{' {
-            let mut name = String::new();
-            for c2 in chars.by_ref() {
-                if c2 == '}' {
-                    break;
-                }
-                name.push(c2);
-            }
-            if let Some((_, value)) = filled.iter().find(|(key, _)| key == name.trim()) {
-                out.push_str(value);
-            } else {
-                out.push('{');
-                out.push_str(name.trim());
-                out.push('}');
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
+    reference::substitute_interpolations(template, |found| {
+        let name = found.slot()?;
+        filled
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.clone())
+    })
 }
 
 /// 模板引用的 slot 名集合(驗證用)。
 fn template_refs(template: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut chars = template.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '{' {
-            let mut name = String::new();
-            for c2 in chars.by_ref() {
-                if c2 == '}' {
-                    break;
-                }
-                name.push(c2);
-            }
-            out.push(name.trim().to_owned());
-        }
-    }
-    out
+    reference::scan_interpolations(template)
+        .iter()
+        .map(|found| {
+            found
+                .slot()
+                .map(str::to_owned)
+                // 內容不是合法引用時保留原文,讓驗證端指得出是哪一處。
+                .unwrap_or_else(|| found.inner.clone())
+        })
+        .collect()
 }
 
 fn ident_ok(name: &str) -> bool {
@@ -976,7 +942,7 @@ fn committed_bound_filler(material: &FillerMaterial) -> Result<BoundFiller, CxgE
 }
 
 fn feature_operand(source: &str) -> Option<(String, String)> {
-    let reference = reference::parse(&reference::OPTIONAL_SLOT_SYN_FEATURE, source).ok()?;
+    let reference = reference::parse(&reference::SLOT_SYN_FEATURE, source).ok()?;
     Some((reference.slot()?.to_owned(), reference.path.clone()?))
 }
 
@@ -1058,16 +1024,23 @@ fn validate_binary_constraints(
                 }
             }
             ConstraintPredicate::Before | ConstraintPredicate::Adjacent => {
-                for name in [&constraint.left, &constraint.right] {
-                    if !slot_exists(name) {
-                        return Err(CxgError::ConstraintUnknownSlot(name.clone()));
+                let mut names = Vec::with_capacity(2);
+                for operand in [&constraint.left, &constraint.right] {
+                    let name = reference::parse(&reference::CONSTRAINT_SLOT, operand)
+                        .ok()
+                        .and_then(|read| read.slot().map(str::to_owned))
+                        .ok_or_else(|| CxgError::ConstraintUnknownSlot(operand.clone()))?;
+                    if !slot_exists(&name) {
+                        return Err(CxgError::ConstraintUnknownSlot(name));
                     }
+                    names.push(name);
                 }
+                let (left_slot, right_slot) = (names[0].clone(), names[1].clone());
                 if constraint.predicate == ConstraintPredicate::Before {
-                    before_edges.push((constraint.left.clone(), constraint.right.clone()));
+                    before_edges.push((left_slot.clone(), right_slot.clone()));
                 }
-                let left = order.iter().position(|name| name == &constraint.left);
-                let right = order.iter().position(|name| name == &constraint.right);
+                let left = order.iter().position(|name| name == &left_slot);
+                let right = order.iter().position(|name| name == &right_slot);
                 let (Some(left), Some(right)) = (left, right) else {
                     // Missing optional/required variables remain residual on
                     // the Sign and are checked at its concrete boundary.
@@ -1081,8 +1054,8 @@ fn validate_binary_constraints(
                 if !satisfied {
                     return Err(CxgError::ConstraintOrderConflict {
                         predicate: constraint.predicate.keyword(),
-                        left: constraint.left.clone(),
-                        right: constraint.right.clone(),
+                        left: left_slot,
+                        right: right_slot,
                         template: template.to_owned(),
                     });
                 }
@@ -1168,12 +1141,11 @@ fn validate_occurrence_feature(
     Ok(())
 }
 
+/// 依**已解析的**欄位路徑(`<dim>.<field>`)查 token 的純量值。
+/// 這裡不是引用位置——主體早在呼叫端就決定了,故不經 `reference`。
 fn token_scalar<'a>(token: &'a DerivedToken, path: &str) -> Option<&'a str> {
-    let read = reference::parse(&reference::SELF_SCALAR, path).ok()?;
-    let field = read.path.as_deref()?;
-    let path = &read.dim_path()?;
-    let path = path.as_str();
-    match read.dim? {
+    let (dimension, field) = path.split_once('.')?;
+    match Dim::parse(dimension)? {
         Dim::Phon => token
             .phon
             .iter()
@@ -1232,25 +1204,41 @@ fn token_case_condition_matches(
             let scrutinee = case.scrutinee.as_deref().ok_or_else(|| {
                 TokenExpressionError::Invalid("equality case is missing its scrutinee".to_owned())
             })?;
-            let scrutinee = reference::strip_legacy_self_prefix(scrutinee);
-            // 與 `CompiledSystem::case_equals_matches` 同一判準:只有 slot 的
-            // phon 投影走範疇比對,其餘走純量欄位。
-            if let Some(slot) = reference::parse(&reference::SCRUTINEE, scrutinee)
-                .ok()
-                .filter(|read| read.dim == Some(Dim::Phon) && read.path.is_none())
-                .and_then(|read| read.slot().map(str::to_owned))
-            {
-                let Some(filler) = token.fillers.iter().find(|filler| filler.slot == slot) else {
-                    return Ok(false);
-                };
-                if !reg.has(expected) {
-                    return Err(TokenExpressionError::Invalid(format!(
-                        "unknown case category {expected:?}"
-                    )));
+            // 與 `CompiledSystem::case_equals_matches` 同一判準。
+            let read = reference::parse(&reference::SCRUTINEE, scrutinee).map_err(|error| {
+                TokenExpressionError::Invalid(format!("case scrutinee {scrutinee:?}: {error}"))
+            })?;
+            match (&read.subject, read.dim, read.path.as_deref()) {
+                // 填充者的**範疇**比對(本體樹成員關係)。
+                (reference::Subject::Slot(slot), Some(Dim::Phon), None) => {
+                    let Some(filler) = token.fillers.iter().find(|filler| &filler.slot == slot)
+                    else {
+                        return Ok(false);
+                    };
+                    if !reg.has(expected) {
+                        return Err(TokenExpressionError::Invalid(format!(
+                            "unknown case category {expected:?}"
+                        )));
+                    }
+                    Ok(reg.categories_satisfy(&filler.categories, expected))
                 }
-                return Ok(reg.categories_satisfy(&filler.categories, expected));
+                // 填充者的純量欄位,與 `$self` 對稱。
+                (reference::Subject::Slot(slot), Some(dim), Some(path)) => {
+                    let Some(filler) = token.fillers.iter().find(|filler| &filler.slot == slot)
+                    else {
+                        return Ok(false);
+                    };
+                    Ok(filler.scalar(dim, path) == Some(expected))
+                }
+                (reference::Subject::SelfSign, _, _) => {
+                    let path = read.dim_path().expect("SCRUTINEE requires a dimension");
+                    Ok(token_scalar(token, &path) == Some(expected))
+                }
+                _ => Err(TokenExpressionError::Invalid(format!(
+                    "case scrutinee {scrutinee:?} needs a field: `$slot.NAME.DIM.FIELD` \
+                     (or `$slot.NAME.phon` to compare the filler's category)"
+                ))),
             }
-            Ok(token_scalar(token, scrutinee) == Some(expected))
         }
     }
 }
@@ -1984,7 +1972,7 @@ fn resolve_sem(
                         slot: slot_name.to_owned(),
                     });
                 }
-                if let Some((_, filler)) = filler_nodes.iter().find(|(key, _)| key == slot_name) {
+                if let Some((_, filler)) = filler_nodes.iter().find(|(key, _)| *key == slot_name) {
                     node.roles.push((field, filler.clone()));
                 }
                 // 引用未填(optional/部分)→ role 暫略

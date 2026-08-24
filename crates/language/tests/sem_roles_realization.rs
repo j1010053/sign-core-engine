@@ -76,20 +76,20 @@ sign TestCountTransfer:
         feature:
             number => $self.syn.number / $self == [TestTransferFrame]
         roles:
-            agent = {agent}
-            theme = {theme}
+            agent = {$slot.agent}
+            theme = {$slot.theme}
     prag:
         feature:
             realized-number = enum(singular, plural)
             realized-number => $self.sem.number
     phon:
-        /{agent}{theme}/
+        /{$slot.agent}{$slot.theme}/
         realization:
             case:
                 $self.syn.number == plural:
-                    /{agent}{theme}s/
+                    /{$slot.agent}{$slot.theme}s/
                 else:
-                    /{agent}{theme}/
+                    /{$slot.agent}{$slot.theme}/
 
 sign FixedCountForm:
     syn:
@@ -99,7 +99,7 @@ sign FixedCountForm:
             number = enum(singular, plural)
             number = singular
     phon:
-        /{stem}/
+        /{$slot.stem}/
 "#
     .replace("{SEMANTIC_PARENT}", semantic_parent())
 }

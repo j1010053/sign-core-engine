@@ -47,7 +47,7 @@ fn an_unknown_trait_names_the_package_that_exports_it() {
 #[test]
 fn an_unknown_slot_category_names_the_package_too() {
     let message = message_for(
-        "sign C:\n    syn:\n        slots:\n            x [EnglishCaseBearer]\n    phon:\n        /{x}/\n",
+        "sign C:\n    syn:\n        slots:\n            x [EnglishCaseBearer]\n    phon:\n        /{$slot.x}/\n",
         "EnglishCaseBearer",
     );
     assert!(message.contains("natural:en-standard"), "{message}");
@@ -57,7 +57,7 @@ fn an_unknown_slot_category_names_the_package_too() {
 #[test]
 fn an_unknown_role_constraint_names_the_package_too() {
     let message = message_for(
-        "sign C:\n    syn:\n        slots:\n            x [*]\n    sem:\n        roles:\n            r [EnglishCaseBearer]\n            r = {x}\n    phon:\n        /{x}/\n",
+        "sign C:\n    syn:\n        slots:\n            x [*]\n    sem:\n        roles:\n            r [EnglishCaseBearer]\n            r = {$slot.x}\n    phon:\n        /{$slot.x}/\n",
         "EnglishCaseBearer",
     );
     assert!(message.contains("natural:en-standard"), "{message}");

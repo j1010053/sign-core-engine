@@ -225,10 +225,11 @@ fn parse_expression(
         if let Some(slot) = source
             .strip_prefix('{')
             .and_then(|value| value.strip_suffix('}'))
-            .map(str::trim)
+            .and_then(|inner| reference::parse(&reference::SUBJECT_ONLY, inner).ok())
+            .and_then(|read| read.slot().map(str::to_owned))
         {
-            if ident_ok(slot) {
-                return Ok(Expression::Slot(slot.to_owned()));
+            {
+                return Ok(Expression::Slot(slot));
             }
         }
     }
@@ -1379,12 +1380,18 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                     index = next;
                     continue;
                 }
-                let Some(slot) = value.strip_prefix('{').and_then(|v| v.strip_suffix('}')) else {
-                    return Err(err(no, "role binding must be `NAME = {slot}`"));
+                let slot = value
+                    .strip_prefix('{')
+                    .and_then(|v| v.strip_suffix('}'))
+                    .and_then(|inner| reference::parse(&reference::SUBJECT_ONLY, inner).ok())
+                    .and_then(|read| read.slot().map(str::to_owned));
+                let Some(slot) = slot else {
+                    return Err(err(no, "role binding must be `NAME = {$slot.NAME}`"));
                 };
-                if !ident_ok(name) || !ident_ok(slot.trim()) {
+                if !ident_ok(name) {
                     return Err(err(no, "role and slot names must be identifiers"));
                 }
+                let slot = slot.as_str();
                 blocks
                     .last_mut()
                     .unwrap()

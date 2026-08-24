@@ -193,10 +193,13 @@ impl SemNode {
     }
 }
 
-/// `{slot}` 引用?回傳被引用的 slot 名(去空白)。
-pub(crate) fn slot_ref(value: &str) -> Option<&str> {
-    value
-        .strip_prefix('{')
-        .and_then(|s| s.strip_suffix('}'))
-        .map(str::trim)
+/// `{$slot.NAME}` 插值?回傳被引用的 slot 名。
+pub(crate) fn slot_ref(value: &str) -> Option<String> {
+    let found = crate::reference::scan_interpolations(value.trim());
+    let [only] = found.as_slice() else {
+        return None;
+    };
+    (only.start == 0 && only.end == value.trim().len())
+        .then(|| only.slot().map(str::to_owned))
+        .flatten()
 }

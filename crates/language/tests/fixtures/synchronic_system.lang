@@ -64,10 +64,10 @@ sign Clause:
         roles:
             actor [*]
             action [*]
-            actor = {subject}
-            action = {predicate}
+            actor = {$slot.subject}
+            action = {$slot.predicate}
         feature:
             frame = enum(event)
             frame = event
     phon:
-        /{subject}{predicate}/
+        /{$slot.subject}{$slot.predicate}/

@@ -5,7 +5,7 @@
 use crate::construction::{slots_of, FillerSnapshot};
 use crate::ontology::OntologyRegistry;
 use crate::path::parse_path;
-use crate::reference::{self, DimPolicy, PathPolicy, RefError, RefSpec, Sigil};
+use crate::reference::{self, DimPolicy, PathPolicy, RefError, RefSpec};
 use crate::{
     CaseCondition, Def, Dim, Expression, RuleId, RuleNamespace, SignDef, SignItem, Slot,
     SourceLocation,
@@ -109,20 +109,16 @@ pub(crate) fn realization_guard_slot_references(source: &str) -> Vec<String> {
 
 /// `$self.<dim>.<path>`——維度必填、路徑必填且走 Path 文法驗證。
 const SELF_ACCESS: RefSpec = RefSpec {
-    sigil: Sigil::Required,
     allow_self: true,
     allow_slot: false,
-    ident_subject: false,
     dim: DimPolicy::Required,
     path: PathPolicy::RequiredValidated,
 };
 
 /// `$slot.<name>.<dim>.<path>`——同上,主體換成 slot。
 const SLOT_ACCESS: RefSpec = RefSpec {
-    sigil: Sigil::Required,
     allow_self: false,
     allow_slot: true,
-    ident_subject: false,
     dim: DimPolicy::Required,
     path: PathPolicy::RequiredValidated,
 };

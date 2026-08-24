@@ -1,25 +1,46 @@
-//! 統一的 `$` 引用文法(Phase 0)。
-//!
-//! `$self` / `$slot.` 的解析原本散在八個位置,每處各自做前綴比對,接受的
-//! 子集互不相同(有的鎖死維度、有的鎖死路徑長度、有的允許省略 sigil)。
-//! 本模組把那套文法收成單一實作:
+//! 兩個正交的算子:`$` 選出對象,`{…}` 求值並嵌入。
 //!
 //! ```text
-//! Reference := Subject ( '.' Dim ( '.' Path )? )?
-//! Subject   := '$self' | '$slot' '.' Name | Name
+//! Reference     := Subject ( '.' Dim ( '.' Path )? )?
+//! Subject       := '$self' | '$slot' '.' Name
+//! Interpolation := '{' Subject '}'
 //! ```
 //!
-//! 呼叫點不再自己比對前綴,而是宣告一份 [`RefSpec`]——「我接受哪個子集」。
-//! 接受/拒絕的集合因此變成**可讀的宣告**,而不是散落的 `strip_prefix` 串接。
+//! **`$` 只建立引用,不求值。** `$slot.stem.syn.number` 是「slot `stem` 的
+//! 填充者的 syn.number 這個欄位」——一個指名,規則拿它去比對或寫入。
 //!
-//! **Phase 0 不改任何接受/拒絕的集合,也不改 canonical 印出。**
-//! [`Reference::render`] 會還原輸入當時的寫法(見 `explicit_sigil`),所以
-//! rename 之後排出來的原始碼與舊實作逐字相同,`base_source` digest 不動。
-//! 統一印出面(裸形一律補回 `$`)是 Phase 1,需 P 系列裁定。
+//! **`{…}` 要求求值後把結果嵌在這裡。** `/{$slot.stem}+s/` 是「把 `stem`
+//! 的填充者算出來,結果放這個位置」。嵌入什麼型別由括號所在的位置決定
+//! (phon 模板要 surface、sem role 要語意節點),故括號內只寫主體,不帶
+//! 維度與路徑。
+//!
+//! 兩者可以疊:括號內永遠是一個引用。`{$self}` 之所以長這樣,正是因為它就
+//! 是這條規則的一般情形,而不是特例。
+//!
+//! ## 主體一律顯式
+//!
+//! **`$` 不可省略,括號內也一樣。** 曾經合法的裸寫法已全部移除:
+//!
+//! - `stem.syn.number` → `$slot.stem.syn.number`(constraint 運算元)
+//! - `stem.phon` → `$slot.stem.phon`(case scrutinee 讀 slot)
+//! - `syn.number` → `$self.syn.number`(case scrutinee 讀自己)
+//! - `/{stem}/` → `/{$slot.stem}/`(phon 模板、sem role、application 實參)
+//!
+//! 連帶移除的是**首段猜測**:裸形之下,`stem.phon` 與 `syn.number` 只能靠
+//! 「首段是不是維度關鍵字」來決定主體是 slot 還是 `$self`——於是一個叫
+//! `syn` 的 slot 會被靜默讀成自己的 syn 維。顯式主體之後這個歧義不存在。
+//!
+//! 同樣移除的還有 scrutinee 位置那個**寫了也沒用**的 `$self.` 裝飾:
+//! `$self.stem.phon` 曾被 strip 掉再把 `stem` 當 slot 解讀,現在它就是
+//! 字面意義——非法(`$self` 沒有叫 `stem` 的維度),要寫 `$slot.stem.phon`。
+//!
+//! 解析散在八個位置、`{…}` 的字元迴圈另外抄了三份的狀況,由本模組收束:
+//! 呼叫點宣告一份 [`RefSpec`](我接受哪個子集),或呼叫
+//! [`scan_interpolations`](把模板裡的括號一次掃出來)。
 //!
 //! **不在本模組範圍**:`.chg` function 層的 guard 主體(`x.syn.category`)。
-//! 那裡的 `x` 是 function 參數而非 slot,主體命名空間不同;要不要與此合流
-//! 是 Phase 1 的語意決定,不是 Phase 0 的重構。
+//! 那裡的 `x` 是 function 參數而非 slot,主體命名空間不同,與此合流是另一
+//! 個決定。
 
 use crate::path::parse_path;
 use crate::Dim;
@@ -41,26 +62,6 @@ pub struct Reference {
     pub dim: Option<Dim>,
     /// 維度之後的欄位路徑,**不含**維度前綴。`None` = 只到維度為止。
     pub path: Option<String>,
-    /// 來源是否顯式寫了 sigil。`render` 依此還原原樣,故 Phase 0 的
-    /// canonical 輸出逐字不變。
-    explicit_sigil: bool,
-}
-
-/// 省略 sigil 時如何決定主體。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Sigil {
-    /// 必須寫 `$self` / `$slot.`。
-    Required,
-    /// 可省略;省略時主體是**同名 slot**。
-    OptionalSlot,
-    /// 可省略;省略時主體是 `$self`(故首段必須是維度關鍵字)。
-    OptionalSelf,
-    /// 可省略;省略時看首段:**是維度關鍵字 → `$self`,否則 → 同名 slot**。
-    ///
-    /// 這條是 case scrutinee 的既有行為:`syn.number` 讀自己的欄位,
-    /// `stem.phon` 讀 slot `stem`。把判準寫在這裡,而不是讓兩個呼叫點
-    /// 各自用 `split_once` 猜。
-    OptionalHeadDim,
 }
 
 /// 該位置對「維度」那一段的要求。
@@ -81,19 +82,15 @@ pub enum PathPolicy {
     Optional,
     /// 必填,且與維度前綴合併後須通過 [`parse_path`]。
     RequiredValidated,
-    /// 必填且恰 n 段,每段為裸識別字。(slot 名的識別字要求另由
-    /// [`RefSpec::ident_subject`] 決定,兩者互不牽連。)
+    /// 必填且恰 n 段,每段為裸識別字。
     Identifiers(usize),
 }
 
 /// 一個呼叫點接受的引用子集。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RefSpec {
-    pub sigil: Sigil,
     pub allow_self: bool,
     pub allow_slot: bool,
-    /// slot 名是否必須是裸識別字(不含 `.`、空白、括號)。
-    pub ident_subject: bool,
     pub dim: DimPolicy,
     pub path: PathPolicy,
 }
@@ -105,7 +102,7 @@ pub enum RefError {
     /// 主體型別在該位置不允許(例如只收 slot 的位置寫了 `$self`)。
     SubjectNotAllowed,
     EmptySlotName,
-    /// slot 名不是裸識別字(僅 [`RefSpec::ident_subject`] 為真時檢查)。
+    /// slot 名不是裸識別字(含 `.`、空白或括號)。
     SlotNotIdentifier,
     UnknownDim(String),
     DimRequired,
@@ -145,133 +142,78 @@ fn ident_ok(value: &str) -> bool {
             .all(|ch| ch.is_alphanumeric() || ch == '_' || ch == '-')
 }
 
-/// 切出主體,回傳 (主體, 是否顯式寫了 sigil, 剩下的尾段)。
-fn split_subject<'a>(spec: &RefSpec, value: &'a str) -> Result<(Subject, bool, &'a str), RefError> {
+/// 切出主體,回傳 (主體, 剩下的尾段)。主體一律顯式,故不需要任何 spec
+/// ——沒有 sigil 就沒有主體,不猜。
+fn split_subject(value: &str) -> Result<(Subject, &str), RefError> {
     if value == "$self" {
-        return Ok((Subject::SelfSign, true, ""));
+        return Ok((Subject::SelfSign, ""));
     }
     if let Some(rest) = value.strip_prefix("$self.") {
-        return Ok((Subject::SelfSign, true, rest));
+        return Ok((Subject::SelfSign, rest));
     }
     if let Some(rest) = value.strip_prefix("$slot.") {
-        let (name, tail) = match rest.split_once('.') {
-            Some((name, tail)) => (name, tail),
-            None => (rest, ""),
-        };
+        let (name, tail) = rest.split_once('.').unwrap_or((rest, ""));
         if name.is_empty() {
             return Err(RefError::EmptySlotName);
         }
-        return Ok((Subject::Slot(name.to_owned()), true, tail));
+        return Ok((Subject::Slot(name.to_owned()), tail));
     }
-    let head = value.split('.').next().unwrap_or_default();
-    match spec.sigil {
-        Sigil::Required => Err(RefError::MissingSigil),
-        Sigil::OptionalSelf => Ok((Subject::SelfSign, false, value)),
-        Sigil::OptionalSlot => {
-            if head.is_empty() {
-                return Err(RefError::EmptySlotName);
-            }
-            let tail = value.get(head.len() + 1..).unwrap_or("");
-            Ok((Subject::Slot(head.to_owned()), false, tail))
-        }
-        Sigil::OptionalHeadDim => {
-            if Dim::parse(head).is_some() {
-                Ok((Subject::SelfSign, false, value))
-            } else {
-                if head.is_empty() {
-                    return Err(RefError::EmptySlotName);
-                }
-                let tail = value.get(head.len() + 1..).unwrap_or("");
-                Ok((Subject::Slot(head.to_owned()), false, tail))
-            }
-        }
-    }
+    Err(RefError::MissingSigil)
 }
 
 // ── 共用的 spec:同一個形狀原本被四處各抄一份 ──────────────────────────
 
-/// `slot_features:` 的凍結 syn 讀取:`$slot.<name>.syn.<feature>`。
-/// 維度鎖死 syn、路徑恰一段,是這個位置的既有契約(P41)。
+/// `slot_features:` 的凍結 syn 讀取,以及 `constraints:` 的欄位運算元:
+/// `$slot.<name>.syn.<feature>`。維度鎖死 syn、路徑恰一段(P41)。
 pub const SLOT_SYN_FEATURE: RefSpec = RefSpec {
-    sigil: Sigil::Required,
     allow_self: false,
     allow_slot: true,
-    ident_subject: true,
     dim: DimPolicy::Only(Dim::Syn),
     path: PathPolicy::Identifiers(1),
 };
 
-/// `constraints:` 的欄位運算元:同上,但 `$slot.` 可省。
-pub const OPTIONAL_SLOT_SYN_FEATURE: RefSpec = RefSpec {
-    sigil: Sigil::OptionalSlot,
-    allow_self: false,
-    allow_slot: true,
-    ident_subject: false,
-    dim: DimPolicy::Only(Dim::Syn),
-    path: PathPolicy::Identifiers(1),
-};
-
-/// `constraints:` 的整體運算元:可以只是一個 slot 名(`before(a, b)`),
+/// `constraints:` 的整體運算元:可以只是一個 slot(`before($slot.a, $slot.b)`),
 /// 也可以帶維度與欄位。只用來取出主體 slot。
 pub const CONSTRAINT_OPERAND: RefSpec = RefSpec {
-    sigil: Sigil::OptionalSlot,
     allow_self: false,
     allow_slot: true,
-    ident_subject: false,
     dim: DimPolicy::Optional,
     path: PathPolicy::Optional,
 };
 
-/// `$self.<dim>.<field>` 的純量讀取,`$self.` 可省。
-pub const SELF_SCALAR: RefSpec = RefSpec {
-    sigil: Sigil::OptionalSelf,
-    allow_self: true,
-    allow_slot: false,
-    ident_subject: false,
-    dim: DimPolicy::Required,
-    path: PathPolicy::Optional,
-};
-
-/// case scrutinee:首段是維度 → 讀自己的欄位;否則 → 讀同名 slot 的投影。
-pub const SCRUTINEE: RefSpec = RefSpec {
-    sigil: Sigil::OptionalHeadDim,
-    allow_self: true,
+/// `before(…)` / `adjacent(…)` 的運算元:只有 slot,沒有維度也沒有欄位。
+pub const CONSTRAINT_SLOT: RefSpec = RefSpec {
+    allow_self: false,
     allow_slot: true,
-    ident_subject: false,
-    dim: DimPolicy::Required,
-    path: PathPolicy::Optional,
-};
-
-/// application 實參與模板鍵:只有主體,沒有維度與路徑。
-pub const SUBJECT_ONLY: RefSpec = RefSpec {
-    sigil: Sigil::OptionalSlot,
-    allow_self: true,
-    allow_slot: true,
-    ident_subject: true,
     dim: DimPolicy::Forbidden,
     path: PathPolicy::Forbidden,
 };
 
-/// 剝掉 case scrutinee 的遺留 `$self.` 前綴。
-///
-/// scrutinee 位置的 `$self.` 是**寫了也沒用**的裝飾:舊實作一律先 strip 再把
-/// 首段當 slot 解讀,所以 `$self.stem.phon` 與 `stem.phon` 完全等價。這個行為
-/// 本身可疑(見 Phase 1),但 Phase 0 只負責把它從兩個呼叫點收成一處,不改它。
-pub fn strip_legacy_self_prefix(value: &str) -> &str {
-    let value = value.trim();
-    value.strip_prefix("$self.").unwrap_or(value)
-}
+/// case scrutinee:`$slot.<name>.phon` 走範疇比對,`$self.<dim>.<field>`
+/// 走純量欄位。主體顯式,故不必再靠首段猜。
+pub const SCRUTINEE: RefSpec = RefSpec {
+    allow_self: true,
+    allow_slot: true,
+    dim: DimPolicy::Required,
+    path: PathPolicy::Optional,
+};
+
+/// `{…}` 內容:只有主體。嵌入什麼由括號所在的位置決定,故不帶維度與路徑。
+pub const SUBJECT_ONLY: RefSpec = RefSpec {
+    allow_self: true,
+    allow_slot: true,
+    dim: DimPolicy::Forbidden,
+    path: PathPolicy::Forbidden,
+};
 
 /// 依 `spec` 解析一個 `$` 引用。
 pub fn parse(spec: &RefSpec, value: &str) -> Result<Reference, RefError> {
     let value = value.trim();
-    let (subject, explicit_sigil, tail) = split_subject(spec, value)?;
+    let (subject, tail) = split_subject(value)?;
     match &subject {
         Subject::SelfSign if !spec.allow_self => return Err(RefError::SubjectNotAllowed),
         Subject::Slot(_) if !spec.allow_slot => return Err(RefError::SubjectNotAllowed),
-        Subject::Slot(name) if spec.ident_subject && !ident_ok(name) => {
-            return Err(RefError::SlotNotIdentifier)
-        }
+        Subject::Slot(name) if !ident_ok(name) => return Err(RefError::SlotNotIdentifier),
         _ => {}
     }
 
@@ -325,7 +267,6 @@ pub fn parse(spec: &RefSpec, value: &str) -> Result<Reference, RefError> {
         subject,
         dim,
         path: path.map(str::to_owned),
-        explicit_sigil,
     })
 }
 
@@ -358,19 +299,15 @@ impl Reference {
         }
     }
 
-    /// 還原成原始寫法——**顯式 sigil 進、顯式 sigil 出;裸形進、裸形出**。
-    /// Phase 0 靠這條保住 canonical 逐字不變。
+    /// 排成 canonical 形——主體一律顯式。`{…}` 內的裸名不走這裡
+    /// (printer 自己組 `{name}`)。
     pub fn render(&self) -> String {
-        let mut out = match (&self.subject, self.explicit_sigil) {
-            (Subject::SelfSign, true) => "$self".to_owned(),
-            (Subject::SelfSign, false) => String::new(),
-            (Subject::Slot(name), true) => format!("$slot.{name}"),
-            (Subject::Slot(name), false) => name.clone(),
+        let mut out = match &self.subject {
+            Subject::SelfSign => "$self".to_owned(),
+            Subject::Slot(name) => format!("$slot.{name}"),
         };
         if let Some(dim) = self.dim {
-            if !out.is_empty() {
-                out.push('.');
-            }
+            out.push('.');
             out.push_str(dim.keyword());
         }
         if let Some(path) = &self.path {
@@ -381,52 +318,95 @@ impl Reference {
     }
 }
 
-// ── rename:兩個入口,依「整串 vs 內嵌」區分 ────────────────────────────
-//
-// 這個二分**是對的,不是巧合**:整串的位置(constraint 運算元、scrutinee)
-// 可以安全地把裸形 `stem.syn.f` 當成 slot 引用;內嵌的位置(規則本文、模板)
-// 不行——那裡的 `stem.` 可能是任何東西,只有顯式 `$slot.` 與 `{…}` 才是引用。
-// 舊實作有三個重寫器,而「哪個位置該套哪幾個」全靠呼叫點自己記得。
+// ── `{…}` 插值 ─────────────────────────────────────────────────────────
 
-/// 整串就是一個引用時的 rename(constraint 運算元、case scrutinee)。
-///
-/// 解析不出來就原樣回傳——這個位置的合法性由各自的驗證負責,rename 不越權。
-pub fn rename_slot_in_operand(source: &str, old: &str, new: &str) -> String {
-    const SPEC: RefSpec = RefSpec {
-        sigil: Sigil::OptionalSlot,
-        allow_self: true,
-        allow_slot: true,
-        ident_subject: false,
-        dim: DimPolicy::Optional,
-        path: PathPolicy::Optional,
-    };
-    match parse(&SPEC, source) {
-        Ok(reference) if reference.slot() == Some(old) => {
-            let renamed = reference.with_renamed_slot(old, new);
-            let rendered = renamed.render();
-            // 前後空白不是引用的一部分,原樣保留。
-            let leading = &source[..source.len() - source.trim_start().len()];
-            let trailing = &source[source.trim_end().len()..];
-            format!("{leading}{rendered}{trailing}")
+/// 模板裡的一處 `{…}`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Interpolation {
+    /// 含括號的位元組範圍。
+    pub start: usize,
+    pub end: usize,
+    /// 括號內的原文(已 trim)。
+    pub inner: String,
+    /// 括號內解析出的主體;內容非法時為錯誤。
+    pub subject: Result<Subject, RefError>,
+}
+
+impl Interpolation {
+    /// 這處插值引用的 slot 名(主體是 `$self` 或內容非法時為 `None`)。
+    pub fn slot(&self) -> Option<&str> {
+        match &self.subject {
+            Ok(Subject::Slot(name)) => Some(name),
+            _ => None,
         }
-        _ => source.to_owned(),
     }
 }
 
-/// 引用內嵌在自由文字裡時的 rename(規則本文、guard、Def 值、phon 模板)。
+/// 掃出模板裡的每一處 `{…}`。
 ///
-/// 認兩種顯式寫法:`$slot.<name>` 與模板的 `{<name>}`。取代舊的
-/// `rewrite_slot_accesses` + `rewrite_slot_template` 兩個重寫器。
-pub fn rename_slot_in_text(source: &str, old: &str, new: &str) -> String {
-    let templated = source.replace(&format!("{{{old}}}"), &format!("{{{new}}}"));
-    rename_slot_accesses(&templated, old, new)
+/// 三個幾乎相同的字元迴圈(代入、符號式代入、引用收集)原本各抄一份,
+/// 只在「命中之後做什麼」不同;掃描本身收在這裡。
+pub fn scan_interpolations(template: &str) -> Vec<Interpolation> {
+    let mut found = Vec::new();
+    let bytes = template.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] != b'{' {
+            index += 1;
+            continue;
+        }
+        let Some(offset) = template[index..].find('}') else {
+            break;
+        };
+        let end = index + offset + 1;
+        let inner = template[index + 1..end - 1].trim();
+        found.push(Interpolation {
+            start: index,
+            end,
+            inner: inner.to_owned(),
+            subject: parse(&SUBJECT_ONLY, inner).map(|read| read.subject),
+        });
+        index = end;
+    }
+    found
 }
 
-fn is_identifier_character(character: char) -> bool {
-    character.is_alphanumeric() || matches!(character, '_' | '-' | ':' | '/')
+/// 依 `replace` 對每處插值取代;回傳 `None` 表示該處原樣保留。
+pub fn substitute_interpolations(
+    template: &str,
+    mut replace: impl FnMut(&Interpolation) -> Option<String>,
+) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut cursor = 0usize;
+    for found in scan_interpolations(template) {
+        out.push_str(&template[cursor..found.start]);
+        match replace(&found) {
+            Some(value) => out.push_str(&value),
+            None => out.push_str(&template[found.start..found.end]),
+        }
+        cursor = found.end;
+    }
+    out.push_str(&template[cursor..]);
+    out
 }
 
-fn rename_slot_accesses(source: &str, old: &str, new: &str) -> String {
+/// 把一個主體排成 `{…}` 插值的 canonical 形。
+pub fn render_interpolation(subject: &Subject) -> String {
+    match subject {
+        Subject::SelfSign => "{$self}".to_owned(),
+        Subject::Slot(name) => format!("{{$slot.{name}}}"),
+    }
+}
+
+// ── rename ─────────────────────────────────────────────────────────────
+
+/// 把 `source` 裡對 slot `old` 的引用改名為 `new`。
+///
+/// 主體一律顯式之後,引用只有一種可掃的形狀(`$slot.<name>`),而 `{…}` 內
+/// 也是同一個形狀——於是**整串運算元、內嵌於規則本文、模板插值三者共用
+/// 同一個掃描**。先前那三個重寫器(裸形 / `$slot.` / `{…}`)與「哪個位置
+/// 該套哪幾個」的對應表,一起消失。
+pub fn rename_slot(source: &str, old: &str, new: &str) -> String {
     let needle = format!("$slot.{old}");
     let mut output = String::with_capacity(source.len());
     let mut cursor = 0;
@@ -451,15 +431,17 @@ fn rename_slot_accesses(source: &str, old: &str, new: &str) -> String {
     output
 }
 
+fn is_identifier_character(character: char) -> bool {
+    character.is_alphanumeric() || matches!(character, '_' | '-' | ':' | '/')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const STRICT: RefSpec = RefSpec {
-        sigil: Sigil::Required,
         allow_self: true,
         allow_slot: true,
-        ident_subject: false,
         dim: DimPolicy::Required,
         path: PathPolicy::RequiredValidated,
     };
@@ -477,92 +459,94 @@ mod tests {
         assert_eq!(r.path.as_deref(), Some("frame"));
     }
 
+    /// 修補13 ⑨:Path 只剩點分名段。
     #[test]
-    fn the_path_may_use_the_full_path_grammar() {
-        let r = parse(&STRICT, "$slot.agent.syn.slot[key].deep").unwrap();
-        assert_eq!(r.path.as_deref(), Some("slot[key].deep"));
+    fn the_path_is_dotted_names_only() {
+        let r = parse(&STRICT, "$slot.agent.syn.deep.field").unwrap();
+        assert_eq!(r.path.as_deref(), Some("deep.field"));
         assert!(parse(&STRICT, "$self.syn.a..b").is_err(), "畸形路徑要擋下");
+        assert!(
+            parse(&STRICT, "$slot.agent.syn.slot[key]").is_err(),
+            "`[鍵]` 已不是 Path 語法"
+        );
+        assert!(
+            parse(&STRICT, "$self.syn.t~tone").is_err(),
+            "`~tier` 已不是 Path 語法"
+        );
     }
 
+    /// Phase 1 的核心:**沒有主體就沒有引用,不猜**。
     #[test]
-    fn a_missing_sigil_is_rejected_only_where_the_spec_requires_one() {
-        assert_eq!(
-            parse(&STRICT, "stem.syn.number"),
-            Err(RefError::MissingSigil)
-        );
-
-        const LENIENT: RefSpec = RefSpec {
-            sigil: Sigil::OptionalSlot,
-            ..STRICT
-        };
-        let r = parse(&LENIENT, "stem.syn.number").unwrap();
-        assert_eq!(r.subject, Subject::Slot("stem".into()));
+    fn a_reference_without_a_sigil_is_rejected() {
+        for bare in [
+            "stem.syn.number", // 舊的 constraint 運算元
+            "stem.phon",       // 舊的 scrutinee 讀 slot
+            "syn.number",      // 舊的 scrutinee 讀自己
+            "stem",
+        ] {
+            assert_eq!(parse(&STRICT, bare), Err(RefError::MissingSigil), "{bare}");
+            assert_eq!(
+                parse(&CONSTRAINT_OPERAND, bare),
+                Err(RefError::MissingSigil),
+                "{bare}"
+            );
+            assert_eq!(
+                parse(&SCRUTINEE, bare),
+                Err(RefError::MissingSigil),
+                "{bare}"
+            );
+        }
     }
 
-    /// case scrutinee 的既有判準:首段是維度 → `$self`;否則 → 同名 slot。
+    /// 首段猜測隨裸形一起消失:一個叫 `syn` 的 slot 不再被讀成自己的 syn 維。
     #[test]
-    fn a_bare_head_that_names_a_dimension_means_self() {
-        const SCRUTINEE: RefSpec = RefSpec {
-            sigil: Sigil::OptionalHeadDim,
-            allow_self: true,
-            allow_slot: true,
-            ident_subject: false,
-            dim: DimPolicy::Required,
-            path: PathPolicy::Optional,
-        };
+    fn a_slot_named_after_a_dimension_is_no_longer_ambiguous() {
+        let read = parse(&SCRUTINEE, "$slot.syn.phon").unwrap();
+        assert_eq!(read.subject, Subject::Slot("syn".into()));
+        assert_eq!(read.dim, Some(Dim::Phon));
+
+        let read = parse(&SCRUTINEE, "$self.syn.number").unwrap();
+        assert_eq!(read.subject, Subject::SelfSign);
+        assert_eq!(read.dim, Some(Dim::Syn));
+    }
+
+    /// scrutinee 位置那個「寫了也沒用」的 `$self.` 裝飾已無容身處:
+    /// `$self.stem.phon` 現在就是字面意義,而 `$self` 沒有叫 `stem` 的維度。
+    #[test]
+    fn a_decorative_self_prefix_in_front_of_a_slot_is_now_an_error() {
         assert_eq!(
-            parse(&SCRUTINEE, "syn.number").unwrap().subject,
-            Subject::SelfSign
-        );
-        assert_eq!(
-            parse(&SCRUTINEE, "stem.phon").unwrap().subject,
-            Subject::Slot("stem".into())
-        );
-        // 遺留寫法:scrutinee 位置的 `$self.` 是裝飾,剝掉之後首段仍是 slot。
-        assert_eq!(
-            parse(&SCRUTINEE, strip_legacy_self_prefix("$self.stem.phon"))
-                .unwrap()
-                .subject,
-            Subject::Slot("stem".into()),
-            "與舊實作的 strip-and-ignore 行為一致"
+            parse(&SCRUTINEE, "$self.stem.phon"),
+            Err(RefError::UnknownDim("stem".into()))
         );
     }
 
     #[test]
     fn a_spec_can_lock_the_dimension_and_the_path_length() {
-        const SLOT_FEATURE: RefSpec = RefSpec {
-            sigil: Sigil::Required,
-            allow_self: false,
-            allow_slot: true,
-            ident_subject: false,
-            dim: DimPolicy::Only(Dim::Syn),
-            path: PathPolicy::Identifiers(1),
-        };
-        assert!(parse(&SLOT_FEATURE, "$slot.source.syn.number").is_ok());
+        assert!(parse(&SLOT_SYN_FEATURE, "$slot.source.syn.number").is_ok());
         assert_eq!(
-            parse(&SLOT_FEATURE, "$slot.source.sem.number"),
+            parse(&SLOT_SYN_FEATURE, "$slot.source.sem.number"),
             Err(RefError::WrongDim(Dim::Syn))
         );
         assert_eq!(
-            parse(&SLOT_FEATURE, "$slot.source.syn.a.b"),
+            parse(&SLOT_SYN_FEATURE, "$slot.source.syn.a.b"),
             Err(RefError::WrongSegmentCount(1))
         );
         assert_eq!(
-            parse(&SLOT_FEATURE, "$self.syn.number"),
+            parse(&SLOT_SYN_FEATURE, "$self.syn.number"),
             Err(RefError::SubjectNotAllowed)
         );
     }
 
     #[test]
+    fn a_slot_name_must_be_a_bare_identifier() {
+        assert_eq!(
+            parse(&CONSTRAINT_OPERAND, "$slot.a b"),
+            Err(RefError::SlotNotIdentifier)
+        );
+    }
+
+    #[test]
     fn a_subject_only_reference_carries_no_dimension() {
-        const SUBJECT_ONLY: RefSpec = RefSpec {
-            sigil: Sigil::Required,
-            allow_self: true,
-            allow_slot: true,
-            ident_subject: false,
-            dim: DimPolicy::Forbidden,
-            path: PathPolicy::Forbidden,
-        };
         assert_eq!(
             parse(&SUBJECT_ONLY, "$self").unwrap().subject,
             Subject::SelfSign
@@ -577,64 +561,101 @@ mod tests {
         );
     }
 
-    /// Phase 0 的關鍵不變式:**寫進去什麼形,排出來就是什麼形**。
-    /// 若這條紅了,canonical source 會變,`base_source` digest 跟著變。
+    /// `{…}` 內也要 `$`——括號是「求值並嵌入」的算子,不是主體的替代標記。
     #[test]
-    fn rendering_reproduces_the_spelling_it_was_given() {
-        const LENIENT: RefSpec = RefSpec {
-            sigil: Sigil::OptionalSlot,
-            allow_self: true,
-            allow_slot: true,
-            ident_subject: false,
-            dim: DimPolicy::Optional,
-            path: PathPolicy::Optional,
-        };
+    fn inside_braces_the_subject_is_still_explicit() {
+        assert_eq!(
+            parse(&SUBJECT_ONLY, "$slot.stem").unwrap().subject,
+            Subject::Slot("stem".into())
+        );
+        assert_eq!(parse(&SUBJECT_ONLY, "stem"), Err(RefError::MissingSigil));
+    }
+
+    #[test]
+    fn interpolations_are_scanned_and_rendered_as_one_shape() {
+        let found = scan_interpolations("/{$slot.head}+{$self}/");
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].slot(), Some("head"));
+        assert_eq!(found[1].subject, Ok(Subject::SelfSign));
+        assert_eq!(found[1].slot(), None, "`$self` 不是 slot");
+
+        assert_eq!(
+            render_interpolation(&Subject::Slot("head".into())),
+            "{$slot.head}"
+        );
+        assert_eq!(render_interpolation(&Subject::SelfSign), "{$self}");
+
+        // 括號內容非法時掃得到位置,但主體是錯誤——驗證端才指得出是哪一處。
+        let found = scan_interpolations("/{head}/");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].inner, "head");
+        assert_eq!(found[0].subject, Err(RefError::MissingSigil));
+    }
+
+    #[test]
+    fn substituting_leaves_unreplaced_interpolations_alone() {
+        let out = substitute_interpolations("/{$slot.a}{$slot.b}/", |found| {
+            (found.slot() == Some("a")).then(|| "X".to_owned())
+        });
+        assert_eq!(out, "/X{$slot.b}/");
+    }
+
+    /// canonical 只有一種寫法:主體顯式。
+    #[test]
+    fn rendering_always_spells_the_subject_out() {
         for source in [
             "$self.syn.number",
             "$slot.stem.syn.number",
-            "stem.syn.number",
-            "stem.phon",
-            "stem",
+            "$slot.stem.phon",
             "$slot.stem",
             "$self",
         ] {
-            assert_eq!(parse(&LENIENT, source).unwrap().render(), source);
+            assert_eq!(
+                parse(&CONSTRAINT_OPERAND, source)
+                    .unwrap_or_else(|_| parse(&SCRUTINEE, source).unwrap_or_else(|_| parse(
+                        &SUBJECT_ONLY,
+                        source
+                    )
+                    .unwrap()))
+                    .render(),
+                source
+            );
         }
     }
 
+    /// 一個掃描涵蓋全部三種位置:整串運算元、內嵌於本文、模板插值。
     #[test]
-    fn renaming_an_operand_keeps_the_original_spelling() {
+    fn renaming_covers_every_position_with_one_scan() {
         assert_eq!(
-            rename_slot_in_operand("stem.syn.number", "stem", "base"),
-            "base.syn.number"
-        );
-        // 舊的 `rewrite_slot_operand` 只認裸形,顯式形整個漏掉。
-        assert_eq!(
-            rename_slot_in_operand("$slot.stem.syn.number", "stem", "base"),
+            rename_slot("$slot.stem.syn.number", "stem", "base"),
             "$slot.base.syn.number"
         );
-        assert_eq!(rename_slot_in_operand("stem", "stem", "base"), "base");
+        assert_eq!(rename_slot("$slot.stem", "stem", "base"), "$slot.base");
         assert_eq!(
-            rename_slot_in_operand("other.syn.number", "stem", "base"),
-            "other.syn.number"
+            rename_slot("$slot.other.syn.number", "stem", "base"),
+            "$slot.other.syn.number"
         );
-    }
-
-    #[test]
-    fn renaming_in_text_covers_both_embedded_spellings() {
+        // 裸形不再是引用,rename 不得碰它。
         assert_eq!(
-            rename_slot_in_text("number => $slot.stem.syn.number", "stem", "base"),
+            rename_slot("stem.syn.number", "stem", "base"),
+            "stem.syn.number"
+        );
+        assert_eq!(
+            rename_slot("number => $slot.stem.syn.number", "stem", "base"),
             "number => $slot.base.syn.number"
         );
         assert_eq!(
-            rename_slot_in_text("/{stem}+s/", "stem", "base"),
-            "/{base}+s/"
+            rename_slot("/{$slot.stem}+s/", "stem", "base"),
+            "/{$slot.base}+s/"
         );
         // 前綴不得被吃掉:`stem` 不是 `stemma`。
         assert_eq!(
-            rename_slot_in_text("$slot.stemma.syn.x", "stem", "base"),
+            rename_slot("$slot.stemma.syn.x", "stem", "base"),
             "$slot.stemma.syn.x"
         );
-        assert_eq!(rename_slot_in_text("{stemma}", "stem", "base"), "{stemma}");
+        assert_eq!(
+            rename_slot("{$slot.stemma}", "stem", "base"),
+            "{$slot.stemma}"
+        );
     }
 }

@@ -49,7 +49,7 @@ sign Pairing:
             first [Piece]
             second [Piece]
     phon:
-        /{first} {second}/
+        /{$slot.first} {$slot.second}/
 ```
 
 canonical application 使用具名參數；一個參數時可用位置 shorthand：
@@ -81,13 +81,13 @@ sign en_3sg:
         slots:
             stem [Verb]
     phon:
-        /{stem}+s/
+        /{$slot.stem}+s/
         realization:
             case stem.phon:
                 == SibilantFinal:
-                    /{stem}+es/
+                    /{$slot.stem}+es/
                 else:
-                    /{stem}+s/
+                    /{$slot.stem}+s/
 ```
 
 Sign body 的 branch 有兩種合法結果：

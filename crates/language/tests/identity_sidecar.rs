@@ -141,14 +141,14 @@ sign Wrap:
         slots:
             value [*]
     phon:
-        /{value}/
+        /{$slot.value}/
 
 sign Outer:
     syn:
         slots:
             value [*]
     phon:
-        /<{value}>/
+        /<{$slot.value}>/
 
 sign root:
     belongs Entity
@@ -169,7 +169,7 @@ sign root:
                     else:
                         atom()
     phon:
-        /{actor}/
+        /{$slot.actor}/
         realization:
             case:
                 else:

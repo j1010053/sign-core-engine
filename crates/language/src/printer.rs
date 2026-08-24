@@ -130,8 +130,12 @@ fn expression_source(expression: &Expression) -> String {
                 .iter()
                 .map(|argument| {
                     let value = match &argument.value {
-                        SignArgumentValue::SelfSign => "{$self}".to_owned(),
-                        SignArgumentValue::Slot(slot) => format!("{{{slot}}}"),
+                        SignArgumentValue::SelfSign => crate::reference::render_interpolation(
+                            &crate::reference::Subject::SelfSign,
+                        ),
+                        SignArgumentValue::Slot(slot) => crate::reference::render_interpolation(
+                            &crate::reference::Subject::Slot(slot.clone()),
+                        ),
                         SignArgumentValue::Application(application) => {
                             expression_source(&Expression::SignApplication((**application).clone()))
                         }
@@ -164,7 +168,9 @@ fn expression_source(expression: &Expression) -> String {
         Expression::PhonTemplate(template) => template.clone(),
         Expression::EnumValue(value) => value.clone(),
         Expression::SelfSign => "$self".to_owned(),
-        Expression::Slot(slot) => format!("{{{slot}}}"),
+        Expression::Slot(slot) => {
+            crate::reference::render_interpolation(&crate::reference::Subject::Slot(slot.clone()))
+        }
         // Valid nested cases are emitted structurally by `push_case`.  This
         // marker is only reachable for an invalid programmatic AST (for
         // example, a case embedded inside a scalar projection), which the
@@ -412,8 +418,13 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                             role.constraint.display_name(),
                             if role.optional { "?" } else { "" }
                         )),
-                        SignItem::RoleBinding(role) => out
-                            .push_str(&format!("            {} = {{{}}}\n", role.name, role.slot)),
+                        SignItem::RoleBinding(role) => out.push_str(&format!(
+                            "            {} = {}\n",
+                            role.name,
+                            crate::reference::render_interpolation(
+                                &crate::reference::Subject::Slot(role.slot.clone())
+                            )
+                        )),
                         SignItem::RoleExpression(role) => {
                             out.push_str(&format!("            {} =\n", role.name));
                             if let Expression::Case(case) = &role.expression {

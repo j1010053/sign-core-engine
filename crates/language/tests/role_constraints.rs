@@ -40,9 +40,9 @@ sign NeedsEntity:
     sem:
         roles:
             referent [Entity]
-            referent = {x}
+            referent = {$slot.x}
     phon:
-        /{x}/
+        /{$slot.x}/
 
 /* DTO 驗證從 `types` 指名的 trait 解析 role 宣告,故同一份約束也放一個 trait 上。 */
 trait EntityHolder:
@@ -57,9 +57,9 @@ sign NeedsAnything:
     sem:
         roles:
             anything [*]
-            anything = {x}
+            anything = {$slot.x}
     phon:
-        /{x}/
+        /{$slot.x}/
 "#;
 
 fn system() -> conlang_language::CompiledSystem {

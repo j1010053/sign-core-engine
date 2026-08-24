@@ -1333,7 +1333,13 @@ fn validate_typed_schemas(
                     ));
                 }
                 if let Some(scrutinee) = &case.scrutinee {
-                    if let Some((slot, "phon")) = scrutinee.split_once('.') {
+                    if let Err(error) = reference::parse(&reference::SCRUTINEE, scrutinee) {
+                        report.push(Diagnostic::new(
+                            Severity::Error,
+                            "CASE_INVALID_SCRUTINEE",
+                            format!("{owner:?} phon case scrutinee {scrutinee:?}: {error}"),
+                        ));
+                    } else if let Some(slot) = scrutinee_slot(scrutinee) {
                         if !slots.iter().any(|candidate| candidate.name == slot) {
                             report.push(Diagnostic::new(
                                 Severity::Error,
@@ -1721,8 +1727,8 @@ fn validate_fp_expressions(
                         if case
                             .scrutinee
                             .as_deref()
-                            .and_then(|value| value.split_once('.'))
-                            .is_some_and(|(_, projection)| projection == "phon")
+                            .and_then(scrutinee_phon_slot)
+                            .is_some()
                             && !registry.has(category) =>
                     {
                         report.push(
@@ -2063,7 +2069,15 @@ fn template_references(template: &str) -> Result<Vec<String>, String> {
         if name.is_empty() {
             return Err(format!("empty slot reference at byte {at}"));
         }
-        references.push(name.to_owned());
+        // 括號的良構性(未閉合/巢狀)與括號**內容**的良構性是兩件事;
+        // 前者在上面,後者交給 reference。
+        let read = reference::parse(&reference::SUBJECT_ONLY, name)
+            .map_err(|error| format!("`{{{name}}}` at byte {at}: {error}"))?;
+        references.push(
+            read.slot()
+                .map(str::to_owned)
+                .unwrap_or_else(|| name.to_owned()),
+        );
     }
     Ok(references)
 }
@@ -2201,12 +2215,8 @@ fn validate_constructions_and_local_phon(
                 _ => None,
             }) {
                 if let Some(case) = &realization.expression {
-                    if let Some((slot, "phon")) = case
-                        .scrutinee
-                        .as_deref()
-                        .and_then(|value| value.split_once('.'))
-                    {
-                        used_slots.insert(slot.to_owned());
+                    if let Some(slot) = case.scrutinee.as_deref().and_then(scrutinee_phon_slot) {
+                        used_slots.insert(slot);
                     }
                     for branch in &case.branches {
                         if let crate::CaseCondition::Guard(guard) = &branch.condition {
@@ -2230,18 +2240,22 @@ fn validate_constructions_and_local_phon(
                 _ => None,
             }) {
                 for operand in [&constraint.left, &constraint.right] {
+                    // 解析不出主體就是解析不出——不再退回把整串當 slot 名,
+                    // 否則裸寫法會靜默地繼續通過。
                     let slot = reference::parse(&reference::CONSTRAINT_OPERAND, operand)
                         .ok()
-                        .and_then(|reference| reference.slot().map(str::to_owned))
-                        .unwrap_or_else(|| (*operand).to_owned());
-                    if slot_names.contains(&slot.as_str()) {
-                        used_slots.insert(slot.clone());
+                        .and_then(|reference| reference.slot().map(str::to_owned));
+                    if slot
+                        .as_deref()
+                        .is_some_and(|slot| slot_names.contains(&slot))
+                    {
+                        used_slots.insert(slot.expect("checked above"));
                     } else {
                         report.push(Diagnostic::new(
                             Severity::Error,
                             "CONSTRAINT_UNKNOWN_SLOT",
                             format!(
-                                "construction {:?} constraint refers to unknown slot {slot:?}",
+                                "construction {:?} constraint operand {operand:?} does not name a known slot",
                                 effective.name
                             ),
                         ));
@@ -2252,10 +2266,12 @@ fn validate_constructions_and_local_phon(
                 let Some(reference) = value
                     .strip_prefix('{')
                     .and_then(|inner| inner.strip_suffix('}'))
-                    .map(str::trim)
+                    .and_then(|inner| reference::parse(&reference::SUBJECT_ONLY, inner).ok())
+                    .and_then(|read| read.slot().map(str::to_owned))
                 else {
                     continue;
                 };
+                let reference = reference.as_str();
                 if reference.is_empty() || !slot_names.contains(&reference) {
                     report.push(
                         Diagnostic::new(
@@ -2512,6 +2528,24 @@ pub const COMPILER_SEMANTICS_VERSION: &str = "conlang-compile/1";
 
 /// Exact owned entry point requested by P38–P44. Use `compile_system_ref` when
 /// the caller wants to retain its original `Language` without cloning first.
+/// scrutinee 引用的 slot(不論之後讀範疇還是讀欄位)。slot 存在性驗證與
+/// used-slot 統計用這個。
+fn scrutinee_slot(scrutinee: &str) -> Option<String> {
+    let read = reference::parse(&reference::SCRUTINEE, scrutinee).ok()?;
+    read.slot().map(str::to_owned)
+}
+
+/// scrutinee 是不是「某個 slot 的 phon 投影」(`$slot.NAME.phon`)——唯一走
+/// **範疇**比對的形狀,故 `== VALUE` 的 VALUE 是 trait 名而非欄位值。
+/// 其餘形狀讀純量欄位。判準只有這一份。
+fn scrutinee_phon_slot(scrutinee: &str) -> Option<String> {
+    let read = reference::parse(&reference::SCRUTINEE, scrutinee).ok()?;
+    if read.dim != Some(Dim::Phon) || read.path.is_some() {
+        return None;
+    }
+    read.slot().map(str::to_owned)
+}
+
 pub fn compile_system(language: Language) -> Result<CompiledSystem, CompileSystemError> {
     compile_with_libraries(language, LibrarySpec::default())
 }
@@ -3063,16 +3097,17 @@ impl CompiledSystem {
         scrutinee: &str,
         expected: &str,
     ) -> Result<bool, SystemError> {
-        let scrutinee = reference::strip_legacy_self_prefix(scrutinee);
-        if let SignValue::Applied(token) = value {
-            // slot 的 phon 投影(`stem.phon`)是唯一走範疇比對的形狀;
-            // 其餘一律當成純量欄位讀取。判準由 SCRUTINEE spec 給。
-            if let Some(slot) = reference::parse(&reference::SCRUTINEE, scrutinee)
-                .ok()
-                .filter(|read| read.dim == Some(Dim::Phon) && read.path.is_none())
-                .and_then(|read| read.slot().map(str::to_owned))
-            {
-                let Some(filler) = token.fillers.iter().find(|filler| filler.slot == slot) else {
+        let read = reference::parse(&reference::SCRUTINEE, scrutinee).map_err(|error| {
+            SystemError::InvalidSignExpression(format!("case scrutinee {scrutinee:?}: {error}"))
+        })?;
+        match (&read.subject, read.dim, read.path.as_deref()) {
+            // `$slot.<name>.phon` —— 填充者的**範疇**比對。這一形與下一形不同:
+            // 比的是本體樹成員關係,不是欄位值。
+            (reference::Subject::Slot(slot), Some(Dim::Phon), None) => {
+                let SignValue::Applied(token) = value else {
+                    return Ok(false);
+                };
+                let Some(filler) = token.fillers.iter().find(|filler| &filler.slot == slot) else {
                     return Ok(false);
                 };
                 if !self.ontology.has(expected) {
@@ -3080,12 +3115,31 @@ impl CompiledSystem {
                         "unknown case category {expected:?}"
                     )));
                 }
-                return Ok(self
+                Ok(self
                     .ontology
-                    .categories_satisfy(&filler.categories, expected));
+                    .categories_satisfy(&filler.categories, expected))
             }
+            // `$slot.<name>.<dim>.<field>` —— 填充者的純量欄位,與 `$self` 對稱。
+            (reference::Subject::Slot(slot), Some(dim), Some(path)) => {
+                let SignValue::Applied(token) = value else {
+                    return Ok(false);
+                };
+                let Some(filler) = token.fillers.iter().find(|filler| &filler.slot == slot) else {
+                    return Ok(false);
+                };
+                Ok(filler.scalar(dim, path) == Some(expected))
+            }
+            // `$self.<dim>.<field>` —— 自己的純量欄位。
+            (reference::Subject::SelfSign, _, _) => {
+                let path = read.dim_path().expect("SCRUTINEE requires a dimension");
+                Ok(Self::scalar_from_value(value, &path) == Some(expected))
+            }
+            // 剩下的只有 `$slot.NAME.<非 phon 維>` 這種缺欄位的形狀。
+            _ => Err(SystemError::InvalidSignExpression(format!(
+                "case scrutinee {scrutinee:?} needs a field: `$slot.NAME.DIM.FIELD` \
+                 (or `$slot.NAME.phon` to compare the filler's category)"
+            ))),
         }
-        Ok(Self::scalar_from_value(value, scrutinee) == Some(expected))
     }
 
     fn contextual_base_sign(&self, evaluation: &SignEvaluation) -> Result<SignDef, SystemError> {
