@@ -1252,7 +1252,37 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                 rule.branch_sources.push(SourceLocation::line(no));
                 continue;
             }
+            // Q5′(2026-08-19):`NAME =` + 縮排 `case:` = feature 的**求值寫入**。
+            //
+            // 先前寫成 `NAME =>`,但 `=>` 在本語言是**累積規則**(沿用音韻的
+            // `A => B / C _ D`),而這個項目是**鍵控寫入**(一個 feature 一個,
+            // `effective_sign` 按 `(dim, name)` 合併)——名實不符。改用 `=` 之後
+            // 兩形態的分工重新成立:`=` 寫入(右端可以是字面值、值域、或一個
+            // 算出值的 `case`),`=>` 累積規則。
+            //
+            // 判別條件是「`=` 右端空白」,故不與 `NAME = VALUE`、`NAME = A | B`、
+            // `NAME = enum(...)` 相撞;右端空白而下一行不是 `case:` 仍是明確錯誤。
+            // 舊寫法 `NAME =>` + `case:` 若不攔,會掉進下面的規則解析,得到一個
+            // 與真正問題無關的訊息(空 body)。這裡直接指出遷移方向。
             if let Some(name) = text.strip_suffix("=>").map(str::trim) {
+                let next_is_case = body.get(index).is_some_and(|next| {
+                    next.indent > ind
+                        && (next.text == "case:"
+                            || (next.text.starts_with("case ") && next.text.ends_with(':')))
+                });
+                if ident_ok(name) && next_is_case {
+                    return Err(err(
+                        no,
+                        "a feature expression is written `NAME =` with an indented `case:`; \
+                         `=>` introduces an accumulating rule, not a keyed assignment",
+                    ));
+                }
+            }
+            if let Some(name) = text
+                .strip_suffix('=')
+                .filter(|head| !head.ends_with('='))
+                .map(str::trim)
+            {
                 if !ident_ok(name) {
                     return Err(err(no, "feature expression target must be an identifier"));
                 }

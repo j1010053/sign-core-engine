@@ -827,13 +827,27 @@ fn validate_typed_schemas(
                 SignItem::FeatureDecl(feature) => {
                     let key = (feature.dim, feature.name.clone());
                     if let Some(shadowed) = features.insert(key.clone(), feature.clone()) {
+                        // Q1:**型別宣告一次,不得改變**(與 ROLE_SCHEMA_CONFLICT /
+                        // SLOT_CONFLICT 同級)。feature 的值域是「這個語言的範式
+                        // 長什麼樣」,是語言層級的事實,一處說了算。
+                        //
+                        // 收窄不會因此失去出口——「這個類只有單數」寫**賦值**
+                        // (`number = singular`)即可,而賦值層還能表達未定案,
+                        // 表達力比重宣告值域更強。
+                        //
+                        // 先前是 Warning + 訊息說「resolves A over B」,也就是承認
+                        // 會靜默挑一個。而挑法無法從語法讀出意圖:`enum(sg)` 可能
+                        // 是收窄(單數專用類),`enum(sg,dual,pl)` 可能是擴充(有
+                        // 雙數的語言),交集與聯集各會做錯一整類案例。
                         if shadowed.values != feature.values {
                             report.push(
                                 Diagnostic::new(
-                                    Severity::Warning,
+                                    Severity::Error,
                                     "FEATURE_DECLARATION_SHADOWED",
                                     format!(
-                                        "{owner:?} resolves {}.{} enum({}) over enum({})",
+                                        "{owner:?} re-declares {}.{} as enum({}) over enum({}); \
+                                         a feature domain is declared once — to narrow it for a \
+                                         subclass, assign a value instead",
                                         key.0.keyword(),
                                         key.1,
                                         feature.values.join(", "),

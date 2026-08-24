@@ -410,7 +410,7 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                             push_rule(out, "            ", rule);
                         }
                         SignItem::FeatureExpression(expression) if expression.dim == parsed_dim => {
-                            out.push_str(&format!("            {} =>\n", expression.name));
+                            out.push_str(&format!("            {} =\n", expression.name));
                             if let Expression::Case(case) = &expression.expression {
                                 push_case(out, "                ", case);
                             }

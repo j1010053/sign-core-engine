@@ -178,7 +178,7 @@ sign Faulty:
     sem:
         feature:
             result = enum(yes, no)
-            result =>
+            result =
                 case:
                     $self.syn.trigger == on:
                         yes

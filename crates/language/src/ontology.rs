@@ -47,6 +47,21 @@ pub struct TraitProvenance {
     pub precedence: usize,
 }
 
+/// 綁定的值是字面值(而不是 `$slot.X.syn.F` 引用)。
+fn binding_is_literal(binding: &crate::SlotFeatureBinding) -> bool {
+    !binding.value.trim_start().starts_with("$slot.")
+}
+
+/// 字面值綁定的候選集合(`"a | b"` = 未定案)。
+fn binding_candidates(binding: &crate::SlotFeatureBinding) -> Vec<String> {
+    binding
+        .value
+        .split('|')
+        .map(str::trim)
+        .map(str::to_owned)
+        .collect()
+}
+
 /// 值項的合併鍵:泛型 `Def` 用路徑,`FeatureValue` 用 `dim.name`——兩者共用同一個
 /// 有效值命名空間(本地泛型賦值可以蓋掉繼承來的 typed 賦值,反之亦然)。
 fn value_key(item: &SignItem) -> String {
@@ -462,6 +477,48 @@ impl OntologyRegistry {
         }
     }
 
+    /// `name` 是不是 `ancestor` 的後代(含自身)。
+    ///
+    /// Q2 的收窄判定要用:slot 的填充約束只能**收窄**——後代的合法填充集合必須
+    /// 是祖先的子集。範疇的子集關係就是分類樹上的祖裔關係。
+    pub fn is_within(&self, name: &str, ancestor: &str) -> bool {
+        if name == ancestor {
+            return true;
+        }
+        let mut stack = vec![name.to_owned()];
+        let mut seen = BTreeSet::new();
+        while let Some(current) = stack.pop() {
+            if !seen.insert(current.clone()) {
+                continue;
+            }
+            let Some(node) = self.tree.get(&current) else {
+                continue;
+            };
+            for parent in &node.parents {
+                if parent == ancestor {
+                    return true;
+                }
+                stack.push(parent.clone());
+            }
+        }
+        false
+    }
+
+    /// slot 契約的收窄序:`left` 是否不寬於 `right`。
+    ///
+    /// `AnySign` 是上界(任何範疇都不寬於它);`optional` 比必填寬(可省 = 多允許
+    /// 「不填」這個狀態)。
+    pub fn slot_is_within(&self, left: &Slot, right: &Slot) -> bool {
+        let constraint_ok = match (&left.constraint, &right.constraint) {
+            (_, crate::SlotConstraint::AnySign) => true,
+            (crate::SlotConstraint::AnySign, _) => false,
+            (crate::SlotConstraint::Category(a), crate::SlotConstraint::Category(b)) => {
+                self.is_within(a, b)
+            }
+        };
+        constraint_ok && (right.optional || !left.optional)
+    }
+
     pub fn node(&self, name: &str) -> Option<&OntoNode> {
         self.tree.get(name)
     }
@@ -749,23 +806,47 @@ impl OntologyRegistry {
         }
         let values = flatten_values(value_acc);
 
+        // Q2:同名 slot 取**最窄**的契約(可交換,與掛載順序無關)。不相容的組合
+        // 由 `SLOT_CONFLICT` 擋在編譯期,這裡只需在可比較時挑對的那個。
         let mut slots = BTreeMap::<String, (usize, Slot)>::new();
         for (index, slot) in inherited_slots.into_iter().chain(local_slots).enumerate() {
-            slots.insert(slot.name.clone(), (index, slot));
+            match slots.get(&slot.name) {
+                Some((_, kept)) if self.slot_is_within(kept, &slot) => {}
+                _ => {
+                    slots.insert(slot.name.clone(), (index, slot));
+                }
+            }
         }
         let mut slots: Vec<_> = slots.into_values().collect();
         slots.sort_by_key(|(index, _)| *index);
 
+        // Q3(2026-08-19):同一個 `slot.feature` 由多處綁定時,**字面值取候選聯集**
+        // (與 `FeatureValue` 同一套未定案表示,交由構式求交收斂)。
+        //
+        // 任一方是 `$slot.X.syn.F` 引用時**不聯集**——引用不是值而是計算,聯集得
+        // 先求值,而求出的未定案沒有更外層的構式能收斂它,會卡死。那種情況由
+        // `SLOT_FEATURE_BINDING_CONFLICT` 擋在編譯期(見 validation_report)。
         let mut slot_features = BTreeMap::new();
         for (index, binding) in inherited_slot_features
             .into_iter()
             .chain(local_slot_features)
             .enumerate()
         {
-            slot_features.insert(
-                (binding.slot.clone(), binding.feature.clone()),
-                (index, binding),
-            );
+            let key = (binding.slot.clone(), binding.feature.clone());
+            match slot_features.get_mut(&key) {
+                Some((_, kept)) if binding_is_literal(kept) && binding_is_literal(&binding) => {
+                    let kept: &mut crate::SlotFeatureBinding = kept;
+                    for candidate in binding_candidates(&binding) {
+                        if !binding_candidates(kept).iter().any(|k| k == &candidate) {
+                            kept.value.push_str(" | ");
+                            kept.value.push_str(&candidate);
+                        }
+                    }
+                }
+                _ => {
+                    slot_features.insert(key, (index, binding));
+                }
+            }
         }
         let mut slot_features: Vec<_> = slot_features.into_values().collect();
         slot_features.sort_by_key(|(index, _)| *index);
@@ -1098,6 +1179,68 @@ impl OntologyRegistry {
                     }
                 }
 
+                // Q3:同一個 `slot.feature` 上,只要有任一方是 `$slot.X.syn.F` 引用
+                // 且各方說法不同,就擋下。
+                //
+                // 沒有固定策略是對的:德語的結構格 vs 詞彙格(`object.case =
+                // accusative` 對 `= $slot.verb.syn.assigned_case`)要引用贏,英語
+                // 無人稱構式(`verb.number = $slot.subject.syn.number` 對
+                // `= singular`)要字面值贏——語法上兩者一模一樣。出口是在構式自己
+                // 身上寫那條 `slot_features`(本地最高階,直接取代繼承來的)。
+                let mut bindings: BTreeMap<(String, String), Vec<(String, String)>> =
+                    BTreeMap::new();
+                for source in &order {
+                    if let Some(node) = self.node(&source.trait_name) {
+                        for item in &node.items {
+                            if let SignItem::SlotFeatureBinding(binding) = item {
+                                bindings
+                                    .entry((binding.slot.clone(), binding.feature.clone()))
+                                    .or_default()
+                                    .push((source.trait_name.clone(), binding.value.clone()));
+                            }
+                        }
+                    }
+                }
+                for item in &sign.items {
+                    if let SignItem::SlotFeatureBinding(binding) = item {
+                        bindings
+                            .entry((binding.slot.clone(), binding.feature.clone()))
+                            .or_default()
+                            .push((sign.name.clone(), binding.value.clone()));
+                    }
+                }
+                for ((slot, feature), sources) in bindings {
+                    let distinct: BTreeSet<_> = sources.iter().map(|(_, value)| value).collect();
+                    let any_reference = sources
+                        .iter()
+                        .any(|(_, value)| value.trim_start().starts_with("$slot."));
+                    if distinct.len() > 1 && any_reference {
+                        report.push(
+                            Diagnostic::new(
+                                Severity::Error,
+                                "SLOT_FEATURE_BINDING_CONFLICT",
+                                format!(
+                                    "{} binds {slot}.{feature} both by reference and to a \
+                                     different value; a reference is a computation, not a value, \
+                                     so the two cannot be combined — bind it explicitly here",
+                                    sign.name
+                                ),
+                            )
+                            .with_sources(
+                                sources
+                                    .iter()
+                                    .rev()
+                                    .map(|(owner, _)| DiagnosticSource {
+                                        owner: owner.clone(),
+                                        path: Some(format!("{slot}.{feature}")),
+                                        location: SourceLocation::unknown(),
+                                    })
+                                    .collect(),
+                            ),
+                        );
+                    }
+                }
+
                 let mut slots: BTreeMap<String, Vec<(String, Slot)>> = BTreeMap::new();
                 for source in &order {
                     if let Some(node) = self.node(&source.trait_name) {
@@ -1120,17 +1263,49 @@ impl OntologyRegistry {
                     }
                 }
                 for (name, definitions) in slots {
-                    let distinct: BTreeSet<_> = definitions
-                        .iter()
-                        .map(|(_, slot)| (slot.constraint.clone(), slot.optional))
-                        .collect();
-                    if distinct.len() > 1 {
+                    // Q2(2026-08-19):slot 契約允許**收窄**,禁止放寬。
+                    //
+                    // 與 feature 值域(Q1「宣告一次」)不同的理由:值域的收窄有別的
+                    // 表達方式(賦值),slot 沒有——`persuade` 的賓語必須是人,除了
+                    // 重新宣告 `object [Human]` 之外沒有寫法。禁止就會少掉一個真實
+                    // 需求的出口。
+                    //
+                    // 判準:所有定義中必須存在一個**最窄者**,它不寬於其餘全部。
+                    // 有就取它(可交換,與掛載順序無關);沒有就是不相容——可能是
+                    // 後代放寬了祖先,也可能是兩個並列定義在分類樹上互不相干
+                    // (`[Noun]` vs `[Adposition]`,實務上多半是槽名撞車)。
+                    // 兩道檢查,少任何一道都會漏:
+                    //
+                    // (1) **方向**——若 B 是 A 的後代(或 B 是 sign 本身),B 的契約
+                    //     必須不寬於 A。少了它,「後代把 `[Human]` 放回 `[Nominal]`」
+                    //     會通過,因為最窄者(祖先那份)仍然存在。
+                    // (2) **可比較**——所有定義中必須存在一個最窄者。少了它,兩個
+                    //     互不相干的並列定義(`[Noun]` vs `[Adposition]`)會通過。
+                    let widened = definitions.iter().any(|(later_owner, later)| {
+                        definitions.iter().any(|(earlier_owner, earlier)| {
+                            let later_is_below = later_owner == &sign.name
+                                && earlier_owner != &sign.name
+                                || self.has(later_owner)
+                                    && self.has(earlier_owner)
+                                    && later_owner != earlier_owner
+                                    && self.is_within(later_owner, earlier_owner);
+                            later_is_below && !self.slot_is_within(later, earlier)
+                        })
+                    });
+                    let narrowest = definitions.iter().find(|(_, candidate)| {
+                        definitions
+                            .iter()
+                            .all(|(_, other)| self.slot_is_within(candidate, other))
+                    });
+                    if widened || narrowest.is_none() {
                         report.push(
                             Diagnostic::new(
                                 Severity::Error,
                                 "SLOT_CONFLICT",
                                 format!(
-                                    "{} inherits incompatible definitions for slot {name:?}",
+                                    "{} inherits incompatible definitions for slot {name:?}: \
+                                     a slot contract may only be narrowed, and no definition \
+                                     here is narrower than all the others",
                                     sign.name
                                 ),
                             )

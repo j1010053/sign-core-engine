@@ -1130,7 +1130,7 @@ sign Chooser:
     sem:
         feature:
             boundedness = enum(bounded, unbounded)
-            boundedness =>
+            boundedness =
                 case:
                     $self.syn.number == plural:
                         unbounded
@@ -1200,7 +1200,7 @@ sign MissingDefault:
     sem:
         feature:
             result = enum(yes, no)
-            result =>
+            result =
                 case:
                     $self.syn.trigger == on:
                         yes
@@ -1320,7 +1320,7 @@ sign Invalid:
     syn:
         feature:
             value = enum(one, two)
-            value =>
+            value =
                 case:
                     else:
                         Helper()
@@ -1387,7 +1387,7 @@ fn nested_case_leaves_are_statically_type_checked() {
         feature:
             trigger = enum(on, off)
             result = enum(yes, no)
-            result =>
+            result =
                 case:
                     $self.syn.trigger == on:
                         case:
@@ -1439,7 +1439,7 @@ sign NestedChoice:
     sem:
         feature:
             outcome = enum(yes, no)
-            outcome =>
+            outcome =
                 case:
                     $self.syn.trigger == on:
                         case:
@@ -1579,7 +1579,7 @@ sign marked:
     sem:
         feature:
             outcome = enum(yes, no)
-            outcome =>
+            outcome =
                 case:
                     $self.syn.trigger == on:
                         yes

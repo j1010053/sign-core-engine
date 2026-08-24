@@ -155,7 +155,7 @@ sign root:
             actor [Entity]
         feature:
             number = enum(singular, plural)
-            number =>
+            number =
                 case:
                     else:
                         singular

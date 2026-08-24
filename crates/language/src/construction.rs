@@ -1196,11 +1196,15 @@ fn validate_occurrence_feature(
             feature: feature.to_owned(),
         });
     };
-    if !domain.iter().any(|candidate| candidate == value) {
+    // Q3:綁定的值可能是未定案的候選集合(`"a | b"`),每個候選都要在域內。
+    if let Some(outside) = value_candidates(value)
+        .into_iter()
+        .find(|candidate| !domain.iter().any(|allowed| allowed == candidate))
+    {
         return Err(CxgError::SlotFeatureOutOfDomain {
             slot: slot.to_owned(),
             feature: feature.to_owned(),
-            value: value.to_owned(),
+            value: outside.to_owned(),
             domain: domain.join(", "),
         });
     }
@@ -1628,8 +1632,16 @@ fn apply_occurrence_constraints(
                 // *the police are* / *is*、*fish*(單複同形)這類語言事實,所以
                 // 收斂結果只寫進構式局部的副本,不回寫已存的 sign。
                 Some(actual) => {
-                    let candidates = value_candidates(&actual);
-                    if !candidates.contains(&value.as_str()) {
+                    // 構式的要求本身也可能是集合(多處綁定聯集而來),故兩邊都
+                    // 拆成候選再求交,而不是拿字串比對。
+                    let wanted = value_candidates(value);
+                    let held = value_candidates(&actual);
+                    let intersection: Vec<&str> = held
+                        .iter()
+                        .copied()
+                        .filter(|candidate| wanted.contains(candidate))
+                        .collect();
+                    if intersection.is_empty() {
                         return Err(CxgError::SlotFeatureConflict {
                             slot: slot.to_owned(),
                             feature: feature.clone(),
@@ -1637,8 +1649,10 @@ fn apply_occurrence_constraints(
                             actual,
                         });
                     }
-                    if candidates.len() > 1 {
-                        constrained = Patch::syn().set(feature, value).apply(&constrained);
+                    if intersection.len() < held.len() {
+                        constrained = Patch::syn()
+                            .set(feature, &intersection.join(" | "))
+                            .apply(&constrained);
                     }
                 }
                 None => {

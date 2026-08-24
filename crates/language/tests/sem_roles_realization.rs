@@ -509,13 +509,47 @@ sign Winner:
     belongs Earlier
     belongs Later
 "#;
-    let resolved = compile_system(Language::parse(declaration_shadow).expect("parse"))
-        .expect("feature declaration priority is a warning, not a hard failure");
-    assert!(resolved
-        .validation
-        .diagnostics()
-        .iter()
+    // Q1(2026-08-19):值域宣告**一次**,與 ROLE_SCHEMA_CONFLICT / SLOT_CONFLICT
+    // 同級的 Error。先前是 Warning + 靜默挑一個,而挑法無法從語法讀出意圖——
+    // `enum(singular)` 可能是收窄,也可能另一邊是擴充,交集與聯集各會做錯一類。
+    // 收窄的正解是**賦值**(`number = singular`),不是重新宣告值域。
+    let CompileSystemError::Validation(report) =
+        compile_system(Language::parse(declaration_shadow).expect("parse"))
+            .expect_err("重複宣告值域必須擋下")
+    else {
+        panic!("expected validation report");
+    };
+    assert!(report
+        .errors()
         .any(|diagnostic| diagnostic.code == "FEATURE_DECLARATION_SHADOWED"));
+}
+
+/// 正向控制組:**相同**的值域重複出現不得報錯——那不是改變宣告,只是同一份
+/// 宣告經多條路徑到達。少了這條,Q1 會把每個菱形都判成重複宣告。
+#[test]
+fn repeating_an_identical_feature_declaration_is_not_a_re_declaration() {
+    let source = r#"trait Root:
+    syn:
+        feature:
+            number = enum(singular, plural)
+trait Left:
+    belongs Root
+trait Right:
+    belongs Root
+sign Diamond:
+    belongs Left
+    belongs Right
+"#;
+    let system = compile_system(Language::parse(source).expect("parse"))
+        .expect("同一份宣告經兩條路徑到達不是重複宣告");
+    assert!(
+        !system
+            .validation
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "FEATURE_DECLARATION_SHADOWED"),
+        "菱形不得誤判"
+    );
 }
 
 #[test]

@@ -200,7 +200,7 @@ sign InnerNominal:
     sem:
         feature:
             interpreted_case = enum(nominative, accusative)
-            interpreted_case =>
+            interpreted_case =
                 case:
                     $self.syn.case == accusative:
                         accusative
