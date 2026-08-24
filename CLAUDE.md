@@ -254,7 +254,8 @@ P26 序列性 id(不入印出格式,I15);dsl 域宣告以不透明區塊承載(�
 不及於行/括號結構的 .lang)——dsl 域區依**檔案位置**判定(裁決1:首個 language 構造前
 verbatim)、`==` 切 Block(P27)、`Name[n]` 引用、`=`/`=>` 二分、`@stage`(省略=word)、
 **`else` 鏈**(P22,入 `Rule.else_chain`,printer 同步輸出)、**Path 文法**(修補05 §3.5,
-`path::parse_path`:`.`欄位/`[key]`/`~tier`,Def 路徑驗證+步驟 13 定址複用)。
+`path::parse_path`,Def 路徑驗證+步驟 13 定址複用;當時含 `.`欄位/`[key]`/`~tier`
+三種段,**`[key]`/`~tier` 已由修補13 ⑨ 移除**,現為 `Name ('.' Name)*`)。
 出口過:**round-trip 恆等**(canonical 輸入逐位元;id 依文件序決定性再生)、
 非 canonical 輸入正規化為不動點、source→AST golden、錯誤定位(行號)。
 規則 env/action 內部與守衛求值的結構化 = 步驟 10(compile pass 需求驅動)。
@@ -380,7 +381,7 @@ patch);`RuleRecord` 保 status/changed/branch/diag/RuleId。出口過:
 workbench M1++ 封板回歸綠；引擎零觸動。
 
 **共時 `.lang` surface 補齊(2026-07-21)**:維度 Def lhs 接完整 Path
-(`.`/`[key]`/`~tier`)；`syn:` 內平坦 `map SLOT OP [ARG]` 與 Rust 共用
+(當時為 `.`/`[key]`/`~tier`;**後兩者已由修補13 ⑨ 移除**)；`syn:` 內平坦 `map SLOT OP [ARG]` 與 Rust 共用
 `SlotMapOp`，source mapping 經 compile 驗證後進 construction runtime；sign 頂層
 `origin/provenance/lifecycle` typed 化。歷史 attestation 年代/文本/可信度仍不進
 Language，對照見 docs/14 與 `tests/lang_surface.rs`。
