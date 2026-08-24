@@ -25,6 +25,7 @@ pub mod rewrite;
 pub mod state;
 
 use crate::rewrite::DonorScope;
+use conlang_language::reference;
 use conlang_language::{
     check_document, check_document_with_packages, compile_document, sha256_hex, AddressSegment,
     BinaryConstraint, Block, CaseBranch, CompileSystemError, CompiledSystem, Def, DerivationKind,
@@ -5852,7 +5853,7 @@ fn rewrite_local_slot_refs_in_items(items: &mut [SignItem], old: &str, new: &str
                 if binding.slot == old {
                     binding.slot = new.to_owned();
                 }
-                binding.value = rewrite_slot_accesses(&binding.value, old, new);
+                binding.value = reference::rename_slot_in_text(&binding.value, old, new);
             }
             SignItem::SlotMap(operation) => match operation {
                 SlotMapOp::Preserve { slot }
@@ -5870,21 +5871,22 @@ fn rewrite_local_slot_refs_in_items(items: &mut [SignItem], old: &str, new: &str
                 binding.slot = new.to_owned();
             }
             SignItem::Constraint(constraint) => {
-                constraint.left = rewrite_slot_operand(&constraint.left, old, new);
-                constraint.right = rewrite_slot_operand(&constraint.right, old, new);
+                // 運算元整串就是一個引用,裸形與 `$slot.` 顯式形都算。
+                // (舊的 `rewrite_slot_operand` 只認裸形,顯式形整個漏掉。)
+                constraint.left = reference::rename_slot_in_operand(&constraint.left, old, new);
+                constraint.right = reference::rename_slot_in_operand(&constraint.right, old, new);
             }
             SignItem::Rule(rule) | SignItem::FeatureRule(rule) => {
-                rule.body = rewrite_slot_accesses(&rule.body, old, new);
+                rule.body = reference::rename_slot_in_text(&rule.body, old, new);
                 for branch in &mut rule.else_chain {
-                    *branch = rewrite_slot_accesses(branch, old, new);
+                    *branch = reference::rename_slot_in_text(branch, old, new);
                 }
                 for branch in &mut rule.then_chain {
-                    *branch = rewrite_slot_accesses(branch, old, new);
+                    *branch = reference::rename_slot_in_text(branch, old, new);
                 }
             }
             SignItem::Def(def) => {
-                def.value = rewrite_slot_template(&def.value, old, new);
-                def.value = rewrite_slot_accesses(&def.value, old, new);
+                def.value = reference::rename_slot_in_text(&def.value, old, new);
             }
             SignItem::Realization(realization) => {
                 // Typed realization case slot-renames flow through the shared
@@ -5912,12 +5914,11 @@ fn rewrite_local_slot_refs_in_items(items: &mut [SignItem], old: &str, new: &str
 
 fn rewrite_local_slot_refs_in_case(case: &mut TypedCase, old: &str, new: &str) {
     if let Some(scrutinee) = &mut case.scrutinee {
-        *scrutinee = rewrite_slot_operand(scrutinee, old, new);
-        *scrutinee = rewrite_slot_accesses(scrutinee, old, new);
+        *scrutinee = reference::rename_slot_in_operand(scrutinee, old, new);
     }
     for branch in &mut case.branches {
         if let conlang_language::CaseCondition::Guard(guard) = &mut branch.condition {
-            *guard = rewrite_slot_accesses(guard, old, new);
+            *guard = reference::rename_slot_in_text(guard, old, new);
         }
         rewrite_local_slot_refs_in_expression(&mut branch.result, old, new);
     }
@@ -5934,7 +5935,9 @@ fn rewrite_local_slot_refs_in_expression(expression: &mut Expression, old: &str,
         Expression::SignFragment(items) | Expression::DimFragment { items, .. } => {
             rewrite_local_slot_refs_in_items(items, old, new)
         }
-        Expression::PhonTemplate(template) => *template = rewrite_slot_template(template, old, new),
+        Expression::PhonTemplate(template) => {
+            *template = reference::rename_slot_in_text(template, old, new)
+        }
         Expression::Slot(slot) if slot == old => *slot = new.to_owned(),
         Expression::Case(case) => rewrite_local_slot_refs_in_case(case, old, new),
         Expression::EnumValue(_) | Expression::SelfSign | Expression::Slot(_) => {}
@@ -6044,49 +6047,6 @@ fn rewrite_application_parameters(
             rewrite_application_parameters(nested, callees, old, new);
         }
     }
-}
-
-fn rewrite_slot_operand(source: &str, old: &str, new: &str) -> String {
-    if source == old {
-        return new.to_owned();
-    }
-    source
-        .strip_prefix(old)
-        .filter(|rest| rest.starts_with('.'))
-        .map(|rest| format!("{new}{rest}"))
-        .unwrap_or_else(|| source.to_owned())
-}
-
-fn rewrite_slot_template(source: &str, old: &str, new: &str) -> String {
-    source.replace(&format!("{{{old}}}"), &format!("{{{new}}}"))
-}
-
-fn rewrite_slot_accesses(source: &str, old: &str, new: &str) -> String {
-    let needle = format!("$slot.{old}");
-    let mut output = String::with_capacity(source.len());
-    let mut cursor = 0;
-    while let Some(offset) = source[cursor..].find(&needle) {
-        let start = cursor + offset;
-        let end = start + needle.len();
-        let boundary = source[end..]
-            .chars()
-            .next()
-            .is_none_or(|character| character == '.' || !is_identifier_character(character));
-        output.push_str(&source[cursor..start]);
-        if boundary {
-            output.push_str("$slot.");
-            output.push_str(new);
-        } else {
-            output.push_str(&source[start..end]);
-        }
-        cursor = end;
-    }
-    output.push_str(&source[cursor..]);
-    output
-}
-
-fn is_identifier_character(character: char) -> bool {
-    character.is_alphanumeric() || matches!(character, '_' | '-' | ':' | '/')
 }
 
 fn rewrite_sign_refs(language: &mut Language, old: &str, new: &str) {

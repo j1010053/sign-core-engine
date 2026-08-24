@@ -23,6 +23,7 @@
 //! round-trip:對 canonical 輸入,`parse(src).dump() == src`(P21)。
 
 use crate::path::parse_path;
+use crate::reference;
 use crate::{
     BinaryConstraint, Block, CaseBranch, CaseCondition, CaseSelection, ConstraintPredicate, Def,
     Dim, Expression, ExpressionType, FeatureDecl, FeatureExpression, FeatureValue, Language,
@@ -112,16 +113,13 @@ fn parse_argument_value(source: &str, line: usize) -> Result<SignArgumentValue, 
         .and_then(|value| value.strip_suffix('}'))
         .unwrap_or(source.trim())
         .trim();
-    if value == "$self" {
-        return Ok(SignArgumentValue::SelfSign);
-    }
-    if let Some(slot) = value.strip_prefix("$slot.") {
-        if ident_ok(slot) {
-            return Ok(SignArgumentValue::Slot(slot.to_owned()));
-        }
-    }
-    if ident_ok(value) {
-        return Ok(SignArgumentValue::Slot(value.to_owned()));
+    // 實參是「只有主體、沒有維度也沒有路徑」的引用:`$self` / `$slot.n` / `n`。
+    // 解析不出來就是巢狀 application。
+    if let Ok(read) = reference::parse(&reference::SUBJECT_ONLY, value) {
+        return Ok(match read.subject {
+            reference::Subject::SelfSign => SignArgumentValue::SelfSign,
+            reference::Subject::Slot(name) => SignArgumentValue::Slot(name),
+        });
     }
     parse_sign_application(value, line)
         .map(Box::new)
@@ -592,24 +590,19 @@ fn parse_slot_feature_binding(
     }
 
     let value = value.trim();
+    // 值要嘛是 enum 字面值,要嘛是那個凍結的 syn 讀取——形狀由 reference 模組
+    // 定義,這裡只挑訊息。
     if !ident_ok(value) {
-        let mut parts = value.split('.');
-        let (Some("$slot"), Some(slot), Some("syn"), Some(feature), None) = (
-            parts.next(),
-            parts.next(),
-            parts.next(),
-            parts.next(),
-            parts.next(),
-        ) else {
+        if let Err(error) = reference::parse(&reference::SLOT_SYN_FEATURE, value) {
             return Err(err(
                 source_line,
-                "slot feature value must be an enum literal or `$slot.SOURCE.syn.FEATURE`",
-            ));
-        };
-        if !ident_ok(slot) || !ident_ok(feature) {
-            return Err(err(
-                source_line,
-                "slot feature source slot and feature must be identifiers",
+                match error {
+                    reference::RefError::SlotNotIdentifier
+                    | reference::RefError::PathNotIdentifier => {
+                        "slot feature source slot and feature must be identifiers"
+                    }
+                    _ => "slot feature value must be an enum literal or `$slot.SOURCE.syn.FEATURE`",
+                },
             ));
         }
     }

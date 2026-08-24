@@ -36,6 +36,7 @@ pub mod patch;
 pub mod path;
 pub mod printer;
 pub mod projection;
+pub mod reference;
 pub mod sampling;
 pub mod sem;
 pub mod semantic_dto;

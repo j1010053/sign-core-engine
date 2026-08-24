@@ -5,6 +5,7 @@
 use crate::construction::{slots_of, FillerSnapshot};
 use crate::ontology::OntologyRegistry;
 use crate::path::parse_path;
+use crate::reference::{self, DimPolicy, PathPolicy, RefError, RefSpec, Sigil};
 use crate::{
     CaseCondition, Def, Dim, Expression, RuleId, RuleNamespace, SignDef, SignItem, Slot,
     SourceLocation,
@@ -106,25 +107,37 @@ pub(crate) fn realization_guard_slot_references(source: &str) -> Vec<String> {
     }
 }
 
+/// `$self.<dim>.<path>`——維度必填、路徑必填且走 Path 文法驗證。
+const SELF_ACCESS: RefSpec = RefSpec {
+    sigil: Sigil::Required,
+    allow_self: true,
+    allow_slot: false,
+    ident_subject: false,
+    dim: DimPolicy::Required,
+    path: PathPolicy::RequiredValidated,
+};
+
+/// `$slot.<name>.<dim>.<path>`——同上,主體換成 slot。
+const SLOT_ACCESS: RefSpec = RefSpec {
+    sigil: Sigil::Required,
+    allow_self: false,
+    allow_slot: true,
+    ident_subject: false,
+    dim: DimPolicy::Required,
+    path: PathPolicy::RequiredValidated,
+};
+
 fn parse_self_access(value: &str) -> Result<SelfAccess, String> {
-    let mut parts = value.trim().splitn(3, '.');
-    if parts.next() != Some("$self") {
-        return Err(format!(
-            "self reference must begin with `$self.`, got {value:?}"
-        ));
-    }
-    let dim = parts.next().and_then(Dim::parse);
-    let path = parts.next().unwrap_or_default();
-    if path.is_empty() || dim.is_none() {
-        return Err(format!(
-            "self reference must be `$self.phon|syn|sem|prag.PATH`, got {value:?}"
-        ));
-    }
-    let dim = dim.expect("checked above");
-    parse_path(&format!("{}.{}", dim.keyword(), path)).map_err(|error| error.to_string())?;
+    let reference = reference::parse(&SELF_ACCESS, value).map_err(|error| match error {
+        RefError::MissingSigil | RefError::SubjectNotAllowed => {
+            format!("self reference must begin with `$self.`, got {value:?}")
+        }
+        RefError::BadPath(message) => message,
+        _ => format!("self reference must be `$self.phon|syn|sem|prag.PATH`, got {value:?}"),
+    })?;
     Ok(SelfAccess {
-        dim,
-        path: path.to_owned(),
+        dim: reference.dim.expect("SELF_ACCESS requires a dimension"),
+        path: reference.path.expect("SELF_ACCESS requires a path"),
     })
 }
 
@@ -141,26 +154,20 @@ fn parse_access(value: &str) -> Result<Access, String> {
 }
 
 fn parse_slot_access(value: &str) -> Result<SlotAccess, String> {
-    let mut parts = value.trim().splitn(4, '.');
-    if parts.next() != Some("$slot") {
-        return Err(format!(
-            "slot reference must begin with `$slot.`, got {value:?}"
-        ));
-    }
-    let slot = parts.next().unwrap_or_default();
-    let dim = parts.next().and_then(Dim::parse);
-    let path = parts.next().unwrap_or_default();
-    if slot.is_empty() || path.is_empty() || dim.is_none() {
-        return Err(format!(
-            "slot reference must be `$slot.NAME.phon|syn|sem|prag.PATH`, got {value:?}"
-        ));
-    }
-    let dim = dim.expect("checked above");
-    parse_path(&format!("{}.{}", dim.keyword(), path)).map_err(|error| error.to_string())?;
+    let reference = reference::parse(&SLOT_ACCESS, value).map_err(|error| match error {
+        RefError::MissingSigil | RefError::SubjectNotAllowed => {
+            format!("slot reference must begin with `$slot.`, got {value:?}")
+        }
+        RefError::BadPath(message) => message,
+        _ => format!("slot reference must be `$slot.NAME.phon|syn|sem|prag.PATH`, got {value:?}"),
+    })?;
     Ok(SlotAccess {
-        slot: slot.to_owned(),
-        dim,
-        path: path.to_owned(),
+        slot: reference
+            .slot()
+            .expect("SLOT_ACCESS forbids the self subject")
+            .to_owned(),
+        dim: reference.dim.expect("SLOT_ACCESS requires a dimension"),
+        path: reference.path.expect("SLOT_ACCESS requires a path"),
     })
 }
 

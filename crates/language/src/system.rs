@@ -10,6 +10,7 @@ use crate::diagnostic::{Diagnostic, DiagnosticSource, Severity, SourceLocation, 
 use crate::library::{self, LibraryId, LibraryLoadError, LibrarySpec, ResolvedPackages};
 use crate::ontology::OntologyRegistry;
 use crate::path::parse_path;
+use crate::reference;
 use crate::sampling::{sample_weighted_index, WeightedSampleError};
 use crate::semantic_dto::{SemanticDocumentError, SemanticDocumentV1, SemanticNodeV1};
 use crate::synchronic::{self, RuleRecord, RuleStatus, SelfRead, SlotRead};
@@ -612,18 +613,9 @@ fn validate_typed_schemas(
         }
     }
 
-    fn slot_feature_read(value: &str) -> Option<(&str, &str)> {
-        let mut parts = value.split('.');
-        match (
-            parts.next(),
-            parts.next(),
-            parts.next(),
-            parts.next(),
-            parts.next(),
-        ) {
-            (Some("$slot"), Some(slot), Some("syn"), Some(feature), None) => Some((slot, feature)),
-            _ => None,
-        }
+    fn slot_feature_read(value: &str) -> Option<(String, String)> {
+        let reference = reference::parse(&reference::SLOT_SYN_FEATURE, value).ok()?;
+        Some((reference.slot()?.to_owned(), reference.path.clone()?))
     }
 
     fn category_feature_domain(
@@ -934,7 +926,7 @@ fn validate_typed_schemas(
                     continue;
                 };
                 let source_domain =
-                    category_feature_domain(registry, source_category, source_feature);
+                    category_feature_domain(registry, source_category, &source_feature);
                 if source_domain.is_none() {
                     report.push(
                         Diagnostic::new(
@@ -2238,14 +2230,12 @@ fn validate_constructions_and_local_phon(
                 _ => None,
             }) {
                 for operand in [&constraint.left, &constraint.right] {
-                    let slot = operand
-                        .strip_prefix("$slot.")
-                        .unwrap_or(operand)
-                        .split('.')
-                        .next()
-                        .unwrap_or(operand);
-                    if slot_names.contains(&slot) {
-                        used_slots.insert(slot.to_owned());
+                    let slot = reference::parse(&reference::CONSTRAINT_OPERAND, operand)
+                        .ok()
+                        .and_then(|reference| reference.slot().map(str::to_owned))
+                        .unwrap_or_else(|| (*operand).to_owned());
+                    if slot_names.contains(&slot.as_str()) {
+                        used_slots.insert(slot.clone());
                     } else {
                         report.push(Diagnostic::new(
                             Severity::Error,
@@ -2297,12 +2287,10 @@ fn validate_constructions_and_local_phon(
                 _ => None,
             }) {
                 used_slots.insert(binding.slot.clone());
-                if let Some((slot, _)) = binding
-                    .value
-                    .strip_prefix("$slot.")
-                    .and_then(|value| value.split_once(".syn."))
-                {
-                    used_slots.insert(slot.to_owned());
+                if let Ok(read) = reference::parse(&reference::SLOT_SYN_FEATURE, &binding.value) {
+                    if let Some(slot) = read.slot() {
+                        used_slots.insert(slot.to_owned());
+                    }
                 }
             }
             let has_meaning = !effective.project(Dim::Sem, registry).defs.is_empty()
@@ -3075,26 +3063,26 @@ impl CompiledSystem {
         scrutinee: &str,
         expected: &str,
     ) -> Result<bool, SystemError> {
-        let scrutinee = scrutinee
-            .trim()
-            .strip_prefix("$self.")
-            .unwrap_or(scrutinee.trim());
+        let scrutinee = reference::strip_legacy_self_prefix(scrutinee);
         if let SignValue::Applied(token) = value {
-            if let Some((slot, projection)) = scrutinee.split_once('.') {
-                if projection == "phon" {
-                    let filler = token.fillers.iter().find(|filler| filler.slot == slot);
-                    let Some(filler) = filler else {
-                        return Ok(false);
-                    };
-                    if !self.ontology.has(expected) {
-                        return Err(SystemError::InvalidSignExpression(format!(
-                            "unknown case category {expected:?}"
-                        )));
-                    }
-                    return Ok(self
-                        .ontology
-                        .categories_satisfy(&filler.categories, expected));
+            // slot 的 phon 投影(`stem.phon`)是唯一走範疇比對的形狀;
+            // 其餘一律當成純量欄位讀取。判準由 SCRUTINEE spec 給。
+            if let Some(slot) = reference::parse(&reference::SCRUTINEE, scrutinee)
+                .ok()
+                .filter(|read| read.dim == Some(Dim::Phon) && read.path.is_none())
+                .and_then(|read| read.slot().map(str::to_owned))
+            {
+                let Some(filler) = token.fillers.iter().find(|filler| filler.slot == slot) else {
+                    return Ok(false);
+                };
+                if !self.ontology.has(expected) {
+                    return Err(SystemError::InvalidSignExpression(format!(
+                        "unknown case category {expected:?}"
+                    )));
                 }
+                return Ok(self
+                    .ontology
+                    .categories_satisfy(&filler.categories, expected));
             }
         }
         Ok(Self::scalar_from_value(value, scrutinee) == Some(expected))

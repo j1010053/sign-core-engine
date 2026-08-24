@@ -12,6 +12,7 @@
 //! provenance，並可遞迴充當另一 construction 的 filler。
 
 use crate::ontology::OntologyRegistry;
+use crate::reference;
 use crate::sem::{self, SemNode};
 use crate::synchronic::{self, Patch, RuleRecord, RuleStatus};
 pub use crate::SlotMapOp;
@@ -974,13 +975,9 @@ fn committed_bound_filler(material: &FillerMaterial) -> Result<BoundFiller, CxgE
     })
 }
 
-fn feature_operand(source: &str) -> Option<(&str, &str)> {
-    let source = source.strip_prefix("$slot.").unwrap_or(source);
-    let mut parts = source.split('.');
-    match (parts.next(), parts.next(), parts.next(), parts.next()) {
-        (Some(slot), Some("syn"), Some(feature), None) => Some((slot, feature)),
-        _ => None,
-    }
+fn feature_operand(source: &str) -> Option<(String, String)> {
+    let reference = reference::parse(&reference::OPTIONAL_SLOT_SYN_FEATURE, source).ok()?;
+    Some((reference.slot()?.to_owned(), reference.path.clone()?))
 }
 
 fn validate_binary_constraints(
@@ -1014,23 +1011,24 @@ fn validate_binary_constraints(
                 let Some((right_slot, right_feature)) = feature_operand(&constraint.right) else {
                     return Err(CxgError::ConstraintInvalidFeature(constraint.right.clone()));
                 };
-                for name in [left_slot, right_slot] {
+                for name in [&left_slot, &right_slot] {
                     if !slot_exists(name) {
-                        return Err(CxgError::ConstraintUnknownSlot(name.to_owned()));
+                        return Err(CxgError::ConstraintUnknownSlot(name.clone()));
                     }
                 }
-                let (Some(left), Some(right)) = (material(left_slot), material(right_slot)) else {
+                let (Some(left), Some(right)) = (material(&left_slot), material(&right_slot))
+                else {
                     // The unsaturated Sign keeps this constraint until both
                     // operands become concrete.
                     continue;
                 };
                 let left_domain = left
                     .feature_domains
-                    .get(left_feature)
+                    .get(&left_feature)
                     .ok_or_else(|| CxgError::ConstraintInvalidFeature(constraint.left.clone()))?;
                 let right_domain = right
                     .feature_domains
-                    .get(right_feature)
+                    .get(&right_feature)
                     .ok_or_else(|| CxgError::ConstraintInvalidFeature(constraint.right.clone()))?;
                 if left_domain != right_domain {
                     return Err(CxgError::ConstraintDomainMismatch {
@@ -1142,18 +1140,9 @@ fn evaluate_occurrence_sign(
     Ok((sign, records))
 }
 
-fn slot_feature_source(value: &str) -> Option<(&str, &str)> {
-    let mut parts = value.split('.');
-    match (
-        parts.next(),
-        parts.next(),
-        parts.next(),
-        parts.next(),
-        parts.next(),
-    ) {
-        (Some("$slot"), Some(slot), Some("syn"), Some(feature), None) => Some((slot, feature)),
-        _ => None,
-    }
+fn slot_feature_source(value: &str) -> Option<(String, String)> {
+    let reference = reference::parse(&reference::SLOT_SYN_FEATURE, value).ok()?;
+    Some((reference.slot()?.to_owned(), reference.path.clone()?))
 }
 
 fn validate_occurrence_feature(
@@ -1180,9 +1169,11 @@ fn validate_occurrence_feature(
 }
 
 fn token_scalar<'a>(token: &'a DerivedToken, path: &str) -> Option<&'a str> {
-    let path = path.strip_prefix("$self.").unwrap_or(path);
-    let (dimension, field) = path.split_once('.')?;
-    match Dim::parse(dimension)? {
+    let read = reference::parse(&reference::SELF_SCALAR, path).ok()?;
+    let field = read.path.as_deref()?;
+    let path = &read.dim_path()?;
+    let path = path.as_str();
+    match read.dim? {
         Dim::Phon => token
             .phon
             .iter()
@@ -1241,23 +1232,23 @@ fn token_case_condition_matches(
             let scrutinee = case.scrutinee.as_deref().ok_or_else(|| {
                 TokenExpressionError::Invalid("equality case is missing its scrutinee".to_owned())
             })?;
-            let scrutinee = scrutinee
-                .trim()
-                .strip_prefix("$self.")
-                .unwrap_or(scrutinee.trim());
-            if let Some((slot, projection)) = scrutinee.split_once('.') {
-                if projection == "phon" {
-                    let Some(filler) = token.fillers.iter().find(|filler| filler.slot == slot)
-                    else {
-                        return Ok(false);
-                    };
-                    if !reg.has(expected) {
-                        return Err(TokenExpressionError::Invalid(format!(
-                            "unknown case category {expected:?}"
-                        )));
-                    }
-                    return Ok(reg.categories_satisfy(&filler.categories, expected));
+            let scrutinee = reference::strip_legacy_self_prefix(scrutinee);
+            // 與 `CompiledSystem::case_equals_matches` 同一判準:只有 slot 的
+            // phon 投影走範疇比對,其餘走純量欄位。
+            if let Some(slot) = reference::parse(&reference::SCRUTINEE, scrutinee)
+                .ok()
+                .filter(|read| read.dim == Some(Dim::Phon) && read.path.is_none())
+                .and_then(|read| read.slot().map(str::to_owned))
+            {
+                let Some(filler) = token.fillers.iter().find(|filler| filler.slot == slot) else {
+                    return Ok(false);
+                };
+                if !reg.has(expected) {
+                    return Err(TokenExpressionError::Invalid(format!(
+                        "unknown case category {expected:?}"
+                    )));
                 }
+                return Ok(reg.categories_satisfy(&filler.categories, expected));
             }
             Ok(token_scalar(token, scrutinee) == Some(expected))
         }
@@ -2222,7 +2213,7 @@ fn apply_with_committed<'a>(
             {
                 return Err(CxgError::SlotFeatureUnknownSource(source_slot.to_owned()));
             }
-            let Some((_, source)) = probe.iter().find(|(slot, _)| slot == source_slot) else {
+            let Some((_, source)) = probe.iter().find(|(slot, _)| *slot == source_slot) else {
                 return Err(CxgError::SlotFeatureSourceMissing {
                     slot: source_slot.to_owned(),
                     feature: source_feature.to_owned(),

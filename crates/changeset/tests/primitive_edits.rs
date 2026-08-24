@@ -1163,6 +1163,57 @@ sign caller:
     );
 }
 
+/// 迴歸:constraint 運算元寫成**顯式** `$slot.` 形時也要跟著改名。
+///
+/// 舊實作的 constraint 分支只呼叫一個「裸形專用」的重寫器,顯式形整個漏掉
+/// ——rename 之後 `equal($slot.subject…, …)` 會指向一個已不存在的 slot。
+/// 三個重寫器合一之後這條自動成立。
+#[test]
+fn slot_rename_rewrites_an_explicitly_sigilled_constraint_operand() {
+    let before = LanguageDocument::import_new_root(
+        r#"trait LocalEntity:
+    syn:
+        feature:
+            number = enum(singular, plural)
+
+sign target:
+    belongs LocalEntity
+    syn:
+        slots:
+            subject [LocalEntity]
+            object [LocalEntity]
+    phon:
+        /{subject} {object}/
+    constraints:
+        equal($slot.subject.syn.number, object.syn.number)
+"#,
+        "evo:slot-rename-sigil",
+    )
+    .unwrap();
+    let target = before.ref_for_sign("target").unwrap();
+    let subject = child(&before, &target, NodeKind::Slot, 0);
+
+    let renamed = apply_edit(
+        &before,
+        PrimitiveEdit::Update {
+            node: subject,
+            change: NodeUpdate::SlotName("actor".to_owned()),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap();
+
+    let source = renamed.document.source();
+    assert!(
+        source.contains("equal($slot.actor.syn.number, object.syn.number)"),
+        "顯式 `$slot.` 運算元必須跟著改名:\n{source}"
+    );
+    assert!(
+        !source.contains("$slot.subject"),
+        "不得留下懸空引用:\n{source}"
+    );
+}
+
 #[test]
 fn trait_slot_rename_stops_at_an_intermediate_shadow() {
     let before = LanguageDocument::import_new_root(
