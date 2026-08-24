@@ -1723,30 +1723,6 @@ fn validate_fp_expressions(
                             }
                         }
                     }
-                    CaseCondition::Equals(category)
-                        if case
-                            .scrutinee
-                            .as_deref()
-                            .and_then(scrutinee_phon_slot)
-                            .is_some()
-                            && !registry.has(category) =>
-                    {
-                        report.push(
-                            Diagnostic::new(
-                                Severity::Error,
-                                "CASE_UNKNOWN_CATEGORY",
-                                format!(
-                                    "sign {:?} case compares phon against unknown trait {category:?}",
-                                    local.name
-                                ),
-                            )
-                            .with_sources(vec![DiagnosticSource {
-                                owner: local.name.clone(),
-                                path: Some(site.to_owned()),
-                                location: branch.source,
-                            }]),
-                        );
-                    }
                     CaseCondition::Equals(_) | CaseCondition::Else => {}
                 }
                 if !matches!(case.expected, crate::ExpressionType::SignContext)
@@ -2215,7 +2191,7 @@ fn validate_constructions_and_local_phon(
                 _ => None,
             }) {
                 if let Some(case) = &realization.expression {
-                    if let Some(slot) = case.scrutinee.as_deref().and_then(scrutinee_phon_slot) {
+                    if let Some(slot) = case.scrutinee.as_deref().and_then(scrutinee_slot) {
                         used_slots.insert(slot);
                     }
                     for branch in &case.branches {
@@ -2532,17 +2508,6 @@ pub const COMPILER_SEMANTICS_VERSION: &str = "conlang-compile/1";
 /// used-slot 統計用這個。
 fn scrutinee_slot(scrutinee: &str) -> Option<String> {
     let read = reference::parse(&reference::SCRUTINEE, scrutinee).ok()?;
-    read.slot().map(str::to_owned)
-}
-
-/// scrutinee 是不是「某個 slot 的 phon 投影」(`$slot.NAME.phon`)——唯一走
-/// **範疇**比對的形狀,故 `== VALUE` 的 VALUE 是 trait 名而非欄位值。
-/// 其餘形狀讀純量欄位。判準只有這一份。
-fn scrutinee_phon_slot(scrutinee: &str) -> Option<String> {
-    let read = reference::parse(&reference::SCRUTINEE, scrutinee).ok()?;
-    if read.dim != Some(Dim::Phon) || read.path.is_some() {
-        return None;
-    }
     read.slot().map(str::to_owned)
 }
 
@@ -3100,25 +3065,10 @@ impl CompiledSystem {
         let read = reference::parse(&reference::SCRUTINEE, scrutinee).map_err(|error| {
             SystemError::InvalidSignExpression(format!("case scrutinee {scrutinee:?}: {error}"))
         })?;
+        // scrutinee + `== VALUE` 一律是**純量**比對。範疇比對不走這裡——
+        // 那是本體樹成員關係,記法是 `[Trait]`,寫成 guard 形
+        // (`case:` + `$slot.NAME == [Trait]:`),見 `Guard::SlotIsA`。
         match (&read.subject, read.dim, read.path.as_deref()) {
-            // `$slot.<name>.phon` —— 填充者的**範疇**比對。這一形與下一形不同:
-            // 比的是本體樹成員關係,不是欄位值。
-            (reference::Subject::Slot(slot), Some(Dim::Phon), None) => {
-                let SignValue::Applied(token) = value else {
-                    return Ok(false);
-                };
-                let Some(filler) = token.fillers.iter().find(|filler| &filler.slot == slot) else {
-                    return Ok(false);
-                };
-                if !self.ontology.has(expected) {
-                    return Err(SystemError::InvalidSignExpression(format!(
-                        "unknown case category {expected:?}"
-                    )));
-                }
-                Ok(self
-                    .ontology
-                    .categories_satisfy(&filler.categories, expected))
-            }
             // `$slot.<name>.<dim>.<field>` —— 填充者的純量欄位,與 `$self` 對稱。
             (reference::Subject::Slot(slot), Some(dim), Some(path)) => {
                 let SignValue::Applied(token) = value else {
@@ -3134,10 +3084,10 @@ impl CompiledSystem {
                 let path = read.dim_path().expect("SCRUTINEE requires a dimension");
                 Ok(Self::scalar_from_value(value, &path) == Some(expected))
             }
-            // 剩下的只有 `$slot.NAME.<非 phon 維>` 這種缺欄位的形狀。
+            // 剩下的是 `$slot.NAME.<dim>` 這種缺欄位的形狀。
             _ => Err(SystemError::InvalidSignExpression(format!(
-                "case scrutinee {scrutinee:?} needs a field: `$slot.NAME.DIM.FIELD` \
-                 (or `$slot.NAME.phon` to compare the filler's category)"
+                "case scrutinee {scrutinee:?} needs a field: `$slot.NAME.DIM.FIELD`; \
+                 to test a filler's category use a guard case (`$slot.NAME == [Trait]`)"
             ))),
         }
     }

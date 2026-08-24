@@ -83,8 +83,8 @@ sign en_3sg:
     phon:
         /{$slot.stem}+s/
         realization:
-            case stem.phon:
-                == SibilantFinal:
+            case:
+                $slot.stem == [SibilantFinal]:
                     /{$slot.stem}+es/
                 else:
                     /{$slot.stem}+s/

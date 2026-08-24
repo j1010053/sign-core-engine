@@ -29,8 +29,8 @@ sign en_3sg:
     phon:
         /{$slot.stem}+s/
         realization:
-            case $slot.stem.phon:
-                == SibilantFinal:
+            case:
+                $slot.stem == [SibilantFinal]:
                     /{$slot.stem}+es/
                 else:
                     /{$slot.stem}+s/
@@ -60,7 +60,7 @@ fn v2_round_trip_keeps_context_typed_case() {
     let parsed = Language::parse(FP_SOURCE).expect("V2 source parses");
     let canonical = parsed.dump();
     assert_eq!(Language::parse(&canonical).unwrap().dump(), canonical);
-    assert!(canonical.contains("case $slot.stem.phon:"));
+    assert!(canonical.contains("$slot.stem == [SibilantFinal]:"));
     assert!(canonical.contains("en_3sg({$self})"));
 }
 

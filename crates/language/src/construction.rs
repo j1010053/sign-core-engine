@@ -1208,20 +1208,8 @@ fn token_case_condition_matches(
             let read = reference::parse(&reference::SCRUTINEE, scrutinee).map_err(|error| {
                 TokenExpressionError::Invalid(format!("case scrutinee {scrutinee:?}: {error}"))
             })?;
+            // 一律純量比對;範疇比對走 guard 形(`$slot.NAME == [Trait]`)。
             match (&read.subject, read.dim, read.path.as_deref()) {
-                // 填充者的**範疇**比對(本體樹成員關係)。
-                (reference::Subject::Slot(slot), Some(Dim::Phon), None) => {
-                    let Some(filler) = token.fillers.iter().find(|filler| &filler.slot == slot)
-                    else {
-                        return Ok(false);
-                    };
-                    if !reg.has(expected) {
-                        return Err(TokenExpressionError::Invalid(format!(
-                            "unknown case category {expected:?}"
-                        )));
-                    }
-                    Ok(reg.categories_satisfy(&filler.categories, expected))
-                }
                 // 填充者的純量欄位,與 `$self` 對稱。
                 (reference::Subject::Slot(slot), Some(dim), Some(path)) => {
                     let Some(filler) = token.fillers.iter().find(|filler| &filler.slot == slot)
@@ -1235,8 +1223,8 @@ fn token_case_condition_matches(
                     Ok(token_scalar(token, &path) == Some(expected))
                 }
                 _ => Err(TokenExpressionError::Invalid(format!(
-                    "case scrutinee {scrutinee:?} needs a field: `$slot.NAME.DIM.FIELD` \
-                     (or `$slot.NAME.phon` to compare the filler's category)"
+                    "case scrutinee {scrutinee:?} needs a field: `$slot.NAME.DIM.FIELD`; \
+                     to test a filler's category use a guard case (`$slot.NAME == [Trait]`)"
                 ))),
             }
         }

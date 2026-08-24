@@ -189,13 +189,19 @@ pub const CONSTRAINT_SLOT: RefSpec = RefSpec {
     path: PathPolicy::Forbidden,
 };
 
-/// case scrutinee:`$slot.<name>.phon` 走範疇比對,`$self.<dim>.<field>`
-/// 走純量欄位。主體顯式,故不必再靠首段猜。
+/// case scrutinee:`<主體>.<維度>.<欄位>`。
+///
+/// **欄位必填**——scrutinee 搭配的是 `== VALUE` 純量比對,沒有欄位就沒有可比
+/// 的值。範疇比對不走這裡:那是本體樹成員關係,記法是 `[Trait]`,寫成 guard
+/// 形 `case:` + `$slot.NAME == [Trait]:`(見 `synchronic::Guard::SlotIsA`)。
+///
+/// 把「欄位必填」放在 spec 而不是求值器,是為了讓 `$slot.head.phon` 這種缺
+/// 欄位的寫法在 **compile 期**就被擋下,而不是通過編譯後在求值時才炸。
 pub const SCRUTINEE: RefSpec = RefSpec {
     allow_self: true,
     allow_slot: true,
     dim: DimPolicy::Required,
-    path: PathPolicy::Optional,
+    path: PathPolicy::RequiredValidated,
 };
 
 /// `{…}` 內容:只有主體。嵌入什麼由括號所在的位置決定,故不帶維度與路徑。
@@ -501,13 +507,23 @@ mod tests {
     /// 首段猜測隨裸形一起消失:一個叫 `syn` 的 slot 不再被讀成自己的 syn 維。
     #[test]
     fn a_slot_named_after_a_dimension_is_no_longer_ambiguous() {
-        let read = parse(&SCRUTINEE, "$slot.syn.phon").unwrap();
+        let read = parse(&SCRUTINEE, "$slot.syn.phon.length").unwrap();
         assert_eq!(read.subject, Subject::Slot("syn".into()));
         assert_eq!(read.dim, Some(Dim::Phon));
 
         let read = parse(&SCRUTINEE, "$self.syn.number").unwrap();
         assert_eq!(read.subject, Subject::SelfSign);
         assert_eq!(read.dim, Some(Dim::Syn));
+    }
+
+    /// scrutinee 的欄位必填:缺欄位在 spec 層就擋下,不留到求值期。
+    #[test]
+    fn a_scrutinee_without_a_field_is_rejected_by_the_spec() {
+        assert_eq!(
+            parse(&SCRUTINEE, "$slot.head.phon"),
+            Err(RefError::PathRequired)
+        );
+        assert_eq!(parse(&SCRUTINEE, "$self.syn"), Err(RefError::PathRequired));
     }
 
     /// scrutinee 位置那個「寫了也沒用」的 `$self.` 裝飾已無容身處:

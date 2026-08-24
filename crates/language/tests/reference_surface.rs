@@ -49,9 +49,17 @@ fn compiles(phon_tail: &str, sign_tail: &str) -> Result<(), String> {
 }
 
 /// `realization:` 底下一個以 `scrutinee` 為判準的 phon case。
+/// scrutinee + `== VALUE` 一律是**純量**比對(範疇比對走 guard 形)。
 fn realization(scrutinee: &str) -> String {
     format!(
-        "        realization:\n            case {scrutinee}:\n                == RefEntity:\n                    /{{$slot.head}}/\n                else:\n                    /{{$slot.head}}{{$slot.tail}}/\n"
+        "        realization:\n            case {scrutinee}:\n                == singular:\n                    /{{$slot.head}}/\n                else:\n                    /{{$slot.head}}{{$slot.tail}}/\n"
+    )
+}
+
+/// 範疇比對的正解:guard 形 case,`[Trait]` 是既有的範疇記法。
+fn category_realization(guard: &str) -> String {
+    format!(
+        "        realization:\n            case:\n                {guard}:\n                    /{{$slot.head}}/\n                else:\n                    /{{$slot.head}}{{$slot.tail}}/\n"
     )
 }
 
@@ -89,7 +97,26 @@ fn a_bare_field_constraint_operand_is_rejected() {
 
 #[test]
 fn an_explicit_scrutinee_compiles() {
-    compiles(&realization("$slot.head.phon"), "").expect("`$slot.NAME.phon` 合法");
+    compiles(&realization("$slot.head.syn.number"), "")
+        .expect("`$slot.NAME.DIM.FIELD` 是合法 scrutinee");
+    compiles(&realization("$self.syn.number"), "").expect("`$self.DIM.FIELD` 是合法 scrutinee");
+}
+
+/// 修補13 ⑦(修訂):scrutinee 搭配的是 `== VALUE` **純量**比對,故欄位必填。
+/// `$slot.NAME.phon` 不再兼差當範疇比對——`.phon` 就是維度,缺欄位即錯誤,
+/// 且錯在 **compile 期**而非求值期。
+#[test]
+fn a_dimension_without_a_field_is_not_a_category_test() {
+    compiles(&realization("$slot.head.phon"), "")
+        .expect_err("`$slot.NAME.phon` 缺欄位,不得再被解讀成範疇比對");
+}
+
+/// 範疇比對的正解:`[Trait]` guard。這是全庫既有的範疇記法
+/// (slot 約束、function 參數、`$self == [Trait]` 都用它)。
+#[test]
+fn a_category_test_uses_the_bracket_guard_form() {
+    compiles(&category_realization("$slot.head == [RefEntity]"), "")
+        .expect("`$slot.NAME == [Trait]` 是範疇比對的記法");
 }
 
 /// scrutinee 讀 slot 的**非 phon 欄位**——與 `$self.<dim>.<field>` 對稱。
@@ -120,7 +147,7 @@ fn a_bare_slot_scrutinee_is_rejected() {
 /// 自己的 syn 維——因為根本沒有「省略主體」這回事了。
 #[test]
 fn a_slot_named_after_a_dimension_is_addressable() {
-    let source = source(&realization("$slot.syn.phon"), "")
+    let source = source(&realization("$slot.syn.syn.number"), "")
         .replace(
             "            head [RefEntity]",
             "            syn [RefEntity]",
