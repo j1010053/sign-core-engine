@@ -1,4 +1,4 @@
-//! Path 表達式(P22/P25;修補05 §3.5,經修補13 ⑨ 縮減):
+//! Path 表達式(P22/P25;修補05 §3.5,經 P80 縮減):
 //! `Path := Name ( '.' Name )*`
 //!
 //! 同一套文法兩用:條件裡是測試、primitive 裡是定址(P25)。
@@ -94,7 +94,7 @@ mod tests {
         assert!(parse_path("a b").is_err());
     }
 
-    /// 修補13 ⑨:`[鍵]` 與 `~tier` 不再是 Path 的一部分。
+    /// P80:`[鍵]` 與 `~tier` 不再是 Path 的一部分。
     #[test]
     fn key_and_tier_segments_are_no_longer_path_syntax() {
         assert!(parse_path("cxn.slot[agent].syn").is_err(), "`[鍵]` 已移除");

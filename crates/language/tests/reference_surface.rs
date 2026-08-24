@@ -102,7 +102,7 @@ fn an_explicit_scrutinee_compiles() {
     compiles(&realization("$self.syn.number"), "").expect("`$self.DIM.FIELD` 是合法 scrutinee");
 }
 
-/// 修補13 ⑦(修訂):scrutinee 搭配的是 `== VALUE` **純量**比對,故欄位必填。
+/// P78(修訂):scrutinee 搭配的是 `== VALUE` **純量**比對,故欄位必填。
 /// `$slot.NAME.phon` 不再兼差當範疇比對——`.phon` 就是維度,缺欄位即錯誤,
 /// 且錯在 **compile 期**而非求值期。
 #[test]

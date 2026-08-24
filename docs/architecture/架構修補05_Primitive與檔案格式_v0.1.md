@@ -178,14 +178,14 @@ Function Y [layer=Goal](t) / t.sem.concept == GO & !t.syn.has(AUX)
 
 `.` 欄位存取。
 
-> **修補13 ⑨ 縮減(已落地)**:原另有 `[key]` slot／序數存取,與 trait 的
+> **P80 縮減(已落地)**:原另有 `[key]` slot／序數存取,與 trait 的
 > `TR[1]`、選擇器的 `<syl>[2]` 同一記法。**已自 language 域的 Path 移除**;
 > 那兩處記法本身(trait 引用的序數尾槽、Scan 的序數)不受影響。
 >
 > 本節第一個範例原作 `cxn.slot[agent].syn.animate`——「construction 的 agent
 > slot 的填充者的 animate 欄位」。該形**現已不可表達**:`.lang` 側對應的寫法是
 > `$slot.agent.syn.animate`,但 function guard 的主體是**參數**而非 slot
-> (求值前被代換成 `$self`,見修補13 ⑧),故 function 層目前沒有定址 slot 的
+> (求值前被代換成 `$self`,見P79),故 function 層目前沒有定址 slot 的
 > 記法。這是 ⑨ 與 ⑧ 的交界,列為未決。
 
 ### 3.5 統一文法(兩個域,一套 parser)
@@ -200,7 +200,7 @@ Condition := LinearTemplate            # _# / [+voice] _ / <tone>H _ <tone>H   (
 Path := Anchor ( '.' Name )*           # 欄位
 ```
 
-> **修補13 ⑨ 縮減(已落地)**:本產生式原有 `'[' Key ']'`(slot／序數)與
+> **P80 縮減(已落地)**:本產生式原有 `'[' Key ']'`(slot／序數)與
 > `'~' TierRef`(聯結)兩種段,已移除。量測依據見修補13 §6:全庫 201 個
 > `$` 引用與所有 Def lhs **零處**用到這兩種段;`.lang` 的查找端
 > (`project(dim).get(&path)`、`FillerSnapshot::scalar`)是**字串鍵比對**,
@@ -511,7 +511,7 @@ edit    update(sign(go).syn.category, AUX)          # ①
 |---|---|
 | **P20** | **音變 DSL 為獨立可分軟體**:`dsl` crate 只知 Word,**禁止 import Sign/Trait/Language/ChangeSet**(CI 檢查);依賴方向 `changeset → language → dsl`;獨立契約 `(規則檔, 詞表) → 詞表′`;**Compiled Grammar 的 phon 側 = DSL 可直接吃的規則集**;**雙軌迴歸**(同一音變經路徑 A/B 表層須逐字相同)列為步驟 11 出口;規則兩域:phon 規則屬 dsl、syn/sem 規則屬 language,語法共用靠 language 擴充 dsl 的文法 |
 | **P21** | **IR dump = Language canonical form + progressive lowering**:採 MLIR round-trip 原則(text↔IR 恆等、無隱藏狀態、同格式跨 pass);compile 的 ①Source→②Expanded→③Resolved→④Ordered 全是合法 Language,僅 ⑤ Codegen 產出 Compiled Grammar;**canonical printer 為步驟 8 必做**(確定性:欄位序、空白、集合排序) |
-| **P22** | **條件語法擴展**:`/` 復用(環境=守衛,同一記法);**`else` 鏈 = Elsewhere Condition**(disjunctive 單趟、第一匹配勝出;與「兩條有序規則」的 feeding 語意明確區別;關閉 docs/02 §13 的 `Else:` 開放項);**tier 相對 adjacency**(模板可含 tier 引用,字串只是預設 tier);**Path 表達式**(`.` 欄位;原有的 `[key]` slot 與 `~` 聯結兩種段已由**修補13 ⑨**移除,見 §3.5 附註);**三道界**:無量詞(需要時用引擎提供的具名謂詞)、無計算、無副作用必終止 |
+| **P22** | **條件語法擴展**:`/` 復用(環境=守衛,同一記法);**`else` 鏈 = Elsewhere Condition**(disjunctive 單趟、第一匹配勝出;與「兩條有序規則」的 feeding 語意明確區別;關閉 docs/02 §13 的 `Else:` 開放項);**tier 相對 adjacency**(模板可含 tier 引用,字串只是預設 tier);**Path 表達式**(`.` 欄位;原有的 `[key]` slot 與 `~` 聯結兩種段已由 **P80**移除,見 §3.5 附註);**三道界**:無量詞(需要時用引擎提供的具名謂詞)、無計算、無副作用必終止 |
 | **P23** | **Primitive Edit = 四原語** `insert / delete / update / move`(GumTree 先例);修補04 的 `rename/set/unset/replace` 皆為 `update` 的參數化;**`update`/`move` 保持節點身分**——D 的 diff 對齊鍵靠它,`update(sign.phon)`=同一詞音變 vs `delete+insert`=生滅,語意不同;12 個 Atomic Rewrite 全數展得開 |
 | **P24** | **引用 = Ref 屬性值,非圖邊**:origin/衍生邊/component/trait 引用一律為節點欄位裡的 Ref 值(沿單一資訊源);「改引用」= `update(field, Ref)`;**這是四原語在樹上封閉的前提**;不變量:懸空 Ref、component DAG 無環、origin 鏈無環 |
 | **P25** | **定址 = Path 文法 + 錨點相對插入**:條件與定址同一套 parser(測試 vs 定址);插入位置用 `start/end/after:/before:` **錨點**而非索引(replay 中索引會漂移,錨點不會) |

@@ -465,7 +465,7 @@ mod tests {
         assert_eq!(r.path.as_deref(), Some("frame"));
     }
 
-    /// 修補13 ⑨:Path 只剩點分名段。
+    /// P80:Path 只剩點分名段。
     #[test]
     fn the_path_is_dotted_names_only() {
         let r = parse(&STRICT, "$slot.agent.syn.deep.field").unwrap();

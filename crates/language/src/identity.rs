@@ -478,7 +478,7 @@ impl LanguageDocument {
         path: &crate::path::Path,
     ) -> Result<ResolvedTarget, IdentityError> {
         let mut resolved = self.resolve_node(anchor)?;
-        // 修補13 ⑨ 之後 Path 只有具名段,故不再需要過濾非 Name 段。
+        // P80 之後 Path 只有具名段,故不再需要過濾非 Name 段。
         let names: Vec<_> = path
             .0
             .iter()
