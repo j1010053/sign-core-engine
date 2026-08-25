@@ -119,6 +119,8 @@ fn parse_argument_value(source: &str, line: usize) -> Result<SignArgumentValue, 
         return Ok(match read.subject {
             reference::Subject::SelfSign => SignArgumentValue::SelfSign,
             reference::Subject::Slot(name) => SignArgumentValue::Slot(name),
+            // `SUBJECT_ONLY` 不允許具名綁定,故此臂不可達。
+            reference::Subject::Binding(_) => unreachable!("SUBJECT_ONLY forbids bindings"),
         });
     }
     parse_sign_application(value, line)

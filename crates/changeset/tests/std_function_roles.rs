@@ -411,12 +411,12 @@ function Runs(x [Verb]):
 
 function Picks(x [Verb]):
     case:
-        entrench(x, delta: 0.2) / x.syn.category == verb
+        entrench(x, delta: 0.2) / $x.syn.category == verb
         else entrench(x, delta: 0.3)
 
 function Accumulates(x [Verb]):
     when:
-        entrench(x, delta: 0.1) / x.syn.category == verb
+        entrench(x, delta: 0.1) / $x.syn.category == verb
 
 function Offers(x [Verb]):
     choose:
@@ -474,9 +474,9 @@ fn when_runs_every_branch_whose_guard_holds() {
 
 function Both(x [Verb]):
     when:
-        entrench(x, delta: 0.1) / x.syn.category == verb
-        entrench(x, delta: 0.2) / x.syn.category == noun
-        entrench(x, delta: 0.4) / x.syn.category == verb
+        entrench(x, delta: 0.1) / $x.syn.category == verb
+        entrench(x, delta: 0.2) / $x.syn.category == noun
+        entrench(x, delta: 0.4) / $x.syn.category == verb
 "#;
     let package = synthetic(ACCUMULATE, &["Both"]);
     let table = functions_from_packages(&[&package]).expect("loads");
@@ -513,7 +513,7 @@ fn when_with_no_matching_branch_is_a_no_op_not_an_error() {
 
 function Quiet(x [Verb]):
     when:
-        entrench(x, delta: 0.5) / x.syn.category == noun
+        entrench(x, delta: 0.5) / $x.syn.category == noun
 "#;
     let package = synthetic(NONE_MATCH, &["Quiet"]);
     let table = functions_from_packages(&[&package]).expect("loads");
@@ -565,8 +565,8 @@ fn when_guards_all_read_the_document_as_it_was_before_any_branch_ran() {
 
 function Chain(x [Verb]):
     when:
-        reanalyze(x, target: category, to: Aux) / x == [Verb]
-        entrench(x, delta: 0.5) / x == [Aux]
+        reanalyze(x, target: category, to: Aux) / $x == [Verb]
+        entrench(x, delta: 0.5) / $x == [Aux]
 "#;
     let package = synthetic(LEAKY, &["Chain"]);
     let table = functions_from_packages(&[&package]).expect("loads");
@@ -598,12 +598,12 @@ fn else_only_fires_when_no_earlier_branch_matched() {
 
 function Matched(x [Verb]):
     when:
-        entrench(x, delta: 0.1) / x.syn.category == verb
+        entrench(x, delta: 0.1) / $x.syn.category == verb
         else entrench(x, delta: 0.5)
 
 function Unmatched(x [Verb]):
     when:
-        entrench(x, delta: 0.1) / x.syn.category == noun
+        entrench(x, delta: 0.1) / $x.syn.category == noun
         else entrench(x, delta: 0.5)
 "#;
     let package = synthetic(FALLBACK, &["Matched", "Unmatched"]);
@@ -650,7 +650,7 @@ fn an_unconditional_branch_suppresses_a_later_else() {
 
 function BareFirst(x [Verb]):
     when:
-        entrench(x, delta: 0.1) / x.syn.category == noun
+        entrench(x, delta: 0.1) / $x.syn.category == noun
         entrench(x, delta: 0.2)
         else entrench(x, delta: 0.5)
 "#;
@@ -685,7 +685,7 @@ fn case_else_still_fires_as_the_fallback() {
 
 function Pick(x [Verb]):
     case:
-        entrench(x, delta: 0.1) / x.syn.category == noun
+        entrench(x, delta: 0.1) / $x.syn.category == noun
         else entrench(x, delta: 0.5)
 "#;
     let package = synthetic(CASE_ELSE, &["Pick"]);

@@ -59,12 +59,12 @@ fn parameters_carry_slot_style_constraints() {
 #[test]
 fn a_header_guard_is_split_outside_the_parentheses() {
     let parsed = parse_functions(&package(
-        "function F(x) / x.sem.concept == GO:\n    entrench(x, delta: 0.1)\n",
+        "function F(x) / $x.sem.concept == GO:\n    entrench(x, delta: 0.1)\n",
     ))
     .unwrap();
     assert_eq!(
         parsed.functions[0].guard.as_deref(),
-        Some("x.sem.concept == GO")
+        Some("$x.sem.concept == GO")
     );
 }
 
@@ -101,7 +101,7 @@ fn branch_forms_parse_into_the_three_conditions() {
     // `guard: None`,`else` 因此只是裝飾——在 `when:`/`choose:` 下兩者語意不同
     // (`else` 是 `!any_matched`),塌成同一個就錯了。
     let when = parse_functions(&package(
-        "function Future(target):\n    when:\n        VerbToTense(target, tense: FUTURE) / target.sem.concept == GO\n        else Auxiliary(target)\n",
+        "function Future(target):\n    when:\n        VerbToTense(target, tense: FUTURE) / $target.sem.concept == GO\n        else Auxiliary(target)\n",
     ))
     .unwrap();
     match &when.functions[0].body {
@@ -109,7 +109,7 @@ fn branch_forms_parse_into_the_three_conditions() {
             assert_eq!(branches.len(), 2);
             assert_eq!(
                 branches[0].condition,
-                BranchCondition::Guard("target.sem.concept == GO".to_owned())
+                BranchCondition::Guard("$target.sem.concept == GO".to_owned())
             );
             assert_eq!(
                 branches[1].condition,
@@ -134,7 +134,7 @@ fn branch_forms_parse_into_the_three_conditions() {
     }
 
     let case = parse_functions(&package(
-        "function Pick(target):\n    case:\n        A(target) / target.sem.concept == GO\n        else B(target)\n",
+        "function Pick(target):\n    case:\n        A(target) / $target.sem.concept == GO\n        else B(target)\n",
     ))
     .unwrap();
     assert!(matches!(case.functions[0].body, FunctionBody::Case(_)));
@@ -143,7 +143,7 @@ fn branch_forms_parse_into_the_three_conditions() {
 #[test]
 fn an_else_branch_may_not_carry_a_guard() {
     let err = parse_functions(&package(
-        "function F(x):\n    when:\n        else A(x) / x.sem.concept == GO\n",
+        "function F(x):\n    when:\n        else A(x) / $x.sem.concept == GO\n",
     ))
     .expect_err("must be rejected");
     assert!(format!("{err}").contains("else"), "{err}");

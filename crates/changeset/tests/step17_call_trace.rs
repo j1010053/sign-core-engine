@@ -286,13 +286,6 @@ fn every_function_error_declares_its_rebase_class() {
             },
             FunctionErrorClass::Broken,
         ),
-        (
-            FunctionError::GuardMultiSubject {
-                function: "R".to_owned(),
-                guard: "g".to_owned(),
-            },
-            FunctionErrorClass::Broken,
-        ),
     ];
     for (error, expected) in cases {
         assert_eq!(error.class(), *expected, "{error:?}");

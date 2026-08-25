@@ -272,13 +272,13 @@ function Always(x):
 /* 對 verb 而言只有一個分支成立。 */
 function Maybe(x):
     choose:
-        Never(x) / x.syn.category == noun
-        Always(x) / x.syn.category == verb
+        Never(x) / $x.syn.category == noun
+        Always(x) / $x.syn.category == verb
 
 /* 對 verb 而言一個都不成立 —— 候選清單是空的。 */
 function NoneApply(x):
     choose:
-        Never(x) / x.syn.category == noun
+        Never(x) / $x.syn.category == noun
 "#;
 
 const GUARDED_WEIGHTS: &str = "goal\trecipe\tweight\nMaybe\tAlways\t1\nNoneApply\tNever\t1\n";

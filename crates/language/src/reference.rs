@@ -45,13 +45,18 @@
 use crate::path::parse_path;
 use crate::Dim;
 
-/// 求值時才綁定的主體。`$` 引用永不跨 sign 邊界——只有這兩個。
+/// 求值時才綁定的主體。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Subject {
     /// `$self`:當前 sign。
     SelfSign,
     /// `$slot.<name>`:某個 slot 的填充者。
     Slot(String),
+    /// `$<name>`:求值環境裡的具名綁定(P81)。`.lang` 側不用;
+    /// `.chg` 的 function guard 用它指涉參數。
+    ///
+    /// `self` 與 `slot` 是保留字,故 `$x` 不會與前兩形相撞。
+    Binding(String),
 }
 
 /// 一個解析完成的 `$` 引用。
@@ -91,6 +96,8 @@ pub enum PathPolicy {
 pub struct RefSpec {
     pub allow_self: bool,
     pub allow_slot: bool,
+    /// 是否接受 `$<name>` 具名綁定(P81)。`.lang` 的位置一律 false。
+    pub allow_binding: bool,
     pub dim: DimPolicy,
     pub path: PathPolicy,
 }
@@ -158,6 +165,14 @@ fn split_subject(value: &str) -> Result<(Subject, &str), RefError> {
         }
         return Ok((Subject::Slot(name.to_owned()), tail));
     }
+    // `$<name>`:`self` 與 `slot` 已在上面攔掉,故此處必是具名綁定。
+    if let Some(rest) = value.strip_prefix('$') {
+        let (name, tail) = rest.split_once('.').unwrap_or((rest, ""));
+        if name.is_empty() {
+            return Err(RefError::EmptySlotName);
+        }
+        return Ok((Subject::Binding(name.to_owned()), tail));
+    }
     Err(RefError::MissingSigil)
 }
 
@@ -168,6 +183,7 @@ fn split_subject(value: &str) -> Result<(Subject, &str), RefError> {
 pub const SLOT_SYN_FEATURE: RefSpec = RefSpec {
     allow_self: false,
     allow_slot: true,
+    allow_binding: false,
     dim: DimPolicy::Only(Dim::Syn),
     path: PathPolicy::Identifiers(1),
 };
@@ -177,6 +193,7 @@ pub const SLOT_SYN_FEATURE: RefSpec = RefSpec {
 pub const CONSTRAINT_OPERAND: RefSpec = RefSpec {
     allow_self: false,
     allow_slot: true,
+    allow_binding: false,
     dim: DimPolicy::Optional,
     path: PathPolicy::Optional,
 };
@@ -185,6 +202,7 @@ pub const CONSTRAINT_OPERAND: RefSpec = RefSpec {
 pub const CONSTRAINT_SLOT: RefSpec = RefSpec {
     allow_self: false,
     allow_slot: true,
+    allow_binding: false,
     dim: DimPolicy::Forbidden,
     path: PathPolicy::Forbidden,
 };
@@ -200,14 +218,35 @@ pub const CONSTRAINT_SLOT: RefSpec = RefSpec {
 pub const SCRUTINEE: RefSpec = RefSpec {
     allow_self: true,
     allow_slot: true,
+    allow_binding: false,
     dim: DimPolicy::Required,
     path: PathPolicy::RequiredValidated,
+};
+
+/// `.chg` function guard 的主體:`$<參數名>`(P81)。不接受 `$self`/`$slot.`
+/// ——function 層沒有 ambient sign,也沒有自己的 slot。
+pub const BINDING_FIELD: RefSpec = RefSpec {
+    allow_self: false,
+    allow_slot: false,
+    allow_binding: true,
+    dim: DimPolicy::Required,
+    path: PathPolicy::RequiredValidated,
+};
+
+/// 同上,但只到主體為止(`$x == [Trait]` 的左端)。
+pub const BINDING_ONLY: RefSpec = RefSpec {
+    allow_self: false,
+    allow_slot: false,
+    allow_binding: true,
+    dim: DimPolicy::Forbidden,
+    path: PathPolicy::Forbidden,
 };
 
 /// `{…}` 內容:只有主體。嵌入什麼由括號所在的位置決定,故不帶維度與路徑。
 pub const SUBJECT_ONLY: RefSpec = RefSpec {
     allow_self: true,
     allow_slot: true,
+    allow_binding: false,
     dim: DimPolicy::Forbidden,
     path: PathPolicy::Forbidden,
 };
@@ -219,7 +258,10 @@ pub fn parse(spec: &RefSpec, value: &str) -> Result<Reference, RefError> {
     match &subject {
         Subject::SelfSign if !spec.allow_self => return Err(RefError::SubjectNotAllowed),
         Subject::Slot(_) if !spec.allow_slot => return Err(RefError::SubjectNotAllowed),
-        Subject::Slot(name) if !ident_ok(name) => return Err(RefError::SlotNotIdentifier),
+        Subject::Binding(_) if !spec.allow_binding => return Err(RefError::SubjectNotAllowed),
+        Subject::Slot(name) | Subject::Binding(name) if !ident_ok(name) => {
+            return Err(RefError::SlotNotIdentifier)
+        }
         _ => {}
     }
 
@@ -281,7 +323,15 @@ impl Reference {
     pub fn slot(&self) -> Option<&str> {
         match &self.subject {
             Subject::Slot(name) => Some(name),
-            Subject::SelfSign => None,
+            Subject::SelfSign | Subject::Binding(_) => None,
+        }
+    }
+
+    /// 具名綁定的名字(主體不是綁定時為 `None`)。
+    pub fn binding(&self) -> Option<&str> {
+        match &self.subject {
+            Subject::Binding(name) => Some(name),
+            Subject::SelfSign | Subject::Slot(_) => None,
         }
     }
 
@@ -311,6 +361,7 @@ impl Reference {
         let mut out = match &self.subject {
             Subject::SelfSign => "$self".to_owned(),
             Subject::Slot(name) => format!("$slot.{name}"),
+            Subject::Binding(name) => format!("${name}"),
         };
         if let Some(dim) = self.dim {
             out.push('.');
@@ -401,6 +452,7 @@ pub fn render_interpolation(subject: &Subject) -> String {
     match subject {
         Subject::SelfSign => "{$self}".to_owned(),
         Subject::Slot(name) => format!("{{$slot.{name}}}"),
+        Subject::Binding(name) => format!("{{${name}}}"),
     }
 }
 
@@ -448,6 +500,7 @@ mod tests {
     const STRICT: RefSpec = RefSpec {
         allow_self: true,
         allow_slot: true,
+        allow_binding: false,
         dim: DimPolicy::Required,
         path: PathPolicy::RequiredValidated,
     };
@@ -614,6 +667,52 @@ mod tests {
             (found.slot() == Some("a")).then(|| "X".to_owned())
         });
         assert_eq!(out, "/X{$slot.b}/");
+    }
+
+    /// P81:`$<name>` 是第三種主體——求值環境裡的具名綁定。
+    /// `self` 與 `slot` 是保留字,故不會相撞。
+    #[test]
+    fn a_dollar_name_is_a_named_binding() {
+        let r = parse(&BINDING_FIELD, "$x.syn.category").unwrap();
+        assert_eq!(r.subject, Subject::Binding("x".into()));
+        assert_eq!(r.binding(), Some("x"));
+        assert_eq!(r.slot(), None, "綁定不是 slot");
+
+        // 保留字仍走各自的形
+        assert_eq!(
+            parse(&SCRUTINEE, "$self.syn.n").unwrap().subject,
+            Subject::SelfSign
+        );
+        assert_eq!(
+            parse(&SCRUTINEE, "$slot.a.syn.n").unwrap().subject,
+            Subject::Slot("a".into())
+        );
+    }
+
+    /// `.lang` 的位置一律不收具名綁定——那是 `.chg` function 層的東西。
+    #[test]
+    fn lang_positions_reject_named_bindings() {
+        for spec in [
+            &SCRUTINEE,
+            &CONSTRAINT_OPERAND,
+            &SLOT_SYN_FEATURE,
+            &SUBJECT_ONLY,
+        ] {
+            assert_eq!(
+                parse(spec, "$x.syn.n"),
+                Err(RefError::SubjectNotAllowed),
+                "`.lang` 位置不得接受 `$x`"
+            );
+        }
+    }
+
+    #[test]
+    fn a_binding_renders_back_to_its_dollar_form() {
+        assert_eq!(
+            parse(&BINDING_FIELD, "$x.syn.category").unwrap().render(),
+            "$x.syn.category"
+        );
+        assert_eq!(parse(&BINDING_ONLY, "$x").unwrap().render(), "$x");
     }
 
     /// canonical 只有一種寫法:主體顯式。

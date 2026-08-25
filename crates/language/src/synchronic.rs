@@ -95,6 +95,34 @@ enum Guard {
     SlotIsA(String, String),
     SelfIsA(String),
     SelfFieldEq(SelfAccess, String),
+    /// `$x.<dim>.<path> == <值或另一個引用>`(P81):主體來自求值環境的具名
+    /// 綁定。右端可以是字面值,也可以是**另一個綁定的欄位**——那正是跨參數
+    /// guard 的核心用途(比較兩個參數的同一個欄位)。
+    BindingFieldEq(BindingAccess, BindingOperand),
+    /// `$x == [Trait]`(P81)。
+    BindingIsA(String, String),
+    /// `A && B && …`(P81):連言收進文法本身。
+    ///
+    /// 先前 `&&` 由**六個消費端各自 split**,guard 文法只認單一比較。
+    /// function 層要支援多主體就會出現第七份;收進這裡讓它只有一份。
+    All(Vec<Guard>),
+}
+
+/// `$<name>.<dim>.<path>`——具名綁定的欄位讀取。
+#[derive(Debug, Clone)]
+struct BindingAccess {
+    name: String,
+    dim: Dim,
+    path: String,
+}
+
+/// guard 右端:字面值或另一個綁定欄位。
+#[derive(Debug, Clone)]
+enum BindingOperand {
+    Literal(String),
+    /// `$y`——純量參數(function 層的參數可綁 sign,也可綁字面值)。
+    Scalar(String),
+    Access(BindingAccess),
 }
 
 /// Slots a realization/phon-case guard reads (so slot-usage validation counts a
@@ -111,6 +139,7 @@ pub(crate) fn realization_guard_slot_references(source: &str) -> Vec<String> {
 const SELF_ACCESS: RefSpec = RefSpec {
     allow_self: true,
     allow_slot: false,
+    allow_binding: false,
     dim: DimPolicy::Required,
     path: PathPolicy::RequiredValidated,
 };
@@ -119,6 +148,7 @@ const SELF_ACCESS: RefSpec = RefSpec {
 const SLOT_ACCESS: RefSpec = RefSpec {
     allow_self: false,
     allow_slot: true,
+    allow_binding: false,
     dim: DimPolicy::Required,
     path: PathPolicy::RequiredValidated,
 };
@@ -246,6 +276,36 @@ fn parse_dim_rule(body: &str) -> Result<DimRule, String> {
 }
 
 fn parse_guard(value: &str) -> Result<Guard, String> {
+    // 連言先切。單一條件時不包 `All`,避免改變既有結構。
+    if value.contains("&&") {
+        let parts = value
+            .split("&&")
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(parse_atomic_guard)
+            .collect::<Result<Vec<_>, _>>()?;
+        if parts.len() < 2 {
+            return Err(format!("malformed conjunction {value:?}"));
+        }
+        return Ok(Guard::All(parts));
+    }
+    parse_atomic_guard(value)
+}
+
+fn binding_access(source: &str) -> Result<BindingAccess, String> {
+    let read = reference::parse(&reference::BINDING_FIELD, source)
+        .map_err(|error| format!("binding reference {source:?}: {error}"))?;
+    Ok(BindingAccess {
+        name: read
+            .binding()
+            .expect("BINDING_FIELD yields a binding")
+            .to_owned(),
+        dim: read.dim.expect("BINDING_FIELD requires a dimension"),
+        path: read.path.clone().expect("BINDING_FIELD requires a path"),
+    })
+}
+
+fn parse_atomic_guard(value: &str) -> Result<Guard, String> {
     if let Some(inner) = value
         .strip_prefix('[')
         .and_then(|rest| rest.strip_suffix(']'))
@@ -290,6 +350,30 @@ fn parse_guard(value: &str) -> Result<Guard, String> {
             parse_self_access(field)?,
             expected.to_owned(),
         ));
+    }
+    // `$x == [Trait]` / `$x.<dim>.<path> == 值`(P81)。`$self`/`$slot.` 已在
+    // 上面攔掉,故此處的 `$` 開頭必是具名綁定。
+    if field.starts_with('$') {
+        if let Ok(read) = reference::parse(&reference::BINDING_ONLY, field) {
+            let name = read.binding().expect("BINDING_ONLY yields a binding");
+            let Some(category) = expected.strip_prefix('[').and_then(|v| v.strip_suffix(']'))
+            else {
+                return Err(format!("`{field} ==` requires a `[Trait]` value"));
+            };
+            return Ok(Guard::BindingIsA(
+                name.to_owned(),
+                category.trim().to_owned(),
+            ));
+        }
+        let left = binding_access(field)?;
+        let right = if let Ok(read) = reference::parse(&reference::BINDING_ONLY, expected) {
+            BindingOperand::Scalar(read.binding().expect("binding").to_owned())
+        } else if expected.starts_with('$') {
+            BindingOperand::Access(binding_access(expected)?)
+        } else {
+            BindingOperand::Literal(expected.to_owned())
+        };
+        return Ok(Guard::BindingFieldEq(left, right));
     }
     if field.is_empty()
         || parse_path(field).is_err()
@@ -602,12 +686,35 @@ pub(crate) fn validate_realization_guard(
             .then_some(())
             .ok_or_else(|| format!("unknown slot reference {:?}", access.slot)),
         Guard::SelfFieldEq(_, _) => Ok(()),
+        Guard::All(parts) => parts
+            .iter()
+            .try_for_each(|_| Ok(()))
+            .and_then(|()| validate_realization_conjuncts(source, registry, slots)),
+        Guard::BindingFieldEq(_, _) | Guard::BindingIsA(_, _) => {
+            Err("`$<name>` bindings exist only in `.chg` function guards".to_owned())
+        }
         Guard::FieldEq(_, _) => {
             Err("realization guards require explicit `$self` or `$slot` reads".to_owned())
         }
     }
 }
 
+fn validate_realization_conjuncts(
+    source: &str,
+    registry: &OntologyRegistry,
+    slots: &[Slot],
+) -> Result<(), String> {
+    source
+        .split("&&")
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .try_for_each(|part| validate_realization_guard(part, registry, slots))
+}
+
+/// 求值環境裡的具名綁定(P81):`$x` → 一個 sign。`.lang` 側恆為空。
+pub type GuardBindings<'a> = std::collections::BTreeMap<String, &'a SignDef>;
+
+#[allow(clippy::too_many_arguments)]
 fn guard_matches(
     guard: &Guard,
     sign: &SignDef,
@@ -616,8 +723,72 @@ fn guard_matches(
     context: &EvalContext<'_>,
     reads: &mut Vec<SlotRead>,
     self_reads: &mut Vec<SelfRead>,
+    bindings: &GuardBindings<'_>,
+    scalars: &std::collections::BTreeMap<String, String>,
 ) -> GuardResult {
     match guard {
+        Guard::All(parts) => {
+            for part in parts {
+                match guard_matches(
+                    part, sign, dim, registry, context, reads, self_reads, bindings, scalars,
+                ) {
+                    GuardResult::Matched => {}
+                    other => return other,
+                }
+            }
+            GuardResult::Matched
+        }
+        Guard::BindingIsA(name, category) => {
+            let Some(bound) = bindings.get(name) else {
+                return GuardResult::Error(format!("guard references unbound `${name}`"));
+            };
+            if !registry.has(category) {
+                return GuardResult::Error(format!("unknown category guard [{category}]"));
+            }
+            if registry
+                .sign_categories(bound)
+                .iter()
+                .any(|item| item == category)
+            {
+                GuardResult::Matched
+            } else {
+                GuardResult::Unmatched
+            }
+        }
+        Guard::BindingFieldEq(access, expected) => {
+            let read = |access: &BindingAccess| -> Result<Option<String>, String> {
+                let bound = bindings
+                    .get(&access.name)
+                    .ok_or_else(|| format!("guard references unbound `${}`", access.name))?;
+                let path = format!("{}.{}", access.dim.keyword(), access.path);
+                Ok(bound
+                    .project(access.dim, registry)
+                    .get(&path)
+                    .map(str::to_owned))
+            };
+            let left = match read(access) {
+                Ok(value) => value,
+                Err(error) => return GuardResult::Error(error),
+            };
+            let right = match expected {
+                BindingOperand::Literal(value) => Some(value.clone()),
+                BindingOperand::Scalar(name) => match scalars.get(name) {
+                    Some(value) => Some(value.clone()),
+                    None => {
+                        return GuardResult::Error(format!("guard references unbound `${name}`"))
+                    }
+                },
+                BindingOperand::Access(access) => match read(access) {
+                    Ok(value) => value,
+                    Err(error) => return GuardResult::Error(error),
+                },
+            };
+            // 兩端都讀不到不算相等——缺席不是一種值。
+            match (left, right) {
+                (Some(left), Some(right)) if left == right => GuardResult::Matched,
+                _ => GuardResult::Unmatched,
+            }
+        }
         Guard::IsA(category) => {
             if !registry.has(category) {
                 return GuardResult::Error(format!("unknown category guard [{category}]"));
@@ -728,6 +899,8 @@ fn eval_one_branch(
             context,
             &mut reads,
             &mut self_reads,
+            &GuardBindings::new(),
+            &std::collections::BTreeMap::new(),
         ) {
             GuardResult::Matched => {}
             GuardResult::Unmatched => {
@@ -1166,6 +1339,8 @@ pub(crate) fn evaluate_token_guard(
         &context,
         &mut slot_reads,
         &mut self_reads,
+        &GuardBindings::new(),
+        &std::collections::BTreeMap::new(),
     );
     match result {
         GuardResult::Matched => (RuleStatus::Matched, slot_reads, self_reads, None),
@@ -1192,6 +1367,89 @@ pub(crate) fn evaluate_token_guard(
 ///
 /// `Err` carries the evaluator's own diagnostic; an unparseable or ill-typed guard is
 /// **never** reported as "unmatched".
+/// 在**具名綁定環境**上求值一句 guard(P81)。
+///
+/// `.chg` 的 function guard 走這個入口:主體是 `$<參數名>`,由 `bindings`
+/// 解析。先前的作法是把參數名**文字代換成 `$self`** 再呼叫
+/// [`guard_matches_sign`]——那條路徑只有一個隱含主體,所以跨參數的 guard
+/// 表達不出來(`FUNCTION_GUARD_MULTI_SUBJECT`)。改成環境之後限制消失,而
+/// 兩邊仍是**同一個求值器**(不得另寫第二套述詞語意)。
+pub fn guard_matches_bindings(
+    guard: &str,
+    bindings: &GuardBindings<'_>,
+    scalars: &std::collections::BTreeMap<String, String>,
+    registry: &OntologyRegistry,
+) -> Result<bool, String> {
+    let parsed = parse_guard(guard)?;
+    // function 層沒有 ambient sign;無主體形(`[Trait]`、裸 `field ==`)因此
+    // 無所依附,交給呼叫端當「沒有主體」處理。
+    let placeholder = SignDef {
+        id: crate::SignId::synthetic(),
+        name: String::new(),
+        items: Vec::new(),
+    };
+    let context = EvalContext {
+        fillers: &[],
+        slots: &[],
+    };
+    let (mut reads, mut self_reads) = (Vec::new(), Vec::new());
+    match guard_matches(
+        &parsed,
+        &placeholder,
+        Dim::Syn,
+        registry,
+        &context,
+        &mut reads,
+        &mut self_reads,
+        bindings,
+        scalars,
+    ) {
+        GuardResult::Matched => Ok(true),
+        GuardResult::Unmatched => Ok(false),
+        GuardResult::Error(error) => Err(error),
+    }
+}
+
+/// 一句 guard 引用到的具名綁定(P81),依**角色**分開。
+///
+/// 角色決定型別要求:當**主體**用的(`$x.<dim>.<path>`、`$x == [Trait]`)必須
+/// 綁到一個 sign;當**純量值**用的(`… == $y`)綁的是字面值。呼叫端據此決定
+/// 該報「不是 sign」還是直接取值。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GuardBindingRoles {
+    /// 路徑頭與範疇測試的主體。
+    pub subjects: Vec<String>,
+    /// 右端的純量參數。
+    pub scalars: Vec<String>,
+}
+
+pub fn guard_binding_roles(guard: &str) -> GuardBindingRoles {
+    fn walk(guard: &Guard, out: &mut GuardBindingRoles) {
+        match guard {
+            Guard::All(parts) => parts.iter().for_each(|part| walk(part, out)),
+            Guard::BindingIsA(name, _) => out.subjects.push(name.clone()),
+            Guard::BindingFieldEq(access, operand) => {
+                out.subjects.push(access.name.clone());
+                match operand {
+                    BindingOperand::Access(right) => out.subjects.push(right.name.clone()),
+                    BindingOperand::Scalar(name) => out.scalars.push(name.clone()),
+                    BindingOperand::Literal(_) => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = GuardBindingRoles::default();
+    if let Ok(parsed) = parse_guard(guard) {
+        walk(&parsed, &mut out);
+    }
+    out.subjects.sort();
+    out.subjects.dedup();
+    out.scalars.sort();
+    out.scalars.dedup();
+    out
+}
+
 pub fn guard_matches_sign(
     sign: &SignDef,
     guard: &str,
@@ -1230,6 +1488,8 @@ pub(crate) fn evaluate_sign_guard(
         &context,
         &mut slot_reads,
         &mut self_reads,
+        &GuardBindings::new(),
+        &std::collections::BTreeMap::new(),
     );
     match result {
         GuardResult::Matched => (RuleStatus::Matched, slot_reads, self_reads, None),
