@@ -181,3 +181,112 @@ fn the_explicit_spelling_survives_a_round_trip() {
         "不動點"
     );
 }
+
+// ── P75 增修 A:構式內部不回指構式本身 ────────────────────────────────
+
+/// phon 模板**就是**這個 sign 的形式,`{$self}` 等於把自己的 surface 嵌進
+/// 自己的 surface——無條件遞迴。訊息必須講這個,不能落到 unknown-slot
+/// (那會讓作者去找一個叫 `$self` 的 slot)。
+#[test]
+fn a_self_interpolation_in_a_phon_template_names_the_recursion() {
+    let error = compiles("", "").err().map(|e| e).unwrap_or_default();
+    assert!(error.is_empty(), "基準案例應可編譯:{error}");
+
+    let source = source("", "").replace("/{$slot.head}{$slot.tail}/", "/{$self}/");
+    let language = Language::parse(&source).expect("parse");
+    let error = format!(
+        "{}",
+        compile_system(language).expect_err("`{$self}` 不得合法")
+    );
+    assert!(
+        error.contains("TEMPLATE_INVALID") || error.contains("M1++"),
+        "{error}"
+    );
+}
+
+/// role 的填充者是某個 slot,不會是構式自己。
+#[test]
+fn a_role_cannot_be_filled_by_the_construction_itself() {
+    let source = source(
+        "",
+        "    sem:\n        roles:\n            agent [RefEntity]\n            agent = {$self}\n",
+    );
+    let error = Language::parse(&source).expect_err("`{$self}` 不得是 role 的填充者");
+    assert!(
+        format!("{error}").contains("cannot be filled by the construction itself"),
+        "訊息要講回指,不能只講形狀:{error}"
+    );
+}
+
+/// **不誤傷反身**:兩個 role 綁**同一個 slot** 是正常的反身構式,
+/// 與「回指構式本身」無關。
+#[test]
+fn two_roles_sharing_one_slot_is_still_legal() {
+    compiles(
+        "",
+        "    sem:\n        roles:\n            agent [RefEntity]\n            patient [RefEntity]\n            agent = {$slot.head}\n            patient = {$slot.head}\n",
+    )
+    .expect("反身:兩個 role 綁同一 slot");
+}
+
+/// **不誤傷把自己傳給別的構式**:`f({$self})` 不是內部回指,是往外傳。
+/// 傳給自己才是環,由 `APPLICATION_CYCLE` 擋。
+#[test]
+fn passing_self_as_an_argument_to_another_construction_is_legal() {
+    let source = r#"Symbol a
+Class vowel {a}
+
+trait RefThing:
+
+sign wrapper:
+    belongs RefThing
+    syn:
+        slots:
+            stem [RefThing]
+    phon:
+        /{$slot.stem}a/
+    sem:
+        senses:
+            core = W
+
+sign word:
+    belongs RefThing
+    phon:
+        /a/
+    case:
+        else:
+            wrapper({$self})
+"#;
+    let language = Language::parse(source).expect("parse");
+    compile_system(language).expect("把自己傳給別的 construction 是合法的");
+}
+
+/// 傳給**自己**才是回指:環偵測擋下。
+#[test]
+fn passing_self_to_itself_is_a_cycle() {
+    let source = r#"Symbol a
+Class vowel {a}
+
+trait RefThing:
+
+sign word:
+    belongs RefThing
+    syn:
+        slots:
+            stem [RefThing]
+    phon:
+        /{$slot.stem}a/
+    sem:
+        senses:
+            core = W
+    case:
+        else:
+            word({$self})
+"#;
+    let language = Language::parse(source).expect("parse");
+    let error = format!("{}", compile_system(language).expect_err("自我套用是環"));
+    assert!(
+        error.contains("APPLICATION_CYCLE") || error.contains("M1++"),
+        "{error}"
+    );
+}

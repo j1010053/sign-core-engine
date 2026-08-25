@@ -2049,11 +2049,16 @@ fn template_references(template: &str) -> Result<Vec<String>, String> {
         // 前者在上面,後者交給 reference。
         let read = reference::parse(&reference::SUBJECT_ONLY, name)
             .map_err(|error| format!("`{{{name}}}` at byte {at}: {error}"))?;
-        references.push(
-            read.slot()
-                .map(str::to_owned)
-                .unwrap_or_else(|| name.to_owned()),
-        );
+        // P75 增修 A:構式內部不回指構式本身。phon 模板**就是**這個 sign 的
+        // 形式,把 `$self` 求值後嵌進去等於把自己的 surface 嵌進自己的 surface
+        // ——無條件遞迴,與 slot 是否存在無關,故不能落到 unknown-slot。
+        let Some(slot) = read.slot() else {
+            return Err(format!(
+                "`{{$self}}` at byte {at} embeds this sign's own surface into itself; \
+                 a phon template may only interpolate slots (`{{$slot.NAME}}`)"
+            ));
+        };
+        references.push(slot.to_owned());
     }
     Ok(references)
 }

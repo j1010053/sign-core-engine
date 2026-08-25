@@ -1386,7 +1386,15 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                     .and_then(|inner| reference::parse(&reference::SUBJECT_ONLY, inner).ok())
                     .and_then(|read| read.slot().map(str::to_owned));
                 let Some(slot) = slot else {
-                    return Err(err(no, "role binding must be `NAME = {$slot.NAME}`"));
+                    // P75 增修 A:role 的填充者是某個 slot,不會是這個構式自己。
+                    // `{$self}` 在此不是形狀錯誤而是回指錯誤,訊息要講對原因。
+                    let message = if value.trim() == "{$self}" {
+                        "a role cannot be filled by the construction itself; \
+                         bind it to a slot (`NAME = {$slot.NAME}`)"
+                    } else {
+                        "role binding must be `NAME = {$slot.NAME}`"
+                    };
+                    return Err(err(no, message));
                 };
                 if !ident_ok(name) {
                     return Err(err(no, "role and slot names must be identifiers"));

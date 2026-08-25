@@ -70,7 +70,7 @@
 | `architecture/架構修補10_歷時function層與載入_v0.1.md` | P47–P55 詳細來源:function surface/load、接力展開、路徑庫、ServiceContext 接點、components、`.chg` canonical |
 | `architecture/架構修補11_演化樹節點模型_v0.1.md` | P56–P64 詳細來源:immutable snapshot、typed rebase、node-v2、全 parent merge、donor、persistence |
 | `architecture/架構修補12_授權面與封裝面分離_v0.1_提案.md` | P65–P68 **提案,未定案**:digest 移至邊、環境鎖分離、授權/封裝二分、bundle |
-| `architecture/架構修補13_引用與插值語法統一_v0.1.md` | **P72–P80 權威**:`$` 只建立引用不求值、`{…}` 求值後嵌入,兩者正交;主體一律顯式(裸寫法與首段猜測移除)、`{…}` 內容只有主體、範疇比對交還 `[Trait]` guard、Path 縮減為點分名段。§6 附行為量測(語料庫分佈、查找端是字串鍵、封閉清單可容納的形狀) |
+| `architecture/架構修補13_引用與插值語法統一_v0.1.md` | **P72–P80 權威**(P75 含**增修 A**=構式內部不回指構式本身):`$` 只建立引用不求值、`{…}` 求值後嵌入,兩者正交;主體一律顯式(裸寫法與首段猜測移除)、`{…}` 內容只有主體、範疇比對交還 `[Trait]` guard、Path 縮減為點分名段。§6 附行為量測(語料庫分佈、查找端是字串鍵、封閉清單可容納的形狀) |
 | `architecture/架構修補09_phon命名block_v0.md` | P46 詳細來源:phon `name:`、結構化 block、propagate、grouped codegen 與 authoring |
 | `verification/` | 測試索引與封板證據：M1++、Step 13、Step 14、Step 16；只宣告可觀測完成狀態，不取代規範權威 |
 | `specifications/` | 規範性契約：DSL、Language、演化圖、Sign、統計與共時資料語意；02–04 的 D/A/B/C 決策編號保留於檔名。 |
