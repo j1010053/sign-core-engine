@@ -82,8 +82,8 @@ fn the_resolved_trace_names_the_statement_the_stack_and_the_substituted_argument
     let resolved = resolve(
         &document,
         "evo:trace",
-        "\n    #0:\n        VerbToTense(sign(\"go\"), tense: FUTURE, result_category: Aux)\
-         \n\n    #1:\n        VerbToTense(sign(\"finish\"), tense: PERFECT, result_category: Bound)\n",
+        "\n    #0:\n        VerbToTense(sign(\"go\"), tense: FUTURE, result_category: Aux, delta: 0.3)\
+         \n\n    #1:\n        VerbToTense(sign(\"finish\"), tense: PERFECT, result_category: Bound, delta: 0.3)\n",
     )
     .resolve(&document, &libraries)
     .expect("std recipe resolves");
@@ -138,7 +138,7 @@ fn the_trace_is_observation_only_and_never_reaches_the_dump() {
     let resolved = resolve(
         &document,
         "evo:dump",
-        "\n    #0:\n        VerbToTense(sign(\"go\"), tense: FUTURE, result_category: Aux)\n",
+        "\n    #0:\n        VerbToTense(sign(\"go\"), tense: FUTURE, result_category: Aux, delta: 0.3)\n",
     )
     .resolve(&document, &libraries)
     .expect("resolves");
@@ -186,7 +186,7 @@ fn resolved_trace_and_primitive_expansion_golden() {
     let resolved = resolve(
         &document,
         "evo:golden",
-        "\n    #0:\n        VerbToTense(sign(\"go\"), tense: FUTURE, result_category: Aux)\n",
+        "\n    #0:\n        VerbToTense(sign(\"go\"), tense: FUTURE, result_category: Aux, delta: 0.3)\n",
     )
     .resolve(&document, &LibrarySpec::default())
     .expect("resolves");
@@ -286,13 +286,6 @@ fn every_function_error_declares_its_rebase_class() {
             },
             FunctionErrorClass::Broken,
         ),
-        (
-            FunctionError::GuardMultiSubject {
-                function: "R".to_owned(),
-                guard: "g".to_owned(),
-            },
-            FunctionErrorClass::Broken,
-        ),
     ];
     for (error, expected) in cases {
         assert_eq!(error.class(), *expected, "{error:?}");
@@ -351,8 +344,8 @@ fn a_function_failure_inside_a_statement_carries_that_statement_number() {
     let error = resolve(
         &document,
         "evo:ordinal",
-        "\n    #0:\n        VerbToTense(sign(\"go\"), tense: FUTURE, result_category: Aux)\
-         \n\n    #1:\n        VerbToTense(sign(\"nowhere\"), tense: PERFECT, result_category: Bound)\n",
+        "\n    #0:\n        VerbToTense(sign(\"go\"), tense: FUTURE, result_category: Aux, delta: 0.3)\
+         \n\n    #1:\n        VerbToTense(sign(\"nowhere\"), tense: PERFECT, result_category: Bound, delta: 0.3)\n",
     )
     .resolve(&document, &LibrarySpec::default())
     .expect_err("nowhere 不存在");
@@ -377,7 +370,7 @@ fn a_changeset_calling_a_std_recipe_runs_end_to_end_and_replays_deterministicall
     let resolved = resolve(
         &document,
         "evo:e2e",
-        "\n    #0:\n        VerbToTense(sign(\"go\"), tense: FUTURE, result_category: Aux)\n",
+        "\n    #0:\n        VerbToTense(sign(\"go\"), tense: FUTURE, result_category: Aux, delta: 0.3)\n",
     )
     .resolve(&document, &libraries)
     .expect("resolves");
@@ -443,7 +436,7 @@ fn a_constraint_that_stopped_holding_is_a_conflict_not_broken_input() {
                     // 第 0 句刻意只碰 `finish`——在新 base 上照樣成立,故句號
                     // 若被寫死成 0 或漏補,下面的 `Some(1)` 會紅。
                     "\n    #0:\n        update sign(\"finish\").def[entrenchment].value = 0.35\
-                     \n\n    #1:\n        VerbToTense(sign(\"go\"), tense: FUTURE, result_category: Aux)\n",
+                     \n\n    #1:\n        VerbToTense(sign(\"go\"), tense: FUTURE, result_category: Aux, delta: 0.3)\n",
                 ),
             )],
             Nativization::None,
@@ -516,7 +509,7 @@ fn a_recipe_call_that_still_holds_rebases_cleanly() {
                 changeset_for(
                     &n1_doc,
                     "evo:n2",
-                    "\n    #0:\n        VerbToTense(sign(\"go\"), tense: FUTURE, result_category: Aux)\n",
+                    "\n    #0:\n        VerbToTense(sign(\"go\"), tense: FUTURE, result_category: Aux, delta: 0.3)\n",
                 ),
             )],
             Nativization::None,

@@ -30,10 +30,10 @@ sign NP:
         map head optional false
         licensing.register = general
     phon:
-        /{det}{head}/
+        /{$slot.det}{$slot.head}/
     sem:
         senses[core].concept = DEFINITE_NP
-        profile = {head}
+        profile = {$slot.head}
 ```
 
 Slot mapping 是平坦、動詞式語句，避免再造第二套巢狀物件格式：
@@ -59,8 +59,8 @@ source mapping 與呼叫端 Rust mapping 合成後，先完整驗證未知 slot�
 | trait/sign/global trait | colon+縮排、`==` | `TraitDef/SignDef/Block` | compile pipeline | 完整 |
 | 分類/繼承 | `belongs Name` | `SignItem::Belongs` | ontology closure/diagnostics | 完整 |
 | macro 引用 | `Name`、`Name[n]` | `TraitUse` | expansion | 完整 |
-| 四維 scalar/structured path | 維度內 `path = value` | `Def` + `Path` | projection/patch/rules | 完整；lhs 支援 `.`、`[key]`、`~tier` |
-| phon UR/template | `/…/`、`{slot}` | `Def("phon")` | construction + phon runtime | 完整 |
+| 四維 scalar/structured path | 維度內 `path = value` | `Def` + `Path` | projection/patch/rules | 完整；lhs 為點分名段 `Name ('.' Name)*`(`[key]`／`~tier` 已由 P80 移除) |
+| phon UR/template | `/…/`、`{$slot.NAME}` | `Def("phon")` | construction + phon runtime | 完整 |
 | valence | `slots:` + `NAME [Trait]?` | `Slot` | filler licensing/partial apply | 完整 |
 | slot mapping | `map SLOT OP [ARG]` | `SlotMapOp` | 原子驗證/application | 完整 |
 | syn/sem/prag/phon 規則 | rule + `then/else` + `@stage` | `Rule` | 三分求值/Tshiatūn | 完整（不含巢狀 Then/Else） |

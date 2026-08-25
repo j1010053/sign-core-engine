@@ -43,7 +43,7 @@ sign SingularNP:
         slot_features:
             item.number = singular
     phon:
-        /{item}/
+        /{$slot.item}/
 
 sign PluralNP:
     syn:
@@ -52,7 +52,7 @@ sign PluralNP:
         slot_features:
             item.number = plural
     phon:
-        /{item}/
+        /{$slot.item}/
 "#;
 
 fn narrowed_number(construction: &str, filler: &str) -> Result<Option<String>, String> {

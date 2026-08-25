@@ -14,6 +14,7 @@
             "store:default",
             "wdio:allow-execute",
             "wdio:allow-debug-plugin",
+            "wdio:allow-get-window-states",
             "wdio-webdriver:default"
           ]
         }

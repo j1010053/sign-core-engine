@@ -20,7 +20,9 @@
    但 std:core 的 `AgreementBearer.number` 確實需要 `?`，其 digest 已變、`restore.chg` 已重 bless）**，
    **P72–P74 權威=`architecture/年代切片與歷時分期_v1.0.md` §1
    （已裁定並實作 2026-08-11：方言群與歷時分期分離／切片=反鏈、判準走拓撲不走 `time`／
-   並存判準只看主幹邊）**；
+   並存判準只看主幹邊）**，
+   **P84–P92 權威=`architecture/架構修補13_引用與插值語法統一_v0.1.md` §3
+   （引用與插值語法統一；已落地，行為量測見該檔 §6；原引用分支編 P72–P80，因 P72–P74 已被年代切片占用、P77–P83 被語意錨層本體論占用而順延）**；
    個別修補文件保留詳細理由與落地紀錄，出入處一律以彙整為準；
    P7 已廢止→P14，P19 的 nativization 放置由 P56/P58/P64 局部覆寫，
    **P48 的 body 分支語意由 P69 修訂**；
@@ -78,6 +80,7 @@
 | `architecture/架構修補10_歷時function層與載入_v0.1.md` | P47–P55 詳細來源:function surface/load、接力展開、路徑庫、ServiceContext 接點、components、`.chg` canonical |
 | `architecture/架構修補11_演化樹節點模型_v0.1.md` | P56–P64 詳細來源:immutable snapshot、typed rebase、node-v2、全 parent merge、donor、persistence |
 | `architecture/架構修補12_授權面與封裝面分離_v0.1_提案.md` | P65–P68 **提案,未定案**:digest 移至邊、環境鎖分離、授權/封裝二分、bundle |
+| `architecture/架構修補13_引用與插值語法統一_v0.1.md` | **P72–P80 權威**(P75 含**增修 A**=構式內部不回指構式本身;**P79** = function guard 主體改 `$<參數名>` + 環境求值,連言 `&&` 進文法):`$` 只建立引用不求值、`{…}` 求值後嵌入,兩者正交;主體一律顯式(裸寫法與首段猜測移除)、`{…}` 內容只有主體、範疇比對交還 `[Trait]` guard、Path 縮減為點分名段。§6 附行為量測(語料庫分佈、查找端是字串鍵、封閉清單可容納的形狀) |
 | `architecture/架構修補09_phon命名block_v0.md` | P46 詳細來源:phon `name:`、結構化 block、propagate、grouped codegen 與 authoring |
 | `verification/` | 測試索引與封板證據：M1++、Step 13、Step 14、Step 16；只宣告可觀測完成狀態，不取代規範權威 |
 | `specifications/` | 規範性契約：DSL、Language、演化圖、Sign、統計與共時資料語意；02–04 的 D/A/B/C 決策編號保留於檔名。 |
@@ -294,7 +297,8 @@ P26 序列性 id(不入印出格式,I15);dsl 域宣告以不透明區塊承載(�
 不及於行/括號結構的 .lang)——dsl 域區依**檔案位置**判定(裁決1:首個 language 構造前
 verbatim)、`==` 切 Block(P27)、`Name[n]` 引用、`=`/`=>` 二分、`@stage`(省略=word)、
 **`else` 鏈**(P22,入 `Rule.else_chain`,printer 同步輸出)、**Path 文法**(修補05 §3.5,
-`path::parse_path`:`.`欄位/`[key]`/`~tier`,Def 路徑驗證+步驟 13 定址複用)。
+`path::parse_path`,Def 路徑驗證+步驟 13 定址複用;當時含 `.`欄位/`[key]`/`~tier`
+三種段,**`[key]`/`~tier` 已由 P80 移除**,現為 `Name ('.' Name)*`)。
 出口過:**round-trip 恆等**(canonical 輸入逐位元;id 依文件序決定性再生)、
 非 canonical 輸入正規化為不動點、source→AST golden、錯誤定位(行號)。
 規則 env/action 內部與守衛求值的結構化 = 步驟 10(compile pass 需求驅動)。
@@ -422,7 +426,7 @@ patch);`RuleRecord` 保 status/changed/branch/diag/RuleId。出口過:
 workbench M1++ 封板回歸綠；引擎零觸動。
 
 **共時 `.lang` surface 補齊(2026-07-21)**:維度 Def lhs 接完整 Path
-(`.`/`[key]`/`~tier`)；`syn:` 內平坦 `map SLOT OP [ARG]` 與 Rust 共用
+(當時為 `.`/`[key]`/`~tier`;**後兩者已由 P80 移除**)；`syn:` 內平坦 `map SLOT OP [ARG]` 與 Rust 共用
 `SlotMapOp`，source mapping 經 compile 驗證後進 construction runtime；sign 頂層
 `origin/provenance/lifecycle` typed 化。歷史 attestation 年代/文本/可信度仍不進
 Language，對照見 docs/14 與 `tests/lang_surface.rs`。

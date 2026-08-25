@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../i18n";
+import { DirtyDraftProvider, type SaveDirtyDraft } from "../dirtyGuard";
 import { EvolutionPage } from "./EvolutionPage";
 
 const mocks = vi.hoisted(() => ({
@@ -20,7 +21,11 @@ const mocks = vi.hoisted(() => ({
   redo: vi.fn(),
   removeActiveLeaf: vi.fn(),
   saveWorkingCopy: vi.fn(),
+  saveWorkingCopySource: vi.fn(),
   loadWorkingCopy: vi.fn(),
+  saveDialog: vi.fn(),
+  openDialog: vi.fn(),
+  registerDraft: vi.fn(),
 }));
 
 vi.mock("../ipc", async (importOriginal) => {
@@ -29,8 +34,18 @@ vi.mock("../ipc", async (importOriginal) => {
 });
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
-  open: vi.fn(),
-  save: vi.fn(),
+  open: mocks.openDialog,
+  save: mocks.saveDialog,
+}));
+
+vi.mock("@uiw/react-codemirror", () => ({
+  default: ({ value, onChange }: { value: string; onChange(value: string): void }) => (
+    <textarea
+      aria-label="Raw .chg source"
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  ),
 }));
 
 function renderPage() {
@@ -39,7 +54,9 @@ function renderPage() {
   });
   render(
     <QueryClientProvider client={queryClient}>
-      <EvolutionPage />
+      <DirtyDraftProvider value={mocks.registerDraft}>
+        <EvolutionPage />
+      </DirtyDraftProvider>
     </QueryClientProvider>,
   );
 }
@@ -103,6 +120,79 @@ describe("Evolution working copy", () => {
       statements: 1,
       diff: { aligned: 1, born: 1, died: 0, phon: 0, syn: 0, sem: 0, prag: 0, structural: 1 },
     });
+    mocks.saveDialog.mockResolvedValue(null);
+  });
+
+  it("Save As validates and persists the editor-visible .chg version", async () => {
+    const visibleSource = "changeset ui:test:\n    schema = conlang.changeset/v1\n\n    #0:\n        insert visible\n";
+    const canonicalSource = `${visibleSource}\n`;
+    const savedChange = {
+      schema: "conlang.ui/v1",
+      source: canonicalSource,
+      statements: 1,
+      diff: { aligned: 1, born: 1, died: 0, phon: 0, syn: 0, sem: 0, prag: 0, structural: 1 },
+    };
+    mocks.saveDialog.mockResolvedValue("C:\\visible.chg");
+    mocks.saveWorkingCopySource.mockImplementation(async () => {
+      mocks.pendingChange.mockResolvedValue(savedChange);
+      return savedChange;
+    });
+    renderPage();
+
+    const editor = await screen.findByLabelText("Raw .chg source");
+    fireEvent.change(editor, { target: { value: visibleSource } });
+    await waitFor(() => expect(editor).toHaveValue(visibleSource));
+    fireEvent.click(screen.getByTitle("另存 .chg"));
+
+    await waitFor(() => expect(mocks.saveWorkingCopySource).toHaveBeenCalledWith(
+      "C:\\visible.chg",
+      visibleSource,
+    ));
+    expect(mocks.saveWorkingCopy).not.toHaveBeenCalled();
+    await waitFor(() => expect(editor).toHaveValue(canonicalSource));
+  });
+
+  it("does not write or replace pending when the visible .chg is invalid", async () => {
+    mocks.saveDialog.mockResolvedValue("C:\\invalid.chg");
+    mocks.saveWorkingCopySource.mockRejectedValue(new Error("invalid changeset"));
+    renderPage();
+
+    const editor = await screen.findByLabelText("Raw .chg source");
+    fireEvent.change(editor, { target: { value: "not a .chg" } });
+    await waitFor(() => expect(editor).toHaveValue("not a .chg"));
+    fireEvent.click(screen.getByTitle("另存 .chg"));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("invalid changeset");
+    expect(editor).toHaveValue("not a .chg");
+    expect(mocks.saveWorkingCopy).not.toHaveBeenCalled();
+  });
+
+  it("registers the visible .chg draft for route guarding", async () => {
+    const visibleSource = "changeset ui:test:\n    schema = conlang.changeset/v1\n\n    #0:\n        insert visible\n";
+    const syncedChange = {
+      schema: "conlang.ui/v1",
+      source: visibleSource,
+      statements: 1,
+      diff: { aligned: 1, born: 1, died: 0, phon: 0, syn: 0, sem: 0, prag: 0, structural: 1 },
+    };
+    mocks.replacePendingSource.mockImplementation(async () => {
+      mocks.pendingChange.mockResolvedValue(syncedChange);
+      return syncedChange;
+    });
+    renderPage();
+
+    const editor = await screen.findByLabelText("Raw .chg source");
+    fireEvent.change(editor, { target: { value: visibleSource } });
+    await waitFor(() => expect(mocks.registerDraft).toHaveBeenCalledWith(
+      "evolution-source",
+      expect.any(Function),
+    ));
+
+    const saveDraft = [...mocks.registerDraft.mock.calls]
+      .reverse()
+      .find(([, save]) => typeof save === "function")?.[1] as SaveDirtyDraft;
+    await saveDraft();
+    expect(mocks.replacePendingSource).toHaveBeenCalledWith(visibleSource);
   });
 
   it("does not submit the sound-change examples as real working-copy input", async () => {

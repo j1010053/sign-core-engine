@@ -9,9 +9,9 @@
 
 use conlang_app::{AppError, Session};
 use conlang_changeset::evolution::{EvolutionGraph, NodeId};
+use conlang_changeset::rewrite::{AtomicRewrite, DonorScope, RuleHome, ServiceContext};
 use conlang_changeset::{NodeUpdate, PrimitiveEdit};
 use conlang_command::{lower, LanguageCommand};
-use conlang_changeset::rewrite::{AtomicRewrite, DonorScope, RuleHome, ServiceContext};
 use conlang_generate::Strategies;
 use conlang_language::{LanguageDocument, LibrarySpec};
 use conlang_persistence::GraphStore;
@@ -253,7 +253,10 @@ fn discarding_from_an_empty_buffer_yields_none() {
 fn editing_without_an_active_node_is_refused() {
     let libraries = LibrarySpec::default();
     let mut session = Session::new(EvolutionGraph::new(libraries.clone()), libraries);
-    assert!(matches!(session.begin_edit("x"), Err(AppError::NoActiveNode)));
+    assert!(matches!(
+        session.begin_edit("x"),
+        Err(AppError::NoActiveNode)
+    ));
     assert!(matches!(
         session.stage(Vec::<PrimitiveEdit>::new()),
         Err(AppError::NoActiveNode)
@@ -292,7 +295,10 @@ fn the_working_copy_is_an_ordinary_chg_file() {
 
     // 由**既有**的 parser 讀得回來 —— 沒有第二套格式
     let text = fs::read_to_string(&path).expect("read");
-    assert!(text.starts_with("changeset "), "就是 .chg 的表面語法:{text}");
+    assert!(
+        text.starts_with("changeset "),
+        "就是 .chg 的表面語法:{text}"
+    );
     conlang_changeset::UnresolvedChangeSet::parse(&text).expect("既有 parser 讀得回");
 
     // 而 Session 自己也讀得回,內容一致
@@ -335,6 +341,71 @@ fn a_reloaded_working_copy_still_commits() {
 
     let source = session.graph().snapshot(&id).expect("snapshot").source();
     assert!(source.contains("t => k"), "存檔往返不改變產物:{source}");
+}
+
+#[test]
+fn save_as_writes_the_supplied_editor_version_and_replaces_pending() {
+    let temp = TempDir::new("save-visible");
+    let (mut session, _root) = session();
+    session.begin_edit("app:visible").expect("begin visible");
+    let document = session.snapshot().expect("snapshot").clone();
+    let edits = lower(
+        &LanguageCommand::ApplyRewrite(&AtomicRewrite::SoundChange {
+            home: RuleHome::Global("Core".to_owned()),
+            body: "t => k".to_owned(),
+        }),
+        &document,
+        &Strategies::default(),
+        &ServiceContext::offline(),
+        &DonorScope::new(),
+    )
+    .expect("lower");
+    session.stage(edits).expect("stage visible");
+    let visible = session.pending_source().expect("visible source").expect("non-empty");
+
+    session.begin_edit("app:stale").expect("replace with stale");
+    let stale = session.pending_source().expect("stale source").expect("non-empty");
+    assert_ne!(
+        visible, stale,
+        "counterexample requires two distinct versions"
+    );
+
+    let path = temp.0.join("visible.chg");
+    session
+        .save_working_copy_source(&path, &visible)
+        .expect("save visible source");
+
+    let saved = fs::read_to_string(path).expect("read saved source");
+    assert_eq!(saved, session.pending_source().expect("new pending").expect("non-empty"));
+    assert_ne!(saved, stale, "Save As must not serialize stale pending");
+    assert!(saved.contains("t => k"));
+}
+
+#[test]
+fn failed_editor_save_as_keeps_both_file_and_pending_unchanged() {
+    let temp = TempDir::new("save-visible-failure");
+    let (mut session, _root) = session();
+    session.begin_edit("app:stale").expect("begin stale");
+    let stale = session.pending_source().expect("stale source").expect("non-empty");
+    let path = temp.0.join("draft.chg");
+    fs::write(&path, "existing file").expect("seed file");
+
+    assert!(session
+        .save_working_copy_source(&path, "not a .chg")
+        .is_err());
+    assert_eq!(
+        fs::read_to_string(&path).expect("read file"),
+        "existing file"
+    );
+    assert_eq!(session.pending_source().expect("pending").expect("non-empty"), stale);
+
+    // A valid source paired with an unwritable target must also leave pending
+    // unchanged. A directory is not a writable file on both supported hosts.
+    assert!(session.save_working_copy_source(&temp.0, &stale).is_err());
+    assert_eq!(
+        session.pending_source().expect("pending after I/O error").expect("non-empty"),
+        stale
+    );
 }
 
 // ── 落盤 ─────────────────────────────────────────────────────────────────

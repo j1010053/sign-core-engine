@@ -354,12 +354,17 @@ impl Session {
     ///
     /// parse／resolve 全部成功後才改欄位；失敗時舊 working copy 保持可重試。
     pub fn replace_pending_source(&mut self, source: &str) -> Result<(), AppError> {
+        let resolved = self.resolve_pending_source(source)?;
+        self.pending = Some(resolved);
+        Ok(())
+    }
+
+    fn resolve_pending_source(&self, source: &str) -> Result<ResolvedChangeSet, AppError> {
         let document = self.snapshot()?.clone();
         let unresolved = UnresolvedChangeSet::parse(source)?;
         let resolved = self.resolve_unresolved(&document, &unresolved)?;
         self.replay_change_set(document, &resolved)?;
-        self.pending = Some(resolved);
-        Ok(())
+        Ok(resolved)
     }
 
     /// 在不提交、不改圖的前提下 replay pending，供 UI 預覽。
@@ -496,10 +501,12 @@ impl Session {
         Ok(next)
     }
 
-    /// 從記憶體圖移除一個已經在 persistence 側驗證過的葉節點。
+    /// 從記憶體圖移除葉節點。
     ///
-    /// 這不是 undo；呼叫端必須以顯式刪除操作觸發。若刪的是 active，導覽會
-    /// 回到最近仍存在的節點，沒有就取排序後第一個 root。
+    /// 這不是 undo；呼叫端必須以顯式刪除操作觸發。已落盤的節點應先在
+    /// persistence 側驗證並刪除；剛 commit、尚未 Save Project 的節點沒有對應
+    /// store entry，可直接走圖側刪除。若刪的是 active，導覽會回到最近仍存在
+    /// 的節點，沒有就取排序後第一個 root。
     pub fn remove_node(&mut self, id: &NodeId) -> Result<(), AppError> {
         self.graph.remove_node(id)?;
         self.history.retain(|candidate| candidate != id);
@@ -527,6 +534,22 @@ impl Session {
             path: path.display().to_string(),
             source,
         })
+    }
+
+    /// Validate and save the editor-visible source as one working-copy action.
+    ///
+    /// The candidate is parsed, resolved, and replayed before any state changes.
+    /// It replaces `pending` only after the exact canonical source has reached
+    /// disk, so a validation or I/O failure leaves the previous pending copy
+    /// available for retry.
+    pub fn save_working_copy_source(&mut self, path: &Path, source: &str) -> Result<(), AppError> {
+        let resolved = self.resolve_pending_source(source)?;
+        std::fs::write(path, resolved.dump()?).map_err(|source| AppError::Io {
+            path: path.display().to_string(),
+            source,
+        })?;
+        self.pending = Some(resolved);
+        Ok(())
     }
 
     /// 讀回一份工作副本。基底必須是目前節點——三道 digest 會在 resolve 時把關。

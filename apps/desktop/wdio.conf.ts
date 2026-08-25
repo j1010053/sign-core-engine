@@ -10,6 +10,7 @@ const capabilities: TauriCapabilities = { browserName: "tauri", "tauri:options":
 
 export const config: WebdriverIO.Config = {
   runner: "local",
+  outputDir: path.join(root, "target", "wdio-logs"),
   // 巢狀陣列 = wdio 的 spec group:群組內的檔案在**同一個 worker、同一個
   // session** 內依序跑。這裡必須如此,原因是 embedded provider 的一個硬約束:
   //
@@ -33,7 +34,13 @@ export const config: WebdriverIO.Config = {
   framework: "mocha",
   reporters: ["spec"],
   mochaOpts: { timeout: 60_000 },
-  services: [["@wdio/tauri-service", { appBinaryPath: binary, driverProvider: "embedded" }]],
+  services: [["@wdio/tauri-service", {
+    appBinaryPath: binary,
+    driverProvider: "embedded",
+    // The embedded driver dies with the app. Forward Rust stderr so CI keeps
+    // the original panic/stack-overflow message instead of only `fetch failed`.
+    captureBackendLogs: true,
+  }]],
   onPrepare() {
     // Windows 必須走 shell:自 CVE-2024-27980 修補起(Node ≥18.20.2),
     // spawn 一個 `.cmd`/`.bat` 而不開 shell 會直接回 EINVAL——`pnpm` 在

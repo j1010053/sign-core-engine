@@ -475,16 +475,12 @@ impl LanguageDocument {
         path: &crate::path::Path,
     ) -> Result<ResolvedTarget, IdentityError> {
         let mut resolved = self.resolve_node(anchor)?;
+        // P80 之後 Path 只有具名段,故不再需要過濾非 Name 段。
         let names: Vec<_> = path
             .0
             .iter()
-            .map(|segment| match segment {
-                crate::path::PathSeg::Name(name) => Ok(name.as_str()),
-                _ => Err(IdentityError::Resolve(
-                    "editable field paths accept only named field segments".to_owned(),
-                )),
-            })
-            .collect::<Result<_, _>>()?;
+            .map(|crate::path::PathSeg::Name(name)| name.as_str())
+            .collect();
         if names.len() != 1 {
             return Err(IdentityError::Resolve(
                 "Step 13 field paths must identify exactly one atomic field".to_owned(),

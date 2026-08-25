@@ -235,7 +235,7 @@ constraints:                             # sign 級（語意屬 syn）
 
 | 語境 | field 是 | 文法 |
 |---|---|---|
-| Def `field = value` | 一條 **Path** | `anchor`（`.name`\|`[key]`\|`~tier`）* |
+| Def `field = value` | 一條 **Path** | `anchor`（`.name`）*(`[key]`／`~tier` 已由 P80 移除） |
 | syn/sem/prag rule `field => …` | 一個**已宣告 feature 名** | 單一 identifier |
 | phon rule `b => p` | **音韻 pattern**（非 field） | Tshiatūn 改寫式 |
 

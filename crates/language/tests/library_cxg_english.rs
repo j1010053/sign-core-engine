@@ -100,15 +100,15 @@ sign cop:
 sign RequiredNominalEquation:
     belongs RequiredCopulaPredicateNominal
     phon:
-        /{subject}{copula}{predicate}/
+        /{$slot.subject}{$slot.copula}{$slot.predicate}/
 sign OptionalNominalEquation:
     belongs OptionalCopulaPredicateNominal
     phon:
-        /{subject}{copula}{predicate}/
+        /{$slot.subject}{$slot.copula}{$slot.predicate}/
 sign ZeroNominalEquation:
     belongs ZeroCopulaPredicateNominal
     phon:
-        /{subject}{predicate}/
+        /{$slot.subject}{$slot.predicate}/
 "#;
     let system = compile_system(Language::parse(source).unwrap()).unwrap();
 
@@ -703,7 +703,7 @@ sign plural_target:
 sign Agreement:
     belongs ControllerTargetAgreement
     phon:
-        /{controller}{target}/
+        /{$slot.controller}{$slot.target}/
 "#;
     let generic = compile_system(Language::parse(source).unwrap()).unwrap();
     let matched = generic
@@ -799,9 +799,9 @@ sign CopyConstruction:
     sem:
         roles:
             referent [*]
-            referent = {head}
+            referent = {$slot.head}
     phon:
-        /{head}{optional}/
+        /{$slot.head}{$slot.optional}/
 "#;
     let system = compile_system(Language::parse(source).unwrap()).unwrap();
     let derivation = system
@@ -839,9 +839,9 @@ sign CopyConstruction:
     sem:
         roles:
             referent [*]
-            referent = {head}
+            referent = {$slot.head}
     phon:
-        /{head}/
+        /{$slot.head}/
 "#;
     let error = compile_system(Language::parse(invalid).unwrap()).unwrap_err();
     let conlang_language::CompileSystemError::Validation(report) = error else {
@@ -1020,7 +1020,7 @@ sign Meaningless:
         slots:
             head [*]
     phon:
-        /{head}/
+        /{$slot.head}/
 sign Unused:
     syn:
         slots:
@@ -1064,7 +1064,7 @@ sign VerbMedialOnly:
     sem:
         roles:
             referent [*]
-            referent = {head}
+            referent = {$slot.head}
 "#;
     let error = compile_system(Language::parse(missing_form).unwrap()).unwrap_err();
     let conlang_language::CompileSystemError::Validation(report) = error else {

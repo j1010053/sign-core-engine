@@ -65,14 +65,14 @@ sign TutorialClause:
             subject.case = nominative
             object.case = accusative
     phon:
-        /{subject} {object}/
+        /{$slot.subject} {$slot.object}/
 ```
 
 RHS 也可讀 `$slot.predicate.syn.assigned_case`。同批 RHS 全部讀 frozen probe，不受書寫順序影響；完整驗證後才原子提交。stored sign 從 effective base、derived token 從 `DeepTokenState` 重跑 Syn→Sem→Prag，再重選 filler realization。`SlotMap` 是 Rust API 的 preserve／rename／autofill／internalize／optional 操作，目前不新增 `.lang` 表面語法。
 
 ## 4. semantic frame 與 recursive roles
 
-Frame 身分用 trait；結構論元用 `roles:`。宣告是 `role [Trait]?`，binding 是 `role = {slot}`。required role 在 saturated derive 前必須填滿，filler category 也必須符合。
+Frame 身分用 trait；結構論元用 `roles:`。宣告是 `role [Trait]?`，binding 是 `role = {$slot.NAME}`。required role 在 saturated derive 前必須填滿，filler category 也必須符合。
 
 ```lang
 trait TutorialTransferFrame:
@@ -90,10 +90,10 @@ sign TutorialGiving:
             gift [TutorialEntity]
     sem:
         roles:
-            agent = {giver}
-            theme = {gift}
+            agent = {$slot.giver}
+            theme = {$slot.gift}
     phon:
-        /{giver} {gift}/
+        /{$slot.giver} {$slot.gift}/
 ```
 
 `SemNode` 保存 types、typed features、recursive roles 與 provenance。`SemanticDocumentV1` 以 `conlang.semantic/v1` JSON 輸出／匯入 detached semantic value，未知 schema、trait、feature、role 或欄位均拒絕；它是未來 LLM 介面邊界，不是 provider API。
@@ -160,7 +160,7 @@ Sign，所有 guard 都只讀這份 snapshot，之後才把命中的匿名 fragm
 
 ## 7. 一個 deep sign，多個 surface realization
 
-`phon:` 的 `/.../` 是 deep/default template；`realization:` 依 finalized token 第一匹配選完整模板。選定後展開 `{slot}`，確認只剩純 phon 字串，才交給 Tshiatūn 音變。詞界由 phon phrase 保存，`surface_phrase` 最後映射成空格；surface 永不寫回 sign。
+`phon:` 的 `/.../` 是 deep/default template；`realization:` 依 finalized token 第一匹配選完整模板。選定後展開 `{$slot.NAME}`，確認只剩純 phon 字串，才交給 Tshiatūn 音變。詞界由 phon phrase 保存，`surface_phrase` 最後映射成空格；surface 永不寫回 sign。
 
 ```lang
 sign TutorialNP:
@@ -169,13 +169,13 @@ sign TutorialNP:
         slots:
             stem [TutorialNominal]
     phon:
-        /{stem}/
+        /{$slot.stem}/
         realization:
             case:
                 $self.syn.number == plural:
-                    /{stem}s/
+                    /{$slot.stem}s/
                 else:
-                    /{stem}/
+                    /{$slot.stem}/
 ```
 
 Rust 端以 `DerivationContext::new().feature(Dim::Syn, "number", "plural")` 約束同一個 `TutorialNP` deep SignId。這是 occurrence constraint，不是 priority override；與固定值或規則結果衝突時在 phon 前失敗。
@@ -235,19 +235,19 @@ sign TutorialNP:
             interpreted_case => $self.syn.case
         roles:
             referent [TutorialEntity]
-            referent = {stem}
+            referent = {$slot.stem}
     prag:
         feature:
             discourse_case = enum(nominative, accusative)
             discourse_case => $self.sem.interpreted_case
     phon:
-        /{stem}/
+        /{$slot.stem}/
         realization:
             case:
                 $self.syn.number == plural:
-                    /{stem}s/
+                    /{$slot.stem}s/
                 else:
-                    /{stem}/
+                    /{$slot.stem}/
 
 sign TutorialClause:
     belongs TutorialClauseFrame
@@ -259,10 +259,10 @@ sign TutorialClause:
             subject.case = nominative
     sem:
         roles:
-            agent = {subject}
-            predicate = {predicate}
+            agent = {$slot.subject}
+            predicate = {$slot.predicate}
     phon:
-        /{subject} {predicate}/
+        /{$slot.subject} {$slot.predicate}/
 ```
 
 ## 9. library、export 與 caller override

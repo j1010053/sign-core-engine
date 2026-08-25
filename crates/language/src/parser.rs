@@ -23,6 +23,7 @@
 //! round-trip:對 canonical 輸入,`parse(src).dump() == src`(P21)。
 
 use crate::path::parse_path;
+use crate::reference;
 use crate::{
     BinaryConstraint, Block, CaseBranch, CaseCondition, CaseSelection, ConstraintPredicate, Def,
     Dim, Expression, ExpressionType, FeatureDecl, FeatureExpression, FeatureValue, Language,
@@ -189,16 +190,15 @@ fn parse_argument_value(source: &str, line: usize) -> Result<SignArgumentValue, 
         .and_then(|value| value.strip_suffix('}'))
         .unwrap_or(source.trim())
         .trim();
-    if value == "$self" {
-        return Ok(SignArgumentValue::SelfSign);
-    }
-    if let Some(slot) = value.strip_prefix("$slot.") {
-        if ident_ok(slot) {
-            return Ok(SignArgumentValue::Slot(slot.to_owned()));
-        }
-    }
-    if ident_ok(value) {
-        return Ok(SignArgumentValue::Slot(value.to_owned()));
+    // 實參是「只有主體、沒有維度也沒有路徑」的引用:`$self` / `$slot.n` / `n`。
+    // 解析不出來就是巢狀 application。
+    if let Ok(read) = reference::parse(&reference::SUBJECT_ONLY, value) {
+        return Ok(match read.subject {
+            reference::Subject::SelfSign => SignArgumentValue::SelfSign,
+            reference::Subject::Slot(name) => SignArgumentValue::Slot(name),
+            // `SUBJECT_ONLY` 不允許具名綁定,故此臂不可達。
+            reference::Subject::Binding(_) => unreachable!("SUBJECT_ONLY forbids bindings"),
+        });
     }
     parse_sign_application(value, line)
         .map(Box::new)
@@ -304,10 +304,11 @@ fn parse_expression(
         if let Some(slot) = source
             .strip_prefix('{')
             .and_then(|value| value.strip_suffix('}'))
-            .map(str::trim)
+            .and_then(|inner| reference::parse(&reference::SUBJECT_ONLY, inner).ok())
+            .and_then(|read| read.slot().map(str::to_owned))
         {
-            if ident_ok(slot) {
-                return Ok(Expression::Slot(slot.to_owned()));
+            {
+                return Ok(Expression::Slot(slot));
             }
         }
     }
@@ -694,24 +695,19 @@ fn parse_slot_feature_binding(
     }
 
     let value = value.trim();
+    // 值要嘛是 enum 字面值,要嘛是那個凍結的 syn 讀取——形狀由 reference 模組
+    // 定義,這裡只挑訊息。
     if !ident_ok(value) {
-        let mut parts = value.split('.');
-        let (Some("$slot"), Some(slot), Some("syn"), Some(feature), None) = (
-            parts.next(),
-            parts.next(),
-            parts.next(),
-            parts.next(),
-            parts.next(),
-        ) else {
+        if let Err(error) = reference::parse(&reference::SLOT_SYN_FEATURE, value) {
             return Err(err(
                 source_line,
-                "slot feature value must be an enum literal or `$slot.SOURCE.syn.FEATURE`",
-            ));
-        };
-        if !ident_ok(slot) || !ident_ok(feature) {
-            return Err(err(
-                source_line,
-                "slot feature source slot and feature must be identifiers",
+                match error {
+                    reference::RefError::SlotNotIdentifier
+                    | reference::RefError::PathNotIdentifier => {
+                        "slot feature source slot and feature must be identifiers"
+                    }
+                    _ => "slot feature value must be an enum literal or `$slot.SOURCE.syn.FEATURE`",
+                },
             ));
         }
     }
@@ -888,6 +884,57 @@ fn phon_block_boundary(text: &str) -> Option<(bool, bool, Option<String>)> {
 /// 把 `name:` 下的縮排 body 解析成結構化 `PhonBlock`(對映引擎 `RuleBlock`)。
 /// leading 語句 = 第一個 Leaf;`Then:`/`Else:`(inline 或縮排子 block)開後續 block;
 /// 同層不得混 Then/Else。
+/// 自 block 樹摘出 `stage:` 標記(遞迴,原地移除),回傳 rule 級 stage。
+///
+/// 容忍度對齊引擎:標記可寫在樹上任一處(手寫 `.qy` 常見寫在 header 下第一行),
+/// 但整條 rule 只能有一個值——衝突報錯,與 `lower.rs` 的
+/// 「conflicting stage markers in one rule block」同。printer 一律印回**根 block
+/// 首行**,故非 canonical 位置的輸入會正規化到不動點(步驟 9 的既有契約)。
+fn lift_phon_stage(block: &mut PhonBlock, line: usize) -> Result<Option<Stage>, ParseError> {
+    let mut found: Option<Stage> = None;
+    let mut visit = |found: &mut Option<Stage>, block: &mut PhonBlock| -> Result<(), ParseError> {
+        let PhonBlock::Leaf(statements) = block else {
+            return Ok(());
+        };
+        for statement in statements.iter() {
+            let Some(level) = statement.trim().strip_prefix("stage:") else {
+                continue;
+            };
+            let stage = match level.trim() {
+                "stem" => Stage::Stem,
+                "word" => Stage::Word,
+                "phrase" => Stage::Phrase,
+                other => return Err(err(line, format!("unknown stage {other:?}"))),
+            };
+            if found.is_some_and(|previous| previous != stage) {
+                return Err(err(line, "conflicting stage markers in one rule block"));
+            }
+            *found = Some(stage);
+        }
+        statements.retain(|statement| !statement.trim().starts_with("stage:"));
+        Ok(())
+    };
+    fn walk(
+        block: &mut PhonBlock,
+        found: &mut Option<Stage>,
+        visit: &mut impl FnMut(&mut Option<Stage>, &mut PhonBlock) -> Result<(), ParseError>,
+    ) -> Result<(), ParseError> {
+        visit(found, block)?;
+        match block {
+            PhonBlock::Leaf(_) => {}
+            PhonBlock::Then(elements) | PhonBlock::Else(elements) => {
+                for element in elements {
+                    walk(element, found, visit)?;
+                }
+            }
+            PhonBlock::Propagate(inner) => walk(inner, found, visit)?,
+        }
+        Ok(())
+    }
+    walk(block, &mut found, &mut visit)?;
+    Ok(found)
+}
+
 fn parse_phon_block(lines: &[Line]) -> Result<PhonBlock, ParseError> {
     let mut first: Vec<String> = Vec::new();
     let mut subs: Vec<PhonBlock> = Vec::new();
@@ -1514,12 +1561,26 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                     index = next;
                     continue;
                 }
-                let Some(slot) = value.strip_prefix('{').and_then(|v| v.strip_suffix('}')) else {
-                    return Err(err(no, "role binding must be `NAME = {slot}`"));
+                let slot = value
+                    .strip_prefix('{')
+                    .and_then(|v| v.strip_suffix('}'))
+                    .and_then(|inner| reference::parse(&reference::SUBJECT_ONLY, inner).ok())
+                    .and_then(|read| read.slot().map(str::to_owned));
+                let Some(slot) = slot else {
+                    // P75 增修 A:role 的填充者是某個 slot,不會是這個構式自己。
+                    // `{$self}` 在此不是形狀錯誤而是回指錯誤,訊息要講對原因。
+                    let message = if value.trim() == "{$self}" {
+                        "a role cannot be filled by the construction itself; \
+                         bind it to a slot (`NAME = {$slot.NAME}`)"
+                    } else {
+                        "role binding must be `NAME = {$slot.NAME}`"
+                    };
+                    return Err(err(no, message));
                 };
-                if !ident_ok(name) || !ident_ok(slot.trim()) {
+                if !ident_ok(name) {
                     return Err(err(no, "role and slot names must be identifiers"));
                 }
+                let slot = slot.as_str();
                 blocks
                     .last_mut()
                     .unwrap()
@@ -1765,8 +1826,15 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             while index < body.len() && (body[index].text.is_empty() || body[index].indent > ind) {
                 index += 1;
             }
-            let block = parse_phon_block(&body[start..index])?;
-            let mut r = lang.rule_dim(String::new(), Stage::Word, Dim::Phon);
+            let mut block = parse_phon_block(&body[start..index])?;
+            // P46/P3:`stage:` 在引擎裡是 **rule 級**屬性,不是語句
+            // (`tshiatun/crates/dsl/src/lower.rs`:掃全 block 樹取一個值、
+            // 衝突報錯、lower 時自 leaf 丟棄)。故在此提升進 `Rule.stage`,
+            // 不留在 Leaf 裡——否則同一個 stratum 標記會有兩個權威存放處
+            // (Leaf 字串 vs `Rule.stage`),而只有前者到得了引擎、只有後者
+            // 到得了 ④Ordered 與步驟 12 的 stage 切片。
+            let stage = lift_phon_stage(&mut block, no)?.unwrap_or(Stage::Word);
+            let mut r = lang.rule_dim(String::new(), stage, Dim::Phon);
             r.name = Some(name);
             r.propagate = propagate;
             r.phon_block = Some(block);

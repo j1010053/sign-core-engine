@@ -61,11 +61,11 @@ sign PresentVerb:
             stem [VerbStem]
             suffix [AgrSuffix]
     phon:
-        /{prefix}{stem}{suffix}/
+        /{$slot.prefix}{$slot.stem}{$slot.suffix}/
 sign Participle:
     belongs Verb
     syn:
         slots:
             stem [VerbStem]
     phon:
-        /ge{stem}t/
+        /ge{$slot.stem}t/

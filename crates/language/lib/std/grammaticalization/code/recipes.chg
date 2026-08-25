@@ -7,8 +7,15 @@ package std:grammaticalization:
     schema = conlang.functions/v1
 
 /* Bleach a verb sense, reanalyse its syntactic category, then increase its
-   entrenchment. Step 17 evaluates these calls as a sequential handoff. */
-function VerbToTense(verb [Verb], tense, result_category):
+   entrenchment. Step 17 evaluates these calls as a sequential handoff.
+
+   This is the parameterised path mechanism of P52: one function, not one per
+   path. Which source concepts may travel to which target semantics, and how
+   much entrenchment each move carries, live in data/paths.tsv. `delta` is an
+   ordinary parameter here because the caller resolves it while the source
+   concept is still readable — by the time `drift` has run, this sign's core
+   gloss is the target, and the path row could no longer be found. */
+function VerbToTense(verb [Verb], tense, result_category, delta):
     drift(verb, sense: core, gloss: tense)
     reanalyze(verb, target: category, to: result_category)
-    entrench(verb, delta: 0.3)
+    entrench(verb, delta: delta)

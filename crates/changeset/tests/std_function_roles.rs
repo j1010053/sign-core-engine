@@ -139,6 +139,7 @@ fn std_recipe_executes_in_order_on_a_temporary_language() {
     call.named.push(("tense".to_owned(), "FUTURE".to_owned()));
     call.named
         .push(("result_category".to_owned(), "Aux".to_owned()));
+    call.named.push(("delta".to_owned(), "0.3".to_owned()));
 
     let FunctionEvaluation::Executed(execution) =
         evaluate_function_offline(&table, &call, &base(), &LibrarySpec::default()).unwrap()
@@ -187,7 +188,10 @@ fn std_goal_returns_candidates_without_executing_them() {
         candidates.candidates[0].named,
         [
             ("tense".to_owned(), "FUTURE".to_owned()),
-            ("result_category".to_owned(), "Aux".to_owned())
+            ("result_category".to_owned(), "Aux".to_owned()),
+            // δ 已在候選階段自 data/paths.tsv 解成字面數字(P52):寫進 `.chg`
+            // 的是 0.3,replay 不重查那張表。
+            ("delta".to_owned(), "0.3".to_owned())
         ]
     );
     assert_eq!(document.source(), original);
@@ -235,7 +239,8 @@ fn perfect_goal_can_select_verb_to_bound_tense_marker() {
         candidate.named,
         [
             ("tense".to_owned(), "PERFECT".to_owned()),
-            ("result_category".to_owned(), "Bound".to_owned())
+            ("result_category".to_owned(), "Bound".to_owned()),
+            ("delta".to_owned(), "0.3".to_owned())
         ]
     );
     assert_eq!(document.source(), original, "a Goal cannot mutate state");
@@ -406,12 +411,12 @@ function Runs(x [Verb]):
 
 function Picks(x [Verb]):
     case:
-        entrench(x, delta: 0.2) / x.syn.category == verb
+        entrench(x, delta: 0.2) / $x.syn.category == verb
         else entrench(x, delta: 0.3)
 
 function Accumulates(x [Verb]):
     when:
-        entrench(x, delta: 0.1) / x.syn.category == verb
+        entrench(x, delta: 0.1) / $x.syn.category == verb
 
 function Offers(x [Verb]):
     choose:
@@ -456,7 +461,9 @@ function Offers(x [Verb]):
 /// 判別性:三個分支,兩個成立一個不成立,而且三者的 delta 互不相同——
 /// 「只跑第一個」「全部都跑」「一個都不跑」會落在三個不同的數字上。
 ///
-/// **三個 guard 都走同一條可讀路徑**(`syn.category`,由 `reanalyze` 原子改寫寫入)。
+/// **三個 guard 都走同一條可讀路徑**(`syn.category` = fixture `SOURCE` 裡 `go`
+/// 自己宣告的 typed feature `category = verb`,本測試期間為靜態值;`reanalyze`
+/// 搬的是 `belongs`,不寫這個欄位)。
 /// 中間那條先前寫成 `x.sem.senses[core].concept == NOPE`——那條路徑 guard **根本
 /// 讀不到**(義項是一級節點不是 `Def`),於是它的「不成立」與值無關,把中間值改成
 /// 真值也照樣不成立。現在改成同一條路徑的不同值,**改值就會改結果**。
@@ -467,9 +474,9 @@ fn when_runs_every_branch_whose_guard_holds() {
 
 function Both(x [Verb]):
     when:
-        entrench(x, delta: 0.1) / x.syn.category == verb
-        entrench(x, delta: 0.2) / x.syn.category == noun
-        entrench(x, delta: 0.4) / x.syn.category == verb
+        entrench(x, delta: 0.1) / $x.syn.category == verb
+        entrench(x, delta: 0.2) / $x.syn.category == noun
+        entrench(x, delta: 0.4) / $x.syn.category == verb
 "#;
     let package = synthetic(ACCUMULATE, &["Both"]);
     let table = functions_from_packages(&[&package]).expect("loads");
@@ -506,7 +513,7 @@ fn when_with_no_matching_branch_is_a_no_op_not_an_error() {
 
 function Quiet(x [Verb]):
     when:
-        entrench(x, delta: 0.5) / x.syn.category == noun
+        entrench(x, delta: 0.5) / $x.syn.category == noun
 "#;
     let package = synthetic(NONE_MATCH, &["Quiet"]);
     let table = functions_from_packages(&[&package]).expect("loads");
@@ -558,8 +565,8 @@ fn when_guards_all_read_the_document_as_it_was_before_any_branch_ran() {
 
 function Chain(x [Verb]):
     when:
-        reanalyze(x, target: category, to: Aux) / x == [Verb]
-        entrench(x, delta: 0.5) / x == [Aux]
+        reanalyze(x, target: category, to: Aux) / $x == [Verb]
+        entrench(x, delta: 0.5) / $x == [Aux]
 "#;
     let package = synthetic(LEAKY, &["Chain"]);
     let table = functions_from_packages(&[&package]).expect("loads");
@@ -591,12 +598,12 @@ fn else_only_fires_when_no_earlier_branch_matched() {
 
 function Matched(x [Verb]):
     when:
-        entrench(x, delta: 0.1) / x.syn.category == verb
+        entrench(x, delta: 0.1) / $x.syn.category == verb
         else entrench(x, delta: 0.5)
 
 function Unmatched(x [Verb]):
     when:
-        entrench(x, delta: 0.1) / x.syn.category == noun
+        entrench(x, delta: 0.1) / $x.syn.category == noun
         else entrench(x, delta: 0.5)
 "#;
     let package = synthetic(FALLBACK, &["Matched", "Unmatched"]);
@@ -643,7 +650,7 @@ fn an_unconditional_branch_suppresses_a_later_else() {
 
 function BareFirst(x [Verb]):
     when:
-        entrench(x, delta: 0.1) / x.syn.category == noun
+        entrench(x, delta: 0.1) / $x.syn.category == noun
         entrench(x, delta: 0.2)
         else entrench(x, delta: 0.5)
 "#;
@@ -678,7 +685,7 @@ fn case_else_still_fires_as_the_fallback() {
 
 function Pick(x [Verb]):
     case:
-        entrench(x, delta: 0.1) / x.syn.category == noun
+        entrench(x, delta: 0.1) / $x.syn.category == noun
         else entrench(x, delta: 0.5)
 "#;
     let package = synthetic(CASE_ELSE, &["Pick"]);
@@ -734,7 +741,7 @@ fn calling_a_goal_from_a_changeset_is_broken_input_not_a_conflict() {
     // 近似反例:非 Goal 的**真正**引數錯誤不得被靜態檢查吞掉,仍須報約束不符。
     let mut source = change_set_prelude(&document, &libraries, "evo:recipe-bad-arg").unwrap();
     source.push_str(
-        "\n    #0:\n        VerbToTense(sign(\"stone\"), tense: FUTURE, result_category: Aux)\n",
+        "\n    #0:\n        VerbToTense(sign(\"stone\"), tense: FUTURE, result_category: Aux, delta: 0.3)\n",
     );
     let error = UnresolvedChangeSet::parse(&source)
         .unwrap()
@@ -758,7 +765,7 @@ fn changeset_dispatches_recipe_and_stops_at_goal_candidates() {
     let libraries = LibrarySpec::default();
     let mut recipe_source = change_set_prelude(&document, &libraries, "evo:std-recipe").unwrap();
     recipe_source.push_str(
-        "\n    #0:\n        VerbToTense(sign(\"go\"), tense: FUTURE, result_category: Aux)\n",
+        "\n    #0:\n        VerbToTense(sign(\"go\"), tense: FUTURE, result_category: Aux, delta: 0.3)\n",
     );
     let recipe = UnresolvedChangeSet::parse(&recipe_source)
         .unwrap()

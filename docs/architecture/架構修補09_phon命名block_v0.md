@@ -146,6 +146,37 @@ lenition:                 # 命名 rule = block(name: 前綴;名可含連字號 
 - `changeset/tests/phon_authoring.rs` 3 案：顯式 bootstrap＋leaf/sub-block insert、
   flat insert 不 silent bootstrap、leading boundary root 明確拒絕。
 
+### slice 6(已落地 2026-08-11)= structured block 的 stratum 標記(P3/I14 對接)
+
+補的是 S2 起就只做了一半的那條路:codegen 自 slice 2 起就會依 `Rule.stage` 排放
+block 內 `stage:`(引擎確有此形,見本檔 §「真實 Lexurgy/tshiatūn 語法」與
+`tshiatun/crates/dsl/tests/block_ir.rs` 的 `stable:` + `stage: stem` + `Then:`),
+**但讀與印那兩半沒接**——parser 的 structured 分支硬給 `Stage::Word`,printer 的
+`phon_block` 分支提前 return 不印 stage。後果是兩個,都不是「少個功能」而已:
+
+1. **codegen 那條分支到不了**:`.lang` 無從讓 structured block 帶非 word stage。
+2. **標記以語句身分矇混**:寫在 block 裡的 `stage: stem` 被當成普通語句進
+   `PhonBlock::Leaf`,原樣排到 `.qy`——**引擎讀得到**(`lower.rs` 掃全 block 樹取
+   rule 級 stage),而 ④Ordered 的 stratum 排序與步驟 12 的 stage 切片讀
+   `Rule.stage`,**讀不到**。同一個 stratum 有兩個權威存放處,且兩邊不一致
+   (違實作原則 3 單一資訊源)。
+
+- **parser**:`lift_phon_stage` 於解析時把 `stage:` 自 block 樹**提升**進 `Rule.stage`
+  並移除該語句。容忍度對齊引擎:標記可寫在樹上任一處、值須為 stem|word|phrase、
+  一條 rule 只能有一個值(衝突報錯,與 `lower.rs` 的
+  "conflicting stage markers in one rule block" 同語)。
+- **printer**:自 `Rule.stage` 印回**根 block 首行**(省略 = word,與 flat 側同預設)。
+  非 canonical 位置(如寫在巢狀 `Then:` 內)因而正規化到不動點——步驟 9 既有契約。
+- **codegen**:分支不動,現在到得了;標記已不在 Leaf,故無重複排放。
+- **編輯**:`update <rule>.stage` 對 structured rule **恢復生效**(不在
+  `reject_flat_field_on_phon_block` 閘門之列);反向則堵上——`stage:` 不得從語句通道
+  進入(`insert … leaf stage: …`、`update …leaf[k].body = stage: …` 皆明確拒絕並指向
+  `.stage`),否則下一次 round-trip 會把它自 Leaf 提走,那個語句節點就此消失。
+- 測試:`language/tests/codegen.rs` 2 案(提升+round-trip+canonical 不動點+stratum
+  排序 early<late+無重複排放;正規化/壞值/衝突)、`changeset/tests/phon_block_edits.rs`
+  2 案(stage 生效、兩條走私路徑各自被拒)。workspace **943 綠**、golden 零 churn
+  (既有 fixture 無 structured block 帶 stage 者)、引擎零觸動。
+
 ### 尚未落地(staged)
 - leading `Then`／`Else`／`Propagate` root 在 `.qy` 無合法掛點，維持顯式拒絕；
   structured→flat 亦不提供會丟失 block 意圖的 authoring 糖。

@@ -166,7 +166,7 @@ sign Cxn:
             copy = enum(a, b)
             copy => $slot.head.syn.supplied
     phon:
-        /{head}/
+        /{$slot.head}/
 ";
 
 fn derive_diags(mark: &str) -> Vec<String> {

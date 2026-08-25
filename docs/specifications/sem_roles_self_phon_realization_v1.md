@@ -53,9 +53,9 @@ sign GivingConstruction:
             indirect [Animate]?
     sem:
         roles:
-            agent = {subject}
-            theme = {object}
-            recipient = {indirect}
+            agent = {$slot.subject}
+            theme = {$slot.object}
+            recipient = {$slot.indirect}
 ```
 
 `NAME [Trait]?` 是 role declaration；`NAME = {slot}` 是 binding。相同 declaration 可去重；同名 role 的 constraint 或 optionality 不同是 `ROLE_SCHEMA_CONFLICT` error。binding 可依一般 `=` precedence 覆寫抽象預設。填入 filler 的語意類型必須滿足 role constraint；partial application 可暫缺 role，但 saturated token 不可缺 required role。
@@ -157,16 +157,16 @@ sign EnglishCountNounForm:
             number = enum(singular, plural)
             number => $self.syn.number
     phon:
-        /{stem}/
+        /{$slot.stem}/
         realization:
             case:
                 $self.syn.number == plural:
-                    /{stem}s/
+                    /{$slot.stem}s/
                 else:
-                    /{stem}/
+                    /{$slot.stem}/
 ```
 
-`realization:` branch 是完整 phon template。guard 只能讀 `$self` 與 frozen `$slot`，不能寫 Syn/Sem/Prag。按書寫順序 first-match；Error 不進 fallback；所有 guard Unmatched 時使用 deep/default template。選中後先展開 `{slot}`，若仍有 `{...}`、`$self`、`$slot` 或非 phon metadata，即為 error。
+`realization:` branch 是完整 phon template。guard 只能讀 `$self` 與 frozen `$slot`，不能寫 Syn/Sem/Prag。按書寫順序 first-match；Error 不進 fallback；所有 guard Unmatched 時使用 deep/default template。選中後先展開 `{$slot.NAME}`，若仍有 `{...}`、`$self`、`$slot` 或非 phon metadata，即為 error。
 
 展開結果是透明的 `RealizedPhonInput(String)`。只有這個純字串被交給 Tshiatūn；realization trace、source line 和 reads 留在 language runtime。surface 從不存入 Language 或 Sign。已實現的 transient token 可保留純 input 以便作為下一個 construction 的 filler，但它不是 phonological surface。
 
@@ -174,7 +174,7 @@ phon template 內的空白是結構性的詞界，不是事後排版：
 
 ```lang
 /{subject} {predicate} {object}/   /* 三個 phonological words */
-/{stem}s/                         /* 同一詞內的黏著實現 */
+/{$slot.stem}s/                         /* 同一詞內的黏著實現 */
 ```
 
 `build_phrase` 將空白建立為 `MorphUnit::Word` 邊界，phrase rule 以 `##` 匹配跨詞環境；

@@ -25,6 +25,7 @@ pub mod rewrite;
 pub mod state;
 
 use crate::rewrite::DonorScope;
+use conlang_language::reference;
 use conlang_language::{
     check_document, check_document_with_packages, compile_document, sha256_hex, AddressSegment,
     BinaryConstraint, Block, CaseBranch, CompileSystemError, CompiledSystem, Def, DerivationKind,
@@ -699,10 +700,12 @@ fn insertion_site(
         }
         (NodeKind::Rule | NodeKind::FeatureRule, NodeKind::RuleElseBranch) => {
             let rule = rule_at(language, &parent.address)?;
+            reject_flat_field_on_phon_block(rule, "else")?;
             (ListKey::RuleElse, rule.else_chain.len(), None)
         }
         (NodeKind::Rule | NodeKind::FeatureRule, NodeKind::RuleThenBranch) => {
             let rule = rule_at(language, &parent.address)?;
+            reject_flat_field_on_phon_block(rule, "then")?;
             (ListKey::RuleThen, rule.then_chain.len(), None)
         }
         (NodeKind::Case, NodeKind::CaseBranch) => {
@@ -902,6 +905,7 @@ fn insert_payload(
                 NodeKind::Rule | NodeKind::FeatureRule | NodeKind::PhonBlockNode
             ) =>
         {
+            reject_stage_statement(&value)?;
             match phon_container_block_mut(language, &parent.address)? {
                 PhonBlock::Leaf(statements) => statements.insert(index, value),
                 _ => {
@@ -1313,19 +1317,25 @@ fn update_payload(
             Ok(field)
         }
         (NodeKind::Rule | NodeKind::FeatureRule, NodeUpdate::RuleBody(value)) => {
-            rule_at_mut(language, &node.address)?.body = value;
+            let rule = rule_at_mut(language, &node.address)?;
+            reject_flat_field_on_phon_block(rule, "body")?;
+            rule.body = value;
             Ok(None)
         }
         (NodeKind::Rule | NodeKind::FeatureRule, NodeUpdate::RuleName(value)) => {
             rule_at_mut(language, &node.address)?.name = value;
             Ok(None)
         }
+        // `stage` **不**在閘門之列:structured block 的 stratum 標記有 surface 形
+        // (block 內 `stage:` 一行,printer/parser 兩側皆已接),故編輯真的落地。
         (NodeKind::Rule | NodeKind::FeatureRule, NodeUpdate::RuleStage(value)) => {
             rule_at_mut(language, &node.address)?.stage = value;
             Ok(None)
         }
         (NodeKind::Rule | NodeKind::FeatureRule, NodeUpdate::RuleDimension(value)) => {
-            rule_at_mut(language, &node.address)?.dim = value;
+            let rule = rule_at_mut(language, &node.address)?;
+            reject_flat_field_on_phon_block(rule, "dim")?;
+            rule.dim = value;
             Ok(None)
         }
         (
@@ -1357,6 +1367,7 @@ fn update_payload(
             Ok(None)
         }
         (NodeKind::PhonStatement, NodeUpdate::RuleBranchBody(value)) => {
+            reject_stage_statement(&value)?;
             *phon_statement_at_mut(language, &node.address)? = value;
             Ok(None)
         }
@@ -5760,16 +5771,70 @@ fn set_rule_branch(
     value: String,
 ) -> Result<(), EditError> {
     let parent = address.parent().ok_or(EditError::RootImmutable)?;
-    match address.0.last() {
+    let (index, chain, field) = match address.0.last() {
         Some(AddressSegment::RuleElse(index)) => {
-            rule_at_mut(language, &parent)?.else_chain[*index] = value
+            let rule = rule_at_mut(language, &parent)?;
+            reject_flat_field_on_phon_block(rule, "else")?;
+            (*index, &mut rule.else_chain, "else")
         }
         Some(AddressSegment::RuleThen(index)) => {
-            rule_at_mut(language, &parent)?.then_chain[*index] = value
+            let rule = rule_at_mut(language, &parent)?;
+            reject_flat_field_on_phon_block(rule, "then")?;
+            (*index, &mut rule.then_chain, "then")
         }
         _ => return Err(EditError::FieldMismatch("expected rule branch".to_owned())),
-    }
+    };
+    let slot = chain.get_mut(index).ok_or_else(|| {
+        EditError::FieldMismatch(format!("`{field}[{index}]` is out of range on this rule"))
+    })?;
+    *slot = value;
     Ok(())
+}
+
+/// P46 取徑 A 的不可見欄位閘門。`phon_block.is_some()` 時 printer 只印
+/// `name:`(+ `stage:`)+ 巢狀 block(見 `language::printer::push_rule`),
+/// `body`/`dim`/`else_chain`/`then_chain` 一概不落地——寫進去的值會在下一次
+/// canonical round-trip 蒸發。這種**靜默吞掉**最糟:`.chg` 宣稱做了一件沒發生的事,
+/// 而文件逐位元不變,replay 決定性(P26)與三道 digest 都抓不到。故一律明確報錯,
+/// 訊息指向真正生效的定址(`.leaf[k].body` / `.then[n]` / `.else[n]`)。
+///
+/// `stage` **不在**此列:它有 block 內 `stage:` 的 surface 形,編輯真的落地。
+/// `stage:` 不是語句,是 rule 級屬性(引擎 `lower.rs` 掃全樹取一值、lower 時
+/// 自 leaf 丟棄;`.lang` parser 於解析時提升進 `Rule.stage`)。若放它從語句通道
+/// 進來,下一次 round-trip 會把它從 Leaf 提走——那個語句節點就此消失,成為
+/// 另一種形式的靜默吞掉。單一資訊源(實作原則 3):stratum 只有 `.stage` 一個入口。
+fn reject_stage_statement(text: &str) -> Result<(), EditError> {
+    if !text.trim().starts_with("stage:") {
+        return Ok(());
+    }
+    Err(EditError::FieldMismatch(
+        "`stage:` is a rule-level attribute, not a phon statement — \
+         write `update <rule>.stage = stem|word|phrase` instead"
+            .to_owned(),
+    ))
+}
+
+fn reject_flat_field_on_phon_block(rule: &Rule, field: &str) -> Result<(), EditError> {
+    if rule.phon_block.is_none() {
+        return Ok(());
+    }
+    let hint = match field {
+        "body" | "else" | "then" => {
+            "address the statement itself — `.leaf[k].body` inside this rule, \
+             descending through `.then[n]`/`.else[n]` when the block is nested"
+        }
+        // dim 在結構化 block 下沒有 surface 語法可承載(printer 不印維度標記,
+        // 且 structured block 依 P46 限 phon 維),故無從表達,也就無從編輯。
+        _ => {
+            "a structured phon block carries no dimension marker in `.lang` and is \
+              phon-only by P46; there is no surface syntax for this field here"
+        }
+    };
+    Err(EditError::FieldMismatch(format!(
+        "`{field}` has no effect on a rule carrying a structured phon block (P46): \
+         the canonical printer emits only the block, so the write would vanish on \
+         round-trip — {hint}"
+    )))
 }
 
 #[derive(Debug)]
@@ -5897,7 +5962,7 @@ fn rewrite_local_slot_refs_in_items(items: &mut [SignItem], old: &str, new: &str
                 if binding.slot == old {
                     binding.slot = new.to_owned();
                 }
-                binding.value = rewrite_slot_accesses(&binding.value, old, new);
+                binding.value = reference::rename_slot(&binding.value, old, new);
             }
             SignItem::SlotMap(operation) => match operation {
                 SlotMapOp::Preserve { slot }
@@ -5915,21 +5980,20 @@ fn rewrite_local_slot_refs_in_items(items: &mut [SignItem], old: &str, new: &str
                 binding.slot = new.to_owned();
             }
             SignItem::Constraint(constraint) => {
-                constraint.left = rewrite_slot_operand(&constraint.left, old, new);
-                constraint.right = rewrite_slot_operand(&constraint.right, old, new);
+                constraint.left = reference::rename_slot(&constraint.left, old, new);
+                constraint.right = reference::rename_slot(&constraint.right, old, new);
             }
             SignItem::Rule(rule) | SignItem::FeatureRule(rule) => {
-                rule.body = rewrite_slot_accesses(&rule.body, old, new);
+                rule.body = reference::rename_slot(&rule.body, old, new);
                 for branch in &mut rule.else_chain {
-                    *branch = rewrite_slot_accesses(branch, old, new);
+                    *branch = reference::rename_slot(branch, old, new);
                 }
                 for branch in &mut rule.then_chain {
-                    *branch = rewrite_slot_accesses(branch, old, new);
+                    *branch = reference::rename_slot(branch, old, new);
                 }
             }
             SignItem::Def(def) => {
-                def.value = rewrite_slot_template(&def.value, old, new);
-                def.value = rewrite_slot_accesses(&def.value, old, new);
+                def.value = reference::rename_slot(&def.value, old, new);
             }
             SignItem::Realization(realization) => {
                 // Typed realization case slot-renames flow through the shared
@@ -5955,12 +6019,11 @@ fn rewrite_local_slot_refs_in_items(items: &mut [SignItem], old: &str, new: &str
 
 fn rewrite_local_slot_refs_in_case(case: &mut TypedCase, old: &str, new: &str) {
     if let Some(scrutinee) = &mut case.scrutinee {
-        *scrutinee = rewrite_slot_operand(scrutinee, old, new);
-        *scrutinee = rewrite_slot_accesses(scrutinee, old, new);
+        *scrutinee = reference::rename_slot(scrutinee, old, new);
     }
     for branch in &mut case.branches {
         if let conlang_language::CaseCondition::Guard(guard) = &mut branch.condition {
-            *guard = rewrite_slot_accesses(guard, old, new);
+            *guard = reference::rename_slot(guard, old, new);
         }
         rewrite_local_slot_refs_in_expression(&mut branch.result, old, new);
     }
@@ -5977,7 +6040,9 @@ fn rewrite_local_slot_refs_in_expression(expression: &mut Expression, old: &str,
         Expression::SignFragment(items) | Expression::DimFragment { items, .. } => {
             rewrite_local_slot_refs_in_items(items, old, new)
         }
-        Expression::PhonTemplate(template) => *template = rewrite_slot_template(template, old, new),
+        Expression::PhonTemplate(template) => {
+            *template = reference::rename_slot(template, old, new)
+        }
         Expression::Slot(slot) if slot == old => *slot = new.to_owned(),
         Expression::Case(case) => rewrite_local_slot_refs_in_case(case, old, new),
         Expression::EnumValue(_) | Expression::SelfSign | Expression::Slot(_) => {}
@@ -6088,49 +6153,6 @@ fn rewrite_application_parameters(
             rewrite_application_parameters(nested, callees, old, new);
         }
     }
-}
-
-fn rewrite_slot_operand(source: &str, old: &str, new: &str) -> String {
-    if source == old {
-        return new.to_owned();
-    }
-    source
-        .strip_prefix(old)
-        .filter(|rest| rest.starts_with('.'))
-        .map(|rest| format!("{new}{rest}"))
-        .unwrap_or_else(|| source.to_owned())
-}
-
-fn rewrite_slot_template(source: &str, old: &str, new: &str) -> String {
-    source.replace(&format!("{{{old}}}"), &format!("{{{new}}}"))
-}
-
-fn rewrite_slot_accesses(source: &str, old: &str, new: &str) -> String {
-    let needle = format!("$slot.{old}");
-    let mut output = String::with_capacity(source.len());
-    let mut cursor = 0;
-    while let Some(offset) = source[cursor..].find(&needle) {
-        let start = cursor + offset;
-        let end = start + needle.len();
-        let boundary = source[end..]
-            .chars()
-            .next()
-            .is_none_or(|character| character == '.' || !is_identifier_character(character));
-        output.push_str(&source[cursor..start]);
-        if boundary {
-            output.push_str("$slot.");
-            output.push_str(new);
-        } else {
-            output.push_str(&source[start..end]);
-        }
-        cursor = end;
-    }
-    output.push_str(&source[cursor..]);
-    output
-}
-
-fn is_identifier_character(character: char) -> bool {
-    character.is_alphanumeric() || matches!(character, '_' | '-' | ':' | '/')
 }
 
 fn rewrite_sign_refs(language: &mut Language, old: &str, new: &str) {

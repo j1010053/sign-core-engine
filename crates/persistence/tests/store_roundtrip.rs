@@ -418,11 +418,14 @@ fn remove_node_deletes_a_leaf_and_the_reload_no_longer_sees_it() {
     let temp = TestDirectory::new("remove-leaf");
     let store = GraphStore::init(&temp.0).unwrap();
     let (mut graph, root_id, child_id) = fixture();
+    assert!(!store.contains_node(&child_id));
     store.save(&graph).unwrap();
+    assert!(store.contains_node(&child_id));
     assert_eq!(store.load(LibrarySpec::default()).unwrap().len(), 2);
 
     graph.remove_node(&child_id).unwrap();
     store.remove_node(&child_id).unwrap();
+    assert!(!store.contains_node(&child_id));
 
     let reloaded = store.load(LibrarySpec::default()).unwrap();
     assert_eq!(reloaded.len(), 1, "只剩 root");

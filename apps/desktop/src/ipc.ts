@@ -123,6 +123,8 @@ export const api = {
     ),
   discardLastEdit: () => call("discard_last_edit", {}, pendingChangeSchema),
   saveWorkingCopy: (path: string) => action("save_working_copy", { path }),
+  saveWorkingCopySource: (path: string, source: string) =>
+    call("save_working_copy_source", { path, source }, pendingChangeSchema),
   loadWorkingCopy: (path: string) => call("load_working_copy", { path }, pendingChangeSchema),
   commit: (label?: string) => call("commit_change", { label: label || null }, nodeDetailSchema),
   saveProject: () => call("save_project", {}, projectSummarySchema),

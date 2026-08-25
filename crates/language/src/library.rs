@@ -328,6 +328,41 @@ pub struct LibraryFunctionSource {
 pub struct LibraryDataSource {
     pub path: String,
     pub source: String,
+    /// 這份表的**表型穩定 ID**,由 `config/tables.tsv` 宣告(P29:跨套件契約
+    /// 是穩定 ID,不是套件內部檔案路徑)。`None` = 未宣告表型;沒有任何解析器
+    /// 會看到它,它只進 library lock。
+    ///
+    /// 表型決定**誰來讀**這份表,不決定欄位怎麼解讀——欄位仍由認得該表型的
+    /// 消費者定義。引擎自帶的兩個表型在 [`table_type`] 模組。
+    pub table_type: Option<String>,
+}
+
+/// 引擎自帶的表型穩定 ID。
+///
+/// 這兩個 schema 定義在引擎 crate(`changeset` / `stats`)裡而不在任何套件裡,
+/// 故命名空間是 `engine:` 而非某個 package id。套件要自帶表型時用自己的
+/// 命名空間(例:`plugin:tonepack:ToneTable`),不必改引擎。
+pub mod table_type {
+    /// Step 17 Weight DB(`goal<TAB>recipe<TAB>weight`)。
+    pub const WEIGHT_TABLE: &str = "engine:WeightTable";
+    /// 模組 E 的 E1 音段先驗(`segment<TAB>weight`)。
+    pub const SEGMENT_PRIOR: &str = "engine:SegmentPrior";
+    /// P52 語法化路徑庫(`source<TAB>target<TAB>delta`):來源概念、目標語意、
+    /// 預設 δ。機制住 `code/*.chg` 的參數化 function,路徑本身住這張表——
+    /// **加一條路徑 = 加一行 data**,不改 `.chg`、不改引擎。
+    pub const GRAMMATICALIZATION_PATH_TABLE: &str = "engine:GrammaticalizationPathTable";
+}
+
+/// 表型 ID 格式:兩段以上、以 `:` 分隔的識別字。
+///
+/// 與 export stable id 同形(`std:grammaticalization:VerbToTense`),但**不強制**
+/// 前綴等於宣告者的 package id——套件本來就該能宣告「我這份表是**別人**定義的
+/// 那個表型」,那正是 P29 要的跨套件契約。
+fn valid_table_type(value: &str) -> bool {
+    let mut segments = value.split(':');
+    let first = segments.next().is_some_and(valid_identifier);
+    let rest: Vec<&str> = segments.collect();
+    first && !rest.is_empty() && rest.iter().copied().all(valid_identifier)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -375,6 +410,22 @@ pub struct LibraryPackage {
     /// 歷時 function 原始碼(`.chg`),**verbatim**;`language` 不解析(P20)。
     pub functions: String,
     pub data: String,
+}
+
+impl LibraryPackage {
+    /// 本套件中宣告為 `table_type` 這個表型的 data 檔,依 manifest 序。
+    ///
+    /// 這是消費者(Weight DB、E1 先驗、日後的路徑庫)取表的**唯一**入口:
+    /// 認表型,不認檔案路徑(P29)。套件把表放在 `data/` 底下哪個路徑、叫什麼
+    /// 名字,都不是契約。
+    pub fn tables<'a>(
+        &'a self,
+        table_type: &'a str,
+    ) -> impl Iterator<Item = &'a LibraryDataSource> {
+        self.data_sources
+            .iter()
+            .filter(move |source| source.table_type.as_deref() == Some(table_type))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -495,6 +546,12 @@ pub enum LibraryLoadError {
         line: usize,
         message: String,
     },
+    #[error("library package {package:?} tables line {line}: {message}")]
+    Tables {
+        package: String,
+        line: usize,
+        message: String,
+    },
     #[error("library package {package:?} code line {line}: {message}")]
     PackageLanguage {
         package: String,
@@ -568,6 +625,7 @@ impl LibraryLoadError {
             Self::InvalidPackageAlias(_) => "PACKAGE_ALIAS_INVALID",
             Self::Config { .. } => "LIBRARY_CONFIG_INVALID",
             Self::Exports { .. } => "LIBRARY_EXPORTS_INVALID",
+            Self::Tables { .. } => "LIBRARY_TABLES_INVALID",
             Self::PackageLanguage { .. } => "LIBRARY_LANGUAGE_INVALID",
             Self::UnsupportedContent { .. } => "LIBRARY_CONTENT_UNSUPPORTED",
             Self::DuplicatePackage(_) => "LIBRARY_PACKAGE_DUPLICATE",
@@ -599,6 +657,8 @@ pub struct PackageSources {
     pub config: String,
     /// `config/exports.tsv`
     pub exports: String,
+    /// `config/tables.tsv`(選填;空字串 = 沒有具型別的 data 表)
+    pub tables: String,
     /// 依 manifest 序合併的 `code/*.lang`
     pub code: String,
     /// `code/*.chg`(P50 ③,verbatim 不解析)
@@ -623,6 +683,8 @@ pub struct PackageFile {
 struct EmbeddedPackage {
     config: &'static str,
     exports: &'static str,
+    /// `config/tables.tsv`;沒有具型別的表時為空字串。
+    tables: &'static str,
     code: &'static str,
     /// P50 ③:套件 `code/*.chg` 的歷時 function 原始碼,**verbatim 承載不解析**。
     /// `language` 不得解析 `.chg`(P20 依賴方向 `changeset → language`),
@@ -686,6 +748,7 @@ const EMBEDDED_PACKAGES: &[EmbeddedPackage] = &[
     EmbeddedPackage {
         config: include_str!("../lib/std/core/config/package.conf"),
         exports: include_str!("../lib/std/core/config/exports.tsv"),
+        tables: "",
         code: include_str!("../lib/std/core/code/ontology.lang"),
         functions: &[],
         data: include_str!("../lib/std/core/data/categories.tsv"),
@@ -694,6 +757,7 @@ const EMBEDDED_PACKAGES: &[EmbeddedPackage] = &[
     EmbeddedPackage {
         config: include_str!("../lib/std/grambank/config/package.conf"),
         exports: include_str!("../lib/std/grambank/config/exports.tsv"),
+        tables: "",
         code: include_str!("../lib/std/grambank/code/syntax.lang"),
         functions: &[],
         data: include_str!("../lib/std/grambank/data/features.tsv"),
@@ -702,6 +766,7 @@ const EMBEDDED_PACKAGES: &[EmbeddedPackage] = &[
     EmbeddedPackage {
         config: include_str!("../lib/std/cxg/config/package.conf"),
         exports: include_str!("../lib/std/cxg/config/exports.tsv"),
+        tables: "",
         code: concat!(
             include_str!("../lib/std/cxg/code/schema.lang"),
             "\n",
@@ -714,6 +779,7 @@ const EMBEDDED_PACKAGES: &[EmbeddedPackage] = &[
     EmbeddedPackage {
         config: include_str!("../lib/std/grammaticalization/config/package.conf"),
         exports: include_str!("../lib/std/grammaticalization/config/exports.tsv"),
+        tables: include_str!("../lib/std/grammaticalization/config/tables.tsv"),
         code: "",
         functions: GRAMMATICALIZATION_FUNCTIONS,
         data: concat!(
@@ -726,6 +792,7 @@ const EMBEDDED_PACKAGES: &[EmbeddedPackage] = &[
     EmbeddedPackage {
         config: include_str!("../lib/natural/en-standard/config/package.conf"),
         exports: include_str!("../lib/natural/en-standard/config/exports.tsv"),
+        tables: "",
         code: include_str!("../lib/natural/en-standard/code/grammar.lang"),
         functions: &[],
         data: include_str!("../lib/natural/en-standard/data/grambank-v1.0.3.tsv"),
@@ -1219,6 +1286,65 @@ fn parse_exports(
     Ok(exports)
 }
 
+/// 解析 `config/tables.tsv`:把套件的 data 檔綁到表型穩定 ID。
+///
+/// P29 說跨套件契約是穩定 ID,不是套件內部檔案路徑。在這個檔案出現以前,
+/// 引擎只能靠檔名尾綴(`ends_with("/weights.tsv")`)認表——套件因此既不能
+/// 把已知表型的表放在自己選的路徑下,也不能宣告新表型。
+///
+/// 空白/缺檔 = 該套件沒有任何具型別的表(合法;所有 data 檔都只進 lock)。
+fn parse_tables(
+    id: &LibraryId,
+    source: &str,
+    data_paths: &[String],
+) -> Result<BTreeMap<String, String>, LibraryLoadError> {
+    let mut tables = BTreeMap::new();
+    if source.trim().is_empty() {
+        return Ok(tables);
+    }
+    let mut lines = source.lines().enumerate().filter_map(|(index, raw)| {
+        let line = raw.trim().trim_start_matches('\u{feff}');
+        (!line.is_empty() && !line.starts_with('#')).then_some((index + 1, line))
+    });
+    let error = |line: usize, message: &str| LibraryLoadError::Tables {
+        package: id.to_string(),
+        line,
+        message: message.to_owned(),
+    };
+    let Some((header_line, header)) = lines.next() else {
+        return Ok(tables);
+    };
+    if header.split('\t').map(str::trim).collect::<Vec<_>>() != ["path", "type"] {
+        return Err(error(header_line, "header must be `path<TAB>type`"));
+    }
+    for (line, value) in lines {
+        let fields = value.split('\t').map(str::trim).collect::<Vec<_>>();
+        if fields.len() != 2 || fields.iter().any(|field| field.is_empty()) {
+            return Err(error(line, "expected two non-empty tab-separated fields"));
+        }
+        let path = fields[0].replace('\\', "/");
+        if !data_paths.contains(&path) {
+            return Err(error(
+                line,
+                &format!("path {path:?} is not declared in the manifest `data` list"),
+            ));
+        }
+        if !valid_table_type(fields[1]) {
+            return Err(error(
+                line,
+                &format!(
+                    "table type {:?} must be two or more `:`-separated identifiers",
+                    fields[1]
+                ),
+            ));
+        }
+        if tables.insert(path.clone(), fields[1].to_owned()).is_some() {
+            return Err(error(line, &format!("duplicate entry for path {path:?}")));
+        }
+    }
+    Ok(tables)
+}
+
 fn validate_package_code(package: &LibraryPackage) -> Result<Language, LibraryLoadError> {
     let mut language =
         Language::parse(&package.code).map_err(|error| LibraryLoadError::PackageLanguage {
@@ -1314,6 +1440,7 @@ fn load_sources(sources: &PackageSources) -> Result<LibraryPackage, LibraryLoadE
     let embedded = OwnedPackageView {
         config: &sources.config,
         exports: &sources.exports,
+        tables: &sources.tables,
         code: &sources.code,
         functions: &sources.functions,
         data: &sources.data,
@@ -1327,6 +1454,7 @@ fn load_sources(sources: &PackageSources) -> Result<LibraryPackage, LibraryLoadE
 struct OwnedPackageView<'a> {
     config: &'a str,
     exports: &'a str,
+    tables: &'a str,
     code: &'a str,
     functions: &'a [PackageFile],
     data: &'a str,
@@ -1354,6 +1482,7 @@ fn load_embedded(source: &EmbeddedPackage) -> Result<LibraryPackage, LibraryLoad
     load_package(OwnedPackageView {
         config: source.config,
         exports: source.exports,
+        tables: source.tables,
         code: source.code,
         functions: &functions,
         data: source.data,
@@ -1444,6 +1573,7 @@ fn load_package(source: OwnedPackageView<'_>) -> Result<LibraryPackage, LibraryL
             !capabilities.traits && !capabilities.signs && !capabilities.functions
         });
     let exports = parse_exports(&id, source.exports, allow_empty_exports)?;
+    let tables = parse_tables(&id, source.tables, &data_paths)?;
     let capabilities = manifest.capabilities.unwrap_or(PackageCapabilities {
         traits: exports
             .iter()
@@ -1478,6 +1608,7 @@ fn load_package(source: OwnedPackageView<'_>) -> Result<LibraryPackage, LibraryL
             .data_files
             .iter()
             .map(|data| LibraryDataSource {
+                table_type: tables.get(&data.path).cloned(),
                 path: data.path.to_owned(),
                 source: data.source.to_owned(),
             })
@@ -1578,6 +1709,13 @@ pub fn package_lock_content(package: &LibraryPackage) -> String {
             "export {} {:?} {}\n",
             export.stable_id, export.kind, export.alias
         ));
+    }
+    // 表型決定哪個解析器讀這份表,是承載行為的宣告,故必須進 digest。只印
+    // 有宣告表型的來源:未宣告的套件因此逐位元維持舊 lock 內容,digest 不動。
+    for source in &package.data_sources {
+        if let Some(table_type) = &source.table_type {
+            content.push_str(&format!("table {} {}\n", source.path, table_type));
+        }
     }
     content.push_str(&lock_normalized(&package.code));
     content.push('\n');

@@ -279,14 +279,14 @@ sign alt:
         slots:
             value [*]
     phon:
-        /a{value}/
+        /a{$slot.value}/
 
 sign wrap:
     syn:
         slots:
             value [*]
     phon:
-        /w{value}/
+        /w{$slot.value}/
 
 sign root:
     phon:

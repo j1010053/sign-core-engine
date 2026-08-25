@@ -159,7 +159,7 @@ fn candidates(evaluation: FunctionEvaluation) -> Vec<String> {
 const HEADER_GUARD: &str = r#"package plugin:guards:
     schema = conlang.functions/v1
 
-function OnlyVerbs(x) / x.syn.category == verb:
+function OnlyVerbs(x) / $x.syn.category == verb:
     entrench(x, delta: 0.3)
 "#;
 
@@ -211,8 +211,8 @@ const CASE_ORDER: &str = r#"package plugin:guards:
 
 function Nudge(x):
     case:
-        Small(x) / x.syn.category == verb
-        Large(x) / x.syn.telic == no
+        Small(x) / $x.syn.category == verb
+        Large(x) / $x.syn.telic == no
         else Fallback(x)
 
 function Small(x):
@@ -256,7 +256,7 @@ fn case_without_a_matching_branch_and_without_else_is_rejected() {
 
 function Nudge(x):
     case:
-        Small(x) / x.syn.category == verb
+        Small(x) / $x.syn.category == verb
 
 function Small(x):
     entrench(x, delta: 0.1)
@@ -283,8 +283,8 @@ const CHOOSE_FILTER: &str = r#"package plugin:guards:
 
 function Options(x):
     choose:
-        Bleach(x) / x.syn.category == verb
-        Harden(x) / x.syn.category == noun
+        Bleach(x) / $x.syn.category == verb
+        Harden(x) / $x.syn.category == noun
         Always(x)
 
 function Bleach(x):
@@ -403,7 +403,7 @@ fn a_guard_reads_the_effective_sign_including_inherited_content() {
     const INHERITED: &str = r#"package plugin:guards:
     schema = conlang.functions/v1
 
-function Atelic(x) / x.syn.telic == no:
+function Atelic(x) / $x.syn.telic == no:
     entrench(x, delta: 0.3)
 "#;
     let document = base();
@@ -439,42 +439,70 @@ function Odd(x) / [Verb]:
 }
 
 #[test]
-fn a_guard_reading_two_parameters_is_rejected_not_guessed() {
-    // `.lang` 的求值器只認**一個** `$self`。挑其中一個會靜默給出錯的答案,
-    // 故明確拒絕。
+fn a_guard_may_read_two_parameters() {
+    // P81:主體以 `$<參數名>` 顯式書寫、由環境解析,故跨參數的 guard 可表達。
+    // 舊路徑把參數名代換成 `$self`,只有一個隱含主體,因此必須拒絕。
     const MULTI: &str = r#"package plugin:guards:
     schema = conlang.functions/v1
 
-function Pair(x, y) / x.syn.category == y.syn.category:
+function Pair(x, y) / $x.syn.category == $y.syn.category:
     entrench(x, delta: 0.3)
 "#;
     let document = base();
+    // go 與 finish 同為 verb ⇒ guard 成立
     let invocation = FunctionCall {
         name: "Pair".to_owned(),
         positional: Some("sign(\"go\")".to_owned()),
         named: vec![("y".to_owned(), "sign(\"finish\")".to_owned())],
     };
-    let error = run(MULTI, &["Pair"], &invocation, &document).expect_err("兩個主體");
-    assert!(
-        matches!(
-            &error,
-            ReplayError::Function {
-                source: FunctionError::GuardMultiSubject { .. },
-                ..
-            }
-        ),
-        "{error}"
-    );
+    run(MULTI, &["Pair"], &invocation, &document).expect("兩個參數的 category 相同");
+
+    // go 是 verb、stone 是 noun ⇒ guard 不成立,函數不執行
+    let mismatched = FunctionCall {
+        name: "Pair".to_owned(),
+        positional: Some("sign(\"go\")".to_owned()),
+        named: vec![("y".to_owned(), "sign(\"stone\")".to_owned())],
+    };
+    // header guard 不成立是**錯誤**而非靜默 no-op(既有語意,見
+    // `a_header_guard_that_fails_is_an_error_not_a_silent_no_op`)。
+    run(MULTI, &["Pair"], &mismatched, &document).expect_err("category 不同");
+}
+
+/// 連言收進 guard 文法(P81):先前 `&&` 由六個消費端各自 split,
+/// function 層完全不認得它。
+#[test]
+fn a_guard_may_conjoin_conditions_across_parameters() {
+    const BOTH: &str = r#"package plugin:guards:
+    schema = conlang.functions/v1
+
+function Both(x, y) / $x.syn.category == verb && $y.syn.category == noun:
+    entrench(x, delta: 0.3)
+"#;
+    let document = base();
+    let ok = FunctionCall {
+        name: "Both".to_owned(),
+        positional: Some("sign(\"go\")".to_owned()),
+        named: vec![("y".to_owned(), "sign(\"stone\")".to_owned())],
+    };
+    run(BOTH, &["Both"], &ok, &document).expect("verb + noun");
+
+    let no = FunctionCall {
+        name: "Both".to_owned(),
+        positional: Some("sign(\"go\")".to_owned()),
+        named: vec![("y".to_owned(), "sign(\"finish\")".to_owned())],
+    };
+    run(BOTH, &["Both"], &no, &document).expect_err("第二個連言項不成立");
 }
 
 #[test]
 fn a_bare_parameter_name_on_the_right_hand_side_is_not_a_subject() {
-    // **判別性**:`x.syn.category == y` 裡的 `y` 是**值**不是路徑頭。若主體掃描用
-    // 「參數名有沒有出現」而不是「有沒有跟著 `.`」,這裡會被誤判成兩個主體而報錯。
+    // **判別性**:`$x.syn.category == $y` 裡的 `$y` 綁的是純量字面值,不是 sign。
+    // P81 之後 `$` 一律表示「從環境解析」,純量與 sign 由綁定的內容區分,
+    // 不再靠「有沒有跟著 `.`」猜。
     const RHS: &str = r#"package plugin:guards:
     schema = conlang.functions/v1
 
-function Compare(x, y) / x.syn.category == y:
+function Compare(x, y) / $x.syn.category == $y:
     entrench(x, delta: 0.3)
 "#;
     let document = base();
@@ -493,7 +521,7 @@ fn a_guard_subject_that_is_not_a_sign_is_rejected() {
     const NOT_A_SIGN: &str = r#"package plugin:guards:
     schema = conlang.functions/v1
 
-function Odd(x) / x.syn.category == verb:
+function Odd(x) / $x.syn.category == verb:
     entrench(x, delta: 0.3)
 "#;
     let document = base();
@@ -670,4 +698,74 @@ function Helper(x):
         source.contains("entrenchment = 0.6"),
         "應走自己套件的 Helper(+0.4 → 0.6),不是外來的(+0.1 → 0.3):{source}"
     );
+}
+
+#[test]
+fn unrelated_private_functions_with_the_same_name_do_not_form_a_cross_package_cycle() {
+    // 真實圖是 guards::Public → guards::Helper，以及
+    // foreign::Helper → guards::Public → guards::Helper。foreign::Helper 沒有任何回邊。
+    // 若 cycle checker 只以裸名建圖，兩個 Helper 會被合併成
+    // Public → Helper → Public，因而誤判成環。
+    let owner = synthetic(WITH_PRIVATE, &["Public"]);
+    const FOREIGN: &str = r#"package plugin:foreign:
+    schema = conlang.functions/v1
+
+function Helper(x):
+    Public(x)
+"#;
+    let foreign_id = LibraryId::new(LibraryKind::Plugin, "foreign");
+    let mut foreign = synthetic(FOREIGN, &[]);
+    foreign.name = foreign_id.name.clone();
+    foreign.rule_namespace = foreign_id.to_string();
+    foreign.exports.clear();
+    foreign.id = foreign_id;
+
+    let table = functions_from_packages(&[&owner, &foreign])
+        .expect("不同套件的同名 private function 必須是不同節點");
+    let evaluation = evaluate_function_offline(
+        &table,
+        &call("Public", "go"),
+        &base(),
+        &LibrarySpec::default(),
+    )
+    .expect("Public 仍可呼叫自己套件的 Helper");
+    let (source, trace) = executed(evaluation);
+    assert_eq!(trace, vec!["entrench"]);
+    assert!(source.contains("entrenchment = 0.6"), "{source}");
+}
+
+#[test]
+fn a_real_cross_package_cycle_is_rejected() {
+    const OWNER: &str = r#"package plugin:guards:
+    schema = conlang.functions/v1
+
+function Public(x):
+    Loop(x)
+"#;
+    const FOREIGN: &str = r#"package plugin:foreign:
+    schema = conlang.functions/v1
+
+function Loop(x):
+    Public(x)
+"#;
+    let owner = synthetic(OWNER, &["Public"]);
+    let foreign_id = LibraryId::new(LibraryKind::Plugin, "foreign");
+    let mut foreign = synthetic(FOREIGN, &["Loop"]);
+    foreign.name = foreign_id.name.clone();
+    foreign.rule_namespace = foreign_id.to_string();
+    foreign.exports = vec![LibraryExport {
+        package: foreign_id.name.clone(),
+        package_id: foreign_id.clone(),
+        stable_id: "plugin:foreign:Loop".to_owned(),
+        kind: LibraryExportKind::Function,
+        alias: "Loop".to_owned(),
+    }];
+    foreign.id = foreign_id;
+
+    let error =
+        functions_from_packages(&[&owner, &foreign]).expect_err("真正的跨套件環仍必須在載入時拒絕");
+    let message = error.to_string();
+    assert!(message.contains("call cycle across packages"), "{message}");
+    assert!(message.contains("plugin:guards::Public"), "{message}");
+    assert!(message.contains("plugin:foreign::Loop"), "{message}");
 }

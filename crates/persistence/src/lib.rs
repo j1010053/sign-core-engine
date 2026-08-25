@@ -566,6 +566,8 @@ struct VendoredManifest {
     schema: u32,
     #[serde(default = "default_exports_path")]
     exports: String,
+    #[serde(default = "default_tables_path")]
+    tables: String,
     #[serde(default)]
     code: Vec<String>,
     #[serde(default)]
@@ -576,6 +578,11 @@ struct VendoredManifest {
 
 fn default_exports_path() -> String {
     "config/exports.tsv".to_owned()
+}
+
+/// `config/tables.tsv` 綁 data 檔到表型穩定 ID。缺檔合法(= 沒有具型別的表)。
+fn default_tables_path() -> String {
+    "config/tables.tsv".to_owned()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -937,6 +944,15 @@ impl GraphStore {
         remove_dir_all(&node_dir)
     }
 
+    /// Whether this node already has a persistence entry.
+    ///
+    /// A freshly committed app node intentionally exists only in the in-memory
+    /// graph until Save Project. Callers use this distinction to avoid treating
+    /// an unpersisted leaf as a corrupt or unknown stored node.
+    pub fn contains_node(&self, id: &NodeId) -> bool {
+        self.node_dir(id).exists()
+    }
+
     /// 讀節點的 State(外部環境)。**雜湊外**,不存在時回預設空值。
     ///
     /// 裁定 (A):State 只在撰寫時被讀,**replay 不看它**——故它與
@@ -1091,6 +1107,14 @@ impl GraphStore {
                 )?
                 .map(|file| file.source)
                 .unwrap_or_default();
+                let tables = read_optional_manifest_file(
+                    package_root,
+                    &manifest_path,
+                    "tables",
+                    &routing.tables,
+                )?
+                .map(|file| file.source)
+                .unwrap_or_default();
                 let code_files =
                     read_manifest_files(package_root, &manifest_path, "code", &routing.code)?;
                 let functions = read_manifest_files(
@@ -1117,6 +1141,7 @@ impl GraphStore {
                 Ok(PackageSources {
                     config,
                     exports,
+                    tables,
                     code: join_package_files(&code_files),
                     functions,
                     data: join_package_files(&data_files),

@@ -351,7 +351,7 @@ sign PolarQuestion:
         slots:
             clause [Verb]
     phon:
-        /q{clause}/
+        /q{$slot.clause}/
 "#,
     )
     .unwrap();

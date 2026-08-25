@@ -30,7 +30,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_debug_implementations)]
 
-use conlang_language::{Language, LibraryPackage};
+use conlang_language::{table_type, Language, LibraryPackage};
 use std::collections::BTreeMap;
 
 /// **IPA 字串 → 權重**。三個來源共用同一組鍵(§6.2)。
@@ -211,25 +211,21 @@ pub enum PriorError {
     },
 }
 
-/// E1 起步庫的檔名尾綴。任何 package 的 `data/` 底下叫這個的都會被讀入。
-pub const PRIOR_FILE_SUFFIX: &str = "/segments.tsv";
-
-/// 自套件 `data/*/segments.tsv` 載入 E1 先驗(§6.5)。
+/// 自套件中**宣告為 [`table_type::SEGMENT_PRIOR`] 的表**載入 E1 先驗(§6.5)。
 ///
 /// 格式 `segment<TAB>weight`,首行為表頭。與步驟 17 的
 /// `weight_db_from_packages` 同形——先驗是 **data**(裁定 W),
 /// 不進 `.lang`/`.chg`,且由 R9-a 之後可以是外部注入的 package。
+///
+/// 選表**認表型不認路徑**(P29)。此處曾經是 `path.ends_with("/segments.tsv")`
+/// ——那讓套件內部檔名成為跨套件契約,套件想放兩份不同來源的先驗表都做不到。
 ///
 /// 同一個 segment 出現在多個 package 時**後載入者勝**;呼叫端以 catalog 的
 /// 決定性排序決定順序。
 pub fn load_prior_from_packages(packages: &[&LibraryPackage]) -> Result<WeightTable, PriorError> {
     let mut table = WeightTable::new();
     for package in packages {
-        for source in package
-            .data_sources
-            .iter()
-            .filter(|source| source.path.ends_with(PRIOR_FILE_SUFFIX))
-        {
+        for source in package.tables(table_type::SEGMENT_PRIOR) {
             parse_prior(&mut table, &source.path, &source.source)?;
         }
     }

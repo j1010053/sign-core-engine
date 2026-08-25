@@ -86,18 +86,21 @@ fn any_provider_feeds_the_same_imported_layer() {
 
 // ── E1 先驗自 package data 載入 ──────────────────────────────────────────
 
+/// 刻意**不叫** `segments.tsv`:選表認的是 `config/tables.tsv` 宣告的表型,
+/// 不是檔名(P29)。這個 fixture 因此同時是那條契約的迴歸。
 fn prior_package(name: &str, rows: &str) -> PackageSources {
     PackageSources {
         config: format!(
             "kind = plugin\nname = {name}\nversion = 0.1.0\n\
              rule_namespace = plugin:{name}\nenabled = true\npriority = 0\n\
-             requires =\ncode = code/main.lang\ndata = data/segments.tsv\n"
+             requires =\ncode = code/main.lang\ndata = data/phoible-subset.tsv\n"
         ),
         exports: format!("stable_id\tkind\talias\nplugin:{name}:Marker\ttrait\t{name}Marker\n"),
+        tables: "path\ttype\ndata/phoible-subset.tsv\tengine:SegmentPrior\n".to_owned(),
         code: format!("trait {name}Marker:\n"),
         data: rows.to_owned(),
         data_files: vec![PackageFile {
-            path: "data/segments.tsv".to_owned(),
+            path: "data/phoible-subset.tsv".to_owned(),
             source: rows.to_owned(),
         }],
         ..PackageSources::default()
