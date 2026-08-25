@@ -78,7 +78,7 @@ fn measure_what_the_path_segment_actually_supports() {
     assert_eq!(
         (key, tier),
         (false, false),
-        "`[鍵]`/`~tier` 已移出 Path 文法(P80)"
+        "`[鍵]`/`~tier` 已移出 Path 文法(P92)"
     );
     assert_eq!(
         (index, navigate, descend),
@@ -165,7 +165,7 @@ fn measure_the_slot_side_and_the_closed_list() {
     println!("\n[更深的段數]");
     slot_report("syn.alignment.a.b(三段)", "syn.alignment", "a.b");
 
-    println!("\n[P80 移除的兩種段]");
+    println!("\n[P92 移除的兩種段]");
     slot_report("syn.alignment.a[k](鍵)", "syn.alignment", "a[k]");
     slot_report("syn.alignment.t~tone(tier)", "syn.alignment", "t~tone");
 
@@ -189,7 +189,7 @@ fn measure_the_slot_side_and_the_closed_list() {
     for leaf in ["a[k]", "t~tone"] {
         assert!(
             slot_probe("syn.alignment", leaf).is_err(),
-            "`{leaf}` 已移出 Path 文法(P80)"
+            "`{leaf}` 已移出 Path 文法(P92)"
         );
     }
     // 封閉清單之外的自造路徑進不來——這正是多段路徑只能來自套件座標的原因。

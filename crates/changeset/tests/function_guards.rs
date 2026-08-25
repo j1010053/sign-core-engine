@@ -440,7 +440,7 @@ function Odd(x) / [Verb]:
 
 #[test]
 fn a_guard_may_read_two_parameters() {
-    // P81:主體以 `$<參數名>` 顯式書寫、由環境解析,故跨參數的 guard 可表達。
+    // P91:主體以 `$<參數名>` 顯式書寫、由環境解析,故跨參數的 guard 可表達。
     // 舊路徑把參數名代換成 `$self`,只有一個隱含主體,因此必須拒絕。
     const MULTI: &str = r#"package plugin:guards:
     schema = conlang.functions/v1
@@ -468,7 +468,7 @@ function Pair(x, y) / $x.syn.category == $y.syn.category:
     run(MULTI, &["Pair"], &mismatched, &document).expect_err("category 不同");
 }
 
-/// 連言收進 guard 文法(P81):先前 `&&` 由六個消費端各自 split,
+/// 連言收進 guard 文法(P91):先前 `&&` 由六個消費端各自 split,
 /// function 層完全不認得它。
 #[test]
 fn a_guard_may_conjoin_conditions_across_parameters() {
@@ -497,7 +497,7 @@ function Both(x, y) / $x.syn.category == verb && $y.syn.category == noun:
 #[test]
 fn a_bare_parameter_name_on_the_right_hand_side_is_not_a_subject() {
     // **判別性**:`$x.syn.category == $y` 裡的 `$y` 綁的是純量字面值,不是 sign。
-    // P81 之後 `$` 一律表示「從環境解析」,純量與 sign 由綁定的內容區分,
+    // P91 之後 `$` 一律表示「從環境解析」,純量與 sign 由綁定的內容區分,
     // 不再靠「有沒有跟著 `.`」猜。
     const RHS: &str = r#"package plugin:guards:
     schema = conlang.functions/v1

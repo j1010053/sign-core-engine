@@ -97,13 +97,13 @@ enum Guard {
     SlotIsA(String, String),
     SelfIsA(String),
     SelfFieldEq(SelfAccess, String),
-    /// `$x.<dim>.<path> == <值或另一個引用>`(P81):主體來自求值環境的具名
+    /// `$x.<dim>.<path> == <值或另一個引用>`(P91):主體來自求值環境的具名
     /// 綁定。右端可以是字面值,也可以是**另一個綁定的欄位**——那正是跨參數
     /// guard 的核心用途(比較兩個參數的同一個欄位)。
     BindingFieldEq(BindingAccess, BindingOperand),
-    /// `$x == [Trait]`(P81)。
+    /// `$x == [Trait]`(P91)。
     BindingIsA(String, String),
-    /// `A && B && …`(P81):連言收進文法本身。
+    /// `A && B && …`(P91):連言收進文法本身。
     ///
     /// 先前 `&&` 由**六個消費端各自 split**,guard 文法只認單一比較。
     /// function 層要支援多主體就會出現第七份;收進這裡讓它只有一份。
@@ -353,7 +353,7 @@ fn parse_atomic_guard(value: &str) -> Result<Guard, String> {
             expected.to_owned(),
         ));
     }
-    // `$x == [Trait]` / `$x.<dim>.<path> == 值`(P81)。`$self`/`$slot.` 已在
+    // `$x == [Trait]` / `$x.<dim>.<path> == 值`(P91)。`$self`/`$slot.` 已在
     // 上面攔掉,故此處的 `$` 開頭必是具名綁定。
     if field.starts_with('$') {
         if let Ok(read) = reference::parse(&reference::BINDING_ONLY, field) {
@@ -947,7 +947,7 @@ fn validate_realization_conjuncts(
         .try_for_each(|part| validate_realization_guard(part, registry, slots, self_features, filler_features))
 }
 
-/// 求值環境裡的具名綁定(P81):`$x` → 一個 sign。`.lang` 側恆為空。
+/// 求值環境裡的具名綁定(P91):`$x` → 一個 sign。`.lang` 側恆為空。
 pub type GuardBindings<'a> = std::collections::BTreeMap<String, &'a SignDef>;
 
 #[allow(clippy::too_many_arguments)]
@@ -1603,7 +1603,7 @@ pub(crate) fn evaluate_token_guard(
 ///
 /// `Err` carries the evaluator's own diagnostic; an unparseable or ill-typed guard is
 /// **never** reported as "unmatched".
-/// 在**具名綁定環境**上求值一句 guard(P81)。
+/// 在**具名綁定環境**上求值一句 guard(P91)。
 ///
 /// `.chg` 的 function guard 走這個入口:主體是 `$<參數名>`,由 `bindings`
 /// 解析。先前的作法是把參數名**文字代換成 `$self`** 再呼叫
@@ -1646,7 +1646,7 @@ pub fn guard_matches_bindings(
     }
 }
 
-/// 一句 guard 引用到的具名綁定(P81),依**角色**分開。
+/// 一句 guard 引用到的具名綁定(P91),依**角色**分開。
 ///
 /// 角色決定型別要求:當**主體**用的(`$x.<dim>.<path>`、`$x == [Trait]`)必須
 /// 綁到一個 sign;當**純量值**用的(`… == $y`)綁的是字面值。呼叫端據此決定

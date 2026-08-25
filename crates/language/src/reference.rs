@@ -52,7 +52,7 @@ pub enum Subject {
     SelfSign,
     /// `$slot.<name>`:某個 slot 的填充者。
     Slot(String),
-    /// `$<name>`:求值環境裡的具名綁定(P81)。`.lang` 側不用;
+    /// `$<name>`:求值環境裡的具名綁定(P91)。`.lang` 側不用;
     /// `.chg` 的 function guard 用它指涉參數。
     ///
     /// `self` 與 `slot` 是保留字,故 `$x` 不會與前兩形相撞。
@@ -96,7 +96,7 @@ pub enum PathPolicy {
 pub struct RefSpec {
     pub allow_self: bool,
     pub allow_slot: bool,
-    /// 是否接受 `$<name>` 具名綁定(P81)。`.lang` 的位置一律 false。
+    /// 是否接受 `$<name>` 具名綁定(P91)。`.lang` 的位置一律 false。
     pub allow_binding: bool,
     pub dim: DimPolicy,
     pub path: PathPolicy,
@@ -223,7 +223,7 @@ pub const SCRUTINEE: RefSpec = RefSpec {
     path: PathPolicy::RequiredValidated,
 };
 
-/// `.chg` function guard 的主體:`$<參數名>`(P81)。不接受 `$self`/`$slot.`
+/// `.chg` function guard 的主體:`$<參數名>`(P91)。不接受 `$self`/`$slot.`
 /// ——function 層沒有 ambient sign,也沒有自己的 slot。
 pub const BINDING_FIELD: RefSpec = RefSpec {
     allow_self: false,
@@ -518,7 +518,7 @@ mod tests {
         assert_eq!(r.path.as_deref(), Some("frame"));
     }
 
-    /// P80:Path 只剩點分名段。
+    /// P92:Path 只剩點分名段。
     #[test]
     fn the_path_is_dotted_names_only() {
         let r = parse(&STRICT, "$slot.agent.syn.deep.field").unwrap();
@@ -669,7 +669,7 @@ mod tests {
         assert_eq!(out, "/X{$slot.b}/");
     }
 
-    /// P81:`$<name>` 是第三種主體——求值環境裡的具名綁定。
+    /// P91:`$<name>` 是第三種主體——求值環境裡的具名綁定。
     /// `self` 與 `slot` 是保留字,故不會相撞。
     #[test]
     fn a_dollar_name_is_a_named_binding() {

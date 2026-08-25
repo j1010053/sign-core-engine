@@ -1158,7 +1158,7 @@ fn guard_holds(
             path_builtin_key(owner, guard, &args, bindings, document, libraries)?;
         return Ok(paths.contains(&source, &target));
     }
-    // P81:主體以 `$<參數名>` 顯式書寫,由**環境**解析,不再掃描識別字再
+    // P91:主體以 `$<參數名>` 顯式書寫,由**環境**解析,不再掃描識別字再
     // 文字代換成 `$self`。跨參數的 guard 因此可表達——舊路徑只有一個隱含
     // 主體,故必須以 `FUNCTION_GUARD_MULTI_SUBJECT` 拒絕。
     let roles = conlang_language::synchronic::guard_binding_roles(guard);
