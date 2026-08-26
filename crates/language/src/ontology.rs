@@ -1407,6 +1407,69 @@ impl OntologyRegistry {
     }
 }
 
+/// P76:檢查 `belongs X<Arg>` 的實參是否滿足 trait X 的 bound 約束。
+pub(crate) fn type_param_bound_diagnostics(
+    langs: &[&Language],
+    registry: &OntologyRegistry,
+) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    let all_traits: BTreeMap<&str, &TraitDef> = langs
+        .iter()
+        .flat_map(|l| l.traits.iter())
+        .map(|t| (t.name.as_str(), t))
+        .collect();
+
+    let check_items = |items: &[SignItem], owner: &str, out: &mut Vec<Diagnostic>| {
+        for item in items {
+            let SignItem::TraitMount {
+                name,
+                kind: crate::TraitMountKind::Declaration,
+                args,
+                ..
+            } = item
+            else {
+                continue;
+            };
+            let Some(trait_def) = all_traits.get(name.as_str()) else {
+                continue;
+            };
+            if args.len() != trait_def.type_params.len() {
+                continue;
+            }
+            for (param, arg) in trait_def.type_params.iter().zip(args.iter()) {
+                let Some(ref bound) = param.bound else {
+                    continue;
+                };
+                if !registry.has(bound) {
+                    continue;
+                }
+                if !registry.category_is_a(arg, bound) {
+                    out.push(Diagnostic::new(
+                        Severity::Error,
+                        "TYPE_PARAM_BOUND_VIOLATION",
+                        format!(
+                            "{owner:?}: `belongs {name}<…>` 的實參 {arg:?} \
+                             不滿足 bound {bound:?}（{arg} 不是 {bound} 的子類型）"
+                        ),
+                    ));
+                }
+            }
+        }
+    };
+
+    for lang in langs {
+        for sign in &lang.signs {
+            check_items(&sign.items, &sign.name, &mut out);
+        }
+        for t in &lang.traits {
+            for block in &t.blocks {
+                check_items(&block.items, &t.name, &mut out);
+            }
+        }
+    }
+    out
+}
+
 fn path_dim(path: &str) -> Option<Dim> {
     let head = path.split_once('.').map(|(head, _)| head).unwrap_or(path);
     Dim::parse(head)

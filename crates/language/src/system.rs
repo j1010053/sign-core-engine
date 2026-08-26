@@ -2577,6 +2577,10 @@ fn validate_source_language(
     validate_typed_schemas(std, &[], &registry, &mut report);
     validate_typed_schemas(&expanded, &[std], &registry, &mut report);
     validate_fp_expressions(&expanded, &registry, &mut report);
+    report.extend(crate::ontology::type_param_bound_diagnostics(
+        &[std, &expanded],
+        &registry,
+    ));
     validate_origin_graph(effective_source, &mut report);
     validate_constructions_and_local_phon(&expanded, &registry, None, &mut report);
     report

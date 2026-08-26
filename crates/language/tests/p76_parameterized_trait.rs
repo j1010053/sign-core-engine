@@ -432,3 +432,69 @@ trait Child:
         "inherited slot should have C substituted to Noun"
     );
 }
+
+#[test]
+fn bound_violation_is_diagnosed() {
+    let lang = parse(
+        "\
+trait Animal:
+    pass
+
+trait Mammal:
+    belongs Animal
+    Animal
+
+trait Schema<C: Mammal>:
+    syn:
+        slots:
+            head [C]
+
+sign Bad:
+    belongs Schema<Animal>
+    Schema
+",
+    );
+    let report = conlang_language::check_language(&lang);
+    let codes: Vec<_> = report
+        .diagnostics()
+        .iter()
+        .map(|d| d.code)
+        .collect();
+    assert!(
+        codes.contains(&"TYPE_PARAM_BOUND_VIOLATION"),
+        "Animal is not a subtype of Mammal, should be flagged: {codes:?}"
+    );
+}
+
+#[test]
+fn bound_satisfied_produces_no_violation() {
+    let lang = parse(
+        "\
+trait Animal:
+    pass
+
+trait Mammal:
+    belongs Animal
+    Animal
+
+trait Schema<C: Animal>:
+    syn:
+        slots:
+            head [C]
+
+sign Good:
+    belongs Schema<Mammal>
+    Schema
+",
+    );
+    let report = conlang_language::check_language(&lang);
+    let violations: Vec<_> = report
+        .diagnostics()
+        .iter()
+        .filter(|d| d.code == "TYPE_PARAM_BOUND_VIOLATION")
+        .collect();
+    assert!(
+        violations.is_empty(),
+        "Mammal is a subtype of Animal, should pass: {violations:?}"
+    );
+}
