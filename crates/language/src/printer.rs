@@ -261,7 +261,13 @@ fn push_body(out: &mut String, blocks: &[Block]) {
         }
         // 1) belongs(保序)
         for it in items {
-            if let SignItem::TraitMount { name: n, kind: crate::TraitMountKind::Declaration, args, .. } = it {
+            if let SignItem::TraitMount {
+                name: n,
+                kind: crate::TraitMountKind::Declaration,
+                args,
+                ..
+            } = it
+            {
                 out.push_str(&format!("    belongs {n}"));
                 if !args.is_empty() {
                     out.push('<');
@@ -277,9 +283,7 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                 match kind {
                     // 宣告那一份由 belongs 區段印,這裡只印展開點
                     crate::TraitMountKind::Declaration => {}
-                    crate::TraitMountKind::Block(n) => {
-                        out.push_str(&format!("    {name}[{n}]\n"))
-                    }
+                    crate::TraitMountKind::Block(n) => out.push_str(&format!("    {name}[{n}]\n")),
                     crate::TraitMountKind::Whole => out.push_str(&format!("    {name}\n")),
                 }
             }
@@ -658,7 +662,11 @@ mod tests {
                 marker: false,
                 type_params: vec![],
                 blocks: vec![Block {
-                    items: vec![SignItem::TraitMount { name: "Beta".into(), kind: crate::TraitMountKind::Declaration, args: vec![] }],
+                    items: vec![SignItem::TraitMount {
+                        name: "Beta".into(),
+                        kind: crate::TraitMountKind::Declaration,
+                        args: vec![],
+                    }],
                 }],
             };
             let b = TraitDef {

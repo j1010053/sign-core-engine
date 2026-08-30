@@ -164,7 +164,7 @@ material.phon = if let Some(realized) = token.realized_phon_input() { ... }  // 
 |---|---|---|---|
 | B1 | `TEMPLATE_ADJACENT_SLOTS_FUSED` | 相鄰 `{$slot.X}{$slot.Y}` 無分隔 | Warning(融合對非串接形態合法) |
 | B2 | `REALIZATION_RULE_WITHOUT_BASE` | 分支只有規則但無深層模板 | Error |
-| B3 | 分支選中但規則全未命中 | 類別掛錯的徵兆 | Warning(可選) |
+| B3 | `REALIZATION_RULES_INERT` | 分支帶規則卻對展開形無作用 | `CaseRecord.diagnostic_code`(執行期) |
 
 ### C. changeset / `.chg`
 
@@ -182,7 +182,7 @@ material.phon = if let Some(realized) = token.realized_phon_input() { ... }  // 
 | D1 | **新增** `EnglishFiniteVerbForm` | 吃 `stem [Verb]`,規則分支處理**可派生**屈折 | 可做 |
 | D2 | #3 / #4 小句構式 | 去掉 `{$slot.predicate}s`,predicate 改填 D1 的產物 | 可做 |
 | D3 | #2 `EnglishCountNounForm` | 規則分支處理 `mouse`→`mice` | 可做 |
-| D4 | `EnglishPluralNP` | `/{$slot.nominal}{$slot.marker}/` 補 `+` | 可做(B1 首個真陽性) |
+| D4 | `EnglishPluralNP`、std:cxg 的 `PrefixNegation` / `SuffixNegation` | 三處相鄰槽補 `+` | 可做(B1 上線即抓到,**全數真陽性**) |
 | D5 | #1 `she`/`her` | **不動**,合法的詞位內部替換 | — |
 | D6 | #5–#8 硬編 `is`/`does` | **本輪不動** | **卡 §5** |
 

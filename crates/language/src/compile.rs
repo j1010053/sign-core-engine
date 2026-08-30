@@ -199,7 +199,10 @@ fn substitute_type_params(items: &mut [SignItem], subst: &[(&str, &str)]) {
 /// P76:從同容器的 Declaration 中找出某個 trait 的型別實參。
 fn find_declaration_args<'a>(items: &'a [SignItem], trait_name: &str) -> Option<&'a [String]> {
     for item in items {
-        if let SignItem::TraitMount { name, kind, args, .. } = item {
+        if let SignItem::TraitMount {
+            name, kind, args, ..
+        } = item
+        {
             if kind.is_declaration() && name == trait_name {
                 return Some(args);
             }
@@ -284,7 +287,9 @@ fn expand_item_sequence_with(
             // **宣告原樣留下。** `belongs X` 是分類邊,不是展開對象——它必須
             // 活到 ②③④ 與 ontology 建樹那一刻。把它當成「展開出空集合」會讓
             // 分類邊在展開後消失,整棵 ontology 樹跟著垮。
-            SignItem::TraitMount { name, kind, args, .. } if kind.is_declaration() => {
+            SignItem::TraitMount {
+                name, kind, args, ..
+            } if kind.is_declaration() => {
                 output.push(item.clone());
                 if !expand_declarations {
                     continue;
@@ -300,9 +305,7 @@ fn expand_item_sequence_with(
                     .iter()
                     .flat_map(|block| block.items.iter().cloned())
                     .collect();
-                if !trait_def.type_params.is_empty()
-                    && args.len() == trait_def.type_params.len()
-                {
+                if !trait_def.type_params.is_empty() && args.len() == trait_def.type_params.len() {
                     let subst: Vec<(&str, &str)> = trait_def
                         .type_params
                         .iter()
@@ -322,7 +325,12 @@ fn expand_item_sequence_with(
                 )?);
                 active.pop();
             }
-            SignItem::TraitMount { name, kind, args: direct_args, .. } => {
+            SignItem::TraitMount {
+                name,
+                kind,
+                args: direct_args,
+                ..
+            } => {
                 if let Some(start) = active.iter().position(|candidate| candidate == name) {
                     let mut path = active[start..].to_vec();
                     path.push(name.clone());
@@ -541,10 +549,7 @@ pub fn compile(src: &Language) -> Result<Pipeline, CompileError> {
 }
 
 /// 同上,但展開時可額外查**外部語言**的 trait(std / 套件)——見 [`find_trait`]。
-pub fn compile_with(
-    src: &Language,
-    externals: &[&Language],
-) -> Result<Pipeline, CompileError> {
+pub fn compile_with(src: &Language, externals: &[&Language]) -> Result<Pipeline, CompileError> {
     // Index Generation(Compile Artifact;自 ① 收集,展開後即不可得)
     let mut trait_index: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for t in src.traits.iter().filter(|t| !t.global) {
@@ -552,7 +557,12 @@ pub fn compile_with(
     }
     for s in &src.signs {
         for it in &s.items {
-            if let SignItem::TraitMount { name, kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_), .. } = it {
+            if let SignItem::TraitMount {
+                name,
+                kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_),
+                ..
+            } = it
+            {
                 let v = trait_index.entry(name.clone()).or_default();
                 if !v.contains(&s.name) {
                     v.push(s.name.clone());

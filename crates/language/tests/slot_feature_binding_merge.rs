@@ -103,7 +103,10 @@ sign s:
             object [Bearer]
 "
     );
-    let other = one.replace("    belongs A\n    belongs B\n", "    belongs B\n    belongs A\n");
+    let other = one.replace(
+        "    belongs A\n    belongs B\n",
+        "    belongs B\n    belongs A\n",
+    );
     let one_value = binding(&one, "s", "object", "case");
     let other_value = binding(&other, "s", "object", "case");
     let mut a: Vec<&str> = one_value.split('|').map(str::trim).collect();

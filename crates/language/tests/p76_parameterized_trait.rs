@@ -316,11 +316,7 @@ marker trait Bad<C>:
 ",
     );
     let report = conlang_language::check_language(&lang);
-    let codes: Vec<_> = report
-        .diagnostics()
-        .iter()
-        .map(|d| d.code)
-        .collect();
+    let codes: Vec<_> = report.diagnostics().iter().map(|d| d.code).collect();
     assert!(
         codes.contains(&"TYPE_PARAM_ON_MARKER_TRAIT"),
         "marker trait with type params should be flagged: {codes:?}"
@@ -336,11 +332,7 @@ global trait Bad<C>:
 ",
     );
     let report = conlang_language::check_language(&lang);
-    let codes: Vec<_> = report
-        .diagnostics()
-        .iter()
-        .map(|d| d.code)
-        .collect();
+    let codes: Vec<_> = report.diagnostics().iter().map(|d| d.code).collect();
     assert!(
         codes.contains(&"TYPE_PARAM_ON_GLOBAL_TRAIT"),
         "global trait with type params should be flagged: {codes:?}"
@@ -358,11 +350,7 @@ trait Bad<C, C>:
 ",
     );
     let report = conlang_language::check_language(&lang);
-    let codes: Vec<_> = report
-        .diagnostics()
-        .iter()
-        .map(|d| d.code)
-        .collect();
+    let codes: Vec<_> = report.diagnostics().iter().map(|d| d.code).collect();
     assert!(
         codes.contains(&"TYPE_PARAM_DUPLICATE_NAME"),
         "duplicate param name should be flagged: {codes:?}"
@@ -382,7 +370,11 @@ trait Schema<C>:
 ",
     );
     let view = compile::trait_view(&lang, &[], "Schema");
-    assert!(view.is_ok(), "trait_view should not fail on parameterized traits: {}", view.unwrap_err());
+    assert!(
+        view.is_ok(),
+        "trait_view should not fail on parameterized traits: {}",
+        view.unwrap_err()
+    );
     let items = view.unwrap();
     let slot = items.iter().find_map(|item| {
         if let conlang_language::SignItem::Slot(slot) = item {
@@ -417,13 +409,16 @@ trait Child:
 ",
     );
     let view = compile::trait_view(&lang, &[], "Child").unwrap();
-    let slots: Vec<_> = view.iter().filter_map(|item| {
-        if let conlang_language::SignItem::Slot(slot) = item {
-            Some(slot)
-        } else {
-            None
-        }
-    }).collect();
+    let slots: Vec<_> = view
+        .iter()
+        .filter_map(|item| {
+            if let conlang_language::SignItem::Slot(slot) = item {
+                Some(slot)
+            } else {
+                None
+            }
+        })
+        .collect();
     let head = slots.iter().find(|s| s.name == "head");
     assert!(head.is_some(), "should inherit head slot from Base");
     assert_eq!(
@@ -455,11 +450,7 @@ sign Bad:
 ",
     );
     let report = conlang_language::check_language(&lang);
-    let codes: Vec<_> = report
-        .diagnostics()
-        .iter()
-        .map(|d| d.code)
-        .collect();
+    let codes: Vec<_> = report.diagnostics().iter().map(|d| d.code).collect();
     assert!(
         codes.contains(&"TYPE_PARAM_BOUND_VIOLATION"),
         "Animal is not a subtype of Mammal, should be flagged: {codes:?}"

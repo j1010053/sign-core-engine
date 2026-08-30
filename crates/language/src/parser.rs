@@ -85,7 +85,10 @@ fn container_head(text: &str) -> Option<(&'static str, &str)> {
 
 /// P76:`Name<P1: Bound, P2>` → (base_name, params)。
 /// 無角括號時回傳空列表。
-fn split_type_params(name: &str, line: usize) -> Result<(&str, Vec<crate::TraitTypeParam>), ParseError> {
+fn split_type_params(
+    name: &str,
+    line: usize,
+) -> Result<(&str, Vec<crate::TraitTypeParam>), ParseError> {
     let Some(open) = name.find('<') else {
         return Ok((name, vec![]));
     };
@@ -551,7 +554,9 @@ fn parse_typed_case(
             {
                 return Err(err(
                     result_line.no,
-                    format!("case branch does not contain an expression accepted by <{expected:?}>"),
+                    format!(
+                        "case branch does not contain an expression accepted by <{expected:?}>"
+                    ),
                 ));
             }
             index = branch_body_end;
@@ -1199,11 +1204,7 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             in_realization = false;
             in_constraints = false;
             if text == "pass" {
-                blocks
-                    .last_mut()
-                    .unwrap()
-                    .items
-                    .push(SignItem::Pass);
+                blocks.last_mut().unwrap().items.push(SignItem::Pass);
             } else if text == "==" {
                 blocks.push(Block::default());
             } else if text == "constraints:" {
@@ -1222,7 +1223,11 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                     }));
                 index = next;
             } else if let Some((name, args)) = belongs_target(text, no)? {
-                blocks.last_mut().unwrap().items.push(SignItem::TraitMount { name, kind: crate::TraitMountKind::Declaration, args });
+                blocks.last_mut().unwrap().items.push(SignItem::TraitMount {
+                    name,
+                    kind: crate::TraitMountKind::Declaration,
+                    args,
+                });
             } else if let Some(dim) = DimKw::parse(text) {
                 cur_dim = Some(dim);
             } else if let Some((name, block)) = trait_use(text) {
@@ -1231,11 +1236,11 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                     Some(index) => crate::TraitMountKind::Block(index),
                     None => crate::TraitMountKind::Whole,
                 };
-                blocks
-                    .last_mut()
-                    .unwrap()
-                    .items
-                    .push(SignItem::TraitMount { name, kind, args: vec![] });
+                blocks.last_mut().unwrap().items.push(SignItem::TraitMount {
+                    name,
+                    kind,
+                    args: vec![],
+                });
             } else if !text.contains("=>")
                 && text
                     .split_once('=')

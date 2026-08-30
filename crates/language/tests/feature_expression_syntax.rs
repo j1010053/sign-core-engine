@@ -61,7 +61,9 @@ fn the_case_still_computes_the_value() {
 #[test]
 fn the_old_arrow_spelling_reports_how_to_migrate() {
     let old = SOURCE.replace("            outcome =\n", "            outcome =>\n");
-    let error = Language::parse(&old).expect_err("舊寫法不再合法").to_string();
+    let error = Language::parse(&old)
+        .expect_err("舊寫法不再合法")
+        .to_string();
     assert!(
         error.contains("NAME =") && error.contains("accumulating rule"),
         "訊息要說出正確寫法與 `=>` 的真正語義:{error}"
@@ -73,14 +75,17 @@ fn the_old_arrow_spelling_reports_how_to_migrate() {
 #[test]
 fn an_equals_with_nothing_after_it_is_still_an_error() {
     let broken = "sign s:\n    syn:\n        feature:\n            x = enum(a)\n            x =\n            y = enum(b)\n";
-    let error = Language::parse(broken).expect_err("空右端必須報錯").to_string();
+    let error = Language::parse(broken)
+        .expect_err("空右端必須報錯")
+        .to_string();
     assert!(error.contains("case"), "訊息要提到缺的是 case:{error}");
 }
 
 /// 正向控制組:一行 `=>` 規則不受影響,仍是累積規則。
 #[test]
 fn a_one_line_arrow_rule_is_untouched() {
-    let source = "sign s:\n    syn:\n        feature:\n            a = enum(yes)\n            a => yes\n";
+    let source =
+        "sign s:\n    syn:\n        feature:\n            a = enum(yes)\n            a => yes\n";
     let language = Language::parse(source).expect("parse");
     // canonical 會補上顯式的 `@stage`(規則的正規化),那與本條無關。
     assert!(language.dump().contains("a => yes @stage"));

@@ -41,7 +41,9 @@ fn mismatches(src: &str) -> Vec<String> {
             })
             .unwrap_or_else(|| "<無>".to_owned());
         if actual != reported {
-            out.push(format!("{sign_name}.{path}:報 {reported:?},實得 {actual:?}"));
+            out.push(format!(
+                "{sign_name}.{path}:報 {reported:?},實得 {actual:?}"
+            ));
         }
     }
     out
@@ -79,7 +81,11 @@ fn it_still_matches_when_the_mounts_are_written_the_other_way_round() {
         "    belongs B\n    belongs C\n",
         "    belongs C\n    belongs B\n",
     );
-    assert!(mismatches(&flipped).is_empty(), "{:?}", mismatches(&flipped));
+    assert!(
+        mismatches(&flipped).is_empty(),
+        "{:?}",
+        mismatches(&flipped)
+    );
 }
 
 /// 深一點的鏈 + 並列。

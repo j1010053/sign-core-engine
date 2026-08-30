@@ -69,9 +69,9 @@ impl SignDef {
         let categories = reg.sign_categories(self); // 維度中立
                                                     // 繼承 precedence 由 registry 統一計算:遠祖先、近祖後;
                                                     // 同距離後寫 belongs 後套用;菱形節點只出現一次。
-        // 繼承值走 registry 的**逐包解析**:每個掛載的 trait 先在自己那層解完,
-        // 這裡只看到解完的包。並列包對同一 feature 分歧時是候選聯集(未定案),
-        // 不挑贏家——理由與 `OntologyRegistry::inherited_values` 同。
+                                                    // 繼承值走 registry 的**逐包解析**:每個掛載的 trait 先在自己那層解完,
+                                                    // 這裡只看到解完的包。並列包對同一 feature 分歧時是候選聯集(未定案),
+                                                    // 不挑贏家——理由與 `OntologyRegistry::inherited_values` 同。
         let mut all: Vec<(String, String)> = reg
             .inherited_values(self)
             .into_iter()

@@ -320,7 +320,9 @@ fn when_guards_share_one_frozen_pre_merge_snapshot() {
     };
     let feature = |name: &str| {
         stored.sign.items.iter().rev().find_map(|item| match item {
-            SignItem::FeatureValue(value) if value.name == name => Some(value.decided().unwrap_or_default()),
+            SignItem::FeatureValue(value) if value.name == name => {
+                Some(value.decided().unwrap_or_default())
+            }
             _ => None,
         })
     };

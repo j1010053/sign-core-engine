@@ -131,12 +131,20 @@ fn marker_and_pass_survive_a_canonical_round_trip() {
 #[test]
 fn marker_is_not_global() {
     let language = Language::parse("marker trait Blank:\n").expect("parses");
-    let def = language.traits.iter().find(|t| t.name == "Blank").expect("Blank");
+    let def = language
+        .traits
+        .iter()
+        .find(|t| t.name == "Blank")
+        .expect("Blank");
     assert!(def.marker, "marker 要立起來");
     assert!(!def.global, "但不得順手把 global 也打開");
 
     let global = Language::parse("global trait Core:\n    pass\n").expect("parses");
-    let def = global.traits.iter().find(|t| t.name == "Core").expect("Core");
+    let def = global
+        .traits
+        .iter()
+        .find(|t| t.name == "Core")
+        .expect("Core");
     assert!(def.global);
     assert!(!def.marker);
 }
@@ -147,7 +155,8 @@ fn marker_is_not_global() {
 // `X[n]` 才是內容落點。今天投影仍然供給內容,所以這條只發警告——它的用途是
 // 把遷移清單列出來,行為零改變。第 3 步才會關掉投影並升為錯誤。
 
-const CONTENTFUL: &str = "Symbol a\n\ntrait Contentful:\n    sem:\n        senses:\n            core = THING\n";
+const CONTENTFUL: &str =
+    "Symbol a\n\ntrait Contentful:\n    sem:\n        senses:\n            core = THING\n";
 
 fn belongs_codes(source: &str) -> Vec<String> {
     let document = LanguageDocument::import_new_root(source, "evo:br").expect("parses");
@@ -184,8 +193,9 @@ fn referencing_the_trait_silences_it() {
 #[test]
 fn a_trait_with_nothing_to_inline_needs_no_reference() {
     for declaration in ["marker trait Blank:\n", "trait Blank:\n    pass\n"] {
-        let source =
-            format!("Symbol a\n\n{declaration}\nsign x:\n    belongs Blank\n    phon:\n        /a/\n");
+        let source = format!(
+            "Symbol a\n\n{declaration}\nsign x:\n    belongs Blank\n    phon:\n        /a/\n"
+        );
         assert!(
             belongs_codes(&source).is_empty(),
             "{declaration} 不該要求引用:{source}"
@@ -296,20 +306,33 @@ fn a_declaration_survives_expansion_while_the_expansion_point_is_consumed() {
         "trait Rich:\n    sem:\n        senses:\n            core = THING\n\nsign x:\n    belongs Rich\n    Rich[0]\n",
     )
     .expect("parses");
-    let expanded = conlang_language::compile::compile(&language).expect("compiles").expanded;
-    let items = &expanded.signs.iter().find(|s| s.name == "x").expect("x").items;
+    let expanded = conlang_language::compile::compile(&language)
+        .expect("compiles")
+        .expanded;
+    let items = &expanded
+        .signs
+        .iter()
+        .find(|s| s.name == "x")
+        .expect("x")
+        .items;
 
     assert!(
         items.iter().any(|item| matches!(
             item,
-            SignItem::TraitMount { kind: TraitMountKind::Declaration, .. }
+            SignItem::TraitMount {
+                kind: TraitMountKind::Declaration,
+                ..
+            }
         )),
         "分類邊要留下:{items:?}"
     );
     assert!(
         !items.iter().any(|item| matches!(
             item,
-            SignItem::TraitMount { kind: TraitMountKind::Block(_) | TraitMountKind::Whole, .. }
+            SignItem::TraitMount {
+                kind: TraitMountKind::Block(_) | TraitMountKind::Whole,
+                ..
+            }
         )),
         "展開點要被消耗掉:{items:?}"
     );

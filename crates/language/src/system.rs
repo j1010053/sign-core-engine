@@ -938,10 +938,15 @@ fn validate_typed_schemas(
             // Before the compile expansion pass a fragment may still contain
             // a trait macro.  Its complete contract is validated by the
             // ordered-language pass after the macro has been expanded.
-            if fragment
-                .iter()
-                .any(|item| matches!(item, SignItem::TraitMount { kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_), .. }))
-            {
+            if fragment.iter().any(|item| {
+                matches!(
+                    item,
+                    SignItem::TraitMount {
+                        kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_),
+                        ..
+                    }
+                )
+            }) {
                 continue;
             }
             let mut virtual_sign = effective.clone();
@@ -1048,8 +1053,13 @@ fn validate_typed_schemas(
                 );
                 continue;
             };
-            let target_domain =
-                category_feature_domain(language, externals, registry, target_category, &binding.feature);
+            let target_domain = category_feature_domain(
+                language,
+                externals,
+                registry,
+                target_category,
+                &binding.feature,
+            );
             if target_domain.is_none() {
                 report.push(
                     Diagnostic::new(
@@ -1092,8 +1102,13 @@ fn validate_typed_schemas(
                     );
                     continue;
                 };
-                let source_domain =
-                    category_feature_domain(language, externals, registry, source_category, &source_feature);
+                let source_domain = category_feature_domain(
+                    language,
+                    externals,
+                    registry,
+                    source_category,
+                    &source_feature,
+                );
                 if source_domain.is_none() {
                     report.push(
                         Diagnostic::new(
@@ -1193,22 +1208,22 @@ fn validate_typed_schemas(
                         .any(|candidate| !declaration.values.contains(candidate)) =>
                 {
                     report.push(
-                    Diagnostic::new(
-                        Severity::Error,
-                        "FEATURE_VALUE_OUT_OF_DOMAIN",
-                        format!(
-                            "{owner:?} assigns {:?} outside enum({}) for {}.{}",
-                            value.values.join(" | "),
-                            declaration.values.join(", "),
-                            value.dim.keyword(),
-                            value.name
-                        ),
-                    )
-                    .with_sources(vec![DiagnosticSource {
-                        owner: owner.clone(),
-                        path: Some(format!("{}.{}", value.dim.keyword(), value.name)),
-                        location: value.source,
-                    }]),
+                        Diagnostic::new(
+                            Severity::Error,
+                            "FEATURE_VALUE_OUT_OF_DOMAIN",
+                            format!(
+                                "{owner:?} assigns {:?} outside enum({}) for {}.{}",
+                                value.values.join(" | "),
+                                declaration.values.join(", "),
+                                value.dim.keyword(),
+                                value.name
+                            ),
+                        )
+                        .with_sources(vec![DiagnosticSource {
+                            owner: owner.clone(),
+                            path: Some(format!("{}.{}", value.dim.keyword(), value.name)),
+                            location: value.source,
+                        }]),
                     )
                 }
                 Some(_) => {}
@@ -1489,6 +1504,12 @@ fn validate_typed_schemas(
             }
         }
 
+        // B2:純規則分支的 base 是 sign 的深層形。`effective` 已含繼承,故這裡
+        // 看到的就是分支實際拿得到的東西。
+        let has_deep_template = effective
+            .items
+            .iter()
+            .any(|item| matches!(item, SignItem::Def(def) if def.path == "phon"));
         for realization in effective.items.iter().filter_map(|item| match item {
             SignItem::Realization(realization) => Some(realization),
             _ => None,
@@ -1544,7 +1565,20 @@ fn validate_typed_schemas(
                                 });
                                 match base {
                                     Some(template) => template,
-                                    None => continue,
+                                    None => {
+                                        if !has_deep_template {
+                                            report.push(Diagnostic::new(
+                                                Severity::Error,
+                                                "REALIZATION_RULE_WITHOUT_BASE",
+                                                format!(
+                                                    "{owner:?} phon case branch carries rules but \
+                                                     has no base: neither the branch nor the sign \
+                                                     declares a `/…/` template for them to change"
+                                                ),
+                                            ));
+                                        }
+                                        continue;
+                                    }
                                 }
                             }
                             _ => {
@@ -1572,6 +1606,17 @@ fn validate_typed_schemas(
                         let Some(inner) = inner else {
                             continue;
                         };
+                        if let Some((left, right)) = fused_reference_pair(inner) {
+                            report.push(Diagnostic::new(
+                                Severity::Warning,
+                                "TEMPLATE_ADJACENT_SLOTS_FUSED",
+                                format!(
+                                    "{owner:?} template puts {left:?} and {right:?} side by side \
+                                     with nothing between them — they fuse into one morph. If they \
+                                     are two morphemes, write `+` between them (P96)"
+                                ),
+                            ));
+                        }
                         match template_references(inner) {
                             Ok(references) => {
                                 for reference in references {
@@ -1802,7 +1847,16 @@ fn validate_fp_expressions(
             SignItem::RoleDecl(_) | SignItem::RoleBinding(_) | SignItem::RoleExpression(_) => {
                 dim == Dim::Sem
             }
-            SignItem::TraitMount { kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_), .. } | SignItem::TraitMount { name: _, kind: crate::TraitMountKind::Declaration, .. } | SignItem::Realization(_) => false,
+            SignItem::TraitMount {
+                kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_),
+                ..
+            }
+            | SignItem::TraitMount {
+                name: _,
+                kind: crate::TraitMountKind::Declaration,
+                ..
+            }
+            | SignItem::Realization(_) => false,
         }
     }
 
@@ -2024,7 +2078,11 @@ fn validate_fp_expressions(
                     }
                     for item in items {
                         match item {
-                            SignItem::TraitMount { name: category, kind: crate::TraitMountKind::Declaration, .. }
+                            SignItem::TraitMount {
+                                name: category,
+                                kind: crate::TraitMountKind::Declaration,
+                                ..
+                            }
                             | SignItem::TraitMount { name: category, .. }
                                 if !registry.has(category) =>
                             {
@@ -2210,6 +2268,21 @@ fn validate_fp_expressions(
     }
 }
 
+/// B1:模板裡兩個引用**緊鄰、中間無任何字元**時,回傳那一對的名字。
+///
+/// 這是「兩個詞素黏成一個」的徵兆:`expand_phon_template` 是純字串代換,
+/// `build_phrase` 只會看到一串音段、沒有詞素縫,`@stage word` 規則因此無從命中。
+///
+/// **Warning 而非 Error**:融合本身合法——非串接形態就要這樣寫
+/// (阿拉伯語詞根 `/{$slot.c1}a{$slot.c2}a{$slot.c3}a/` 是三個槽一個詞素)。
+/// 引擎不推斷詞素結構(P96),只在看起來像漏寫時出聲。
+fn fused_reference_pair(inner: &str) -> Option<(String, String)> {
+    let at = inner.find("}{")?;
+    let left = inner[..at].rsplit('{').next()?.trim().to_owned();
+    let right = inner[at + 2..].split('}').next()?.trim().to_owned();
+    Some((left, right))
+}
+
 fn template_references(template: &str) -> Result<Vec<String>, String> {
     let mut references = Vec::new();
     let mut chars = template.char_indices().peekable();
@@ -2357,22 +2430,34 @@ fn validate_constructions_and_local_phon(
                     "CONSTRUCTION_PHON_MISSING",
                     format!("construction {:?} has no phon template", effective.name),
                 )),
-                Some(value) => match template_references(
-                    value
+                Some(value) => {
+                    let inner = value
                         .strip_prefix('/')
                         .and_then(|inner| inner.strip_suffix('/'))
-                        .unwrap_or(&value),
-                ) {
-                    Err(error) => report.push(Diagnostic::new(
-                        Severity::Error,
-                        "CONSTRUCTION_TEMPLATE_INVALID",
-                        format!("construction {:?}: {error}", effective.name),
-                    )),
-                    Ok(references) => {
-                        for reference in references {
-                            used_slots.insert(reference.clone());
-                            if !slot_names.contains(&reference.as_str()) {
-                                report.push(Diagnostic::new(
+                        .unwrap_or(&value);
+                    if let Some((left, right)) = fused_reference_pair(inner) {
+                        report.push(Diagnostic::new(
+                            Severity::Warning,
+                            "TEMPLATE_ADJACENT_SLOTS_FUSED",
+                            format!(
+                                "construction {:?} template puts {left:?} and {right:?} side by \
+                                 side with nothing between them — they fuse into one morph. If \
+                                 they are two morphemes, write `+` between them (P96)",
+                                effective.name
+                            ),
+                        ));
+                    }
+                    match template_references(inner) {
+                        Err(error) => report.push(Diagnostic::new(
+                            Severity::Error,
+                            "CONSTRUCTION_TEMPLATE_INVALID",
+                            format!("construction {:?}: {error}", effective.name),
+                        )),
+                        Ok(references) => {
+                            for reference in references {
+                                used_slots.insert(reference.clone());
+                                if !slot_names.contains(&reference.as_str()) {
+                                    report.push(Diagnostic::new(
                                     Severity::Error,
                                     "CONSTRUCTION_TEMPLATE_UNKNOWN_SLOT",
                                     format!(
@@ -2380,10 +2465,11 @@ fn validate_constructions_and_local_phon(
                                         effective.name
                                     ),
                                 ));
+                                }
                             }
                         }
                     }
-                },
+                }
             }
             for realization in effective.items.iter().filter_map(|item| match item {
                 SignItem::Realization(realization) => Some(realization),
@@ -3329,12 +3415,16 @@ impl CompiledSystem {
             (reference::Subject::SelfSign, _, _) => {
                 let path = read.dim_path().expect("SCRUTINEE requires a dimension");
                 match Self::value_set_from_value(value, &path) {
-                    Some(values) if values.len() > 1 => Err(SystemError::InvalidSignExpression(format!(
+                    Some(values) if values.len() > 1 => {
+                        Err(SystemError::InvalidSignExpression(format!(
                         "{path} is undecided ({}); decide it on the sign or let a construction \
                          narrow it before testing it with `==`",
                         values.join(" | ")
-                    ))),
-                    other => Ok(other.as_deref() == Some(std::slice::from_ref(&expected.to_owned()))),
+                    )))
+                    }
+                    other => {
+                        Ok(other.as_deref() == Some(std::slice::from_ref(&expected.to_owned())))
+                    }
                 }
             }
             _ => Err(SystemError::InvalidSignExpression(format!(
@@ -3604,10 +3694,15 @@ impl CompiledSystem {
         stack: &[String],
         rules: &mut Vec<UnitRuleRecord>,
     ) -> Result<SignValue, SystemError> {
-        if items
-            .iter()
-            .any(|item| matches!(item, SignItem::TraitMount { kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_), .. }))
-        {
+        if items.iter().any(|item| {
+            matches!(
+                item,
+                SignItem::TraitMount {
+                    kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_),
+                    ..
+                }
+            )
+        }) {
             return Err(SystemError::InvalidSignExpression(
                 "unexpanded trait use reached a SignContext fragment".to_owned(),
             ));
@@ -4289,6 +4384,9 @@ impl CompiledSystem {
     ) -> Result<(String, Option<usize>, SourceLocation), SystemError> {
         let current = SignValue::Applied(token.clone());
         for (index, branch) in case.branches.iter().enumerate() {
+            // B3:這一支帶了規則,卻對展開後的形毫無作用。分支既然是靠範疇選中的,
+            // 規則不動就表示範疇掛錯或規則環境寫錯——兩者都是靜默的錯。
+            let mut inert_rules = false;
             if !self.case_condition_matches(&current, case, &branch.condition)? {
                 cases.push(CaseRecord {
                     selection: case.selection,
@@ -4357,7 +4455,9 @@ impl CompiledSystem {
                     if rules.is_empty() {
                         expanded
                     } else {
-                        self.apply_realization_rules(&expanded, &rules)?
+                        let changed = self.apply_realization_rules(&expanded, &rules)?;
+                        inert_rules = changed == expanded;
+                        changed
                     }
                 }
                 Expression::Case(nested) => {
@@ -4375,7 +4475,7 @@ impl CompiledSystem {
                 branch: index,
                 status: CaseBranchStatus::Matched,
                 source: branch.source,
-                diagnostic_code: None,
+                diagnostic_code: inert_rules.then_some("REALIZATION_RULES_INERT"),
             });
             return Ok((input, Some(index), branch.source));
         }

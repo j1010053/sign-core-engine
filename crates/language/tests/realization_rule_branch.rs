@@ -58,7 +58,10 @@ sign sing:\n\
     assert_eq!(case.branches.len(), 2);
 
     let Expression::DimFragment { dim, items } = &case.branches[0].result else {
-        panic!("多行 phon 分支應為 DimFragment,得到 {:?}", case.branches[0].result);
+        panic!(
+            "多行 phon 分支應為 DimFragment,得到 {:?}",
+            case.branches[0].result
+        );
     };
     assert_eq!(*dim, Dim::Phon);
     assert!(
@@ -145,6 +148,11 @@ sign sin:
     phon:
         /sin/
 
+sign sang:
+    belongs TestAblaut
+    phon:
+        /sang/
+
 sign PastForm:
     syn:
         slots:
@@ -196,4 +204,50 @@ fn a_rule_branch_round_trips() {
     );
     let reparsed = Language::parse(&dumped).expect("re-parses");
     assert_eq!(reparsed.dump(), dumped, "dump 應為不動點:\n{dumped}");
+}
+
+/// B3:分支靠範疇選中,規則卻對這個形毫無作用 —— 範疇掛錯或環境寫錯,
+/// 兩者都是靜默的。`sang` 掛著 `[TestAblaut]` 但沒有 `i` 可換。
+#[test]
+fn a_branch_whose_rules_do_nothing_is_flagged() {
+    let language = Language::parse(PAST_FORM).expect("parses");
+    let system = compile_system(language).expect("compiles");
+    let derivation = system
+        .derive(
+            "PastForm",
+            &[SlotFiller::sign("stem", "sang")],
+            &SlotMap::identity(),
+        )
+        .expect("derives");
+    assert_eq!(derivation.surface, "sang", "規則無作用,形不變");
+    assert!(
+        derivation
+            .cases
+            .iter()
+            .any(|record| record.diagnostic_code == Some("REALIZATION_RULES_INERT")),
+        "應標記規則無作用: {:?}",
+        derivation.cases
+    );
+}
+
+/// 對照組:規則真的動了就不標記。
+#[test]
+fn a_branch_whose_rules_fire_is_not_flagged() {
+    let language = Language::parse(PAST_FORM).expect("parses");
+    let system = compile_system(language).expect("compiles");
+    let derivation = system
+        .derive(
+            "PastForm",
+            &[SlotFiller::sign("stem", "sing")],
+            &SlotMap::identity(),
+        )
+        .expect("derives");
+    assert!(
+        !derivation
+            .cases
+            .iter()
+            .any(|record| record.diagnostic_code == Some("REALIZATION_RULES_INERT")),
+        "規則有作用不該標記: {:?}",
+        derivation.cases
+    );
 }

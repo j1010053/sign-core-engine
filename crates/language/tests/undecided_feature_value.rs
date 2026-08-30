@@ -41,7 +41,10 @@ sign fish:
 fn an_undecided_value_set_parses_and_round_trips() {
     let dump = parse(FISH).dump();
     assert_eq!(parse(&dump).dump(), dump, "多值賦值必須 round-trip 恆等");
-    assert_eq!(feature_values(FISH, "fish", "number"), ["singular", "plural"]);
+    assert_eq!(
+        feature_values(FISH, "fish", "number"),
+        ["singular", "plural"]
+    );
 }
 
 /// 控制組:已定案的單值 canonical form **逐位元不變**。這條在的理由是 library

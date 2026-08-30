@@ -92,9 +92,7 @@ fn merge_value(
     *counter += 1;
     let index = *counter;
     match (acc.get_mut(&key), &item) {
-        (Some((_, SignItem::FeatureValue(kept))), SignItem::FeatureValue(incoming))
-            if sibling =>
-        {
+        (Some((_, SignItem::FeatureValue(kept))), SignItem::FeatureValue(incoming)) if sibling => {
             for candidate in &incoming.values {
                 if !kept.values.contains(candidate) {
                     kept.values.push(candidate.clone());
@@ -130,7 +128,12 @@ fn trait_belongs(t: &TraitDef) -> Vec<String> {
     let mut out = Vec::new();
     for b in &t.blocks {
         for it in &b.items {
-            if let SignItem::TraitMount { name: name, kind: crate::TraitMountKind::Declaration, .. } = it {
+            if let SignItem::TraitMount {
+                name: name,
+                kind: crate::TraitMountKind::Declaration,
+                ..
+            } = it
+            {
                 if seen.insert(name.clone()) {
                     out.push(name.clone());
                 }
@@ -156,11 +159,22 @@ fn trait_items(t: &TraitDef) -> Vec<SignItem> {
     t.blocks
         .iter()
         .flat_map(|block| block.items.iter())
-        .filter(|item| !matches!(item, SignItem::TraitMount { name: _, kind: crate::TraitMountKind::Declaration, .. } | SignItem::TraitMount { kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_), .. }))
+        .filter(|item| {
+            !matches!(
+                item,
+                SignItem::TraitMount {
+                    name: _,
+                    kind: crate::TraitMountKind::Declaration,
+                    ..
+                } | SignItem::TraitMount {
+                    kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_),
+                    ..
+                }
+            )
+        })
         .cloned()
         .collect()
 }
-
 
 /// `pass` / 空塊 / `marker` 三條塊形狀規則。
 ///
@@ -202,10 +216,12 @@ pub(crate) fn belongs_reference_diagnostics(langs: &[&Language]) -> Vec<Diagnost
     for lang in langs {
         for def in &lang.traits {
             let has_content = !def.marker
-                && def
-                    .blocks
-                    .iter()
-                    .any(|block| block.items.iter().any(|item| !matches!(item, SignItem::Pass)));
+                && def.blocks.iter().any(|block| {
+                    block
+                        .items
+                        .iter()
+                        .any(|item| !matches!(item, SignItem::Pass))
+                });
             content_bearing.insert(def.name.as_str(), has_content);
         }
     }
@@ -215,14 +231,22 @@ pub(crate) fn belongs_reference_diagnostics(langs: &[&Language]) -> Vec<Diagnost
         let used: BTreeSet<&str> = items
             .iter()
             .filter_map(|item| match item {
-                SignItem::TraitMount { name, kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_), .. } => Some(name.as_str()),
+                SignItem::TraitMount {
+                    name,
+                    kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_),
+                    ..
+                } => Some(name.as_str()),
                 _ => None,
             })
             .collect();
         let declared: BTreeSet<&str> = items
             .iter()
             .filter_map(|item| match item {
-                SignItem::TraitMount { name: name, kind: crate::TraitMountKind::Declaration, .. } => Some(name.as_str()),
+                SignItem::TraitMount {
+                    name: name,
+                    kind: crate::TraitMountKind::Declaration,
+                    ..
+                } => Some(name.as_str()),
                 _ => None,
             })
             .collect();
@@ -249,14 +273,23 @@ pub(crate) fn belongs_reference_diagnostics(langs: &[&Language]) -> Vec<Diagnost
             }
         }
         for item in items {
-            let SignItem::TraitMount { name: target, kind: crate::TraitMountKind::Declaration, .. } = item else {
+            let SignItem::TraitMount {
+                name: target,
+                kind: crate::TraitMountKind::Declaration,
+                ..
+            } = item
+            else {
                 continue;
             };
             if used.contains(target.as_str()) {
                 continue;
             }
             // 未知 trait 由 `ONTOLOGY_UNKNOWN_TRAIT` 負責;這裡不重複報。
-            if content_bearing.get(target.as_str()).copied().unwrap_or(false) {
+            if content_bearing
+                .get(target.as_str())
+                .copied()
+                .unwrap_or(false)
+            {
                 out.push(Diagnostic::new(
                     Severity::Warning,
                     "BELONGS_WITHOUT_REFERENCE",
@@ -311,10 +344,7 @@ fn block_shape_diagnostics(langs: &[&Language]) -> Vec<Diagnostic> {
                         out.push(Diagnostic::new(
                             Severity::Error,
                             "TYPE_PARAM_DUPLICATE_NAME",
-                            format!(
-                                "trait {:?} 的型別參數 {:?} 重複宣告",
-                                def.name, p.name
-                            ),
+                            format!("trait {:?} 的型別參數 {:?} 重複宣告", def.name, p.name),
                         ));
                     }
                 }
@@ -416,7 +446,12 @@ impl OntologyRegistry {
         for lang in langs {
             for s in &lang.signs {
                 for it in &s.items {
-                    if let SignItem::TraitMount { name: target, kind: crate::TraitMountKind::Declaration, .. } = it {
+                    if let SignItem::TraitMount {
+                        name: target,
+                        kind: crate::TraitMountKind::Declaration,
+                        ..
+                    } = it
+                    {
                         if !reg.tree.contains_key(target) {
                             diags.push(OntologyDiag::UnknownTrait {
                                 referrer: s.name.clone(),
@@ -531,7 +566,11 @@ impl OntologyRegistry {
             .items
             .iter()
             .filter_map(|item| match item {
-                SignItem::TraitMount { name: name, kind: crate::TraitMountKind::Declaration, .. } if self.has(name) => Some(name.clone()),
+                SignItem::TraitMount {
+                    name: name,
+                    kind: crate::TraitMountKind::Declaration,
+                    ..
+                } if self.has(name) => Some(name.clone()),
                 _ => None,
             })
             .collect();
@@ -794,7 +833,6 @@ impl OntologyRegistry {
             _ => None,
         });
 
-
         // 繼承段已在 `inherited_values` 逐包解析完;本地值一律取代(P6 最高階)。
         let mut value_acc = BTreeMap::new();
         let mut value_counter = 0usize;
@@ -940,7 +978,16 @@ impl OntologyRegistry {
         let mut items: Vec<SignItem> = sign
             .items
             .iter()
-            .filter(|item| matches!(item, SignItem::TraitMount { name: _, kind: crate::TraitMountKind::Declaration, .. }))
+            .filter(|item| {
+                matches!(
+                    item,
+                    SignItem::TraitMount {
+                        name: _,
+                        kind: crate::TraitMountKind::Declaration,
+                        ..
+                    }
+                )
+            })
             .cloned()
             .collect();
         items.extend(senses.into_iter().map(|(_, sense)| SignItem::Sense(sense)));
@@ -1055,7 +1102,11 @@ impl OntologyRegistry {
                     .map(|trait_def| SignDef {
                         id: crate::SignId::synthetic(),
                         name: trait_def.name.clone(),
-                        items: vec![SignItem::TraitMount { name: trait_def.name.clone(), kind: crate::TraitMountKind::Declaration, args: vec![] }],
+                        items: vec![SignItem::TraitMount {
+                            name: trait_def.name.clone(),
+                            kind: crate::TraitMountKind::Declaration,
+                            args: vec![],
+                        }],
                     }),
             );
             for sign in &candidates {
@@ -1388,7 +1439,12 @@ impl OntologyRegistry {
         let mut seen = BTreeSet::new();
         let mut out = Vec::new();
         for it in &sign.items {
-            if let SignItem::TraitMount { name: target, kind: crate::TraitMountKind::Declaration, .. } = it {
+            if let SignItem::TraitMount {
+                name: target,
+                kind: crate::TraitMountKind::Declaration,
+                ..
+            } = it
+            {
                 if self.has(target) {
                     for c in self.closure(target) {
                         if seen.insert(c.clone()) {

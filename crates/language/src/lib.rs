@@ -69,13 +69,12 @@ pub use semantic_dto::{
 pub use stdlib::{StdExport, StdExportKind, StdLoadError, StdPackage};
 pub use system::{
     check_document, check_document_with_packages, check_language, check_language_with_libraries,
-    check_language_with_packages, compile_document, compile_document_with_packages,
-    compile_system, compile_system_ref, compile_with_libraries, compile_with_libraries_ref,
-    compile_with_packages_ref,
-    CandidateSelectionTrace, CandidateSelector, CandidateSet, CaseBranchStatus, CaseRecord,
-    CompileSystemError, CompiledSystem, ConstructionCandidate, DerivationContext, EvaluatedToken,
-    PhonRealization, COMPILER_SEMANTICS_VERSION,
-    RealizedPhonInput, SignExpressionEvaluation, SignValue, SystemDerivation, SystemError,
+    check_language_with_packages, compile_document, compile_document_with_packages, compile_system,
+    compile_system_ref, compile_with_libraries, compile_with_libraries_ref,
+    compile_with_packages_ref, CandidateSelectionTrace, CandidateSelector, CandidateSet,
+    CaseBranchStatus, CaseRecord, CompileSystemError, CompiledSystem, ConstructionCandidate,
+    DerivationContext, EvaluatedToken, PhonRealization, RealizedPhonInput,
+    SignExpressionEvaluation, SignValue, SystemDerivation, SystemError, COMPILER_SEMANTICS_VERSION,
 };
 pub use tshiatun_dsl::lower::Stage;
 
@@ -432,7 +431,9 @@ impl DerivationKind {
 /// 註:15a 造出了表面語法(`sem: edges:` 的 `opaque` 尾綴)卻尚無消費者,
 /// 這一點繞過了《共時lang語法與資料貼合度》「不先造無消費者語法」的原則;
 /// 保留現狀是為了讓實例 7 落地時四案有共同著力點。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum SenseTransparency {
     #[default]
@@ -923,9 +924,7 @@ impl SlotConstraint {
     ) -> bool {
         match self {
             SlotConstraint::AnySign => true,
-            SlotConstraint::Category(required) => {
-                registry.categories_satisfy(categories, required)
-            }
+            SlotConstraint::Category(required) => registry.categories_satisfy(categories, required),
         }
     }
 

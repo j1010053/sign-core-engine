@@ -40,7 +40,10 @@ fn an_author_invented_def_path_is_rejected_and_points_at_feature() {
         message.contains("feature:"),
         "訊息要指路到 `feature:`:{message}"
     );
-    assert!(message.contains("syn.category"), "訊息要指出是哪條路徑:{message}");
+    assert!(
+        message.contains("syn.category"),
+        "訊息要指出是哪條路徑:{message}"
+    );
 }
 
 /// 三個維度都關,不是只關 syn。
@@ -89,11 +92,17 @@ fn sign_metadata_paths_are_unaffected() {
 #[test]
 fn gloss_is_no_longer_a_legal_def_path_or_rule_target() {
     assert!(
-        has("sign s:\n    sem:\n        gloss = BOOK\n", "DEF_INVALID_PATH_OR_VALUE"),
+        has(
+            "sign s:\n    sem:\n        gloss = BOOK\n",
+            "DEF_INVALID_PATH_OR_VALUE"
+        ),
         "gloss 已併入 senses,不得再當 Def"
     );
     assert!(
-        has("sign s:\n    sem:\n        gloss => HOUND\n", "RULE_TARGET_NOT_ALLOWED"),
+        has(
+            "sign s:\n    sem:\n        gloss => HOUND\n",
+            "RULE_TARGET_NOT_ALLOWED"
+        ),
         "A2:gloss 不得作為規則目標"
     );
     // 正向控制組:義項的正解寫法必須通過
@@ -162,8 +171,14 @@ fn a_guard_reading_an_invented_path_is_rejected_and_points_at_feature() {
         .iter()
         .find(|(code, _)| code == "RULE_GUARD_NOT_ALLOWED")
         .unwrap_or_else(|| panic!("guard 路徑未受封閉清單約束:{found:?}"));
-    assert!(message.contains("syn.bogus"), "訊息要指出是哪條路徑:{message}");
-    assert!(message.contains("feature:"), "訊息要指路到 `feature:`:{message}");
+    assert!(
+        message.contains("syn.bogus"),
+        "訊息要指出是哪條路徑:{message}"
+    );
+    assert!(
+        message.contains("feature:"),
+        "訊息要指路到 `feature:`:{message}"
+    );
 }
 
 /// 裸欄位守衛 = 本規則維度上的 `$self` 讀取,同樣受約束。
@@ -307,7 +322,10 @@ fn a_value_reading_an_invented_self_path_is_rejected_and_points_at_feature() {
         .find(|(code, _)| code == "RULE_VALUE_NOT_ALLOWED")
         .unwrap_or_else(|| panic!("值表達式的讀取未受約束:{found:?}"));
     assert!(message.contains("syn.bogus"), "{message}");
-    assert!(message.contains("feature:"), "訊息要指路到 `feature:`:{message}");
+    assert!(
+        message.contains("feature:"),
+        "訊息要指路到 `feature:`:{message}"
+    );
 }
 
 /// slot 讀取用語言全域宣告集(與 D3 同一檔)。
@@ -386,7 +404,11 @@ fn branch_values_and_both_rule_kinds_are_checked() {
 #[test]
 fn trait_value_reads_use_the_language_wide_set() {
     let sibling = "trait L:\n    syn:\n        feature:\n            left = enum(yes)\ntrait R:\n    syn:\n        feature:\n            right = enum(yes)\n            right => $self.syn.left\nsign s:\n    belongs L\n    belongs R\n";
-    assert!(!has(sibling, "RULE_VALUE_NOT_ALLOWED"), "{:?}", errors(sibling));
+    assert!(
+        !has(sibling, "RULE_VALUE_NOT_ALLOWED"),
+        "{:?}",
+        errors(sibling)
+    );
     assert!(has(
         "trait R:\n    syn:\n        feature:\n            right = enum(yes)\n            right => $self.syn.nowhere\n",
         "RULE_VALUE_NOT_ALLOWED"
@@ -412,7 +434,8 @@ fn feature_assignments_keep_their_two_checks() {
         "值超出值域要報 FEATURE_VALUE_OUT_OF_DOMAIN"
     );
     // 正向控制組:宣告過、值在域內 → 乾淨
-    let clean = "sign s:\n    syn:\n        feature:\n            n = enum(sg, pl)\n            n = pl\n";
+    let clean =
+        "sign s:\n    syn:\n        feature:\n            n = enum(sg, pl)\n            n = pl\n";
     assert!(
         !has(clean, "FEATURE_UNDECLARED") && !has(clean, "FEATURE_VALUE_OUT_OF_DOMAIN"),
         "{:?}",

@@ -944,7 +944,9 @@ fn validate_realization_conjuncts(
         .split("&&")
         .map(str::trim)
         .filter(|part| !part.is_empty())
-        .try_for_each(|part| validate_realization_guard(part, registry, slots, self_features, filler_features))
+        .try_for_each(|part| {
+            validate_realization_guard(part, registry, slots, self_features, filler_features)
+        })
 }
 
 /// 求值環境裡的具名綁定(P91):`$x` → 一個 sign。`.lang` 側恆為空。
@@ -1513,8 +1515,11 @@ fn token_sign(token: &crate::construction::DerivedToken) -> SignDef {
         .filter(|item| {
             matches!(
                 item,
-                SignItem::TraitMount { name: _, kind: crate::TraitMountKind::Declaration, .. }
-                    | SignItem::Slot(_)
+                SignItem::TraitMount {
+                    name: _,
+                    kind: crate::TraitMountKind::Declaration,
+                    ..
+                } | SignItem::Slot(_)
                     | SignItem::FeatureDecl(_)
                     | SignItem::RoleDecl(_)
                     | SignItem::RoleBinding(_)
@@ -1747,8 +1752,11 @@ pub fn run_token_dim_rules(
         .filter(|item| {
             matches!(
                 item,
-                SignItem::TraitMount { name: _, kind: crate::TraitMountKind::Declaration, .. }
-                    | SignItem::Slot(_)
+                SignItem::TraitMount {
+                    name: _,
+                    kind: crate::TraitMountKind::Declaration,
+                    ..
+                } | SignItem::Slot(_)
                     | SignItem::FeatureDecl(_)
                     | SignItem::RoleDecl(_)
                     | SignItem::RoleBinding(_)
