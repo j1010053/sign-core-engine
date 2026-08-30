@@ -1422,7 +1422,11 @@ fn update_payload(
         }
         (NodeKind::Belongs, NodeUpdate::Belongs(value)) => {
             let (name, args) = parse_belongs_target(&value);
-            *item_at_address_mut(language, &node.address)? = SignItem::TraitMount { name, kind: conlang_language::TraitMountKind::Declaration, args };
+            *item_at_address_mut(language, &node.address)? = SignItem::TraitMount {
+                name,
+                kind: conlang_language::TraitMountKind::Declaration,
+                args,
+            };
             Ok(Some("belongs".to_owned()))
         }
         (NodeKind::FeatureDeclaration, NodeUpdate::FeatureDeclaration(value)) => {
@@ -1832,8 +1836,16 @@ fn address_list_position(address: &NodeAddress) -> Result<(ListKey, usize), Edit
 fn item_kind(item: &SignItem) -> NodeKind {
     match item {
         SignItem::Pass => NodeKind::Pass,
-        SignItem::TraitMount { kind: conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_), .. } => NodeKind::TraitUse,
-        SignItem::TraitMount { name: _, kind: conlang_language::TraitMountKind::Declaration, .. } => NodeKind::Belongs,
+        SignItem::TraitMount {
+            kind:
+                conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_),
+            ..
+        } => NodeKind::TraitUse,
+        SignItem::TraitMount {
+            name: _,
+            kind: conlang_language::TraitMountKind::Declaration,
+            ..
+        } => NodeKind::Belongs,
         SignItem::Slot(_) => NodeKind::Slot,
         SignItem::SlotMap(_) => NodeKind::SlotMap,
         SignItem::FeatureDecl(_) => NodeKind::FeatureDeclaration,
@@ -3364,7 +3376,9 @@ fn parse_trait_use_target(value: &str) -> Result<NodeUpdate, ReplayError> {
         });
     };
     let index = rest.strip_suffix(']').ok_or_else(|| {
-        ReplayError::Selector(format!("trait use target must be `Name[n]` or `Name`, got {value:?}"))
+        ReplayError::Selector(format!(
+            "trait use target must be `Name[n]` or `Name`, got {value:?}"
+        ))
     })?;
     let block = index.trim().parse::<u32>().map_err(|_| {
         ReplayError::Selector(format!("trait use block must be a number, got {index:?}"))
@@ -4068,8 +4082,10 @@ fn dump_update(change: &NodeUpdate) -> Option<(&'static str, String)> {
 /// (`Session::save_working_copy`),靜默丟棄等於存出一份**不等於記憶體狀態**的
 /// `.chg`——replay 回來會少那些編輯,而 base digest 驗的是基底不是結果,擋不到。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("CHANGESET_DUMP_UNREPRESENTABLE: {kind} 的這種改動排不成 `.chg` 的一行 `field = value`;\
-         它的酬載是結構,需要先給它表面語法")]
+#[error(
+    "CHANGESET_DUMP_UNREPRESENTABLE: {kind} 的這種改動排不成 `.chg` 的一行 `field = value`;\
+         它的酬載是結構,需要先給它表面語法"
+)]
 pub struct DumpError {
     /// 排不出來的那種 update(`NodeUpdate` 的變體名)。
     pub kind: &'static str,
@@ -4807,8 +4823,16 @@ fn item_group(item: &SignItem) -> u16 {
     match item {
         // `pass` 與內容互斥(驗證擋),故與 `belongs` 同組不會造成排序歧義
         SignItem::Pass => 0,
-        SignItem::TraitMount { name: _, kind: conlang_language::TraitMountKind::Declaration, .. } => 0,
-        SignItem::TraitMount { kind: conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_), .. } => 1,
+        SignItem::TraitMount {
+            name: _,
+            kind: conlang_language::TraitMountKind::Declaration,
+            ..
+        } => 0,
+        SignItem::TraitMount {
+            kind:
+                conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_),
+            ..
+        } => 1,
         SignItem::Def(def) if def_dimension(&def.path).is_none() => 2,
         SignItem::Slot(_) => dim_base(Dim::Syn),
         SignItem::SlotFeatureBinding(_) => dim_base(Dim::Syn) + 1,
@@ -5869,7 +5893,11 @@ fn slot_rename_scope(
                 let probe = SignDef {
                     id: conlang_language::SignId::synthetic(),
                     name: "__slot_rename_probe".to_owned(),
-                    items: vec![SignItem::TraitMount { name: trait_def.name.clone(), kind: conlang_language::TraitMountKind::Declaration, args: vec![] }],
+                    items: vec![SignItem::TraitMount {
+                        name: trait_def.name.clone(),
+                        kind: conlang_language::TraitMountKind::Declaration,
+                        args: vec![],
+                    }],
                 };
                 let inherited_owner = registry
                     .inheritance_order(&probe)
@@ -6009,8 +6037,16 @@ fn rewrite_local_slot_refs_in_items(items: &mut [SignItem], old: &str, new: &str
             SignItem::RoleExpression(expression) => {
                 rewrite_local_slot_refs_in_expression(&mut expression.expression, old, new)
             }
-            SignItem::TraitMount { kind: conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_), .. }
-            | SignItem::TraitMount { name: _, kind: conlang_language::TraitMountKind::Declaration, .. }
+            SignItem::TraitMount {
+                kind:
+                    conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_),
+                ..
+            }
+            | SignItem::TraitMount {
+                name: _,
+                kind: conlang_language::TraitMountKind::Declaration,
+                ..
+            }
             | SignItem::RoleDecl(_)
             | SignItem::RoleBinding(_) => {}
         }
@@ -6090,16 +6126,14 @@ fn rewrite_application_parameters_in_items(
                 new,
             ),
             SignItem::Realization(realization) => {
-                {
-                    let case = &mut realization.expression;
-                    for branch in &mut case.branches {
-                        rewrite_application_parameters_in_expression(
-                            &mut branch.result,
-                            callees,
-                            old,
-                            new,
-                        );
-                    }
+                let case = &mut realization.expression;
+                for branch in &mut case.branches {
+                    rewrite_application_parameters_in_expression(
+                        &mut branch.result,
+                        callees,
+                        old,
+                        new,
+                    );
                 }
             }
             _ => {}
@@ -6185,10 +6219,8 @@ fn rewrite_sign_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
                 rewrite_sign_refs_in_expression(&mut expression.expression, old, new)
             }
             SignItem::Realization(realization) => {
-                {
-                    let case = &mut realization.expression;
-                    rewrite_sign_refs_in_case(case, old, new);
-                }
+                let case = &mut realization.expression;
+                rewrite_sign_refs_in_case(case, old, new);
             }
             _ => {}
         }
@@ -6237,9 +6269,17 @@ fn rewrite_trait_refs(language: &mut Language, old: &str, new: &str) {
 fn rewrite_trait_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
     for item in items {
         match item {
-            SignItem::TraitMount { name, kind: conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_), .. } | SignItem::TraitMount { name: name, kind: conlang_language::TraitMountKind::Declaration, .. } if name == old => {
-                *name = new.to_owned()
+            SignItem::TraitMount {
+                name,
+                kind:
+                    conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_),
+                ..
             }
+            | SignItem::TraitMount {
+                name: name,
+                kind: conlang_language::TraitMountKind::Declaration,
+                ..
+            } if name == old => *name = new.to_owned(),
             SignItem::Slot(slot) => {
                 if let SlotConstraint::Category(name) = &mut slot.constraint {
                     if name == old {
@@ -6264,10 +6304,8 @@ fn rewrite_trait_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
                 rewrite_trait_refs_in_expression(&mut expression.expression, old, new)
             }
             SignItem::Realization(realization) => {
-                {
-                    let case = &mut realization.expression;
-                    rewrite_trait_refs_in_case(case, old, new);
-                }
+                let case = &mut realization.expression;
+                rewrite_trait_refs_in_case(case, old, new);
             }
             _ => {}
         }

@@ -330,16 +330,17 @@ fn a_hand_edited_trait_use_reconstructs_into_a_readable_changeset() {
         .expect("回讀")
         .resolve(&before, &LibrarySpec::default())
         .expect("回讀後 resolve");
-    let replayed = ChangeInterpreter::new(
-        before.clone(),
-        LibrarySpec::default(),
-        "evo:m1".to_owned(),
-    )
-    .expect("interpreter")
-    .run(&round)
-    .expect("runs")
-    .document;
-    assert!(replayed.source().contains("Nouny[0]"), "{}", replayed.source());
+    let replayed =
+        ChangeInterpreter::new(before.clone(), LibrarySpec::default(), "evo:m1".to_owned())
+            .expect("interpreter")
+            .run(&round)
+            .expect("runs")
+            .document;
+    assert!(
+        replayed.source().contains("Nouny[0]"),
+        "{}",
+        replayed.source()
+    );
 }
 
 /// 裸 `Foo`(整個 trait,`block: None`)也要能來回。

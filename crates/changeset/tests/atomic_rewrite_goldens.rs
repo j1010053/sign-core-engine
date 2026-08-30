@@ -118,7 +118,11 @@ fn new_sign(name: &str, gloss: &str) -> SignDef {
         id: SignId::synthetic(),
         name: name.to_owned(),
         items: vec![
-            SignItem::TraitMount { name: "LocalNoun".to_owned(), kind: conlang_language::TraitMountKind::Declaration, args: vec![] },
+            SignItem::TraitMount {
+                name: "LocalNoun".to_owned(),
+                kind: conlang_language::TraitMountKind::Declaration,
+                args: vec![],
+            },
             SignItem::Sense(conlang_language::Sense {
                 name: "core".to_owned(),
                 gloss: gloss.to_owned(),

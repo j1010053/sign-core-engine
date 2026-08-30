@@ -95,7 +95,11 @@ fn insert_block_round_trips_through_dump() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    assert_eq!(round.dump().expect("dump"), dump, "dump→parse→resolve→dump 穩定");
+    assert_eq!(
+        round.dump().expect("dump"),
+        dump,
+        "dump→parse→resolve→dump 穩定"
+    );
 }
 
 /// §④:一個多 item block 展成 N 個 `Insert`(同 statement,只驗最終態),

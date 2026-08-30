@@ -112,7 +112,11 @@ fn new_sign(name: &str, gloss: &str) -> SignDef {
         id: SignId::synthetic(),
         name: name.to_owned(),
         items: vec![
-            SignItem::TraitMount { name: "LocalNoun".to_owned(), kind: conlang_language::TraitMountKind::Declaration, args: vec![] },
+            SignItem::TraitMount {
+                name: "LocalNoun".to_owned(),
+                kind: conlang_language::TraitMountKind::Declaration,
+                args: vec![],
+            },
             SignItem::Sense(conlang_language::Sense {
                 name: "core".to_owned(),
                 gloss: gloss.to_owned(),
@@ -275,7 +279,10 @@ fn reanalyze_refuses_multi_belongs_without_from() {
     )
     .expect_err("ambiguous");
     assert!(format!("{err}").contains("UNSUPPORTED"), "{err}");
-    assert!(format!("{err}").contains("from:"), "should suggest from: {err}");
+    assert!(
+        format!("{err}").contains("from:"),
+        "should suggest from: {err}"
+    );
 }
 
 /// 多 belongs + `from` 指定 → 只換指定的那一條。
@@ -299,15 +306,10 @@ fn reanalyze_with_from_replaces_the_specified_belongs() {
     .expect("from disambiguates");
     let mut doc = document;
     for edit in edits {
-        doc = apply_edit(&doc, edit, &spec)
-            .expect("applies")
-            .document;
+        doc = apply_edit(&doc, edit, &spec).expect("applies").document;
     }
     let lang = doc.source();
-    let both = lang
-        .split("sign both:")
-        .nth(1)
-        .expect("sign block");
+    let both = lang.split("sign both:").nth(1).expect("sign block");
     assert!(both.contains("belongs C"), "A should become C:\n{lang}");
     assert!(both.contains("belongs B"), "B should be untouched:\n{lang}");
     assert!(!both.contains("belongs A"), "A should be gone:\n{lang}");

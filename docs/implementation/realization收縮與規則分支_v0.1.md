@@ -168,12 +168,14 @@ material.phon = if let Some(realized) = token.realized_phon_input() { ... }  // 
 
 ### C. changeset / `.chg`
 
-| # | 位置 | 內容 |
-|---|---|---|
-| C1 | `lib.rs:5072` `root_case`/`root_case_mut` | 定址多一層:branch → rule |
-| C2 | 原語編輯 | 插入/更新/刪除分支內規則(`RuleId` 現成,containment 變了) |
-| C3 | `identity.rs` | 分支內規則進內容雜湊 |
-| C4 | `restore.chg` | 語料改動後 rebless |
+| # | 位置 | 內容 | 結果 |
+|---|---|---|---|
+| C1 | 定址 | branch → rule | **免費**:`enumerate_expression_node` 早已把 `SignFragment \| DimFragment` 的 items 當分支的直接子節點 |
+| C2 | 原語編輯 | 插入/更新/刪除分支內規則 | update/insert **可用**;delete 見 §5 缺陷 |
+| C3 | `identity.rs` | 分支內規則進內容雜湊 | **免費**,同 C1 |
+| C4 | `restore.chg` | 語料改動後 rebless | 本輪語料未動,**不需要**;若採 §5(a) 則需要 |
+
+C1/C3 免費得到,是 P93「不新增 `Expression` variant、改用既有 `DimFragment`」的直接回報。
 
 ### D. 語料遷移
 
@@ -258,6 +260,24 @@ sign is:
 
 這是**已知缺口,非疏漏**。補充形是 blocking 的詞彙層樣貌(儲存形阻斷派生形,Elsewhere
 Condition);可派生形態不需要填充者選擇,補充形需要。
+
+### 🔴 表示塌陷:刪掉 `(模板, [規則])` 的規則會 `ShapeMismatch`
+
+實作 C2 時發現。兩種表示的**節點結構不同**:單行 `/…/` 分支是純量 `PhonTemplate`
+(`enumerate_expression_node` 的 `_ => {}`,**不產生節點**),多行分支是 `DimFragment`
+(items 各自是節點)。刪掉規則後重新解析的 canonical 塌陷成純量,manifest 卻還記著
+`Items(0)`,兩者對不上。
+
+| 修法 | 得 | 失 |
+|---|---|---|
+| **(a) phon 分支一律 fragment** | 單一表示、模板到處可定址、編輯下穩定 | 每個帶模板的分支多一個節點 → `base_identities` 變動 → **需 rebless** |
+| **(b) 塌陷時正規化 AST 成純量** | 不必 rebless | 刪一個節點會**連帶**讓模板的節點消失——正是本專案一路在清的靜默結構副作用 |
+
+**傾向 (a)**;它同時讓 P93 那句「單行分支維持純量、表示逐位元不變」失效,要改寫。
+波及面已量:測試側只有 `realization_rule_branch.rs` 斷言 `PhonTemplate`,src 側 12 處。
+
+缺陷已釘在 `changeset/tests/realization_branch_rule_edits.rs` 的
+`deleting_the_last_rule_of_a_template_branch_is_a_known_defect`,免得被誤當成已修。
 
 ### 🔴 A2 副作用:`when:` 會在 phon 合法
 

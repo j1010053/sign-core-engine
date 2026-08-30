@@ -80,10 +80,7 @@ fn diff_lines<'a>(before: &'a str, after: &'a str) -> Vec<(&'a str, &'a str)> {
     if old.len() != new.len() {
         return vec![("<行數不同,整份重寫>", "<see git diff>")];
     }
-    old.into_iter()
-        .zip(new)
-        .filter(|(a, b)| a != b)
-        .collect()
+    old.into_iter().zip(new).filter(|(a, b)| a != b).collect()
 }
 
 /// prelude 之後的部分(第一個 `#` 語句標記起)。

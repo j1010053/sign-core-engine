@@ -263,7 +263,11 @@ fn the_resolved_changeset_stays_primitive_only() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    assert_eq!(round.dump().expect("dump"), dump, "dump→parse→resolve 逐位元穩定");
+    assert_eq!(
+        round.dump().expect("dump"),
+        dump,
+        "dump→parse→resolve 逐位元穩定"
+    );
 }
 
 #[test]

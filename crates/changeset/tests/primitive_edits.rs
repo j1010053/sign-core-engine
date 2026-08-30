@@ -424,7 +424,11 @@ fn updating_one_parent_preserves_other_inheritance_links() {
         .items
         .iter()
         .filter_map(|item| match item {
-            SignItem::TraitMount { name: name, kind: conlang_language::TraitMountKind::Declaration, .. } => Some(name.as_str()),
+            SignItem::TraitMount {
+                name: name,
+                kind: conlang_language::TraitMountKind::Declaration,
+                ..
+            } => Some(name.as_str()),
             _ => None,
         })
         .collect();
@@ -519,7 +523,11 @@ fn stable_anchor_survives_prior_insert_and_delete() {
         PrimitiveEdit::Insert {
             parent: dog,
             anchor: Anchor::Before(pet.clone()),
-            subtree: DetachedNode::Item(SignItem::TraitMount { name: "Canine".to_owned(), kind: conlang_language::TraitMountKind::Declaration, args: vec![] }),
+            subtree: DetachedNode::Item(SignItem::TraitMount {
+                name: "Canine".to_owned(),
+                kind: conlang_language::TraitMountKind::Declaration,
+                args: vec![],
+            }),
         },
         &LibrarySpec::default(),
     )
@@ -535,7 +543,11 @@ fn stable_anchor_survives_prior_insert_and_delete() {
         PrimitiveEdit::Insert {
             parent: deleted.document.ref_for_sign("dog").unwrap(),
             anchor: Anchor::Before(pet.clone()),
-            subtree: DetachedNode::Item(SignItem::TraitMount { name: "Mammal".to_owned(), kind: conlang_language::TraitMountKind::Declaration, args: vec![] }),
+            subtree: DetachedNode::Item(SignItem::TraitMount {
+                name: "Mammal".to_owned(),
+                kind: conlang_language::TraitMountKind::Declaration,
+                args: vec![],
+            }),
         },
         &LibrarySpec::default(),
     )
@@ -549,7 +561,11 @@ fn stable_anchor_survives_prior_insert_and_delete() {
         .items
         .iter()
         .filter_map(|item| match item {
-            SignItem::TraitMount { name: name, kind: conlang_language::TraitMountKind::Declaration, .. } => Some(name.as_str()),
+            SignItem::TraitMount {
+                name: name,
+                kind: conlang_language::TraitMountKind::Declaration,
+                ..
+            } => Some(name.as_str()),
             _ => None,
         })
         .collect();

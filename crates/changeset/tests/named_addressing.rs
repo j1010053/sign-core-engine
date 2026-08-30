@@ -116,7 +116,10 @@ fn named_case_and_branch_round_trip_and_address() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    assert!(resolved.dump().expect("dump").contains("update node(case, @"));
+    assert!(resolved
+        .dump()
+        .expect("dump")
+        .contains("update node(case, @"));
     let doc = ChangeInterpreter::new(base.clone(), spec.clone(), "evo:case")
         .unwrap()
         .run(&resolved)
@@ -137,7 +140,10 @@ fn named_case_and_branch_round_trip_and_address() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    assert!(resolved2.dump().expect("dump").contains("delete node(case_branch, @"));
+    assert!(resolved2
+        .dump()
+        .expect("dump")
+        .contains("delete node(case_branch, @"));
 }
 
 /// Step-14 補完:往具名 case 插入一個 case-branch(SignContext guard 分支),
@@ -166,7 +172,11 @@ fn inserts_a_case_branch_into_a_named_case() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    assert_eq!(round.dump().expect("dump"), dump, "case-branch round-trip 穩定");
+    assert_eq!(
+        round.dump().expect("dump"),
+        dump,
+        "case-branch round-trip 穩定"
+    );
 
     let doc = ChangeInterpreter::new(base, spec, "evo:cb")
         .unwrap()

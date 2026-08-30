@@ -72,7 +72,11 @@ fn a_syn_change_moves_only_the_syn_component() {
     assert_eq!(vector.sem.signs.changed, 0, "sem 不該動");
     assert_eq!(vector.prag.signs.changed, 0, "prag 不該動");
     assert_eq!(vector.structural.signs.changed, 0);
-    assert_eq!((vector.born_signs(), vector.died_signs()), (0, 0), "沒有生滅");
+    assert_eq!(
+        (vector.born_signs(), vector.died_signs()),
+        (0, 0),
+        "沒有生滅"
+    );
     assert_eq!(vector.aligned_signs(), 2, "兩個 sign 都對得上");
 }
 
@@ -105,10 +109,22 @@ fn the_dimension_accessor_agrees_with_the_fields() {
         &statement("update sign(\"x\").feature[syn.category].value = verb"),
     );
     let vector = diff_vector(&before, &after);
-    assert_eq!(vector.dimension(Dim::Syn).signs.changed, vector.syn.signs.changed);
-    assert_eq!(vector.dimension(Dim::Phon).signs.changed, vector.phon.signs.changed);
-    assert_eq!(vector.dimension(Dim::Sem).signs.changed, vector.sem.signs.changed);
-    assert_eq!(vector.dimension(Dim::Prag).signs.changed, vector.prag.signs.changed);
+    assert_eq!(
+        vector.dimension(Dim::Syn).signs.changed,
+        vector.syn.signs.changed
+    );
+    assert_eq!(
+        vector.dimension(Dim::Phon).signs.changed,
+        vector.phon.signs.changed
+    );
+    assert_eq!(
+        vector.dimension(Dim::Sem).signs.changed,
+        vector.sem.signs.changed
+    );
+    assert_eq!(
+        vector.dimension(Dim::Prag).signs.changed,
+        vector.prag.signs.changed
+    );
 }
 
 // ── 生滅(§6.1「無對應者計為生/滅」)────────────────────────────────────────
@@ -174,7 +190,11 @@ fn renaming_a_sign_is_not_a_birth_and_death() {
         after.source()
     );
     let vector = diff_vector(&before, &after);
-    assert_eq!((vector.born_signs(), vector.died_signs()), (0, 0), "改名不是生滅");
+    assert_eq!(
+        (vector.born_signs(), vector.died_signs()),
+        (0, 0),
+        "改名不是生滅"
+    );
     assert_eq!(vector.aligned_signs(), 2);
 }
 
@@ -226,7 +246,10 @@ fn a_cross_dimension_item_moves_the_structural_component() {
         "\n    #0:\n        insert into sign(\"y\") at end:\n            belongs LocalNoun\n",
     );
     let vector = diff_vector(&before, &after);
-    assert_eq!(vector.structural.signs.changed, 1, "跨維項目要落在 structural");
+    assert_eq!(
+        vector.structural.signs.changed, 1,
+        "跨維項目要落在 structural"
+    );
     assert_eq!(
         (
             vector.phon.signs.changed,
@@ -361,17 +384,30 @@ fn a_sound_change_in_a_trait_moves_the_phon_trait_rules_component() {
     );
     let vector = diff_vector(&before, &after);
 
-    assert_eq!(vector.phon.trait_rules.counts.changed, 1, "音變要落在 phon.trait_rules");
-    assert_eq!(vector.phon.trait_rules.counts.both, 1, "規則依 RuleId 對得上,不是一生一滅");
+    assert_eq!(
+        vector.phon.trait_rules.counts.changed, 1,
+        "音變要落在 phon.trait_rules"
+    );
+    assert_eq!(
+        vector.phon.trait_rules.counts.both, 1,
+        "規則依 RuleId 對得上,不是一生一滅"
+    );
     // 規則**只**記在 `rules`。`traits` 也記一次就是雙重計數,而那兩個數字下游
     // 很可能相加——一條音變會變成兩條。
     assert_eq!(
-        (vector.phon.trait_content.counts.changed, vector.structural.trait_content.counts.changed),
+        (
+            vector.phon.trait_content.counts.changed,
+            vector.structural.trait_content.counts.changed
+        ),
         (0, 0),
         "規則不得同時記進 trait_content leaf"
     );
     assert_eq!(
-        (vector.syn.trait_rules.counts.changed, vector.sem.trait_rules.counts.changed, vector.prag.trait_rules.counts.changed),
+        (
+            vector.syn.trait_rules.counts.changed,
+            vector.sem.trait_rules.counts.changed,
+            vector.prag.trait_rules.counts.changed
+        ),
         (0, 0, 0),
         "只有 phon 的規則動了"
     );
@@ -396,7 +432,10 @@ fn a_belongs_edge_on_a_trait_moves_the_structural_trait_content_component() {
     );
     let vector = diff_vector(&before, &after);
 
-    assert_eq!(vector.structural.trait_content.counts.changed, 1, "belongs 要落在 structural.trait_content");
+    assert_eq!(
+        vector.structural.trait_content.counts.changed, 1,
+        "belongs 要落在 structural.trait_content"
+    );
     assert_eq!(
         (
             vector.phon.trait_content.counts.changed,
@@ -439,7 +478,10 @@ fn a_sense_on_a_trait_moves_only_the_sem_trait_content_component() {
     );
     let vector = diff_vector(&before, &after);
 
-    assert_eq!(vector.sem.trait_content.counts.changed, 1, "義項是 sem 內容");
+    assert_eq!(
+        vector.sem.trait_content.counts.changed, 1,
+        "義項是 sem 內容"
+    );
     assert_eq!(
         (
             vector.phon.trait_content.counts.changed,
@@ -487,7 +529,10 @@ fn a_slot_on_a_trait_moves_only_the_syn_trait_content_component() {
     );
     let vector = diff_vector(&before, &after);
 
-    assert_eq!(vector.syn.trait_content.counts.changed, 1, "slot 是 syn 內容(P41 valence=slots)");
+    assert_eq!(
+        vector.syn.trait_content.counts.changed, 1,
+        "slot 是 syn 內容(P41 valence=slots)"
+    );
     assert_eq!(
         (
             vector.phon.trait_content.counts.changed,
@@ -647,7 +692,10 @@ fn reach_before_and_after_can_differ() {
     );
     let vector = diff_vector(&before, &after);
 
-    assert_eq!(vector.sem.trait_content.counts.changed, 1, "宣告處仍然只算 1");
+    assert_eq!(
+        vector.sem.trait_content.counts.changed, 1,
+        "宣告處仍然只算 1"
+    );
     assert_eq!(
         (
             vector.sem.trait_content.reach_before,
@@ -706,7 +754,10 @@ fn a_new_trait_is_a_birth_not_a_change() {
     );
     let vector = diff_vector(&before, &after);
 
-    assert_eq!(vector.structural.trait_content.counts.only_after, 1, "新 trait 是生");
+    assert_eq!(
+        vector.structural.trait_content.counts.only_after, 1,
+        "新 trait 是生"
+    );
     assert_eq!(vector.structural.trait_content.counts.only_before, 0);
     assert_eq!(
         vector.structural.trait_content.counts.changed, 0,
@@ -731,7 +782,10 @@ fn a_rule_on_a_sign_stays_in_the_signs_component() {
     );
     let vector = diff_vector(&before, &after);
 
-    assert_eq!(vector.phon.signs.changed, 1, "sign 自帶的規則算在該 sign 頭上");
+    assert_eq!(
+        vector.phon.signs.changed, 1,
+        "sign 自帶的規則算在該 sign 頭上"
+    );
     assert_eq!(
         vector.phon.trait_rules,
         conlang_changeset::diff::TraitDiff {

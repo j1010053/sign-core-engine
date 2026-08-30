@@ -263,7 +263,17 @@ fn explicit_name(document: &LanguageDocument, entry: &NodeEntryV1) -> Option<Str
     }
     if let Some(item) = item_at_address(language, &entry.address) {
         return match item {
-            SignItem::TraitMount { name, kind: conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_), .. } | SignItem::TraitMount { name: name, kind: conlang_language::TraitMountKind::Declaration, .. } => Some(name.clone()),
+            SignItem::TraitMount {
+                name,
+                kind:
+                    conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_),
+                ..
+            }
+            | SignItem::TraitMount {
+                name: name,
+                kind: conlang_language::TraitMountKind::Declaration,
+                ..
+            } => Some(name.clone()),
             SignItem::Slot(value) => Some(value.name.clone()),
             SignItem::FeatureDecl(value) => Some(value.name.clone()),
             SignItem::FeatureValue(value) => Some(value.name.clone()),

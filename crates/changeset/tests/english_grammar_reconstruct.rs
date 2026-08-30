@@ -140,7 +140,11 @@ fn reconstructs_the_english_grammar_through_a_dumped_changeset() {
         "evo:en-standard-restore",
         "new grammar nodes retain ChangeSet provenance"
     );
-    assert_eq!(reparsed.dump().expect("dump"), dumped, ".chg dump is canonical");
+    assert_eq!(
+        reparsed.dump().expect("dump"),
+        dumped,
+        ".chg dump is canonical"
+    );
 }
 
 #[test]

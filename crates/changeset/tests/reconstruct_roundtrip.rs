@@ -514,7 +514,11 @@ fn reorder_with_insert_and_delete_keeps_final_item_order() {
         PrimitiveEdit::Insert {
             parent: root,
             anchor: Anchor::Before(definitions[1].clone()),
-            subtree: DetachedNode::Item(conlang_language::SignItem::TraitMount { name: "D".to_owned(), kind: conlang_language::TraitMountKind::Declaration, args: vec![] }),
+            subtree: DetachedNode::Item(conlang_language::SignItem::TraitMount {
+                name: "D".to_owned(),
+                kind: conlang_language::TraitMountKind::Declaration,
+                args: vec![],
+            }),
         },
         &LibrarySpec::default(),
     )
@@ -659,9 +663,14 @@ fn belongs_type_args_roundtrip() {
             args.push("Verb".to_owned());
         }
     }
-    let after = LanguageDocument::import_new_root(&after_lang.dump(), "evo:root").expect("re-parses");
+    let after =
+        LanguageDocument::import_new_root(&after_lang.dump(), "evo:root").expect("re-parses");
 
-    assert_ne!(before.source(), after.source(), "precondition: sources differ");
+    assert_ne!(
+        before.source(),
+        after.source(),
+        "precondition: sources differ"
+    );
     let edits = reconstruct(&before, &after).expect("reconstruct");
     assert!(!edits.is_empty(), "changing type args should produce edits");
 

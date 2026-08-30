@@ -185,7 +185,11 @@ fn edit_round_trips_and_is_deterministic() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    assert_eq!(round.dump().expect("dump"), dump, "round-trip stable:\n{dump}");
+    assert_eq!(
+        round.dump().expect("dump"),
+        dump,
+        "round-trip stable:\n{dump}"
+    );
     // 重跑決定性:同 base+chg 兩次 apply 逐字相同。
     let a = apply(
         "\n    statement 0:\n        update sign(\"x\").rule[\"layered\"].then[1].leaf[0].body = g => a\n",

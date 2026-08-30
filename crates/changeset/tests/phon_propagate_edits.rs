@@ -160,7 +160,11 @@ fn propagate_update_round_trips_through_dump() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    assert_eq!(round.dump().expect("dump"), dump, "dump→parse→resolve stable");
+    assert_eq!(
+        round.dump().expect("dump"),
+        dump,
+        "dump→parse→resolve stable"
+    );
 }
 
 /// Near-miss 負例:`propagate` 是 phon **block** 的修飾詞;扁平 else/then 鏈的 rule

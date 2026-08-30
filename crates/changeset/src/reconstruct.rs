@@ -966,7 +966,20 @@ fn phon_block_kind(block: &PhonBlock) -> &'static str {
 fn item_updates(before: &SignItem, after: &SignItem) -> Result<Vec<NodeUpdate>, ReconstructError> {
     let mut updates = Vec::new();
     match (before, after) {
-        (SignItem::TraitMount { name: old, kind: conlang_language::TraitMountKind::Declaration, args: old_args, .. }, SignItem::TraitMount { name: new, kind: conlang_language::TraitMountKind::Declaration, args: new_args, .. }) => {
+        (
+            SignItem::TraitMount {
+                name: old,
+                kind: conlang_language::TraitMountKind::Declaration,
+                args: old_args,
+                ..
+            },
+            SignItem::TraitMount {
+                name: new,
+                kind: conlang_language::TraitMountKind::Declaration,
+                args: new_args,
+                ..
+            },
+        ) => {
             if old != new || old_args != new_args {
                 updates.push(NodeUpdate::Belongs(format_belongs_target(new, new_args)));
             }

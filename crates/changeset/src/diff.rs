@@ -346,8 +346,7 @@ pub fn diff_vector(before: &LanguageDocument, after: &LanguageDocument) -> DiffV
 /// 邊算不進來——這不影響 reach 的正確性:reach 的目標集合同樣只來自本文件
 /// (套件的 trait 不會 `belongs` 一個下游文件的 trait,依賴方向不允許)。
 fn reach_index(document: &LanguageDocument) -> ReachIndex {
-    let (registry, _) =
-        conlang_language::ontology::OntologyRegistry::build(&[document.language()]);
+    let (registry, _) = conlang_language::ontology::OntologyRegistry::build(&[document.language()]);
     ReachIndex {
         closures: document
             .language()
@@ -579,7 +578,16 @@ fn projection(sign: &SignDef, dim: Option<Dim>) -> Vec<SignItem> {
 fn item_dimension(item: &SignItem) -> Option<Dim> {
     match item {
         SignItem::Pass => None,
-        SignItem::TraitMount { name: _, kind: conlang_language::TraitMountKind::Declaration, .. } | SignItem::TraitMount { kind: conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_), .. } => None,
+        SignItem::TraitMount {
+            name: _,
+            kind: conlang_language::TraitMountKind::Declaration,
+            ..
+        }
+        | SignItem::TraitMount {
+            kind:
+                conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_),
+            ..
+        } => None,
         SignItem::Constraint(_) | SignItem::SignExpression(_) => None,
         SignItem::Def(def) => def_dimension(&def.path),
         SignItem::Slot(_) | SignItem::SlotFeatureBinding(_) | SignItem::SlotMap(_) => {

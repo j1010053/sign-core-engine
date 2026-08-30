@@ -187,7 +187,11 @@ fn a_sense_changeset_round_trips_and_is_deterministic() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    assert_eq!(round.dump().expect("dump"), dump, "dump→parse→resolve 逐位元穩定");
+    assert_eq!(
+        round.dump().expect("dump"),
+        dump,
+        "dump→parse→resolve 逐位元穩定"
+    );
 
     let once = apply(
         "\n    statement 0:\n        update sign(\"book\").sense[\"log\"].gloss = JOURNAL\n",

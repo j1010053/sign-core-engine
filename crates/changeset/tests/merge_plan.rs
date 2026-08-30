@@ -43,7 +43,9 @@ fn set_category(
     apply(
         base,
         namespace,
-        &format!("\n    #0:\n        update sign(\"{sign}\").feature[syn.category].value = {value}\n"),
+        &format!(
+            "\n    #0:\n        update sign(\"{sign}\").feature[syn.category].value = {value}\n"
+        ),
     )
 }
 
