@@ -324,6 +324,12 @@ fn is_context_head(source: &str) -> bool {
         || ((source.starts_with("case ") || source.starts_with("when ")) && source.ends_with(':'))
 }
 
+/// `when:`(`CaseSelection::Accumulate`)可否出現在此 context。
+///
+/// **與 [`context_dim`] 是兩個獨立閘門**:那個決定「分支 body 能不能寫成片段」,
+/// 這個只決定「累積語意合不合法」。P93 讓 phon 分支可帶 body(見 `context_dim`),
+/// 但**不**連帶開放 `when:`——多分支各自貢獻規則、全部套用是另一套語意
+/// (PFM 的 rule block),必須刻意裁定,不得當作 P93 的副產品滑進來。
 fn is_fragment_context(expected: &ExpressionType) -> bool {
     matches!(
         expected,
@@ -343,11 +349,18 @@ fn dim_context(dim: Dim) -> ExpressionType {
     }
 }
 
+/// 分支 body 能寫成哪個維度的片段。
+///
+/// **P93:phon 加入**。此前 phon 被排除,理由是「Phon uses its existing pure-template
+/// representation instead of Sign items」——realization 分支只能是一個完整模板。
+/// 加上規則分支後那個理由失效:分支 body 就是一個 `phon:` 區塊的 body(深層模板 +
+/// 若干規則),故直接復用 phon block body 的解析器,**零新文法**。
 fn context_dim(expected: &ExpressionType) -> Option<Dim> {
     match expected {
         ExpressionType::SynContext => Some(Dim::Syn),
         ExpressionType::SemContext => Some(Dim::Sem),
         ExpressionType::PragContext => Some(Dim::Prag),
+        ExpressionType::PhonContext => Some(Dim::Phon),
         _ => None,
     }
 }
@@ -480,7 +493,17 @@ fn parse_typed_case(
         while branch_body_end < body.len() && body[branch_body_end].indent > branch_indent {
             branch_body_end += 1;
         }
-        let scalar_result = if selection == CaseSelection::FirstMatch {
+        // P93:phon 分支 body = phon block body(深層模板 + 若干規則)。單行 `/…/`
+        // 仍走純量路徑——那是 `(模板, [])` 這個特例,行為與此前逐位元相同。一旦多於
+        // 一行,首行雖然照樣解得成 `PhonTemplate`,卻會把後面的規則行留給 `belongs`
+        // 迴圈而報「only `belongs` may follow」,故改走 fragment。
+        let branch_body_lines = body[branch_body_start..branch_body_end]
+            .iter()
+            .filter(|line| !line.text.is_empty())
+            .count();
+        let phon_rule_body =
+            matches!(expected, ExpressionType::PhonContext) && branch_body_lines > 1;
+        let scalar_result = if selection == CaseSelection::FirstMatch && !phon_rule_body {
             parse_expression(&result_line.text, &expected, result_line.no).ok()
         } else {
             None
@@ -512,6 +535,23 @@ fn parse_typed_case(
                 return Err(err(
                     result_line.no,
                     format!("{expected:?} fragment must contain at least one item"),
+                ));
+            }
+            // P93:單行 phon 分支的預設仍是「一個完整模板」。走到這裡表示
+            // `parse_expression` 已經失敗——只有當那一行確實是**改寫規則**時才收成
+            // fragment,否則維持原本的嚴格拒絕。
+            //
+            // 判準要看 `=>`,不能只看「解出了 Rule」:phon 區塊裡凡不是 `/…/` 的
+            // 行都會落成 Rule,連裸 trait 名(`SuffixFragment`)也是。少了這道,
+            // 畸形模板與 trait 展開嘗試都會被悄悄重新解讀成 phon block body。
+            if dim == Dim::Phon
+                && branch_body_lines == 1
+                && !(result_line.text.contains("=>")
+                    && items.iter().any(|item| matches!(item, SignItem::Rule(_))))
+            {
+                return Err(err(
+                    result_line.no,
+                    format!("case branch does not contain an expression accepted by <{expected:?}>"),
                 ));
             }
             index = branch_body_end;

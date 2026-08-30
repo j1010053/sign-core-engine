@@ -1531,6 +1531,22 @@ fn validate_typed_schemas(
                                 pending.extend(nested.branches.iter().map(|branch| &branch.result));
                                 continue;
                             }
+                            // P93:分支 body = phon block body。其中的深層模板(若有)
+                            // 照樣受底下的 `/…/` 與插值檢查;純規則分支沒有模板可檢,
+                            // 其 base 是 sign 的深層形(缺了由 B2 的診斷接手)。
+                            Expression::DimFragment {
+                                dim: Dim::Phon,
+                                items,
+                            } => {
+                                let base = items.iter().rev().find_map(|item| match item {
+                                    SignItem::Def(def) if def.path == "phon" => Some(&def.value),
+                                    _ => None,
+                                });
+                                match base {
+                                    Some(template) => template,
+                                    None => continue,
+                                }
+                            }
                             _ => {
                                 report.push(Diagnostic::new(
                                     Severity::Error,
@@ -1728,6 +1744,11 @@ fn validate_fp_expressions(
             | (
                 Expression::DimFragment { dim: Dim::Prag, .. },
                 crate::ExpressionType::PragContext,
+            )
+            // P93:phon 分支 body(深層模板 + 規則)。
+            | (
+                Expression::DimFragment { dim: Dim::Phon, .. },
+                crate::ExpressionType::PhonContext,
             ) => true,
             (
                 Expression::Projection {
@@ -4311,6 +4332,34 @@ impl CompiledSystem {
                     nested_rules.extend(realization.nested_rules);
                     realization.input.into_inner()
                 }
+                // P93:分支 body = phon block body(深層模板 + 若干規則)。
+                // base 取 fragment 自帶的模板,沒有就沿用本 sign 的深層形;
+                // 規則隨後對展開結果跑一趟(§2.1 的循環層)。
+                Expression::DimFragment {
+                    dim: Dim::Phon,
+                    items,
+                } => {
+                    let base = items.iter().rev().find_map(|item| match item {
+                        SignItem::Def(def) if def.path == "phon" => Some(def.value.clone()),
+                        _ => None,
+                    });
+                    let expanded = match base {
+                        Some(template) => token.expand_phon_template(&template)?,
+                        None => default.to_owned(),
+                    };
+                    let rules: Vec<&crate::Rule> = items
+                        .iter()
+                        .filter_map(|item| match item {
+                            SignItem::Rule(rule) if rule.dim == Dim::Phon => Some(rule),
+                            _ => None,
+                        })
+                        .collect();
+                    if rules.is_empty() {
+                        expanded
+                    } else {
+                        self.apply_realization_rules(&expanded, &rules)?
+                    }
+                }
                 Expression::Case(nested) => {
                     self.evaluate_phon_case(token, nested, default, cases, nested_rules)?
                         .0
@@ -4387,6 +4436,40 @@ impl CompiledSystem {
             cases,
             nested_rules,
         })
+    }
+
+    /// P93:跑一個 realization 分支自帶的規則。
+    ///
+    /// **這一趟是循環的**(§2.1):只含域宣告 + 該分支的規則,**不含**文法的全域
+    /// 規則——那些是後循環的,由 [`Self::phon_program`] 那一趟在整個 phrase 上跑。
+    /// 巢狀構式時,內層的實現形先在這裡定案,再以 filler 身分進入外層;若把全域
+    /// 規則也排進來,同一條音變會在每一層各跑一次。
+    fn apply_realization_rules(
+        &self,
+        input: &str,
+        rules: &[&crate::Rule],
+    ) -> Result<String, SystemError> {
+        let mut source = String::new();
+        for line in &self.effective_language.dsl_decls {
+            source.push_str(line);
+            source.push('\n');
+        }
+        source.push('\n');
+        let mut number = 1u32;
+        for rule in rules {
+            codegen::emit_rule(&mut source, &mut number, rule)
+                .map_err(|error| SystemError::PhonCompile(error.to_string()))?;
+        }
+        let program = tshiatun_dsl::compile(&source)
+            .map_err(|error| SystemError::PhonCompile(error.to_string()))?;
+        let word = tshiatun_dsl::build_phrase(&program, input)
+            .map_err(|error| SystemError::PhonRuntime(error.to_string()))?;
+        let fallback = word.clone();
+        let steps = tshiatun_dsl::run_program(&program, word)
+            .map_err(|error| SystemError::PhonRuntime(error.to_string()))?;
+        let last = steps.last().map(|step| &step.word).unwrap_or(&fallback);
+        tshiatun_dsl::surface_phrase(&program, last)
+            .map_err(|error| SystemError::PhonRuntime(error.to_string()))
     }
 
     fn phon_program(&self, token: &DerivedToken) -> Result<tshiatun_dsl::Program, SystemError> {
