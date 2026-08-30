@@ -74,7 +74,20 @@ phon:                              realization:
 ```
 
 語意統一為 **分支 =(base, rules)**:base 預設為 sign 的深層模板,rules 預設空。
-**現行只有模板的分支 = `(模板, [])`,是新語意的特例。**
+只有模板的分支 = `(模板, [])`,是新語意的特例。
+
+**表示也統一:phon 模板一律存成 fragment,單行也是。** 曾讓單行 `/…/` 留在純量
+`PhonTemplate` 以求 digest 不動,但那使同一件事有兩種節點結構——純量**不產生節點**
+(`enumerate_expression_node` 的 `_ => {}`),fragment 的 items 各是節點。刪掉
+`(模板, [規則])` 的規則時,重新解析的 canonical 塌陷成純量而 manifest 還記著
+`Items(0)` → `ShapeMismatch`。統一表示換來編輯下的穩定。
+
+**只統一模板。** `PhonInterpolation` / `Projection` 帶著結構化的 `SignApplication`
+(遞迴套用另一個構式要用),壓成 phon 區塊的 Def 字串會讓那個結構消失;它們也沒有
+「模板 + 規則」的形狀,不會遇到上述塌陷。
+
+實測:**不需要 rebless**。canonical 文字逐位元未變,而 identity manifest 不進
+library lock digest(lock 只涵蓋來源內容),`restore.chg` 原樣通過。
 
 實作上**不新增 `Expression` variant**:`Expression::DimFragment { dim, items }` 已存在,
 其排除 phon 的理由(「Phon uses its existing pure-template representation」)在本決策後失效,
@@ -261,23 +274,17 @@ sign is:
 這是**已知缺口,非疏漏**。補充形是 blocking 的詞彙層樣貌(儲存形阻斷派生形,Elsewhere
 Condition);可派生形態不需要填充者選擇,補充形需要。
 
-### 🔴 表示塌陷:刪掉 `(模板, [規則])` 的規則會 `ShapeMismatch`
+### ✅ 表示塌陷(已解,選 (a))
 
-實作 C2 時發現。兩種表示的**節點結構不同**:單行 `/…/` 分支是純量 `PhonTemplate`
-(`enumerate_expression_node` 的 `_ => {}`,**不產生節點**),多行分支是 `DimFragment`
-(items 各自是節點)。刪掉規則後重新解析的 canonical 塌陷成純量,manifest 卻還記著
-`Items(0)`,兩者對不上。
+實作 C2 時發現、當輪修掉:phon 模板一律存成 fragment,不再有純量↔fragment 的塌陷。
+細節見 §2 P93。**代價低於預估**——原判斷需要一次 rebless,實測不需要。
 
-| 修法 | 得 | 失 |
-|---|---|---|
-| **(a) phon 分支一律 fragment** | 單一表示、模板到處可定址、編輯下穩定 | 每個帶模板的分支多一個節點 → `base_identities` 變動 → **需 rebless** |
-| **(b) 塌陷時正規化 AST 成純量** | 不必 rebless | 刪一個節點會**連帶**讓模板的節點消失——正是本專案一路在清的靜默結構副作用 |
+修的過程中發現**四個**消費端各自對分支結果比對 `PhonTemplate`,漏了其中三個
+(stored filler 的自我實現、occurrence 實現、`used_slots` 收集)。已收成
+`Expression::phon_base_template()` / `phon_branch_rules()` 兩個存取器,四處共用。
 
-**傾向 (a)**;它同時讓 P93 那句「單行分支維持純量、表示逐位元不變」失效,要改寫。
-波及面已量:測試側只有 `realization_rule_branch.rs` 斷言 `PhonTemplate`,src 側 12 處。
-
-缺陷已釘在 `changeset/tests/realization_branch_rule_edits.rs` 的
-`deleting_the_last_rule_of_a_template_branch_is_a_known_defect`,免得被誤當成已修。
+兩條路徑(stored filler、occurrence)拿不到 phon program,帶規則的分支在那裡
+**明確報錯**而非靜默丟掉規則——那是 P93 尚未覆蓋的形狀,留給填充者選擇一併處理。
 
 ### 🔴 A2 副作用:`when:` 會在 phon 合法
 

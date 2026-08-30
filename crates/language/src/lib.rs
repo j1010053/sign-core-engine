@@ -482,6 +482,41 @@ pub struct Realization {
     pub expression: TypedCase,
 }
 
+impl Expression {
+    /// P93:取一個 phon case 分支的**深層模板**。
+    ///
+    /// 分支有兩種表示:`PhonTemplate`(結構化 phon 表達式,如 interpolation 那類
+    /// 的鄰居)與 phon `DimFragment`(模板 + 若干規則)。四個消費端都要問同一個
+    /// 問題「這一支的模板是什麼」,故收成一個存取器,免得各自展開 fragment 而
+    /// 漏掉其中一處(實作 P93 時就漏過三處)。
+    ///
+    /// `None` = 這一支沒有自己的模板:純規則分支的 base 是 sign 的深層形。
+    pub fn phon_base_template(&self) -> Option<&str> {
+        match self {
+            Expression::PhonTemplate(template) => Some(template),
+            Expression::DimFragment {
+                dim: Dim::Phon,
+                items,
+            } => items.iter().rev().find_map(|item| match item {
+                SignItem::Def(def) if def.path == "phon" => Some(def.value.as_str()),
+                _ => None,
+            }),
+            _ => None,
+        }
+    }
+
+    /// P93:這一支帶的實現規則。非 phon fragment 一律空。
+    pub fn phon_branch_rules(&self) -> &[SignItem] {
+        match self {
+            Expression::DimFragment {
+                dim: Dim::Phon,
+                items,
+            } => items,
+            _ => &[],
+        }
+    }
+}
+
 /// The type expected at an expression site.  `Feature` carries its declared
 /// enum domain separately during type checking; it is not an untyped string.
 #[derive(Debug, Clone, PartialEq, Eq)]

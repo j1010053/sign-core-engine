@@ -142,22 +142,15 @@ fn deleting_the_only_content_of_a_branch_is_refused() {
     );
 }
 
-/// ⚠ **已知缺陷,刻意釘住**:分支是 `(模板, [規則])` 時刪掉規則會 `ShapeMismatch`。
+/// 分支是 `(模板, [規則])` 時刪掉規則,退回 `(模板, [])` —— 模板留著、身分不變。
 ///
-/// 成因是兩種表示的**節點結構不同**:單行 `/…/` 分支解析成純量 `PhonTemplate`
-/// (`enumerate_expression_node` 的 `_ => {}`,**不產生節點**),多行分支解析成
-/// `DimFragment`(items 各自是節點)。刪掉規則後,重新解析的 canonical 塌陷成
-/// 純量,manifest 卻還記著 `Items(0)`,兩者對不上。
-///
-/// 兩條修法,**待裁定**:
-///   (a) phon 分支一律用 fragment 表示 —— 單一表示、模板到處可定址、編輯下穩定;
-///       代價是每個帶模板的分支多一個節點,`base_identities` 變動 → 需 rebless。
-///   (b) 塌陷時同步正規化 AST 成純量 —— 不必 rebless,但刪一個節點會**連帶**
-///       讓模板的節點消失,正是本專案一路在清的那種靜默結構副作用。
-///
-/// 傾向 (a)。在裁定前,本測試釘住現況,免得缺陷被誤當成已修。
+/// 這曾是 `ShapeMismatch`:單行 `/…/` 分支解析成純量 `PhonTemplate`(不產生節點)、
+/// 多行解析成 `DimFragment`(items 各是節點),刪除後 canonical 塌陷成純量而 manifest
+/// 還記著 `Items(0)`。修法是**統一表示**:phon 模板一律存成 fragment,不再塌陷。
+/// 結構化的 phon 表達式(interpolation / projection)不在此列——它們帶著
+/// `SignApplication`,壓成 Def 字串會讓遞迴套用失去結構。
 #[test]
-fn deleting_the_last_rule_of_a_template_branch_is_a_known_defect() {
+fn a_rule_can_be_deleted_when_the_branch_keeps_its_template() {
     let source = SOURCE.replace(
         "                $self == [Ablauting]:\n                    i => a / _ n g",
         "                $self == [Ablauting]:\n                    /singing/\n                    i => a / _ n g",
@@ -166,16 +159,22 @@ fn deleting_the_last_rule_of_a_template_branch_is_a_known_defect() {
     let branch = realization_branch(&before, "sing", 0);
     let rule = child(&before, &branch, NodeKind::Rule, 0);
 
-    let error = apply_edit(
+    let after = apply_edit(
         &before,
         PrimitiveEdit::Delete { node: rule },
         &LibrarySpec::default(),
     )
-    .expect_err("已知缺陷:表示塌陷造成 ShapeMismatch");
+    .expect("delete applies")
+    .document;
+
     assert!(
-        error
-            .to_string()
-            .contains("do not match the canonical source"),
-        "缺陷應以 ShapeMismatch 現形: {error}"
+        !after.source().contains("i => a / _ n g"),
+        "規則應已刪除:\n{}",
+        after.source()
+    );
+    assert!(
+        after.source().contains("/singing/"),
+        "模板應留著:\n{}",
+        after.source()
     );
 }

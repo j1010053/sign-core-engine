@@ -1555,15 +1555,8 @@ fn validate_typed_schemas(
                             // P93:分支 body = phon block body。其中的深層模板(若有)
                             // 照樣受底下的 `/…/` 與插值檢查;純規則分支沒有模板可檢,
                             // 其 base 是 sign 的深層形(缺了由 B2 的診斷接手)。
-                            Expression::DimFragment {
-                                dim: Dim::Phon,
-                                items,
-                            } => {
-                                let base = items.iter().rev().find_map(|item| match item {
-                                    SignItem::Def(def) if def.path == "phon" => Some(&def.value),
-                                    _ => None,
-                                });
-                                match base {
+                            fragment @ Expression::DimFragment { dim: Dim::Phon, .. } => {
+                                match fragment.phon_base_template() {
                                     Some(template) => template,
                                     None => {
                                         if !has_deep_template {
@@ -2484,7 +2477,9 @@ fn validate_constructions_and_local_phon(
                         if let crate::CaseCondition::Guard(guard) = &branch.condition {
                             used_slots.extend(synchronic::realization_guard_slot_references(guard));
                         }
-                        if let Expression::PhonTemplate(template) = &branch.result {
+                        // P93:分支模板可能住在 phon fragment 裡。漏掉這一支會讓
+                        // 分支專用的槽被誤判成沒人用。
+                        if let Some(template) = branch.result.phon_base_template() {
                             if let Some(inner) = template
                                 .strip_prefix('/')
                                 .and_then(|value| value.strip_suffix('/'))
@@ -4433,19 +4428,13 @@ impl CompiledSystem {
                 // P93:分支 body = phon block body(深層模板 + 若干規則)。
                 // base 取 fragment 自帶的模板,沒有就沿用本 sign 的深層形;
                 // 規則隨後對展開結果跑一趟(§2.1 的循環層)。
-                Expression::DimFragment {
-                    dim: Dim::Phon,
-                    items,
-                } => {
-                    let base = items.iter().rev().find_map(|item| match item {
-                        SignItem::Def(def) if def.path == "phon" => Some(def.value.clone()),
-                        _ => None,
-                    });
-                    let expanded = match base {
-                        Some(template) => token.expand_phon_template(&template)?,
+                fragment @ Expression::DimFragment { dim: Dim::Phon, .. } => {
+                    let expanded = match fragment.phon_base_template() {
+                        Some(template) => token.expand_phon_template(template)?,
                         None => default.to_owned(),
                     };
-                    let rules: Vec<&crate::Rule> = items
+                    let rules: Vec<&crate::Rule> = fragment
+                        .phon_branch_rules()
                         .iter()
                         .filter_map(|item| match item {
                             SignItem::Rule(rule) if rule.dim == Dim::Phon => Some(rule),

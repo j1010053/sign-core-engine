@@ -496,20 +496,48 @@ fn parse_typed_case(
         while branch_body_end < body.len() && body[branch_body_end].indent > branch_indent {
             branch_body_end += 1;
         }
-        // P93:phon 分支 body = phon block body(深層模板 + 若干規則)。單行 `/…/`
-        // 仍走純量路徑——那是 `(模板, [])` 這個特例,行為與此前逐位元相同。一旦多於
-        // 一行,首行雖然照樣解得成 `PhonTemplate`,卻會把後面的規則行留給 `belongs`
-        // 迴圈而報「only `belongs` may follow」,故改走 fragment。
         let branch_body_lines = body[branch_body_start..branch_body_end]
             .iter()
             .filter(|line| !line.text.is_empty())
             .count();
-        let phon_rule_body =
-            matches!(expected, ExpressionType::PhonContext) && branch_body_lines > 1;
+        // P93:phon 分支 body = phon block body(深層模板 + 若干規則),**模板一律**
+        // 存成 fragment,單行也是。
+        //
+        // 曾讓單行 `/…/` 留在純量 `PhonTemplate`,但那使同一件事有兩種節點結構:
+        // 純量不產生節點(`enumerate_expression_node` 的 `_ => {}`),fragment 的
+        // items 各是節點。於是刪掉 `(模板, [規則])` 的規則時,重新解析的 canonical
+        // 塌陷成純量、manifest 卻還記著 `Items(0)` → `ShapeMismatch`。統一表示換來
+        // 編輯下的穩定,代價是 `base_identities` 變動一次。
+        //
+        // **但只統一模板**。`PhonInterpolation` / `Projection` 帶著結構化的
+        // `SignApplication`(遞迴套用另一個構式要用),壓成 phon 區塊的 Def 字串會
+        // 讓那個結構消失。它們沒有「模板 + 規則」的形狀,也就沒有上述塌陷問題。
+        let phon_structured = if matches!(expected, ExpressionType::PhonContext)
+            && selection == CaseSelection::FirstMatch
+            && branch_body_lines == 1
+        {
+            match parse_expression(&result_line.text, &expected, result_line.no) {
+                Ok(Expression::PhonTemplate(_)) => None,
+                Ok(structured) => Some(structured),
+                // 改寫規則不是 `parse_expression` 認得的形狀,交給 fragment 路徑。
+                // 其餘解析失敗一律照舊拒絕——表示統一不該連帶把嚴格性放掉,不然
+                // 畸形的 application 引數與裸 trait 名會被當成 phon block body。
+                Err(error) => {
+                    if result_line.text.contains("=>") {
+                        None
+                    } else {
+                        return Err(error);
+                    }
+                }
+            }
+        } else {
+            None
+        };
+        let phon_rule_body = matches!(expected, ExpressionType::PhonContext);
         let scalar_result = if selection == CaseSelection::FirstMatch && !phon_rule_body {
             parse_expression(&result_line.text, &expected, result_line.no).ok()
         } else {
-            None
+            phon_structured
         };
         let result = if is_context_head(&result_line.text) {
             let (nested, next) = parse_typed_case(lang, body, index, expected.clone())?;
@@ -538,25 +566,6 @@ fn parse_typed_case(
                 return Err(err(
                     result_line.no,
                     format!("{expected:?} fragment must contain at least one item"),
-                ));
-            }
-            // P93:單行 phon 分支的預設仍是「一個完整模板」。走到這裡表示
-            // `parse_expression` 已經失敗——只有當那一行確實是**改寫規則**時才收成
-            // fragment,否則維持原本的嚴格拒絕。
-            //
-            // 判準要看 `=>`,不能只看「解出了 Rule」:phon 區塊裡凡不是 `/…/` 的
-            // 行都會落成 Rule,連裸 trait 名(`SuffixFragment`)也是。少了這道,
-            // 畸形模板與 trait 展開嘗試都會被悄悄重新解讀成 phon block body。
-            if dim == Dim::Phon
-                && branch_body_lines == 1
-                && !(result_line.text.contains("=>")
-                    && items.iter().any(|item| matches!(item, SignItem::Rule(_))))
-            {
-                return Err(err(
-                    result_line.no,
-                    format!(
-                        "case branch does not contain an expression accepted by <{expected:?}>"
-                    ),
                 ));
             }
             index = branch_body_end;

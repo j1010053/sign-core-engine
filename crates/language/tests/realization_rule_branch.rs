@@ -70,10 +70,13 @@ sign sing:\n\
     );
 }
 
-/// 單行分支維持純量 `PhonTemplate` —— `(模板, [])` 的特例不得改變表示,
-/// 否則既有語料的 canonical 與 digest 會無故變動。
+/// 單行 `/…/` 分支**也是 fragment**(§5 選 (a) 後的統一表示)。
+///
+/// 曾為了 digest 不動而讓它留在純量 `PhonTemplate`,但兩種節點結構會在編輯時
+/// 對不上:刪掉 `(模板, [規則])` 的規則後,canonical 塌陷成純量而 manifest 還
+/// 記著 `Items(0)`。統一表示換來編輯下的穩定,代價是一次 rebless。
 #[test]
-fn a_single_line_branch_is_still_a_plain_template() {
+fn a_single_line_template_branch_is_also_a_fragment() {
     let source = format!(
         "{INVENTORY}\
 sign sing:\n\
@@ -86,10 +89,17 @@ sign sing:\n\
     );
     let language = Language::parse(&source).expect("parses");
     let case = realization_of(&language, "sing");
-    assert!(
-        matches!(&case.branches[0].result, Expression::PhonTemplate(t) if t == "/sang/"),
-        "單行分支應維持 PhonTemplate,得到 {:?}",
-        case.branches[0].result
+    let Expression::DimFragment { dim, items } = &case.branches[0].result else {
+        panic!(
+            "單行模板分支也應是 fragment,得到 {:?}",
+            case.branches[0].result
+        );
+    };
+    assert_eq!(*dim, Dim::Phon);
+    assert_eq!(
+        case.branches[0].result.phon_base_template(),
+        Some("/sang/"),
+        "模板取得出來: {items:?}"
     );
 }
 

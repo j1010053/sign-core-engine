@@ -1815,11 +1815,24 @@ fn realize_stored_filler(
                         crate::CaseCondition::Equals(_) => false,
                     };
                     if matched {
-                        match &branch.result {
-                            crate::Expression::PhonTemplate(template) => {
-                                selected = Some(template.clone())
-                            }
-                            _ => {
+                        // P93:分支可能是 phon fragment。這條路徑拿不到 phon
+                        // program,故帶規則的分支明確報錯,不靜默丟掉規則。
+                        if branch
+                            .result
+                            .phon_branch_rules()
+                            .iter()
+                            .any(|item| matches!(item, crate::SignItem::Rule(_)))
+                        {
+                            return Err(CxgError::FillerRealizationGuard {
+                                filler: material.name.clone(),
+                                message: "an occurrence realization branch cannot carry rules \
+                                          yet — this path has no phon program to run them"
+                                    .to_owned(),
+                            });
+                        }
+                        match branch.result.phon_base_template() {
+                            Some(template) => selected = Some(template.to_owned()),
+                            None => {
                                 return Err(CxgError::FillerRealizationGuard {
                                     filler: material.name.clone(),
                                     message: "occurrence realization requires a direct Phon result"
@@ -1907,6 +1920,34 @@ fn realize_stored_filler(
             if matched {
                 match &branch.result {
                     crate::Expression::PhonTemplate(template) => selected = Some(template.as_str()),
+                    // P93:分支存成 phon fragment(模板 + 若干規則)。這條路徑是
+                    // **已存 sign 當 filler** 時的自我實現,拿不到 phon program,
+                    // 故只跑得動純模板的分支。帶規則的分支明確報錯,不靜默丟掉。
+                    fragment @ crate::Expression::DimFragment {
+                        dim: crate::Dim::Phon,
+                        ..
+                    } => {
+                        if fragment
+                            .phon_branch_rules()
+                            .iter()
+                            .any(|item| matches!(item, crate::SignItem::Rule(_)))
+                        {
+                            return Err(CxgError::FillerRealizationGuard {
+                                filler: material.name.clone(),
+                                message: "a stored filler's realization branch cannot carry \
+                                          rules yet — this path has no phon program to run them"
+                                    .to_owned(),
+                            });
+                        }
+                        let Some(template) = fragment.phon_base_template() else {
+                            return Err(CxgError::FillerRealizationGuard {
+                                filler: material.name.clone(),
+                                message: "stored realization requires a direct Phon result"
+                                    .to_owned(),
+                            });
+                        };
+                        selected = Some(template);
+                    }
                     _ => {
                         return Err(CxgError::FillerRealizationGuard {
                             filler: material.name.clone(),
