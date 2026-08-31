@@ -197,7 +197,7 @@ C1/C3 免費得到,是 P93「不新增 `Expression` variant、改用既有 `DimF
 | D1 | **新增** `EnglishFiniteVerbForm` | 吃 `stem [Verb]`,規則分支處理**可派生**屈折 | 可做 |
 | D2 | #3 / #4 小句構式 | 去掉 `{$slot.predicate}s`,predicate 改填 D1 的產物 | 可做 |
 | D3 | #2 `EnglishCountNounForm` | 規則分支處理 `mouse`→`mice` | 可做 |
-| D4 | `EnglishPluralNP`、std:cxg 的 `PrefixNegation` / `SuffixNegation` | 三處相鄰槽補 `+` | 可做(B1 上線即抓到,**全數真陽性**) |
+| D4 | `EnglishPluralNP`、std:cxg 的 `PrefixNegation` / `SuffixNegation` | 三處相鄰槽補 `+` | 可做;三處皆為真缺陷,但 **B1 只抓到第一處**(見 §5 覆蓋缺口) |
 | D5 | #1 `she`/`her` | **不動**,合法的詞位內部替換 | — |
 | D6 | #5–#8 硬編 `is`/`does` | **本輪不動** | **卡 §5** |
 
@@ -285,6 +285,17 @@ Condition);可派生形態不需要填充者選擇,補充形需要。
 
 兩條路徑(stored filler、occurrence)拿不到 phon program,帶規則的分支在那裡
 **明確報錯**而非靜默丟掉規則——那是 P93 尚未覆蓋的形狀,留給填充者選擇一併處理。
+
+### 🔴 B1 覆蓋缺口:trait 上的模板檢查不到
+
+實測 std 語料只冒 **1** 個 `TEMPLATE_ADJACENT_SLOTS_FUSED`(`EnglishPluralNP`),
+但語料裡有 **3** 處 `}{`。另外兩處(`PrefixNegation` / `SuffixNegation`)住在
+**trait** 上,而構式模板的檢查站點只走 effective **sign** —— 目前沒有任何 sign
+`belongs` 這兩個 trait,缺陷因此潛伏。
+
+不是誤報也不是誤刪,是**看不到**:作者寫一個有此缺陷的 trait 不會得到回饋,
+要等到有人用它才浮現。修法是讓檢查也走帶槽的 trait,但那會與「trait 是分類
+節點、內容由投影到達」的既有分工交界,需要先想清楚重複報告怎麼避免。
 
 ### 🔴 A2 副作用:`when:` 會在 phon 合法
 
