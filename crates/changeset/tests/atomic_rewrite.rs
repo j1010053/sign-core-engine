@@ -112,7 +112,11 @@ fn new_sign(name: &str, gloss: &str) -> SignDef {
         id: SignId::synthetic(),
         name: name.to_owned(),
         items: vec![
-            SignItem::Belongs("LocalNoun".to_owned()),
+            SignItem::TraitMount {
+                name: "LocalNoun".to_owned(),
+                kind: conlang_language::TraitMountKind::Declaration,
+                args: vec![],
+            },
             SignItem::Sense(conlang_language::Sense {
                 name: "core".to_owned(),
                 gloss: gloss.to_owned(),
@@ -187,6 +191,7 @@ fn reanalyze_moves_the_sign_into_another_category() {
     let lang = run(&AtomicRewrite::Reanalyze {
         sign: "book".to_owned(),
         target: ReanalysisTarget::Category,
+        from: None,
         to: "Aux".to_owned(),
     });
     // 逐 sign 檢查:`kobo` 也 belongs LocalNoun,全文比對會被它騙過。
@@ -214,6 +219,7 @@ fn reanalyze_into_an_unknown_category_is_rejected_at_compile() {
         &AtomicRewrite::Reanalyze {
             sign: "book".to_owned(),
             target: ReanalysisTarget::Category,
+            from: None,
             to: "no_such_category".to_owned(),
         },
         &document,
@@ -241,6 +247,7 @@ fn reanalyze_valence_and_slot_are_explicitly_unsupported() {
             &AtomicRewrite::Reanalyze {
                 sign: "kobo".to_owned(),
                 target,
+                from: None,
                 to: "intransitive".to_owned(),
             },
             &base(),
@@ -253,19 +260,11 @@ fn reanalyze_valence_and_slot_are_explicitly_unsupported() {
     }
 }
 
-/// 近似反例:多個 `belongs` 時**拒絕而非猜一個**——哪一個是被重分析的那個,
-/// 只有呼叫端知道,猜錯會靜默給出錯的範疇。
+/// 多 belongs 時不給 `from` 仍拒絕——不猜。
 #[test]
-fn reanalyze_refuses_a_sign_with_more_than_one_belongs() {
+fn reanalyze_refuses_multi_belongs_without_from() {
     let document = LanguageDocument::import_new_root(
-        "trait A:
-
-trait B:
-
-sign both:
-    belongs A
-    belongs B
-",
+        "trait A:\n\ntrait B:\n\nsign both:\n    belongs A\n    belongs B\n",
         "evo:multi",
     )
     .expect("fixture parses");
@@ -273,12 +272,68 @@ sign both:
         &AtomicRewrite::Reanalyze {
             sign: "both".to_owned(),
             target: ReanalysisTarget::Category,
+            from: None,
             to: "Aux".to_owned(),
         },
         &document,
     )
     .expect_err("ambiguous");
     assert!(format!("{err}").contains("UNSUPPORTED"), "{err}");
+    assert!(
+        format!("{err}").contains("from:"),
+        "should suggest from: {err}"
+    );
+}
+
+/// 多 belongs + `from` 指定 → 只換指定的那一條。
+#[test]
+fn reanalyze_with_from_replaces_the_specified_belongs() {
+    let document = LanguageDocument::import_new_root(
+        "trait A:\n\ntrait B:\n\ntrait C:\n\nsign both:\n    belongs A\n    belongs B\n",
+        "evo:multi",
+    )
+    .expect("fixture parses");
+    let spec = LibrarySpec::default();
+    let edits = expand_off(
+        &AtomicRewrite::Reanalyze {
+            sign: "both".to_owned(),
+            target: ReanalysisTarget::Category,
+            from: Some("A".to_owned()),
+            to: "C".to_owned(),
+        },
+        &document,
+    )
+    .expect("from disambiguates");
+    let mut doc = document;
+    for edit in edits {
+        doc = apply_edit(&doc, edit, &spec).expect("applies").document;
+    }
+    let lang = doc.source();
+    let both = lang.split("sign both:").nth(1).expect("sign block");
+    assert!(both.contains("belongs C"), "A should become C:\n{lang}");
+    assert!(both.contains("belongs B"), "B should be untouched:\n{lang}");
+    assert!(!both.contains("belongs A"), "A should be gone:\n{lang}");
+}
+
+/// `from` 指定的範疇不存在 → 報錯。
+#[test]
+fn reanalyze_with_wrong_from_is_rejected() {
+    let document = LanguageDocument::import_new_root(
+        "trait A:\n\ntrait B:\n\nsign both:\n    belongs A\n    belongs B\n",
+        "evo:multi",
+    )
+    .expect("fixture parses");
+    let err = expand_off(
+        &AtomicRewrite::Reanalyze {
+            sign: "both".to_owned(),
+            target: ReanalysisTarget::Category,
+            from: Some("NoSuch".to_owned()),
+            to: "C".to_owned(),
+        },
+        &document,
+    )
+    .expect_err("from doesn't match");
+    assert!(format!("{err}").contains("does not"), "{err}");
 }
 
 #[test]
@@ -288,6 +343,7 @@ fn reanalyze_boundary_is_explicitly_unsupported() {
         &AtomicRewrite::Reanalyze {
             sign: "book".to_owned(),
             target: ReanalysisTarget::Boundary,
+            from: None,
             to: "x".to_owned(),
         },
         &base(),

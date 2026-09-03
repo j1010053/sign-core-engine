@@ -10,8 +10,8 @@
 //! Semantic 子樹)雙雙存活所暴露的缺口。
 
 use conlang_language::construction::{SlotFiller, SlotMap};
-use conlang_language::semantic_dto::SemanticDocumentV1;
 use conlang_language::sem::SemNode;
+use conlang_language::semantic_dto::SemanticDocumentV1;
 use conlang_language::system::SystemError;
 use conlang_language::{compile_system, construction::CxgError, ontology, Language};
 
@@ -40,9 +40,9 @@ sign NeedsEntity:
     sem:
         roles:
             referent [Entity]
-            referent = {x}
+            referent = {$slot.x}
     phon:
-        /{x}/
+        /{$slot.x}/
 
 /* DTO 驗證從 `types` 指名的 trait 解析 role 宣告,故同一份約束也放一個 trait 上。 */
 trait EntityHolder:
@@ -57,9 +57,9 @@ sign NeedsAnything:
     sem:
         roles:
             anything [*]
-            anything = {x}
+            anything = {$slot.x}
     phon:
-        /{x}/
+        /{$slot.x}/
 "#;
 
 fn system() -> conlang_language::CompiledSystem {
@@ -111,7 +111,11 @@ fn an_any_node_role_accepts_a_filler_with_no_categories() {
     let language = Language::parse(SRC).unwrap();
     let (registry, _) = ontology::with_std(&language);
     let bare = SemNode::of_sign(language.sign_named("bare").unwrap(), &registry);
-    assert!(bare.types.is_empty(), "前提:bare 無任何範疇:{:?}", bare.types);
+    assert!(
+        bare.types.is_empty(),
+        "前提:bare 無任何範疇:{:?}",
+        bare.types
+    );
 
     fill("NeedsAnything", "bare").expect("`[*]` 不設限");
     // 判別性:同一個 filler 填不進有約束的 role
@@ -131,7 +135,10 @@ fn sem_types_is_the_full_category_closure() {
     let types = SemNode::of_sign(language.sign_named("nouny").unwrap(), &registry).types;
 
     for expected in ["Noun", "Nominal", "Entity", "Semantic"] {
-        assert!(types.contains(&expected.to_string()), "缺 {expected}:{types:?}");
+        assert!(
+            types.contains(&expected.to_string()),
+            "缺 {expected}:{types:?}"
+        );
     }
     // `Noun`/`Nominal` 是舊過濾器會濾掉的——它們正是本斷言的判別點。
     // `types` 另有 sort+dedup(決定性),閉包保 nearest-first,故比集合不比序。

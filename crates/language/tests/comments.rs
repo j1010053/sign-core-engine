@@ -19,7 +19,9 @@ sign go:
     assert!(l.trait_named("Verb").is_some());
     let go = l.sign_named("go").unwrap();
     // 行尾註解不污染 belongs;phon Def 乾淨
-    assert!(matches!(&go.items[0], SignItem::Belongs(n) if n == "Verb"));
+    assert!(
+        matches!(&go.items[0], SignItem::TraitMount { name: n, kind: conlang_language::TraitMountKind::Declaration, .. } if n == "Verb")
+    );
     assert!(go
         .items
         .iter()

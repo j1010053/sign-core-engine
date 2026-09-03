@@ -10,6 +10,7 @@ use crate::diagnostic::{Diagnostic, DiagnosticSource, Severity, SourceLocation, 
 use crate::library::{self, LibraryId, LibraryLoadError, LibrarySpec, ResolvedPackages};
 use crate::ontology::OntologyRegistry;
 use crate::path::parse_path;
+use crate::reference;
 use crate::sampling::{sample_weighted_index, WeightedSampleError};
 use crate::semantic_dto::{SemanticDocumentError, SemanticDocumentV1, SemanticNodeV1};
 use crate::synchronic::{self, RuleRecord, RuleStatus, SelfRead, SlotRead};
@@ -146,6 +147,34 @@ impl DerivationContext {
     }
 }
 
+/// 一個跑完 `evaluate_applied_sign`(token rules + sign-body `case:`)的 token。
+///
+/// 存在理由與 [`RealizedPhonInput`] 同一路數:用型別記錄「已經跨過哪一道關」。
+/// `DerivedToken` 一種型別涵蓋了兩個差很多的狀態——`apply_construction` 之後的
+/// 半成品,與完整求值後的成品——而 `realize_phon` 只對後者有意義。
+///
+/// 只由 [`CompiledSystem::evaluate_token`] 與內部的求值路徑產生。
+#[derive(Debug, Clone)]
+pub struct EvaluatedToken(DerivedToken);
+
+impl EvaluatedToken {
+    /// 只給已經走過 `evaluate_applied_sign` 的內部路徑用。crate 外無法構造,
+    /// 這正是這個型別的用處。
+    pub(crate) fn already_evaluated(token: DerivedToken) -> EvaluatedToken {
+        EvaluatedToken(token)
+    }
+
+    pub fn as_token(&self) -> &DerivedToken {
+        &self.0
+    }
+
+    /// **刻意不公開**:公開它等於開一條 `evaluate_token(x.into_token())` 的回頭路,
+    /// 而重跑一次 token rules 不是冪等的。crate 外只需要 [`Self::as_token`] 讀。
+    pub(crate) fn into_token(self) -> DerivedToken {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RealizedPhonInput(String);
 
@@ -192,6 +221,18 @@ pub enum SignValue {
 }
 
 impl SignValue {
+    /// 取出可實現的 token。`Stored` 回 `None`——它是尚未套用的 Sign,沒有可實現的
+    /// occurrence。
+    ///
+    /// 公開 API 交出的 `SignValue`(`evaluate_sign_expression`、`apply_arguments`)
+    /// 一律已走過 `evaluate_applied_sign`,故 `Applied` 就是 [`EvaluatedToken`]。
+    pub fn into_evaluated(self) -> Option<EvaluatedToken> {
+        match self {
+            SignValue::Applied(token) => Some(EvaluatedToken::already_evaluated(token)),
+            SignValue::Stored(_) => None,
+        }
+    }
+
     /// Saturation is a state of a Sign value, never a separate entity type.
     pub fn is_saturated(&self) -> bool {
         self.residual_parameters()
@@ -376,6 +417,66 @@ pub(crate) fn def_path_allowed(path: &str) -> bool {
         })
 }
 
+/// 一個(已 `effective_sign` 解析過的)sign 上可見的 typed feature 名。
+/// P71 增修 D 的讀取白名單第二半;主體是 `$self` 時用它。
+fn visible_features(effective: &SignDef) -> BTreeSet<(Dim, String)> {
+    effective
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SignItem::FeatureDecl(feature) => Some((feature.dim, feature.name.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 全語言(含 registry 帶進來的套件節點)宣告過的 typed feature 名。
+///
+/// `$slot.NAME` 的主體是 filler,靜態未知——`[*]` 槽可填任何 sign,具名約束的
+/// filler 也能自帶本地 feature,故不能用槽的約束範疇去收窄。取全域集合是**不會
+/// 誤擋**的最強上界:全語言沒有任何一處宣告過的名字,沒有任何 filler 能有它。
+fn language_wide_features(
+    language: &Language,
+    registry: &OntologyRegistry,
+) -> BTreeSet<(Dim, String)> {
+    let mut features = BTreeSet::new();
+    let mut absorb = |items: &[SignItem]| {
+        for item in items {
+            if let SignItem::FeatureDecl(feature) = item {
+                features.insert((feature.dim, feature.name.clone()));
+            }
+        }
+    };
+    for sign in &language.signs {
+        absorb(&sign.items);
+    }
+    for trait_def in &language.traits {
+        for block in &trait_def.blocks {
+            absorb(&block.items);
+        }
+    }
+    for name in registry.names() {
+        if let Some(node) = registry.node(name) {
+            absorb(&node.items);
+        }
+    }
+    features
+}
+
+/// P71 增修 D:guard **讀**到清單外路徑時的指路訊息。與 `closed_list_hint` 分開,
+/// 因為讀取端的白名單多一半(可見的 typed feature),訊息若不說出這半,作者會
+/// 以為宣告了 feature 也還是不能讀。
+pub(crate) fn read_path_hint(path: &str, subject: &str) -> String {
+    let dim = path_dimension(path)
+        .map(|dim| dim.keyword())
+        .unwrap_or("syn");
+    format!(
+        "guard reads {subject}.{path}, which is neither on the closed list (P71) \
+         nor a feature declared on that subject; \
+         fields a guard reads must be declared under `{dim}: feature:` with an enum domain"
+    )
+}
+
 /// 不在清單上時給作者的指路訊息(§4.2:訊息**必須指向 `feature:`**,
 /// 否則只看到一句 invalid Definition 而不知正解)。
 pub(crate) fn closed_list_hint(path: &str) -> String {
@@ -388,15 +489,31 @@ pub(crate) fn closed_list_hint(path: &str) -> String {
     )
 }
 
+/// `validate_items` 需要的 sign/trait 局部脈絡。合成一個結構而非再加一個閉包參數,
+/// 是為了不讓 130 行的閉包本體因參數表變長而整段重排。
+struct ItemContext<'a> {
+    slots: &'a [crate::Slot],
+    /// P71 增修 D:guard 讀取白名單的第二半。具體 sign 傳自己的有效宣告(嚴查),
+    /// trait 傳語言全域集合(`$self` 靜態未知)——理由見
+    /// [`synchronic::rule_guard_violations`]。
+    subject_features: &'a BTreeSet<(Dim, String)>,
+}
+
 fn validate_defs_and_rules(
     language: &Language,
+    externals: &[&Language],
     registry: &OntologyRegistry,
     report: &mut ValidationReport,
 ) {
+    let filler_features = language_wide_features(language, registry);
     let mut validate_items = |owner: &str,
                               items: &[SignItem],
                               sign_metadata: bool,
-                              slots: &[crate::Slot]| {
+                              context: &ItemContext<'_>| {
+        let ItemContext {
+            slots,
+            subject_features,
+        } = context;
         let mut slot_feature_targets = BTreeSet::new();
         // 同一個 sign/trait 內重複宣告同名義項 = 撰寫錯誤(繼承層的覆寫走 effective)。
         let mut seen_senses: Vec<&str> = Vec::new();
@@ -495,6 +612,33 @@ fn validate_defs_and_rules(
                             );
                         }
                     }
+                    // P71 增修 D:guard 讀的路徑同受約束。**兩種規則都查**——
+                    // 上面豁免 `FeatureRule` 的理由只及於它的目標,不及於 guard。
+                    for error in
+                        synchronic::rule_guard_violations(rule, subject_features, &filler_features)
+                    {
+                        report.push(
+                            Diagnostic::new(
+                                Severity::Error,
+                                "RULE_GUARD_NOT_ALLOWED",
+                                format!("{owner:?}: {error}"),
+                            )
+                            .with_sources(source()),
+                        );
+                    }
+                    // P71 增修 E:值表達式的讀取同理(理由同上,兩種規則都查)。
+                    for error in
+                        synchronic::rule_value_violations(rule, subject_features, &filler_features)
+                    {
+                        report.push(
+                            Diagnostic::new(
+                                Severity::Error,
+                                "RULE_VALUE_NOT_ALLOWED",
+                                format!("{owner:?}: {error}"),
+                            )
+                            .with_sources(source()),
+                        );
+                    }
                 }
                 SignItem::SlotFeatureBinding(binding)
                     if !slot_feature_targets
@@ -524,29 +668,49 @@ fn validate_defs_and_rules(
         }
     };
     for trait_def in &language.traits {
-        let synthetic = SignDef {
+        // [A] 3-2:trait 的視圖走**展開**,不走投影的內容那一半。展開會遞迴把
+        // 祖先的內容拉進來,而且與真實編譯同一條路——驗證看到的不會與編譯產出分岔。
+        // 展開失敗時退回空視圖:那個錯誤由編譯路徑自己報,這裡不重複也不假裝。
+        let effective = SignDef {
             id: crate::SignId::synthetic(),
             name: format!("{}#rule-validation", trait_def.name),
-            items: vec![SignItem::Belongs(trait_def.name.clone())],
+            items: crate::compile::trait_view(language, externals, &trait_def.name)
+                .unwrap_or_default(),
         };
-        let effective = registry.effective_sign(&synthetic);
-        let slots = construction::slots_of(&effective);
+        // P71 增修 D:**trait 的 `$self` 靜態未知**,故與 filler 同樣用全域上界。
+        // trait 是模板,合成後的 sign 帶什麼 feature 不由它決定:菱形繼承下
+        // `Right` 的規則合法地 guard 在**兄弟** `Left` 宣告的 feature 上
+        // (`m1pp_system::inherited_rules_are_diamond_deduplicated_…` 即此形狀),
+        // 用 trait 自己的繼承視野去嚴查會誤擋。嚴查留給具體 sign——它的
+        // feature 集合是封閉的。
+        let context = ItemContext {
+            slots: &construction::slots_of(&effective),
+            subject_features: &filler_features,
+        };
         for block in &trait_def.blocks {
-            validate_items(&trait_def.name, &block.items, false, &slots);
+            validate_items(&trait_def.name, &block.items, false, &context);
         }
     }
     for sign in &language.signs {
         let effective = registry.effective_sign(sign);
-        let slots = construction::slots_of(&effective);
-        validate_items(&sign.name, &sign.items, true, &slots);
+        let context = ItemContext {
+            slots: &construction::slots_of(&effective),
+            subject_features: &visible_features(&effective),
+        };
+        validate_items(&sign.name, &sign.items, true, &context);
     }
 }
 
 fn validate_typed_schemas(
     language: &Language,
+    externals: &[&Language],
     registry: &OntologyRegistry,
     report: &mut ValidationReport,
 ) {
+    let mut scope_languages = externals.to_vec();
+    scope_languages.push(language);
+    let type_param_scopes = crate::ontology::trait_type_param_scopes(&scope_languages);
+
     fn expression_leaves<'a>(expression: &'a Expression, output: &mut Vec<&'a Expression>) {
         match expression {
             Expression::Case(case) => {
@@ -600,11 +764,7 @@ fn validate_typed_schemas(
                 collect_sign_fragments(&expression.expression, inherited, output)
             }
             SignItem::Realization(realization) => {
-                for branch in realization
-                    .expression
-                    .iter()
-                    .flat_map(|case| &case.branches)
-                {
+                for branch in &realization.expression.branches {
                     collect_sign_fragments(&branch.result, inherited, output);
                 }
             }
@@ -612,21 +772,14 @@ fn validate_typed_schemas(
         }
     }
 
-    fn slot_feature_read(value: &str) -> Option<(&str, &str)> {
-        let mut parts = value.split('.');
-        match (
-            parts.next(),
-            parts.next(),
-            parts.next(),
-            parts.next(),
-            parts.next(),
-        ) {
-            (Some("$slot"), Some(slot), Some("syn"), Some(feature), None) => Some((slot, feature)),
-            _ => None,
-        }
+    fn slot_feature_read(value: &str) -> Option<(String, String)> {
+        let reference = reference::parse(&reference::SLOT_SYN_FEATURE, value).ok()?;
+        Some((reference.slot()?.to_owned(), reference.path.clone()?))
     }
 
     fn category_feature_domain(
+        language: &Language,
+        externals: &[&Language],
         registry: &OntologyRegistry,
         category: &str,
         feature: &str,
@@ -634,14 +787,8 @@ fn validate_typed_schemas(
         if !registry.has(category) {
             return None;
         }
-        let synthetic = SignDef {
-            id: crate::SignId::synthetic(),
-            name: format!("{category}#slot-feature-schema"),
-            items: vec![SignItem::Belongs(category.to_owned())],
-        };
-        registry
-            .effective_sign(&synthetic)
-            .items
+        crate::compile::trait_view(language, externals, category)
+            .unwrap_or_default()
             .into_iter()
             .find_map(|item| match item {
                 SignItem::FeatureDecl(declaration)
@@ -653,9 +800,23 @@ fn validate_typed_schemas(
             })
     }
 
-    fn inherited_items(source: &SignDef, registry: &OntologyRegistry) -> Vec<SignItem> {
+    fn inherited_items(
+        source: &SignDef,
+        registry: &OntologyRegistry,
+        type_param_scopes: &crate::ontology::TraitTypeParamScopes,
+    ) -> Vec<SignItem> {
         let mut items = Vec::new();
         for provenance in registry.inheritance_order(source) {
+            // 泛型 trait 的內容必須經帶實參的 mount 展開；ontology projection
+            // 沒有實參環境，只能拿到 `[T]` 之類的抽象原稿。若再和 expanded
+            // source 合併，就會把同一個 role 看成 `[T]` 與 `[Concrete]` 兩份
+            // 不相容契約。非泛型 trait 仍保留 legacy projection。
+            if type_param_scopes
+                .get(&provenance.trait_name)
+                .is_some_and(|params| !params.is_empty())
+            {
+                continue;
+            }
             if let Some(node) = registry.node(&provenance.trait_name) {
                 items.extend(node.items.iter().cloned());
             }
@@ -667,22 +828,37 @@ fn validate_typed_schemas(
         owner: &str,
         source: &SignDef,
         registry: &OntologyRegistry,
+        type_param_scopes: &crate::ontology::TraitTypeParamScopes,
         report: &mut ValidationReport,
     ) {
         let mut features = BTreeMap::<(Dim, String), crate::FeatureDecl>::new();
         let mut roles = BTreeMap::<String, crate::RoleDecl>::new();
-        for item in inherited_items(source, registry) {
+        for item in inherited_items(source, registry, type_param_scopes) {
             match item {
                 SignItem::FeatureDecl(feature) => {
                     let key = (feature.dim, feature.name.clone());
                     if let Some(shadowed) = features.insert(key.clone(), feature.clone()) {
+                        // Q1:**型別宣告一次,不得改變**(與 ROLE_SCHEMA_CONFLICT /
+                        // SLOT_CONFLICT 同級)。feature 的值域是「這個語言的範式
+                        // 長什麼樣」,是語言層級的事實,一處說了算。
+                        //
+                        // 收窄不會因此失去出口——「這個類只有單數」寫**賦值**
+                        // (`number = singular`)即可,而賦值層還能表達未定案,
+                        // 表達力比重宣告值域更強。
+                        //
+                        // 先前是 Warning + 訊息說「resolves A over B」,也就是承認
+                        // 會靜默挑一個。而挑法無法從語法讀出意圖:`enum(sg)` 可能
+                        // 是收窄(單數專用類),`enum(sg,dual,pl)` 可能是擴充(有
+                        // 雙數的語言),交集與聯集各會做錯一整類案例。
                         if shadowed.values != feature.values {
                             report.push(
                                 Diagnostic::new(
-                                    Severity::Warning,
+                                    Severity::Error,
                                     "FEATURE_DECLARATION_SHADOWED",
                                     format!(
-                                        "{owner:?} resolves {}.{} enum({}) over enum({})",
+                                        "{owner:?} re-declares {}.{} as enum({}) over enum({}); \
+                                         a feature domain is declared once — to narrow it for a \
+                                         subclass, assign a value instead",
                                         key.0.keyword(),
                                         key.1,
                                         feature.values.join(", "),
@@ -745,15 +921,22 @@ fn validate_typed_schemas(
     }
 
     for sign in &language.signs {
-        validate_inherited_contracts(&sign.name, sign, registry, report);
+        validate_inherited_contracts(&sign.name, sign, registry, &type_param_scopes, report);
     }
     for trait_def in &language.traits {
         let source = SignDef {
             id: crate::SignId::synthetic(),
             name: trait_def.name.clone(),
-            items: vec![SignItem::Belongs(trait_def.name.clone())],
+            items: crate::compile::trait_view(language, externals, &trait_def.name)
+                .unwrap_or_default(),
         };
-        validate_inherited_contracts(&trait_def.name, &source, registry, report);
+        validate_inherited_contracts(
+            &trait_def.name,
+            &source,
+            registry,
+            &type_param_scopes,
+            report,
+        );
     }
 
     let mut candidates = language
@@ -765,9 +948,10 @@ fn validate_typed_schemas(
         let synthetic = SignDef {
             id: crate::SignId::synthetic(),
             name: format!("{}#schema", trait_def.name),
-            items: vec![SignItem::Belongs(trait_def.name.clone())],
+            items: crate::compile::trait_view(language, externals, &trait_def.name)
+                .unwrap_or_default(),
         };
-        (trait_def.name.clone(), registry.effective_sign(&synthetic))
+        (trait_def.name.clone(), synthetic)
     }));
     let roots = candidates.clone();
     for (owner, effective) in roots {
@@ -779,10 +963,15 @@ fn validate_typed_schemas(
             // Before the compile expansion pass a fragment may still contain
             // a trait macro.  Its complete contract is validated by the
             // ordered-language pass after the macro has been expanded.
-            if fragment
-                .iter()
-                .any(|item| matches!(item, SignItem::TraitUse { .. }))
-            {
+            if fragment.iter().any(|item| {
+                matches!(
+                    item,
+                    SignItem::TraitMount {
+                        kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_),
+                        ..
+                    }
+                )
+            }) {
                 continue;
             }
             let mut virtual_sign = effective.clone();
@@ -824,6 +1013,43 @@ fn validate_typed_schemas(
             }
         }
         let slots = construction::slots_of(&effective);
+        for slot in &slots {
+            let Some(required) = slot.constraint.category() else {
+                continue;
+            };
+            let abstract_here = type_param_scopes
+                .get(&owner)
+                .is_some_and(|params| params.contains_key(required));
+            if registry.has(required) || abstract_here {
+                continue;
+            }
+            let path = format!("slot {}", slot.name);
+            let already_reported = report.diagnostics().iter().any(|diagnostic| {
+                diagnostic.code == "SLOT_UNKNOWN_CATEGORY"
+                    && diagnostic.sources.iter().any(|source| {
+                        source.owner == owner && source.path.as_deref() == Some(path.as_str())
+                    })
+            });
+            if !already_reported {
+                report.push(
+                    Diagnostic::new(
+                        Severity::Error,
+                        "SLOT_UNKNOWN_CATEGORY",
+                        format!(
+                            "slot {:?} in {owner:?} requires unknown category {:?}{}",
+                            slot.name,
+                            required,
+                            registry.missing_name_hint(required)
+                        ),
+                    )
+                    .with_sources(vec![DiagnosticSource {
+                        owner: owner.clone(),
+                        path: Some(path),
+                        location: SourceLocation::unknown(),
+                    }]),
+                );
+            }
+        }
         let declarations = effective
             .items
             .iter()
@@ -889,8 +1115,13 @@ fn validate_typed_schemas(
                 );
                 continue;
             };
-            let target_domain =
-                category_feature_domain(registry, target_category, &binding.feature);
+            let target_domain = category_feature_domain(
+                language,
+                externals,
+                registry,
+                target_category,
+                &binding.feature,
+            );
             if target_domain.is_none() {
                 report.push(
                     Diagnostic::new(
@@ -933,8 +1164,13 @@ fn validate_typed_schemas(
                     );
                     continue;
                 };
-                let source_domain =
-                    category_feature_domain(registry, source_category, source_feature);
+                let source_domain = category_feature_domain(
+                    language,
+                    externals,
+                    registry,
+                    source_category,
+                    &source_feature,
+                );
                 if source_domain.is_none() {
                     report.push(
                         Diagnostic::new(
@@ -1025,24 +1261,33 @@ fn validate_typed_schemas(
                         location: value.source,
                     }]),
                 ),
-                Some(declaration) if !declaration.values.contains(&value.value) => report.push(
-                    Diagnostic::new(
-                        Severity::Error,
-                        "FEATURE_VALUE_OUT_OF_DOMAIN",
-                        format!(
-                            "{owner:?} assigns {:?} outside enum({}) for {}.{}",
-                            value.value,
-                            declaration.values.join(", "),
-                            value.dim.keyword(),
-                            value.name
-                        ),
+                // 值域必須整個落在宣告域內:未定案(多候選)時每一個候選都要合法,
+                // 否則「留給構式決議」會把一個非法值一路帶到構式層才爆。
+                Some(declaration)
+                    if value
+                        .values
+                        .iter()
+                        .any(|candidate| !declaration.values.contains(candidate)) =>
+                {
+                    report.push(
+                        Diagnostic::new(
+                            Severity::Error,
+                            "FEATURE_VALUE_OUT_OF_DOMAIN",
+                            format!(
+                                "{owner:?} assigns {:?} outside enum({}) for {}.{}",
+                                value.values.join(" | "),
+                                declaration.values.join(", "),
+                                value.dim.keyword(),
+                                value.name
+                            ),
+                        )
+                        .with_sources(vec![DiagnosticSource {
+                            owner: owner.clone(),
+                            path: Some(format!("{}.{}", value.dim.keyword(), value.name)),
+                            location: value.source,
+                        }]),
                     )
-                    .with_sources(vec![DiagnosticSource {
-                        owner: owner.clone(),
-                        path: Some(format!("{}.{}", value.dim.keyword(), value.name)),
-                        location: value.source,
-                    }]),
-                ),
+                }
                 Some(_) => {}
             }
         }
@@ -1243,7 +1488,10 @@ fn validate_typed_schemas(
         for role in role_declarations.values() {
             // `[*]` 不指名任何 trait,無存在性可驗。
             if let Some(category) = role.constraint.category() {
-                if !registry.has(category) {
+                let abstract_here = type_param_scopes
+                    .get(&owner)
+                    .is_some_and(|params| params.contains_key(category));
+                if !registry.has(category) && !abstract_here {
                     report.push(
                         Diagnostic::new(
                             Severity::Error,
@@ -1321,18 +1569,20 @@ fn validate_typed_schemas(
             }
         }
 
+        // B2:純規則分支的 base 是 sign 的深層形。`effective` 已含繼承,故這裡
+        // 看到的就是分支實際拿得到的東西。
+        let has_deep_template = effective
+            .items
+            .iter()
+            .any(|item| matches!(item, SignItem::Def(def) if def.path == "phon"));
         for realization in effective.items.iter().filter_map(|item| match item {
             SignItem::Realization(realization) => Some(realization),
             _ => None,
         }) {
-            if realization.expression.is_none() {
-                report.push(Diagnostic::new(
-                    Severity::Error,
-                    "REALIZATION_EMPTY",
-                    format!("{owner:?} has an empty realization block"),
-                ));
-            }
-            if let Some(case) = &realization.expression {
+            // `REALIZATION_EMPTY` 已刪:`Realization.expression` 不再是 `Option`,
+            // 空 realization 由 parser 擋下(2026-08-18),型別上不可能到這裡。
+            {
+                let case = &realization.expression;
                 if case.branches.is_empty() {
                     report.push(Diagnostic::new(
                         Severity::Error,
@@ -1341,7 +1591,13 @@ fn validate_typed_schemas(
                     ));
                 }
                 if let Some(scrutinee) = &case.scrutinee {
-                    if let Some((slot, "phon")) = scrutinee.split_once('.') {
+                    if let Err(error) = reference::parse(&reference::SCRUTINEE, scrutinee) {
+                        report.push(Diagnostic::new(
+                            Severity::Error,
+                            "CASE_INVALID_SCRUTINEE",
+                            format!("{owner:?} phon case scrutinee {scrutinee:?}: {error}"),
+                        ));
+                    } else if let Some(slot) = scrutinee_slot(scrutinee) {
                         if !slots.iter().any(|candidate| candidate.name == slot) {
                             report.push(Diagnostic::new(
                                 Severity::Error,
@@ -1360,6 +1616,28 @@ fn validate_typed_schemas(
                             Expression::Case(nested) => {
                                 pending.extend(nested.branches.iter().map(|branch| &branch.result));
                                 continue;
+                            }
+                            // P93:分支 body = phon block body。其中的深層模板(若有)
+                            // 照樣受底下的 `/…/` 與插值檢查;純規則分支沒有模板可檢,
+                            // 其 base 是 sign 的深層形(缺了由 B2 的診斷接手)。
+                            fragment @ Expression::DimFragment { dim: Dim::Phon, .. } => {
+                                match fragment.phon_base_template() {
+                                    Some(template) => template,
+                                    None => {
+                                        if !has_deep_template {
+                                            report.push(Diagnostic::new(
+                                                Severity::Error,
+                                                "REALIZATION_RULE_WITHOUT_BASE",
+                                                format!(
+                                                    "{owner:?} phon case branch carries rules but \
+                                                     has no base: neither the branch nor the sign \
+                                                     declares a `/…/` template for them to change"
+                                                ),
+                                            ));
+                                        }
+                                        continue;
+                                    }
+                                }
                             }
                             _ => {
                                 report.push(Diagnostic::new(
@@ -1386,6 +1664,17 @@ fn validate_typed_schemas(
                         let Some(inner) = inner else {
                             continue;
                         };
+                        if let Some((left, right)) = fused_reference_pair(inner) {
+                            report.push(Diagnostic::new(
+                                Severity::Warning,
+                                "TEMPLATE_ADJACENT_SLOTS_FUSED",
+                                format!(
+                                    "{owner:?} template puts {left:?} and {right:?} side by side \
+                                     with nothing between them — they fuse into one morph. If they \
+                                     are two morphemes, write `+` between them (P96)"
+                                ),
+                            ));
+                        }
                         match template_references(inner) {
                             Ok(references) => {
                                 for reference in references {
@@ -1528,11 +1817,7 @@ fn validate_fp_expressions(
                             applications(&expression.expression, output)
                         }
                         SignItem::Realization(realization) => {
-                            for branch in realization
-                                .expression
-                                .iter()
-                                .flat_map(|case| &case.branches)
-                            {
+                            for branch in &realization.expression.branches {
                                 applications(&branch.result, output);
                             }
                         }
@@ -1562,6 +1847,11 @@ fn validate_fp_expressions(
             | (
                 Expression::DimFragment { dim: Dim::Prag, .. },
                 crate::ExpressionType::PragContext,
+            )
+            // P93:phon 分支 body(深層模板 + 規則)。
+            | (
+                Expression::DimFragment { dim: Dim::Phon, .. },
+                crate::ExpressionType::PhonContext,
             ) => true,
             (
                 Expression::Projection {
@@ -1592,6 +1882,8 @@ fn validate_fp_expressions(
 
     fn item_allowed_in_context(item: &SignItem, dim: Dim) -> bool {
         match item {
+            // `pass` 是塊層級的標記,不屬於任何維度區塊
+            SignItem::Pass => false,
             SignItem::FeatureDecl(value) => value.dim == dim,
             SignItem::FeatureValue(value) => value.dim == dim,
             SignItem::FeatureExpression(value) => value.dim == dim,
@@ -1613,15 +1905,26 @@ fn validate_fp_expressions(
             SignItem::RoleDecl(_) | SignItem::RoleBinding(_) | SignItem::RoleExpression(_) => {
                 dim == Dim::Sem
             }
-            SignItem::TraitUse { .. } | SignItem::Belongs(_) | SignItem::Realization(_) => false,
+            SignItem::TraitMount {
+                kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_),
+                ..
+            }
+            | SignItem::TraitMount {
+                name: _,
+                kind: crate::TraitMountKind::Declaration,
+                ..
+            }
+            | SignItem::Realization(_) => false,
         }
     }
 
     let mut calls = BTreeMap::<String, Vec<String>>::new();
+    let filler_features = language_wide_features(language, registry);
     for local in &language.signs {
         let effective = registry.effective_sign(local);
         let local_parameters = construction::parameters_of(&effective);
         let local_slots = construction::slots_of(&effective);
+        let local_features = visible_features(&effective);
         let mut cases = effective
             .items
             .iter()
@@ -1640,10 +1943,11 @@ fn validate_fp_expressions(
                     )),
                     _ => None,
                 },
-                SignItem::Realization(realization) => realization
-                    .expression
-                    .as_ref()
-                    .map(|case| (case, crate::ExpressionType::PhonContext, "phon.realization")),
+                SignItem::Realization(realization) => Some((
+                    &realization.expression,
+                    crate::ExpressionType::PhonContext,
+                    "phon.realization",
+                )),
                 SignItem::FeatureExpression(expression) => match &expression.expression {
                     Expression::Case(case) => Some((
                         case.as_ref(),
@@ -1707,6 +2011,8 @@ fn validate_fp_expressions(
                                 conjunct,
                                 registry,
                                 &local_slots,
+                                &local_features,
+                                &filler_features,
                             ) {
                                 report.push(
                                     Diagnostic::new(
@@ -1724,30 +2030,6 @@ fn validate_fp_expressions(
                                 );
                             }
                         }
-                    }
-                    CaseCondition::Equals(category)
-                        if case
-                            .scrutinee
-                            .as_deref()
-                            .and_then(|value| value.split_once('.'))
-                            .is_some_and(|(_, projection)| projection == "phon")
-                            && !registry.has(category) =>
-                    {
-                        report.push(
-                            Diagnostic::new(
-                                Severity::Error,
-                                "CASE_UNKNOWN_CATEGORY",
-                                format!(
-                                    "sign {:?} case compares phon against unknown trait {category:?}",
-                                    local.name
-                                ),
-                            )
-                            .with_sources(vec![DiagnosticSource {
-                                owner: local.name.clone(),
-                                path: Some(site.to_owned()),
-                                location: branch.source,
-                            }]),
-                        );
                     }
                     CaseCondition::Equals(_) | CaseCondition::Else => {}
                 }
@@ -1854,8 +2136,12 @@ fn validate_fp_expressions(
                     }
                     for item in items {
                         match item {
-                            SignItem::Belongs(category)
-                            | SignItem::TraitUse { name: category, .. }
+                            SignItem::TraitMount {
+                                name: category,
+                                kind: crate::TraitMountKind::Declaration,
+                                ..
+                            }
+                            | SignItem::TraitMount { name: category, .. }
                                 if !registry.has(category) =>
                             {
                                 report.push(
@@ -1907,13 +2193,11 @@ fn validate_fp_expressions(
                                 }
                             }
                             SignItem::Realization(realization) => {
-                                if let Some(nested) = &realization.expression {
-                                    cases.push((
-                                        nested,
-                                        crate::ExpressionType::PhonContext,
-                                        "sign.fragment.phon.realization",
-                                    ));
-                                }
+                                cases.push((
+                                    &realization.expression,
+                                    crate::ExpressionType::PhonContext,
+                                    "sign.fragment.phon.realization",
+                                ));
                             }
                             _ => {}
                         }
@@ -2042,6 +2326,21 @@ fn validate_fp_expressions(
     }
 }
 
+/// B1:模板裡兩個引用**緊鄰、中間無任何字元**時,回傳那一對的名字。
+///
+/// 這是「兩個詞素黏成一個」的徵兆:`expand_phon_template` 是純字串代換,
+/// `build_phrase` 只會看到一串音段、沒有詞素縫,`@stage word` 規則因此無從命中。
+///
+/// **Warning 而非 Error**:融合本身合法——非串接形態就要這樣寫
+/// (阿拉伯語詞根 `/{$slot.c1}a{$slot.c2}a{$slot.c3}a/` 是三個槽一個詞素)。
+/// 引擎不推斷詞素結構(P96),只在看起來像漏寫時出聲。
+fn fused_reference_pair(inner: &str) -> Option<(String, String)> {
+    let at = inner.find("}{")?;
+    let left = inner[..at].rsplit('{').next()?.trim().to_owned();
+    let right = inner[at + 2..].split('}').next()?.trim().to_owned();
+    Some((left, right))
+}
+
 fn template_references(template: &str) -> Result<Vec<String>, String> {
     let mut references = Vec::new();
     let mut chars = template.char_indices().peekable();
@@ -2071,7 +2370,20 @@ fn template_references(template: &str) -> Result<Vec<String>, String> {
         if name.is_empty() {
             return Err(format!("empty slot reference at byte {at}"));
         }
-        references.push(name.to_owned());
+        // 括號的良構性(未閉合/巢狀)與括號**內容**的良構性是兩件事;
+        // 前者在上面,後者交給 reference。
+        let read = reference::parse(&reference::SUBJECT_ONLY, name)
+            .map_err(|error| format!("`{{{name}}}` at byte {at}: {error}"))?;
+        // P75 增修 A:構式內部不回指構式本身。phon 模板**就是**這個 sign 的
+        // 形式,把 `$self` 求值後嵌進去等於把自己的 surface 嵌進自己的 surface
+        // ——無條件遞迴,與 slot 是否存在無關,故不能落到 unknown-slot。
+        let Some(slot) = read.slot() else {
+            return Err(format!(
+                "`{{$self}}` at byte {at} embeds this sign's own surface into itself; \
+                 a phon template may only interpolate slots (`{{$slot.NAME}}`)"
+            ));
+        };
+        references.push(slot.to_owned());
     }
     Ok(references)
 }
@@ -2176,22 +2488,34 @@ fn validate_constructions_and_local_phon(
                     "CONSTRUCTION_PHON_MISSING",
                     format!("construction {:?} has no phon template", effective.name),
                 )),
-                Some(value) => match template_references(
-                    value
+                Some(value) => {
+                    let inner = value
                         .strip_prefix('/')
                         .and_then(|inner| inner.strip_suffix('/'))
-                        .unwrap_or(&value),
-                ) {
-                    Err(error) => report.push(Diagnostic::new(
-                        Severity::Error,
-                        "CONSTRUCTION_TEMPLATE_INVALID",
-                        format!("construction {:?}: {error}", effective.name),
-                    )),
-                    Ok(references) => {
-                        for reference in references {
-                            used_slots.insert(reference.clone());
-                            if !slot_names.contains(&reference.as_str()) {
-                                report.push(Diagnostic::new(
+                        .unwrap_or(&value);
+                    if let Some((left, right)) = fused_reference_pair(inner) {
+                        report.push(Diagnostic::new(
+                            Severity::Warning,
+                            "TEMPLATE_ADJACENT_SLOTS_FUSED",
+                            format!(
+                                "construction {:?} template puts {left:?} and {right:?} side by \
+                                 side with nothing between them — they fuse into one morph. If \
+                                 they are two morphemes, write `+` between them (P96)",
+                                effective.name
+                            ),
+                        ));
+                    }
+                    match template_references(inner) {
+                        Err(error) => report.push(Diagnostic::new(
+                            Severity::Error,
+                            "CONSTRUCTION_TEMPLATE_INVALID",
+                            format!("construction {:?}: {error}", effective.name),
+                        )),
+                        Ok(references) => {
+                            for reference in references {
+                                used_slots.insert(reference.clone());
+                                if !slot_names.contains(&reference.as_str()) {
+                                    report.push(Diagnostic::new(
                                     Severity::Error,
                                     "CONSTRUCTION_TEMPLATE_UNKNOWN_SLOT",
                                     format!(
@@ -2199,28 +2523,28 @@ fn validate_constructions_and_local_phon(
                                         effective.name
                                     ),
                                 ));
+                                }
                             }
                         }
                     }
-                },
+                }
             }
             for realization in effective.items.iter().filter_map(|item| match item {
                 SignItem::Realization(realization) => Some(realization),
                 _ => None,
             }) {
-                if let Some(case) = &realization.expression {
-                    if let Some((slot, "phon")) = case
-                        .scrutinee
-                        .as_deref()
-                        .and_then(|value| value.split_once('.'))
-                    {
-                        used_slots.insert(slot.to_owned());
+                {
+                    let case = &realization.expression;
+                    if let Some(slot) = case.scrutinee.as_deref().and_then(scrutinee_slot) {
+                        used_slots.insert(slot);
                     }
                     for branch in &case.branches {
                         if let crate::CaseCondition::Guard(guard) = &branch.condition {
                             used_slots.extend(synchronic::realization_guard_slot_references(guard));
                         }
-                        if let Expression::PhonTemplate(template) = &branch.result {
+                        // P93:分支模板可能住在 phon fragment 裡。漏掉這一支會讓
+                        // 分支專用的槽被誤判成沒人用。
+                        if let Some(template) = branch.result.phon_base_template() {
                             if let Some(inner) = template
                                 .strip_prefix('/')
                                 .and_then(|value| value.strip_suffix('/'))
@@ -2238,20 +2562,22 @@ fn validate_constructions_and_local_phon(
                 _ => None,
             }) {
                 for operand in [&constraint.left, &constraint.right] {
-                    let slot = operand
-                        .strip_prefix("$slot.")
-                        .unwrap_or(operand)
-                        .split('.')
-                        .next()
-                        .unwrap_or(operand);
-                    if slot_names.contains(&slot) {
-                        used_slots.insert(slot.to_owned());
+                    // 解析不出主體就是解析不出——不再退回把整串當 slot 名,
+                    // 否則裸寫法會靜默地繼續通過。
+                    let slot = reference::parse(&reference::CONSTRAINT_OPERAND, operand)
+                        .ok()
+                        .and_then(|reference| reference.slot().map(str::to_owned));
+                    if slot
+                        .as_deref()
+                        .is_some_and(|slot| slot_names.contains(&slot))
+                    {
+                        used_slots.insert(slot.expect("checked above"));
                     } else {
                         report.push(Diagnostic::new(
                             Severity::Error,
                             "CONSTRAINT_UNKNOWN_SLOT",
                             format!(
-                                "construction {:?} constraint refers to unknown slot {slot:?}",
+                                "construction {:?} constraint operand {operand:?} does not name a known slot",
                                 effective.name
                             ),
                         ));
@@ -2262,10 +2588,12 @@ fn validate_constructions_and_local_phon(
                 let Some(reference) = value
                     .strip_prefix('{')
                     .and_then(|inner| inner.strip_suffix('}'))
-                    .map(str::trim)
+                    .and_then(|inner| reference::parse(&reference::SUBJECT_ONLY, inner).ok())
+                    .and_then(|read| read.slot().map(str::to_owned))
                 else {
                     continue;
                 };
+                let reference = reference.as_str();
                 if reference.is_empty() || !slot_names.contains(&reference) {
                     report.push(
                         Diagnostic::new(
@@ -2297,12 +2625,10 @@ fn validate_constructions_and_local_phon(
                 _ => None,
             }) {
                 used_slots.insert(binding.slot.clone());
-                if let Some((slot, _)) = binding
-                    .value
-                    .strip_prefix("$slot.")
-                    .and_then(|value| value.split_once(".syn."))
-                {
-                    used_slots.insert(slot.to_owned());
+                if let Ok(read) = reference::parse(&reference::SLOT_SYN_FEATURE, &binding.value) {
+                    if let Some(slot) = read.slot() {
+                        used_slots.insert(slot.to_owned());
+                    }
                 }
             }
             let has_meaning = !effective.project(Dim::Sem, registry).defs.is_empty()
@@ -2390,14 +2716,40 @@ fn validate_source_language(
     let (registry, ontology_diags) = OntologyRegistry::build(&[std, effective_source]);
     let registry = registry.with_available(available_exports.clone());
     let mut report = registry.validation_report(&[std, effective_source], &ontology_diags);
+    // [A] 第 1 步:只吃 ① Source——展開會把 `TraitUse` 消去
+    report.extend(crate::ontology::belongs_reference_diagnostics(&[
+        std,
+        effective_source,
+    ]));
     validate_duplicate_signs(effective_source, &mut report);
-    validate_defs_and_rules(std, &registry, &mut report);
-    validate_defs_and_rules(effective_source, &registry, &mut report);
-    validate_typed_schemas(std, &registry, &mut report);
-    validate_typed_schemas(effective_source, &registry, &mut report);
-    validate_fp_expressions(effective_source, &registry, &mut report);
+
+    // [A] 3-3:**內容級的驗證看展開後的形態。**
+    //
+    // 兩階段之後 trait 的內容從展開來,而這條路是 `.chg` 每一次原語編輯都會走的
+    // (`apply_edit` → `check_document`)。餵 ① Source 的話,`X[n]` 帶進來的內容
+    // 在驗證眼裡還不存在——規則引用的 slot、schema 的 feature 全都會誤報找不到。
+    //
+    // 展開失敗時退回 ① Source:那類錯誤(環、未知 trait)由 registry 與編譯路徑
+    // 各自報,這裡不重複;而退回讓其餘檢查仍然跑得完,不會因為一個展開錯誤就
+    // 讓整份報告變空。
+    //
+    // 成本實測:展開佔 `check_document` 的 **1–4%**(20/100/400 signs,release)
+    // ——`check_document` 本身有約 3.5 ms 的固定開銷(每次重建 std registry),
+    // 展開相對它是雜訊。
+    let expanded = crate::compile::expand_traits_with(effective_source, &[std])
+        .unwrap_or_else(|_| effective_source.clone());
+
+    validate_defs_and_rules(std, &[], &registry, &mut report);
+    validate_defs_and_rules(&expanded, &[std], &registry, &mut report);
+    validate_typed_schemas(std, &[], &registry, &mut report);
+    validate_typed_schemas(&expanded, &[std], &registry, &mut report);
+    validate_fp_expressions(&expanded, &registry, &mut report);
+    report.extend(crate::ontology::type_param_bound_diagnostics(
+        &[std, &expanded],
+        &registry,
+    ));
     validate_origin_graph(effective_source, &mut report);
-    validate_constructions_and_local_phon(effective_source, &registry, None, &mut report);
+    validate_constructions_and_local_phon(&expanded, &registry, None, &mut report);
     report
 }
 
@@ -2524,6 +2876,13 @@ pub const COMPILER_SEMANTICS_VERSION: &str = "conlang-compile/1";
 
 /// Exact owned entry point requested by P38–P44. Use `compile_system_ref` when
 /// the caller wants to retain its original `Language` without cloning first.
+/// scrutinee 引用的 slot(不論之後讀範疇還是讀欄位)。slot 存在性驗證與
+/// used-slot 統計用這個。
+fn scrutinee_slot(scrutinee: &str) -> Option<String> {
+    let read = reference::parse(&reference::SCRUTINEE, scrutinee).ok()?;
+    read.slot().map(str::to_owned)
+}
+
 pub fn compile_system(language: Language) -> Result<CompiledSystem, CompileSystemError> {
     compile_with_libraries(language, LibrarySpec::default())
 }
@@ -2565,14 +2924,19 @@ pub fn compile_with_packages_ref(
         return Err(CompileSystemError::Validation(pre_validation));
     }
 
-    let artifacts = codegen::compile_full(&effective_source)?;
+    // 展開要看得到 std 的 trait,否則顯式 `X[n]` 引用不到套件的東西
+    let artifacts = codegen::compile_full_with(&effective_source, &[&std])?;
     let ordered = artifacts.pipeline.ordered.clone();
     let (registry, ontology_diags) = OntologyRegistry::build(&[&std, &ordered]);
     let registry = registry.with_available(packages.available_exports().clone());
     let mut validation = registry.validation_report(&[&std, &ordered], &ontology_diags);
+    validation.extend(crate::ontology::belongs_reference_diagnostics(&[
+        &std,
+        &effective_source,
+    ]));
     validate_duplicate_signs(&ordered, &mut validation);
-    validate_defs_and_rules(&ordered, &registry, &mut validation);
-    validate_typed_schemas(&ordered, &registry, &mut validation);
+    validate_defs_and_rules(&ordered, &[&std], &registry, &mut validation);
+    validate_typed_schemas(&ordered, &[&std], &registry, &mut validation);
     validate_fp_expressions(&ordered, &registry, &mut validation);
     validate_origin_graph(&ordered, &mut validation);
     validate_constructions_and_local_phon(
@@ -2682,7 +3046,16 @@ impl CompiledSystem {
             let schema_sign = SignDef {
                 id: crate::SignId::synthetic(),
                 name: "#semantic-document-schema".to_owned(),
-                items: node.types.iter().cloned().map(SignItem::Belongs).collect(),
+                items: node
+                    .types
+                    .iter()
+                    .cloned()
+                    .map(|name| SignItem::TraitMount {
+                        name,
+                        kind: crate::TraitMountKind::Declaration,
+                        args: vec![],
+                    })
+                    .collect(),
             };
             let effective = system.ontology.effective_sign(&schema_sign);
             let features = effective
@@ -2915,11 +3288,13 @@ impl CompiledSystem {
                 source_sign: sign.clone(),
                 context: DerivationContext::new(),
             });
-            let base = Self::scalar_from_value(
+            // 未定案原樣輸出:值域照傳,收斂留給構式。中途 Error 反而會把
+            // 「這個 sign 在此維度尚未收斂」這個事實擋在構式看得到它之前。
+            let base = Self::value_set_from_value(
                 &current,
                 &format!("{}.{}", dim.keyword(), expression.name),
             )
-            .map(str::to_owned);
+            .map(|values| values.join(" | "));
             let selected = self.evaluate_feature_case(
                 &current,
                 case,
@@ -3027,21 +3402,30 @@ impl CompiledSystem {
         Ok(true)
     }
 
-    fn scalar_from_value<'a>(value: &'a SignValue, path: &str) -> Option<&'a str> {
+    /// 讀出某路徑的**值域**。回 `Vec` 而不是單值,是因為 feature 的值本來就可能
+    /// 未定案(`len >= 2`)——把「是哪幾個」壓成一個 scalar 的動作必須發生在呼叫端,
+    /// 由呼叫端按自己的語意決定:產值處原樣傳遞,布林判定處拒答。
+    fn value_set_from_value(value: &SignValue, path: &str) -> Option<Vec<String>> {
         match value {
             SignValue::Stored(evaluation) => {
+                // 先定位最後一個相符項,再取值——不能在 `find_map` 裡對未定案回
+                // `None`,那會讓搜尋繼續往前,靜默拿到更早的某個值。未定案就是
+                // 沒有 scalar,必須在這裡停下。
                 evaluation
                     .sign
                     .items
                     .iter()
                     .rev()
-                    .find_map(|item| match item {
-                        SignItem::Def(def) if def.path == path => Some(def.value.as_str()),
-                        SignItem::FeatureValue(feature)
-                            if format!("{}.{}", feature.dim.keyword(), feature.name) == path =>
-                        {
-                            Some(feature.value.as_str())
+                    .find(|item| match item {
+                        SignItem::Def(def) => def.path == path,
+                        SignItem::FeatureValue(feature) => {
+                            format!("{}.{}", feature.dim.keyword(), feature.name) == path
                         }
+                        _ => false,
+                    })
+                    .and_then(|item| match item {
+                        SignItem::Def(def) => Some(vec![def.value.clone()]),
+                        SignItem::FeatureValue(feature) => Some(feature.values.clone()),
                         _ => None,
                     })
             }
@@ -3052,18 +3436,18 @@ impl CompiledSystem {
                         .syn
                         .iter()
                         .find(|(candidate, _)| candidate == path)
-                        .map(|(_, value)| value.as_str()),
-                    Dim::Sem => token.sem.features.get(field).map(String::as_str),
+                        .map(|(_, value)| vec![value.clone()]),
+                    Dim::Sem => token.sem.features.get(field).map(|v| vec![v.clone()]),
                     Dim::Prag => token
                         .prag
                         .iter()
                         .find(|(candidate, _)| candidate == path)
-                        .map(|(_, value)| value.as_str()),
+                        .map(|(_, value)| vec![value.clone()]),
                     Dim::Phon => token
                         .phon
                         .iter()
                         .find(|(candidate, _)| candidate == path)
-                        .map(|(_, value)| value.as_str()),
+                        .map(|(_, value)| vec![value.clone()]),
                 }
             }
         }
@@ -3075,29 +3459,39 @@ impl CompiledSystem {
         scrutinee: &str,
         expected: &str,
     ) -> Result<bool, SystemError> {
-        let scrutinee = scrutinee
-            .trim()
-            .strip_prefix("$self.")
-            .unwrap_or(scrutinee.trim());
-        if let SignValue::Applied(token) = value {
-            if let Some((slot, projection)) = scrutinee.split_once('.') {
-                if projection == "phon" {
-                    let filler = token.fillers.iter().find(|filler| filler.slot == slot);
-                    let Some(filler) = filler else {
-                        return Ok(false);
-                    };
-                    if !self.ontology.has(expected) {
-                        return Err(SystemError::InvalidSignExpression(format!(
-                            "unknown case category {expected:?}"
-                        )));
+        let read = reference::parse(&reference::SCRUTINEE, scrutinee).map_err(|error| {
+            SystemError::InvalidSignExpression(format!("case scrutinee {scrutinee:?}: {error}"))
+        })?;
+        match (&read.subject, read.dim, read.path.as_deref()) {
+            (reference::Subject::Slot(slot), Some(dim), Some(path)) => {
+                let SignValue::Applied(token) = value else {
+                    return Ok(false);
+                };
+                let Some(filler) = token.fillers.iter().find(|filler| &filler.slot == slot) else {
+                    return Ok(false);
+                };
+                Ok(filler.scalar(dim, path) == Some(expected))
+            }
+            (reference::Subject::SelfSign, _, _) => {
+                let path = read.dim_path().expect("SCRUTINEE requires a dimension");
+                match Self::value_set_from_value(value, &path) {
+                    Some(values) if values.len() > 1 => {
+                        Err(SystemError::InvalidSignExpression(format!(
+                        "{path} is undecided ({}); decide it on the sign or let a construction \
+                         narrow it before testing it with `==`",
+                        values.join(" | ")
+                    )))
                     }
-                    return Ok(self
-                        .ontology
-                        .categories_satisfy(&filler.categories, expected));
+                    other => {
+                        Ok(other.as_deref() == Some(std::slice::from_ref(&expected.to_owned())))
+                    }
                 }
             }
+            _ => Err(SystemError::InvalidSignExpression(format!(
+                "case scrutinee {scrutinee:?} needs a field: `$slot.NAME.DIM.FIELD`; \
+                 to test a filler's category use a guard case (`$slot.NAME == [Trait]`)"
+            ))),
         }
-        Ok(Self::scalar_from_value(value, scrutinee) == Some(expected))
     }
 
     fn contextual_base_sign(&self, evaluation: &SignEvaluation) -> Result<SignDef, SystemError> {
@@ -3360,10 +3754,15 @@ impl CompiledSystem {
         stack: &[String],
         rules: &mut Vec<UnitRuleRecord>,
     ) -> Result<SignValue, SystemError> {
-        if items
-            .iter()
-            .any(|item| matches!(item, SignItem::TraitUse { .. }))
-        {
+        if items.iter().any(|item| {
+            matches!(
+                item,
+                SignItem::TraitMount {
+                    kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_),
+                    ..
+                }
+            )
+        }) {
             return Err(SystemError::InvalidSignExpression(
                 "unexpanded trait use reached a SignContext fragment".to_owned(),
             ));
@@ -3429,9 +3828,9 @@ impl CompiledSystem {
                     if !source
                         .items
                         .iter()
-                        .any(|item| matches!(item, SignItem::Belongs(value) if value == category))
+                        .any(|item| matches!(item, SignItem::TraitMount { name: value, kind: crate::TraitMountKind::Declaration, .. } if value == category))
                     {
-                        source.items.push(SignItem::Belongs(category.clone()));
+                        source.items.push(SignItem::TraitMount { name: category.clone(), kind: crate::TraitMountKind::Declaration, args: vec![] });
                     }
                 }
                 let (evaluation, membership_cases) =
@@ -3445,9 +3844,9 @@ impl CompiledSystem {
                     if !source
                         .items
                         .iter()
-                        .any(|item| matches!(item, SignItem::Belongs(value) if value == category))
+                        .any(|item| matches!(item, SignItem::TraitMount { name: value, kind: crate::TraitMountKind::Declaration, .. } if value == category))
                     {
-                        source.items.push(SignItem::Belongs(category.clone()));
+                        source.items.push(SignItem::TraitMount { name: category.clone(), kind: crate::TraitMountKind::Declaration, args: vec![] });
                     }
                 }
                 self.rebuild_applied_with_source(&token, source, stack, rules, records)
@@ -3638,6 +4037,30 @@ impl CompiledSystem {
         Ok(SignExpressionEvaluation { value, cases })
     }
 
+    /// 把一個 `DerivedToken` 跑完 token rules 與 sign-body `case:`,得到可實現的
+    /// [`EvaluatedToken`]。這是 [`Self::apply_construction`] 與 [`Self::realize_phon`]
+    /// 之間缺的那一段——`derive_with_context` 內部走的也是同一段。
+    ///
+    /// sign-body 的 case 可以回傳**另一個** sign(如 `walk` 的 `en_3sg({$self})`);
+    /// 那種情形不是一個可實現的 token,故回 `InvalidSignExpression`,與
+    /// `derive_with_context` 的處置一致。
+    pub fn evaluate_token(&self, token: DerivedToken) -> Result<EvaluatedToken, SystemError> {
+        let stack = vec![token.construction.clone()];
+        let mut rules = Vec::new();
+        let mut cases = Vec::new();
+        let value = self.evaluate_applied_sign(token, &stack, &mut rules, &mut cases)?;
+        let SignValue::Applied(token) = value else {
+            return Err(SystemError::InvalidSignExpression(
+                "a saturated construction must evaluate to an applied Sign".to_owned(),
+            ));
+        };
+        Ok(EvaluatedToken(token))
+    }
+
+    /// **只跑到「filler 填進槽」**(§3.1:部分入口)。token rules 與 sign-body `case:`
+    /// 都還沒跑,故它的結果**不能**直接餵給 `realize_phon`——要嘛接 [`Self::evaluate_token`],
+    /// 要嘛整條用 [`Self::derive`]。保留公開是因為 SlotMap 變價、飽和性與槽授權的
+    /// 負例本來就該在這一層驗。
     pub fn apply_construction<'a>(
         &self,
         construction: &str,
@@ -4021,6 +4444,9 @@ impl CompiledSystem {
     ) -> Result<(String, Option<usize>, SourceLocation), SystemError> {
         let current = SignValue::Applied(token.clone());
         for (index, branch) in case.branches.iter().enumerate() {
+            // B3:這一支帶了規則,卻對展開後的形毫無作用。分支既然是靠範疇選中的,
+            // 規則不動就表示範疇掛錯或規則環境寫錯——兩者都是靜默的錯。
+            let mut inert_rules = false;
             if !self.case_condition_matches(&current, case, &branch.condition)? {
                 cases.push(CaseRecord {
                     selection: case.selection,
@@ -4056,10 +4482,37 @@ impl CompiledSystem {
                             nested.missing_required(),
                         )));
                     }
+                    // `nested` 來自 `apply_sign_application` → `evaluate_applied_sign`,
+                    // 已是求值後的 token,故可直接標記。
+                    let nested = EvaluatedToken::already_evaluated(nested);
                     let realization = self.realize_phon(&nested)?;
                     cases.extend(realization.cases);
                     nested_rules.extend(realization.nested_rules);
                     realization.input.into_inner()
+                }
+                // P93:分支 body = phon block body(深層模板 + 若干規則)。
+                // base 取 fragment 自帶的模板,沒有就沿用本 sign 的深層形;
+                // 規則隨後對展開結果跑一趟(§2.1 的循環層)。
+                fragment @ Expression::DimFragment { dim: Dim::Phon, .. } => {
+                    let expanded = match fragment.phon_base_template() {
+                        Some(template) => token.expand_phon_template(template)?,
+                        None => default.to_owned(),
+                    };
+                    let rules: Vec<&crate::Rule> = fragment
+                        .phon_branch_rules()
+                        .iter()
+                        .filter_map(|item| match item {
+                            SignItem::Rule(rule) if rule.dim == Dim::Phon => Some(rule),
+                            _ => None,
+                        })
+                        .collect();
+                    if rules.is_empty() {
+                        expanded
+                    } else {
+                        let changed = self.apply_realization_rules(&expanded, &rules)?;
+                        inert_rules = changed == expanded;
+                        changed
+                    }
                 }
                 Expression::Case(nested) => {
                     self.evaluate_phon_case(token, nested, default, cases, nested_rules)?
@@ -4076,14 +4529,26 @@ impl CompiledSystem {
                 branch: index,
                 status: CaseBranchStatus::Matched,
                 source: branch.source,
-                diagnostic_code: None,
+                diagnostic_code: inert_rules.then_some("REALIZATION_RULES_INERT"),
             });
             return Ok((input, Some(index), branch.source));
         }
         Ok((default.to_owned(), None, SourceLocation::unknown()))
     }
 
-    pub fn realize_phon(&self, token: &DerivedToken) -> Result<PhonRealization, SystemError> {
+    /// 把一個**已求值**的 token 實現為 phon 輸入。
+    ///
+    /// 參數刻意是 [`EvaluatedToken`] 而非 `DerivedToken`:`apply_construction` 只跑到
+    /// 「filler 填進槽」,token rules 與 sign-body `case:` 都還沒跑,而真實管線裡
+    /// `realize_phon` **永遠**只拿到 `evaluate_applied_sign` 之後的 token。舊簽名收
+    /// `&DerivedToken` 時,`apply_construction(...) + realize_phon(...)` 是一個編譯得過、
+    /// 執行不報錯、卻在產品路徑上不存在的組合——guard 若讀 `$self.<由 token rule 算出的
+    /// 特徵>` 會讀到空值、靜默掉進 `else`,測試照樣綠燈。改型別讓這個組合寫不出來。
+    ///
+    /// 取得 [`EvaluatedToken`]:[`Self::evaluate_token`](完整求值但不跑音變)或
+    /// [`Self::derive`](一路到表層)。
+    pub fn realize_phon(&self, token: &EvaluatedToken) -> Result<PhonRealization, SystemError> {
+        let token = &token.0;
         let realization = token.rule_sign.items.iter().find_map(|item| match item {
             SignItem::Realization(realization) => Some(realization),
             _ => None,
@@ -4095,15 +4560,13 @@ impl CompiledSystem {
         let default = token.phon_form()?;
         let mut typed = None;
         if let Some(realization) = realization {
-            if let Some(case) = &realization.expression {
-                typed = Some(self.evaluate_phon_case(
-                    token,
-                    case,
-                    &default,
-                    &mut cases,
-                    &mut nested_rules,
-                )?);
-            }
+            typed = Some(self.evaluate_phon_case(
+                token,
+                &realization.expression,
+                &default,
+                &mut cases,
+                &mut nested_rules,
+            )?);
         }
         let (input, branch, source) = if let Some(result) = typed {
             result
@@ -4127,6 +4590,40 @@ impl CompiledSystem {
             cases,
             nested_rules,
         })
+    }
+
+    /// P93:跑一個 realization 分支自帶的規則。
+    ///
+    /// **這一趟是循環的**(§2.1):只含域宣告 + 該分支的規則,**不含**文法的全域
+    /// 規則——那些是後循環的,由 [`Self::phon_program`] 那一趟在整個 phrase 上跑。
+    /// 巢狀構式時,內層的實現形先在這裡定案,再以 filler 身分進入外層;若把全域
+    /// 規則也排進來,同一條音變會在每一層各跑一次。
+    fn apply_realization_rules(
+        &self,
+        input: &str,
+        rules: &[&crate::Rule],
+    ) -> Result<String, SystemError> {
+        let mut source = String::new();
+        for line in &self.effective_language.dsl_decls {
+            source.push_str(line);
+            source.push('\n');
+        }
+        source.push('\n');
+        let mut number = 1u32;
+        for rule in rules {
+            codegen::emit_rule(&mut source, &mut number, rule)
+                .map_err(|error| SystemError::PhonCompile(error.to_string()))?;
+        }
+        let program = tshiatun_dsl::compile(&source)
+            .map_err(|error| SystemError::PhonCompile(error.to_string()))?;
+        let word = tshiatun_dsl::build_phrase(&program, input)
+            .map_err(|error| SystemError::PhonRuntime(error.to_string()))?;
+        let fallback = word.clone();
+        let steps = tshiatun_dsl::run_program(&program, word)
+            .map_err(|error| SystemError::PhonRuntime(error.to_string()))?;
+        let last = steps.last().map(|step| &step.word).unwrap_or(&fallback);
+        tshiatun_dsl::surface_phrase(&program, last)
+            .map_err(|error| SystemError::PhonRuntime(error.to_string()))
     }
 
     fn phon_program(&self, token: &DerivedToken) -> Result<tshiatun_dsl::Program, SystemError> {
@@ -4419,7 +4916,10 @@ impl CompiledSystem {
         occurrences.extend(final_occurrences);
 
         let program = self.phon_program(&token)?;
-        let realization = self.realize_phon(&token)?;
+        // `token` 是上方 `evaluate_applied_sign` 解構出來的 `SignValue::Applied`。
+        let evaluated = EvaluatedToken::already_evaluated(token);
+        let realization = self.realize_phon(&evaluated)?;
+        let mut token = evaluated.into_token();
         rules.extend(realization.nested_rules.iter().cloned());
         cases.extend(realization.cases.iter().cloned());
         token.record_realized_phon_input(realization.input.as_str().to_owned());

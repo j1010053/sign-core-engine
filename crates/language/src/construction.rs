@@ -12,6 +12,7 @@
 //! provenance，並可遞迴充當另一 construction 的 filler。
 
 use crate::ontology::OntologyRegistry;
+use crate::reference;
 use crate::sem::{self, SemNode};
 use crate::synchronic::{self, Patch, RuleRecord, RuleStatus};
 pub use crate::SlotMapOp;
@@ -19,7 +20,7 @@ use crate::{
     CaseCondition, Dim, Expression, Language, SignDef, SignItem, Slot, SlotConstraint,
     SourceLocation, TypedCase,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use tshiatun_dsl::{build_phrase, run_program, surface_phrase, Program};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -282,6 +283,9 @@ pub struct FillerSnapshot {
     pub sem: SemNode,
     pub prag: Vec<(String, String)>,
     pub provenance: FillerProvenance,
+    /// P75:filler 上宣告過**且沒有** `?` 的 feature。`$slot` 讀到這些路徑缺席時
+    /// 是 Error 而非靜默 `Unmatched`——與 `$self` 同一條規約,只是宣告住在 filler 上。
+    pub required_features: BTreeSet<(Dim, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -630,77 +634,43 @@ fn phon_value(sign: &SignDef) -> String {
         .unwrap_or_default()
 }
 
-/// `{slot}` 代入 + 字面素材直通。未填的鍵代入空(飽和性由呼叫端先驗)。
+/// `{$slot.NAME}` 代入 + 字面素材直通。未填的鍵代入空(飽和性由呼叫端先驗)。
 fn substitute(template: &str, filled: &[(String, String)]) -> String {
-    let lookup = |name: &str| {
-        filled
-            .iter()
-            .find(|(k, _)| k == name)
-            .map(|(_, v)| v.as_str())
-            .unwrap_or("")
-    };
-    let mut out = String::new();
-    let mut chars = template.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '{' {
-            let mut name = String::new();
-            for c2 in chars.by_ref() {
-                if c2 == '}' {
-                    break;
-                }
-                name.push(c2);
-            }
-            out.push_str(lookup(name.trim()));
-        } else {
-            out.push(c);
-        }
-    }
-    out
+    reference::substitute_interpolations(template, |found| {
+        let name = found.slot()?;
+        Some(
+            filled
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+                .unwrap_or_default(),
+        )
+    })
 }
 
+/// 同上,但**未填的鍵原樣保留**——未飽和的 Sign 之後還要再代一次。
 fn substitute_symbolic(template: &str, filled: &[(String, String)]) -> String {
-    let mut out = String::new();
-    let mut chars = template.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '{' {
-            let mut name = String::new();
-            for c2 in chars.by_ref() {
-                if c2 == '}' {
-                    break;
-                }
-                name.push(c2);
-            }
-            if let Some((_, value)) = filled.iter().find(|(key, _)| key == name.trim()) {
-                out.push_str(value);
-            } else {
-                out.push('{');
-                out.push_str(name.trim());
-                out.push('}');
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
+    reference::substitute_interpolations(template, |found| {
+        let name = found.slot()?;
+        filled
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.clone())
+    })
 }
 
 /// 模板引用的 slot 名集合(驗證用)。
 fn template_refs(template: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut chars = template.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '{' {
-            let mut name = String::new();
-            for c2 in chars.by_ref() {
-                if c2 == '}' {
-                    break;
-                }
-                name.push(c2);
-            }
-            out.push(name.trim().to_owned());
-        }
-    }
-    out
+    reference::scan_interpolations(template)
+        .iter()
+        .map(|found| {
+            found
+                .slot()
+                .map(str::to_owned)
+                // 內容不是合法引用時保留原文,讓驗證端指得出是哪一處。
+                .unwrap_or_else(|| found.inner.clone())
+        })
+        .collect()
 }
 
 fn ident_ok(name: &str) -> bool {
@@ -721,6 +691,8 @@ struct FillerMaterial {
     prag: Vec<(String, String)>,
     provenance: FillerProvenance,
     feature_domains: BTreeMap<String, Vec<String>>,
+    /// P75:宣告過**且沒有** `?` 的 feature——`$slot` 讀到它們缺席是 Error。
+    required_features: BTreeSet<(Dim, String)>,
     occurrence_sign: Option<SignDef>,
     base_sign: Option<SignDef>,
     occurrence_token: Option<DerivedToken>,
@@ -805,6 +777,20 @@ pub fn validate_slot_mapping(sign: &SignDef, extra: &SlotMap) -> Result<(), CxgE
     validate_slot_map(&slots_of(sign), &mapping).map(|_| ())
 }
 
+/// P75:宣告過**且沒有** `?` 的 feature 集合(缺席即 Error 的那些)。
+///
+/// 四維一起收:`$slot` 讀取可以指定任何維度,而 `?` 的意思與維度無關。
+fn required_feature_set<'a>(items: impl Iterator<Item = &'a SignItem>) -> BTreeSet<(Dim, String)> {
+    items
+        .filter_map(|item| match item {
+            SignItem::FeatureDecl(feature) if !feature.optional => {
+                Some((feature.dim, feature.name.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 fn sign_material(sign: &SignDef, reg: &OntologyRegistry) -> Result<FillerMaterial, CxgError> {
     let base_sign = reg.effective_sign(sign);
     let (sign, probe_rules) = evaluate_occurrence_sign(&base_sign, reg)?;
@@ -835,6 +821,7 @@ fn sign_material(sign: &SignDef, reg: &OntologyRegistry) -> Result<FillerMateria
                 _ => None,
             })
             .collect(),
+        required_features: required_feature_set(sign.items.iter()),
         occurrence_sign: Some(sign),
         base_sign: Some(base_sign),
         occurrence_token: None,
@@ -882,6 +869,7 @@ fn committed_sign_material(
                 _ => None,
             })
             .collect(),
+        required_features: required_feature_set(sign.items.iter()),
         occurrence_sign: Some(sign.clone()),
         base_sign: Some(base_sign.clone()),
         occurrence_token: None,
@@ -916,6 +904,7 @@ fn token_material(token: &DerivedToken) -> Result<FillerMaterial, CxgError> {
                 _ => None,
             })
             .collect(),
+        required_features: required_feature_set(token.rule_sign.items.iter()),
         occurrence_sign: None,
         base_sign: None,
         occurrence_token: Some(token.clone()),
@@ -974,13 +963,9 @@ fn committed_bound_filler(material: &FillerMaterial) -> Result<BoundFiller, CxgE
     })
 }
 
-fn feature_operand(source: &str) -> Option<(&str, &str)> {
-    let source = source.strip_prefix("$slot.").unwrap_or(source);
-    let mut parts = source.split('.');
-    match (parts.next(), parts.next(), parts.next(), parts.next()) {
-        (Some(slot), Some("syn"), Some(feature), None) => Some((slot, feature)),
-        _ => None,
-    }
+fn feature_operand(source: &str) -> Option<(String, String)> {
+    let reference = reference::parse(&reference::SLOT_SYN_FEATURE, source).ok()?;
+    Some((reference.slot()?.to_owned(), reference.path.clone()?))
 }
 
 fn validate_binary_constraints(
@@ -1014,23 +999,24 @@ fn validate_binary_constraints(
                 let Some((right_slot, right_feature)) = feature_operand(&constraint.right) else {
                     return Err(CxgError::ConstraintInvalidFeature(constraint.right.clone()));
                 };
-                for name in [left_slot, right_slot] {
+                for name in [&left_slot, &right_slot] {
                     if !slot_exists(name) {
-                        return Err(CxgError::ConstraintUnknownSlot(name.to_owned()));
+                        return Err(CxgError::ConstraintUnknownSlot(name.clone()));
                     }
                 }
-                let (Some(left), Some(right)) = (material(left_slot), material(right_slot)) else {
+                let (Some(left), Some(right)) = (material(&left_slot), material(&right_slot))
+                else {
                     // The unsaturated Sign keeps this constraint until both
                     // operands become concrete.
                     continue;
                 };
                 let left_domain = left
                     .feature_domains
-                    .get(left_feature)
+                    .get(&left_feature)
                     .ok_or_else(|| CxgError::ConstraintInvalidFeature(constraint.left.clone()))?;
                 let right_domain = right
                     .feature_domains
-                    .get(right_feature)
+                    .get(&right_feature)
                     .ok_or_else(|| CxgError::ConstraintInvalidFeature(constraint.right.clone()))?;
                 if left_domain != right_domain {
                     return Err(CxgError::ConstraintDomainMismatch {
@@ -1060,16 +1046,23 @@ fn validate_binary_constraints(
                 }
             }
             ConstraintPredicate::Before | ConstraintPredicate::Adjacent => {
-                for name in [&constraint.left, &constraint.right] {
-                    if !slot_exists(name) {
-                        return Err(CxgError::ConstraintUnknownSlot(name.clone()));
+                let mut names = Vec::with_capacity(2);
+                for operand in [&constraint.left, &constraint.right] {
+                    let name = reference::parse(&reference::CONSTRAINT_SLOT, operand)
+                        .ok()
+                        .and_then(|read| read.slot().map(str::to_owned))
+                        .ok_or_else(|| CxgError::ConstraintUnknownSlot(operand.clone()))?;
+                    if !slot_exists(&name) {
+                        return Err(CxgError::ConstraintUnknownSlot(name));
                     }
+                    names.push(name);
                 }
+                let (left_slot, right_slot) = (names[0].clone(), names[1].clone());
                 if constraint.predicate == ConstraintPredicate::Before {
-                    before_edges.push((constraint.left.clone(), constraint.right.clone()));
+                    before_edges.push((left_slot.clone(), right_slot.clone()));
                 }
-                let left = order.iter().position(|name| name == &constraint.left);
-                let right = order.iter().position(|name| name == &constraint.right);
+                let left = order.iter().position(|name| name == &left_slot);
+                let right = order.iter().position(|name| name == &right_slot);
                 let (Some(left), Some(right)) = (left, right) else {
                     // Missing optional/required variables remain residual on
                     // the Sign and are checked at its concrete boundary.
@@ -1083,8 +1076,8 @@ fn validate_binary_constraints(
                 if !satisfied {
                     return Err(CxgError::ConstraintOrderConflict {
                         predicate: constraint.predicate.keyword(),
-                        left: constraint.left.clone(),
-                        right: constraint.right.clone(),
+                        left: left_slot,
+                        right: right_slot,
                         template: template.to_owned(),
                     });
                 }
@@ -1142,18 +1135,15 @@ fn evaluate_occurrence_sign(
     Ok((sign, records))
 }
 
-fn slot_feature_source(value: &str) -> Option<(&str, &str)> {
-    let mut parts = value.split('.');
-    match (
-        parts.next(),
-        parts.next(),
-        parts.next(),
-        parts.next(),
-        parts.next(),
-    ) {
-        (Some("$slot"), Some(slot), Some("syn"), Some(feature), None) => Some((slot, feature)),
-        _ => None,
-    }
+fn slot_feature_source(value: &str) -> Option<(String, String)> {
+    let reference = reference::parse(&reference::SLOT_SYN_FEATURE, value).ok()?;
+    Some((reference.slot()?.to_owned(), reference.path.clone()?))
+}
+
+/// 把投影出來的值拆成候選集合。未定案的 `FeatureValue` 在投影裡是
+/// `"singular | plural"`,已定案就是單一候選。
+fn value_candidates(raw: &str) -> Vec<&str> {
+    raw.split('|').map(str::trim).collect()
 }
 
 fn validate_occurrence_feature(
@@ -1168,19 +1158,24 @@ fn validate_occurrence_feature(
             feature: feature.to_owned(),
         });
     };
-    if !domain.iter().any(|candidate| candidate == value) {
+    // Q3:綁定的值可能是未定案的候選集合(`"a | b"`),每個候選都要在域內。
+    if let Some(outside) = value_candidates(value)
+        .into_iter()
+        .find(|candidate| !domain.iter().any(|allowed| allowed == candidate))
+    {
         return Err(CxgError::SlotFeatureOutOfDomain {
             slot: slot.to_owned(),
             feature: feature.to_owned(),
-            value: value.to_owned(),
+            value: outside.to_owned(),
             domain: domain.join(", "),
         });
     }
     Ok(())
 }
 
+/// 依**已解析的**欄位路徑(`<dim>.<field>`)查 token 的純量值。
+/// 這裡不是引用位置——主體早在呼叫端就決定了,故不經 `reference`。
 fn token_scalar<'a>(token: &'a DerivedToken, path: &str) -> Option<&'a str> {
-    let path = path.strip_prefix("$self.").unwrap_or(path);
     let (dimension, field) = path.split_once('.')?;
     match Dim::parse(dimension)? {
         Dim::Phon => token
@@ -1241,25 +1236,29 @@ fn token_case_condition_matches(
             let scrutinee = case.scrutinee.as_deref().ok_or_else(|| {
                 TokenExpressionError::Invalid("equality case is missing its scrutinee".to_owned())
             })?;
-            let scrutinee = scrutinee
-                .trim()
-                .strip_prefix("$self.")
-                .unwrap_or(scrutinee.trim());
-            if let Some((slot, projection)) = scrutinee.split_once('.') {
-                if projection == "phon" {
-                    let Some(filler) = token.fillers.iter().find(|filler| filler.slot == slot)
+            // 與 `CompiledSystem::case_equals_matches` 同一判準。
+            let read = reference::parse(&reference::SCRUTINEE, scrutinee).map_err(|error| {
+                TokenExpressionError::Invalid(format!("case scrutinee {scrutinee:?}: {error}"))
+            })?;
+            // 一律純量比對;範疇比對走 guard 形(`$slot.NAME == [Trait]`)。
+            match (&read.subject, read.dim, read.path.as_deref()) {
+                // 填充者的純量欄位,與 `$self` 對稱。
+                (reference::Subject::Slot(slot), Some(dim), Some(path)) => {
+                    let Some(filler) = token.fillers.iter().find(|filler| &filler.slot == slot)
                     else {
                         return Ok(false);
                     };
-                    if !reg.has(expected) {
-                        return Err(TokenExpressionError::Invalid(format!(
-                            "unknown case category {expected:?}"
-                        )));
-                    }
-                    return Ok(reg.categories_satisfy(&filler.categories, expected));
+                    Ok(filler.scalar(dim, path) == Some(expected))
                 }
+                (reference::Subject::SelfSign, _, _) => {
+                    let path = read.dim_path().expect("SCRUTINEE requires a dimension");
+                    Ok(token_scalar(token, &path) == Some(expected))
+                }
+                _ => Err(TokenExpressionError::Invalid(format!(
+                    "case scrutinee {scrutinee:?} needs a field: `$slot.NAME.DIM.FIELD`; \
+                     to test a filler's category use a guard case (`$slot.NAME == [Trait]`)"
+                ))),
             }
-            Ok(token_scalar(token, scrutinee) == Some(expected))
         }
     }
 }
@@ -1586,23 +1585,46 @@ fn apply_occurrence_constraints(
         let mut constrained = base;
         for (feature, value) in constraints {
             let path = format!("syn.{feature}");
-            if let Some(actual) = constrained
+            let actual = constrained
                 .project(Dim::Syn, reg)
                 .defs
                 .iter()
                 .find(|(candidate, _)| candidate == &path)
-                .map(|(_, value)| value)
-            {
-                if actual != value {
-                    return Err(CxgError::SlotFeatureConflict {
-                        slot: slot.to_owned(),
-                        feature: feature.clone(),
-                        expected: value.clone(),
-                        actual: actual.clone(),
-                    });
+                .map(|(_, value)| value.clone());
+            match actual {
+                // 構式的要求與 filler 的值域**求交**。
+                //
+                // filler 未定案時(`"singular | plural"`),交集非空就是這個構式
+                // 把它收斂了——同一個 sign 在不同構式裡收斂到不同的值,正是
+                // *the police are* / *is*、*fish*(單複同形)這類語言事實,所以
+                // 收斂結果只寫進構式局部的副本,不回寫已存的 sign。
+                Some(actual) => {
+                    // 構式的要求本身也可能是集合(多處綁定聯集而來),故兩邊都
+                    // 拆成候選再求交,而不是拿字串比對。
+                    let wanted = value_candidates(value);
+                    let held = value_candidates(&actual);
+                    let intersection: Vec<&str> = held
+                        .iter()
+                        .copied()
+                        .filter(|candidate| wanted.contains(candidate))
+                        .collect();
+                    if intersection.is_empty() {
+                        return Err(CxgError::SlotFeatureConflict {
+                            slot: slot.to_owned(),
+                            feature: feature.clone(),
+                            expected: value.clone(),
+                            actual,
+                        });
+                    }
+                    if intersection.len() < held.len() {
+                        constrained = Patch::syn()
+                            .set(feature, &intersection.join(" | "))
+                            .apply(&constrained);
+                    }
                 }
-            } else {
-                constrained = Patch::syn().set(feature, value).apply(&constrained);
+                None => {
+                    constrained = Patch::syn().set(feature, value).apply(&constrained);
+                }
             }
         }
         let (evaluated, records) = evaluate_occurrence_sign(&constrained, reg)?;
@@ -1762,7 +1784,8 @@ fn realize_stored_filler(
         });
         let mut selected: Option<String> = None;
         if let Some(realization) = realization {
-            if let Some(case) = &realization.expression {
+            {
+                let case = &realization.expression;
                 for branch in &case.branches {
                     let matched = match &branch.condition {
                         crate::CaseCondition::Else => true,
@@ -1792,11 +1815,24 @@ fn realize_stored_filler(
                         crate::CaseCondition::Equals(_) => false,
                     };
                     if matched {
-                        match &branch.result {
-                            crate::Expression::PhonTemplate(template) => {
-                                selected = Some(template.clone())
-                            }
-                            _ => {
+                        // P93:分支可能是 phon fragment。這條路徑拿不到 phon
+                        // program,故帶規則的分支明確報錯,不靜默丟掉規則。
+                        if branch
+                            .result
+                            .phon_branch_rules()
+                            .iter()
+                            .any(|item| matches!(item, crate::SignItem::Rule(_)))
+                        {
+                            return Err(CxgError::FillerRealizationGuard {
+                                filler: material.name.clone(),
+                                message: "an occurrence realization branch cannot carry rules \
+                                          yet — this path has no phon program to run them"
+                                    .to_owned(),
+                            });
+                        }
+                        match branch.result.phon_base_template() {
+                            Some(template) => selected = Some(template.to_owned()),
+                            None => {
                                 return Err(CxgError::FillerRealizationGuard {
                                     filler: material.name.clone(),
                                     message: "occurrence realization requires a direct Phon result"
@@ -1851,7 +1887,8 @@ fn realize_stored_filler(
         return Ok(());
     };
     let mut selected = None;
-    if let Some(case) = &realization.expression {
+    {
+        let case = &realization.expression;
         for branch in &case.branches {
             let matched = match &branch.condition {
                 crate::CaseCondition::Else => true,
@@ -1883,6 +1920,34 @@ fn realize_stored_filler(
             if matched {
                 match &branch.result {
                     crate::Expression::PhonTemplate(template) => selected = Some(template.as_str()),
+                    // P93:分支存成 phon fragment(模板 + 若干規則)。這條路徑是
+                    // **已存 sign 當 filler** 時的自我實現,拿不到 phon program,
+                    // 故只跑得動純模板的分支。帶規則的分支明確報錯,不靜默丟掉。
+                    fragment @ crate::Expression::DimFragment {
+                        dim: crate::Dim::Phon,
+                        ..
+                    } => {
+                        if fragment
+                            .phon_branch_rules()
+                            .iter()
+                            .any(|item| matches!(item, crate::SignItem::Rule(_)))
+                        {
+                            return Err(CxgError::FillerRealizationGuard {
+                                filler: material.name.clone(),
+                                message: "a stored filler's realization branch cannot carry \
+                                          rules yet — this path has no phon program to run them"
+                                    .to_owned(),
+                            });
+                        }
+                        let Some(template) = fragment.phon_base_template() else {
+                            return Err(CxgError::FillerRealizationGuard {
+                                filler: material.name.clone(),
+                                message: "stored realization requires a direct Phon result"
+                                    .to_owned(),
+                            });
+                        };
+                        selected = Some(template);
+                    }
                     _ => {
                         return Err(CxgError::FillerRealizationGuard {
                             filler: material.name.clone(),
@@ -1993,7 +2058,7 @@ fn resolve_sem(
                         slot: slot_name.to_owned(),
                     });
                 }
-                if let Some((_, filler)) = filler_nodes.iter().find(|(key, _)| key == slot_name) {
+                if let Some((_, filler)) = filler_nodes.iter().find(|(key, _)| *key == slot_name) {
                     node.roles.push((field, filler.clone()));
                 }
                 // 引用未填(optional/部分)→ role 暫略
@@ -2222,7 +2287,7 @@ fn apply_with_committed<'a>(
             {
                 return Err(CxgError::SlotFeatureUnknownSource(source_slot.to_owned()));
             }
-            let Some((_, source)) = probe.iter().find(|(slot, _)| slot == source_slot) else {
+            let Some((_, source)) = probe.iter().find(|(slot, _)| *slot == source_slot) else {
                 return Err(CxgError::SlotFeatureSourceMissing {
                     slot: source_slot.to_owned(),
                     feature: source_feature.to_owned(),
@@ -2380,6 +2445,7 @@ fn apply_with_committed<'a>(
             sem: filler.sem.clone(),
             prag: filler.prag.clone(),
             provenance: filler.provenance.clone(),
+            required_features: filler.required_features.clone(),
         })
         .collect();
     let occurrence_records = provided

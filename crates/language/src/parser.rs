@@ -23,6 +23,7 @@
 //! round-trip:對 canonical 輸入,`parse(src).dump() == src`(P21)。
 
 use crate::path::parse_path;
+use crate::reference;
 use crate::{
     BinaryConstraint, Block, CaseBranch, CaseCondition, CaseSelection, ConstraintPredicate, Def,
     Dim, Expression, ExpressionType, FeatureDecl, FeatureExpression, FeatureValue, Language,
@@ -57,19 +58,120 @@ fn indent_of(raw: &str) -> usize {
     raw.chars().take_while(|c| *c == ' ').count()
 }
 
-/// 容器頭 `<kw> Name:` → (kw, name)?
+/// 容器頭 `<kw> Name:` 或 `<kw> Name<P1, P2>:` → (kw, name_with_params)?
+///
+/// name 部分可能帶角括號(P76 泛型 trait);呼叫端負責用
+/// [`split_type_params`] 拆出 base name 與參數列表。
 fn container_head(text: &str) -> Option<(&'static str, &str)> {
-    for kw in ["global trait", "trait", "sign"] {
+    for kw in ["global trait", "marker trait", "trait", "sign"] {
         if let Some(rest) = text.strip_prefix(kw) {
             if let Some(name) = rest.strip_suffix(':') {
                 let name = name.trim();
-                if !name.is_empty() && !name.contains(char::is_whitespace) {
+                if name.is_empty() {
+                    continue;
+                }
+                let base = match name.find('<') {
+                    Some(pos) => &name[..pos],
+                    None => name,
+                };
+                if !base.is_empty() && !base.contains(char::is_whitespace) {
                     return Some((kw, name));
                 }
             }
         }
     }
     None
+}
+
+/// P76:`Name<P1: Bound, P2>` → (base_name, params)。
+/// 無角括號時回傳空列表。
+fn split_type_params(
+    name: &str,
+    line: usize,
+) -> Result<(&str, Vec<crate::TraitTypeParam>), ParseError> {
+    let Some(open) = name.find('<') else {
+        return Ok((name, vec![]));
+    };
+    let base = &name[..open];
+    let rest = &name[open + 1..];
+    let Some(inside) = rest.strip_suffix('>') else {
+        return Err(err(line, "unclosed `<` in type parameter list"));
+    };
+    if inside.trim().is_empty() {
+        return Err(err(line, "empty type parameter"));
+    }
+    Ok((base, parse_trait_type_param_list_at(inside, line)?))
+}
+
+/// 解析不含角括號的 trait 型別參數清單；空字串表示清除全部參數。
+///
+/// `.lang` 宣告與 `.chg` 的 `type_params` update 共用這個入口，避免兩套
+/// `name: Bound` 文法各自漂移。
+pub fn parse_trait_type_param_list(value: &str) -> Result<Vec<crate::TraitTypeParam>, ParseError> {
+    if value.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    parse_trait_type_param_list_at(value, 1)
+}
+
+fn parse_trait_type_param_list_at(
+    inside: &str,
+    line: usize,
+) -> Result<Vec<crate::TraitTypeParam>, ParseError> {
+    let mut params = Vec::new();
+    for part in inside.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            return Err(err(line, "empty type parameter"));
+        }
+        if let Some((pname, bound)) = part.split_once(':') {
+            let pname = pname.trim();
+            let bound = bound.trim();
+            if !ident_ok(pname) {
+                return Err(err(line, format!("invalid type parameter name `{pname}`")));
+            }
+            if !ident_ok(bound) {
+                return Err(err(line, format!("invalid bound `{bound}`")));
+            }
+            params.push(crate::TraitTypeParam {
+                name: pname.to_owned(),
+                bound: Some(bound.to_owned()),
+            });
+        } else {
+            if !ident_ok(part) {
+                return Err(err(line, format!("invalid type parameter name `{part}`")));
+            }
+            params.push(crate::TraitTypeParam {
+                name: part.to_owned(),
+                bound: None,
+            });
+        }
+    }
+    Ok(params)
+}
+
+/// P76:`belongs Name<Arg1, Arg2>` → (name, args)。
+fn split_type_args(full: &str, line: usize) -> Result<(String, Vec<String>), ParseError> {
+    let Some(open) = full.find('<') else {
+        return Ok((full.to_owned(), vec![]));
+    };
+    let base = &full[..open];
+    let rest = &full[open + 1..];
+    let Some(inside) = rest.strip_suffix('>') else {
+        return Err(err(line, "unclosed `<` in type argument list"));
+    };
+    let mut args = Vec::new();
+    for part in inside.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            return Err(err(line, "empty type argument"));
+        }
+        if !ident_ok(part) {
+            return Err(err(line, format!("invalid type argument `{part}`")));
+        }
+        args.push(part.to_owned());
+    }
+    Ok((base.to_owned(), args))
 }
 
 fn is_language_head(text: &str) -> bool {
@@ -112,16 +214,15 @@ fn parse_argument_value(source: &str, line: usize) -> Result<SignArgumentValue, 
         .and_then(|value| value.strip_suffix('}'))
         .unwrap_or(source.trim())
         .trim();
-    if value == "$self" {
-        return Ok(SignArgumentValue::SelfSign);
-    }
-    if let Some(slot) = value.strip_prefix("$slot.") {
-        if ident_ok(slot) {
-            return Ok(SignArgumentValue::Slot(slot.to_owned()));
-        }
-    }
-    if ident_ok(value) {
-        return Ok(SignArgumentValue::Slot(value.to_owned()));
+    // 實參是「只有主體、沒有維度也沒有路徑」的引用:`$self` / `$slot.n` / `n`。
+    // 解析不出來就是巢狀 application。
+    if let Ok(read) = reference::parse(&reference::SUBJECT_ONLY, value) {
+        return Ok(match read.subject {
+            reference::Subject::SelfSign => SignArgumentValue::SelfSign,
+            reference::Subject::Slot(name) => SignArgumentValue::Slot(name),
+            // `SUBJECT_ONLY` 不允許具名綁定,故此臂不可達。
+            reference::Subject::Binding(_) => unreachable!("SUBJECT_ONLY forbids bindings"),
+        });
     }
     parse_sign_application(value, line)
         .map(Box::new)
@@ -227,10 +328,11 @@ fn parse_expression(
         if let Some(slot) = source
             .strip_prefix('{')
             .and_then(|value| value.strip_suffix('}'))
-            .map(str::trim)
+            .and_then(|inner| reference::parse(&reference::SUBJECT_ONLY, inner).ok())
+            .and_then(|read| read.slot().map(str::to_owned))
         {
-            if ident_ok(slot) {
-                return Ok(Expression::Slot(slot.to_owned()));
+            {
+                return Ok(Expression::Slot(slot));
             }
         }
     }
@@ -246,6 +348,12 @@ fn is_context_head(source: &str) -> bool {
         || ((source.starts_with("case ") || source.starts_with("when ")) && source.ends_with(':'))
 }
 
+/// `when:`(`CaseSelection::Accumulate`)可否出現在此 context。
+///
+/// **與 [`context_dim`] 是兩個獨立閘門**:那個決定「分支 body 能不能寫成片段」,
+/// 這個只決定「累積語意合不合法」。P93 讓 phon 分支可帶 body(見 `context_dim`),
+/// 但**不**連帶開放 `when:`——多分支各自貢獻規則、全部套用是另一套語意
+/// (PFM 的 rule block),必須刻意裁定,不得當作 P93 的副產品滑進來。
 fn is_fragment_context(expected: &ExpressionType) -> bool {
     matches!(
         expected,
@@ -265,11 +373,18 @@ fn dim_context(dim: Dim) -> ExpressionType {
     }
 }
 
+/// 分支 body 能寫成哪個維度的片段。
+///
+/// **P93:phon 加入**。此前 phon 被排除,理由是「Phon uses its existing pure-template
+/// representation instead of Sign items」——realization 分支只能是一個完整模板。
+/// 加上規則分支後那個理由失效:分支 body 就是一個 `phon:` 區塊的 body(深層模板 +
+/// 若干規則),故直接復用 phon block body 的解析器,**零新文法**。
 fn context_dim(expected: &ExpressionType) -> Option<Dim> {
     match expected {
         ExpressionType::SynContext => Some(Dim::Syn),
         ExpressionType::SemContext => Some(Dim::Sem),
         ExpressionType::PragContext => Some(Dim::Prag),
+        ExpressionType::PhonContext => Some(Dim::Phon),
         _ => None,
     }
 }
@@ -323,6 +438,27 @@ fn parse_typed_case(
     };
     let (scrutinee, case_name) = split_name_suffix(scrutinee);
     let case_name = validate_label(case_name, head.no)?;
+    // `case <slot>.phon:` 已移除(2026-08-17)。它的 `.phon` 不讀音——執行期比的是
+    // filler 的**範疇**,`.phon` 只是個字面標記,故名實不符;而且整個 case 共用一個
+    // scrutinee,強迫所有分支討論同一個槽。guard 分支 `$slot.<name> == [Category]:`
+    // 表達力嚴格更強(每支可測不同對象、可 `&&`),且 `[...]` 明示這是範疇測試。
+    //
+    // **拒絕而非忽略**:比照舊 `schema conlang.lang/v2` 標頭的處置——留著一個
+    // 名實不符的形式,作者會以為它在讀音韻。本專案未發布,無既有檔案需相容。
+    if let Some((slot, "phon")) = scrutinee
+        .trim()
+        .strip_prefix("$self.")
+        .unwrap_or(scrutinee.trim())
+        .split_once('.')
+    {
+        return Err(err(
+            head.no,
+            format!(
+                "`case {slot}.phon:` was removed — it tested the filler's category, not its \
+                 phonology. Use guard branches instead: `$slot.{slot} == [Category]:`"
+            ),
+        ));
+    }
     let scrutinee = (!scrutinee.is_empty()).then(|| scrutinee.to_owned());
     let mut index = start + 1;
     while index < body.len() && body[index].text.is_empty() {
@@ -381,10 +517,48 @@ fn parse_typed_case(
         while branch_body_end < body.len() && body[branch_body_end].indent > branch_indent {
             branch_body_end += 1;
         }
-        let scalar_result = if selection == CaseSelection::FirstMatch {
-            parse_expression(&result_line.text, &expected, result_line.no).ok()
+        let branch_body_lines = body[branch_body_start..branch_body_end]
+            .iter()
+            .filter(|line| !line.text.is_empty())
+            .count();
+        // P93:phon 分支 body = phon block body(深層模板 + 若干規則),**模板一律**
+        // 存成 fragment,單行也是。
+        //
+        // 曾讓單行 `/…/` 留在純量 `PhonTemplate`,但那使同一件事有兩種節點結構:
+        // 純量不產生節點(`enumerate_expression_node` 的 `_ => {}`),fragment 的
+        // items 各是節點。於是刪掉 `(模板, [規則])` 的規則時,重新解析的 canonical
+        // 塌陷成純量、manifest 卻還記著 `Items(0)` → `ShapeMismatch`。統一表示換來
+        // 編輯下的穩定,代價是 `base_identities` 變動一次。
+        //
+        // **但只統一模板**。`PhonInterpolation` / `Projection` 帶著結構化的
+        // `SignApplication`(遞迴套用另一個構式要用),壓成 phon 區塊的 Def 字串會
+        // 讓那個結構消失。它們沒有「模板 + 規則」的形狀,也就沒有上述塌陷問題。
+        let phon_structured = if matches!(expected, ExpressionType::PhonContext)
+            && selection == CaseSelection::FirstMatch
+            && branch_body_lines == 1
+        {
+            match parse_expression(&result_line.text, &expected, result_line.no) {
+                Ok(Expression::PhonTemplate(_)) => None,
+                Ok(structured) => Some(structured),
+                // 改寫規則不是 `parse_expression` 認得的形狀,交給 fragment 路徑。
+                // 其餘解析失敗一律照舊拒絕——表示統一不該連帶把嚴格性放掉,不然
+                // 畸形的 application 引數與裸 trait 名會被當成 phon block body。
+                Err(error) => {
+                    if result_line.text.contains("=>") {
+                        None
+                    } else {
+                        return Err(error);
+                    }
+                }
+            }
         } else {
             None
+        };
+        let phon_rule_body = matches!(expected, ExpressionType::PhonContext);
+        let scalar_result = if selection == CaseSelection::FirstMatch && !phon_rule_body {
+            parse_expression(&result_line.text, &expected, result_line.no).ok()
+        } else {
+            phon_structured
         };
         let result = if is_context_head(&result_line.text) {
             let (nested, next) = parse_typed_case(lang, body, index, expected.clone())?;
@@ -430,7 +604,7 @@ fn parse_typed_case(
                 index += 1;
                 continue;
             }
-            let Some(category) = belongs_target(&line.text, line.no)? else {
+            let Some((category, _args)) = belongs_target(&line.text, line.no)? else {
                 return Err(err(
                     line.no,
                     "only `belongs` may follow a Sign branch result",
@@ -519,16 +693,20 @@ fn ident_ok(s: &str) -> bool {
             .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
 }
 
-/// `belongs Name`。
-fn belongs_target(l: &str, line: usize) -> Result<Option<String>, ParseError> {
+/// `belongs Name` 或 `belongs Name<Arg1, Arg2>`(P76)。
+fn belongs_target(l: &str, line: usize) -> Result<Option<(String, Vec<String>)>, ParseError> {
     let Some(rest) = l.strip_prefix("belongs ") else {
         return Ok(None);
     };
-    let name = rest.trim();
-    if !ident_ok(name) {
+    let full = rest.trim();
+    if full.is_empty() {
+        return Err(err(line, "`belongs` expects a trait name"));
+    }
+    let (name, args) = split_type_args(full, line)?;
+    if !ident_ok(&name) {
         return Err(err(line, "`belongs` expects a single trait name"));
     }
-    Ok(Some(name.to_owned()))
+    Ok(Some((name, args)))
 }
 
 /// `name [Filler]` (+ optional `?`) → Slot(I21)。
@@ -592,24 +770,19 @@ fn parse_slot_feature_binding(
     }
 
     let value = value.trim();
+    // 值要嘛是 enum 字面值,要嘛是那個凍結的 syn 讀取——形狀由 reference 模組
+    // 定義,這裡只挑訊息。
     if !ident_ok(value) {
-        let mut parts = value.split('.');
-        let (Some("$slot"), Some(slot), Some("syn"), Some(feature), None) = (
-            parts.next(),
-            parts.next(),
-            parts.next(),
-            parts.next(),
-            parts.next(),
-        ) else {
+        if let Err(error) = reference::parse(&reference::SLOT_SYN_FEATURE, value) {
             return Err(err(
                 source_line,
-                "slot feature value must be an enum literal or `$slot.SOURCE.syn.FEATURE`",
-            ));
-        };
-        if !ident_ok(slot) || !ident_ok(feature) {
-            return Err(err(
-                source_line,
-                "slot feature source slot and feature must be identifiers",
+                match error {
+                    reference::RefError::SlotNotIdentifier
+                    | reference::RefError::PathNotIdentifier => {
+                        "slot feature source slot and feature must be identifiers"
+                    }
+                    _ => "slot feature value must be an enum literal or `$slot.SOURCE.syn.FEATURE`",
+                },
             ));
         }
     }
@@ -1009,6 +1182,8 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
     let mut edges_indent = 0usize;
     let mut in_realization = false;
     let mut realization_indent = 0usize;
+    // `realization:` 標頭已見、其 `case:` 尚未到。區塊結束時仍是 `Some` = 空 realization。
+    let mut pending_realization: Option<usize> = None;
     let mut in_constraints = false;
     let mut constraints_indent = 0usize;
 
@@ -1036,6 +1211,9 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             in_edges = false;
         }
         if in_realization && ind <= realization_indent {
+            if let Some(line) = pending_realization {
+                return Err(err(line, EMPTY_REALIZATION));
+            }
             in_realization = false;
         }
         if in_constraints && ind <= constraints_indent {
@@ -1050,9 +1228,14 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             in_roles = false;
             in_senses = false;
             in_edges = false;
+            if let Some(line) = pending_realization.take() {
+                return Err(err(line, EMPTY_REALIZATION));
+            }
             in_realization = false;
             in_constraints = false;
-            if text == "==" {
+            if text == "pass" {
+                blocks.last_mut().unwrap().items.push(SignItem::Pass);
+            } else if text == "==" {
                 blocks.push(Block::default());
             } else if text == "constraints:" {
                 in_constraints = true;
@@ -1069,16 +1252,25 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                         expression: Expression::Case(Box::new(case)),
                     }));
                 index = next;
-            } else if let Some(t) = belongs_target(text, no)? {
-                blocks.last_mut().unwrap().items.push(SignItem::Belongs(t));
+            } else if let Some((name, args)) = belongs_target(text, no)? {
+                blocks.last_mut().unwrap().items.push(SignItem::TraitMount {
+                    name,
+                    kind: crate::TraitMountKind::Declaration,
+                    args,
+                });
             } else if let Some(dim) = DimKw::parse(text) {
                 cur_dim = Some(dim);
             } else if let Some((name, block)) = trait_use(text) {
-                blocks
-                    .last_mut()
-                    .unwrap()
-                    .items
-                    .push(SignItem::TraitUse { name, block });
+                // 裸 `X` = 全塊展開;`X[n]` = 第 n 塊。宣告那一份由 `belongs` 產生。
+                let kind = match block {
+                    Some(index) => crate::TraitMountKind::Block(index),
+                    None => crate::TraitMountKind::Whole,
+                };
+                blocks.last_mut().unwrap().items.push(SignItem::TraitMount {
+                    name,
+                    kind,
+                    args: vec![],
+                });
             } else if !text.contains("=>")
                 && text
                     .split_once('=')
@@ -1182,7 +1374,37 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                 rule.branch_sources.push(SourceLocation::line(no));
                 continue;
             }
+            // Q5′(2026-08-19):`NAME =` + 縮排 `case:` = feature 的**求值寫入**。
+            //
+            // 先前寫成 `NAME =>`,但 `=>` 在本語言是**累積規則**(沿用音韻的
+            // `A => B / C _ D`),而這個項目是**鍵控寫入**(一個 feature 一個,
+            // `effective_sign` 按 `(dim, name)` 合併)——名實不符。改用 `=` 之後
+            // 兩形態的分工重新成立:`=` 寫入(右端可以是字面值、值域、或一個
+            // 算出值的 `case`),`=>` 累積規則。
+            //
+            // 判別條件是「`=` 右端空白」,故不與 `NAME = VALUE`、`NAME = A | B`、
+            // `NAME = enum(...)` 相撞;右端空白而下一行不是 `case:` 仍是明確錯誤。
+            // 舊寫法 `NAME =>` + `case:` 若不攔,會掉進下面的規則解析,得到一個
+            // 與真正問題無關的訊息(空 body)。這裡直接指出遷移方向。
             if let Some(name) = text.strip_suffix("=>").map(str::trim) {
+                let next_is_case = body.get(index).is_some_and(|next| {
+                    next.indent > ind
+                        && (next.text == "case:"
+                            || (next.text.starts_with("case ") && next.text.ends_with(':')))
+                });
+                if ident_ok(name) && next_is_case {
+                    return Err(err(
+                        no,
+                        "a feature expression is written `NAME =` with an indented `case:`; \
+                         `=>` introduces an accumulating rule, not a keyed assignment",
+                    ));
+                }
+            }
+            if let Some(name) = text
+                .strip_suffix('=')
+                .filter(|head| !head.ends_with('='))
+                .map(str::trim)
+            {
                 if !ident_ok(name) {
                     return Err(err(no, "feature expression target must be an identifier"));
                 }
@@ -1236,6 +1458,11 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                 return Err(err(no, "feature name must be a single identifier"));
             }
             let value = value.trim();
+            // P75:`NAME = enum(...)?` 的尾綴 `?` = 可以沒有值(與 slot/role 同形)。
+            let (value, optional) = match value.strip_suffix('?') {
+                Some(stripped) => (stripped.trim_end(), true),
+                None => (value, false),
+            };
             if let Some(domain) = value
                 .strip_prefix("enum(")
                 .and_then(|v| v.strip_suffix(')'))
@@ -1263,11 +1490,34 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                         dim: dim.to_dim(),
                         name: name.to_owned(),
                         values,
+                        optional,
                         source: SourceLocation::line(no),
                     }));
             } else {
-                if !ident_ok(value) {
-                    return Err(err(no, "feature value must be a single enum identifier"));
+                // `?` 只對宣告有意義:賦值沒有「可以沒有值」這回事。
+                if optional {
+                    return Err(err(
+                        no,
+                        "`?` marks an optional feature *declaration* (`NAME = enum(...)?`), not an assignment",
+                    ));
+                }
+                // 值域:`NAME = VALUE` 是已定案,`NAME = A | B` 是**未定案值域**
+                // (候選為這幾個,留給構式收斂)。`|` 在本語言其餘語法與整個
+                // stdlib 語料中都未出現,故不與既有寫法相撞。
+                let values = value
+                    .split('|')
+                    .map(str::trim)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                if values.iter().any(|value| !ident_ok(value)) {
+                    return Err(err(
+                        no,
+                        "feature value must be an enum identifier, or `A | B` for an undecided value set",
+                    ));
+                }
+                let mut unique = std::collections::BTreeSet::new();
+                if values.iter().any(|value| !unique.insert(value.clone())) {
+                    return Err(err(no, "feature value alternatives must be unique"));
                 }
                 blocks
                     .last_mut()
@@ -1276,7 +1526,7 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                     .push(SignItem::FeatureValue(FeatureValue {
                         dim: dim.to_dim(),
                         name: name.to_owned(),
-                        value: value.to_owned(),
+                        values,
                         source: SourceLocation::line(no),
                     }));
             }
@@ -1386,12 +1636,26 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                     index = next;
                     continue;
                 }
-                let Some(slot) = value.strip_prefix('{').and_then(|v| v.strip_suffix('}')) else {
-                    return Err(err(no, "role binding must be `NAME = {slot}`"));
+                let slot = value
+                    .strip_prefix('{')
+                    .and_then(|v| v.strip_suffix('}'))
+                    .and_then(|inner| reference::parse(&reference::SUBJECT_ONLY, inner).ok())
+                    .and_then(|read| read.slot().map(str::to_owned));
+                let Some(slot) = slot else {
+                    // P75 增修 A:role 的填充者是某個 slot,不會是這個構式自己。
+                    // `{$self}` 在此不是形狀錯誤而是回指錯誤,訊息要講對原因。
+                    let message = if value.trim() == "{$self}" {
+                        "a role cannot be filled by the construction itself; \
+                         bind it to a slot (`NAME = {$slot.NAME}`)"
+                    } else {
+                        "role binding must be `NAME = {$slot.NAME}`"
+                    };
+                    return Err(err(no, message));
                 };
-                if !ident_ok(name) || !ident_ok(slot.trim()) {
+                if !ident_ok(name) {
                     return Err(err(no, "role and slot names must be identifiers"));
                 }
+                let slot = slot.as_str();
                 blocks
                     .last_mut()
                     .unwrap()
@@ -1439,16 +1703,18 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
         }
         if in_realization {
             if text == "case:" || (text.starts_with("case ") && text.ends_with(':')) {
-                let (case, next) =
-                    parse_typed_case(lang, body, index - 1, ExpressionType::PhonContext)?;
-                let item = blocks.last_mut().unwrap().items.last_mut();
-                let Some(SignItem::Realization(realization)) = item else {
-                    return Err(err(no, "internal realization block state is invalid"));
-                };
-                if realization.expression.is_some() {
+                if pending_realization.is_none() {
                     return Err(err(no, "realization may contain one typed case"));
                 }
-                realization.expression = Some(case);
+                let (case, next) =
+                    parse_typed_case(lang, body, index - 1, ExpressionType::PhonContext)?;
+                // 標頭不建節點,`case:` 到了才建——`Realization` 因此在型別上不可能是空的。
+                blocks
+                    .last_mut()
+                    .unwrap()
+                    .items
+                    .push(SignItem::Realization(Realization { expression: case }));
+                pending_realization = None;
                 index = next;
                 continue;
             }
@@ -1515,11 +1781,34 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             if dim != DimKw::Phon {
                 return Err(err(no, "`realization:` is only valid under `phon:`"));
             }
-            blocks
-                .last_mut()
-                .unwrap()
-                .items
-                .push(SignItem::Realization(Realization::default()));
+            // **一個 block 至多一個 `realization:`**(2026-08-18)。
+            //
+            // 沒有這道檢查時,兩個 `realization:` 會 parse 成兩個 `SignItem::Realization`,
+            // printer 把它們合併印在**一個** `realization:` 標頭下、兩個 `case:`,
+            // 而重新 parse 那份 dump 會撞上「realization may contain one typed case」
+            // ——**P21 的 round-trip 恆等就破了**。實測:`ParseError line 10`。
+            //
+            // 而且求值端一律 `items.iter().find_map(Realization)` **只取第一個**
+            // (`system.rs` `realize_phon`、`construction.rs` filler 路徑),
+            // 第二個從頭到尾是死的:寫了不生效、存檔後讀不回來。
+            if pending_realization.is_some()
+                || blocks.last().is_some_and(|block| {
+                    block
+                        .items
+                        .iter()
+                        .any(|item| matches!(item, SignItem::Realization(_)))
+                })
+            {
+                return Err(err(
+                    no,
+                    "a `phon:` block may contain at most one `realization:` — \
+                     put every guard in the same `case:`",
+                ));
+            }
+            // 標頭本身不建 item(見下方 `case:` 分支):`Realization` 沒有「空」這個狀態,
+            // 型別上就不可能。標頭到 `case:` 之間的空檔由 `pending_realization` 記著,
+            // 區塊結束時仍未關掉就報錯。
+            pending_realization = Some(no);
             in_realization = true;
             realization_indent = ind;
             continue;
@@ -1637,8 +1926,16 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             blocks.last_mut().unwrap().items.push(SignItem::Rule(r));
         }
     }
+    if let Some(line) = pending_realization {
+        return Err(err(line, EMPTY_REALIZATION));
+    }
     Ok(blocks)
 }
+
+/// 空 `realization:` 的診斷。`REALIZATION_EMPTY`(check 期,Error)仍在,但那道太晚:
+/// 型別上要讓 `Realization` 沒有「空」這個狀態,parser 就不能產出它。
+const EMPTY_REALIZATION: &str =
+    "`realization:` must contain a `case:` selecting phon templates by guard";
 
 /// 剝除 `/* … */` 區塊註解(可跨行、行內、整行;非巢狀,首個 `*/` 結束;未閉合視為
 /// 至檔尾)。**保留換行**以維持行號一致(錯誤定位不漂移);註解內容以空白取代,
@@ -1736,9 +2033,9 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
                 lang.distribution
                     .push((k.trim().to_owned(), v.trim().to_owned()));
             }
-        } else if let Some((kw, name)) = container_head(&ln.text) {
+        } else if let Some((kw, name_raw)) = container_head(&ln.text) {
             let header_indent = ln.indent;
-            let name = name.to_owned();
+            let header_line = ln.no;
             i += 1;
             // 蒐集 body(縮排 > header 的非空行)
             let mut body: Vec<Line> = Vec::new();
@@ -1760,14 +2057,22 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
             let blocks = parse_body(&mut lang, &body)?;
             match kw {
                 "sign" => {
+                    if name_raw.contains('<') {
+                        return Err(err(header_line, "signs cannot have type parameters"));
+                    }
                     let items: Vec<SignItem> = blocks.into_iter().flat_map(|b| b.items).collect();
-                    lang.add_sign(name, items);
+                    lang.add_sign(name_raw.to_owned(), items);
                 }
-                _ => lang.add_trait(TraitDef {
-                    name,
-                    global: kw == "global trait",
-                    blocks,
-                }),
+                _ => {
+                    let (base_name, type_params) = split_type_params(name_raw, header_line)?;
+                    lang.add_trait(TraitDef {
+                        name: base_name.to_owned(),
+                        global: kw == "global trait",
+                        marker: kw == "marker trait",
+                        type_params,
+                        blocks,
+                    });
+                }
             }
         } else {
             return Err(err(ln.no, format!("unexpected line {:?}", ln.text)));

@@ -15,7 +15,7 @@ trait TutorialNominal:
     syn:
         feature:
             number = enum(singular, plural)
-            case = enum(nominative, accusative)
+            case = enum(nominative, accusative)?
 
 trait TutorialPredicate:
     belongs Semantic
@@ -43,23 +43,23 @@ sign TutorialNP:
             stem [TutorialNominal]
     sem:
         feature:
-            interpreted_case = enum(nominative, accusative)
+            interpreted_case = enum(nominative, accusative)?
             interpreted_case => $self.syn.case
         roles:
             referent [TutorialEntity]
-            referent = {stem}
+            referent = {$slot.stem}
     prag:
         feature:
             discourse_case = enum(nominative, accusative)
             discourse_case => $self.sem.interpreted_case
     phon:
-        /{stem}/
+        /{$slot.stem}/
         realization:
             case:
                 $self.syn.number == plural:
-                    /{stem}s/
+                    /{$slot.stem}s/
                 else:
-                    /{stem}/
+                    /{$slot.stem}/
 
 sign TutorialClause:
     belongs TutorialClauseFrame
@@ -71,7 +71,7 @@ sign TutorialClause:
             subject.case = nominative
     sem:
         roles:
-            agent = {subject}
-            predicate = {predicate}
+            agent = {$slot.subject}
+            predicate = {$slot.predicate}
     phon:
-        /{subject} {predicate}/
+        /{$slot.subject} {$slot.predicate}/

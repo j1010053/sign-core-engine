@@ -46,7 +46,7 @@ fn authoring_selectors_resolve_to_stable_ids_and_replay_is_deterministic() {
 
     let unresolved = UnresolvedChangeSet::parse(&source).unwrap();
     let resolved = unresolved.resolve(&base, &spec).unwrap();
-    let canonical = resolved.dump();
+    let canonical = resolved.dump().expect("dump");
     assert!(canonical.contains("update node(sign, @evo:root:"));
     assert!(!canonical.contains("sign(\"dog\")"));
 
@@ -54,7 +54,7 @@ fn authoring_selectors_resolve_to_stable_ids_and_replay_is_deterministic() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    assert_eq!(canonical_resolved.dump(), canonical);
+    assert_eq!(canonical_resolved.dump().expect("dump"), canonical);
 
     let interpreter = ChangeInterpreter::new(base.clone(), spec.clone(), "evo:child").unwrap();
     let first = interpreter.run(&resolved).unwrap();
@@ -182,6 +182,7 @@ fn path_selector_resolves_definition_to_a_stable_node() {
         .unwrap();
     assert!(resolved
         .dump()
+        .expect("dump")
         .contains("update node(definition, @evo:root:"));
     let replay = ChangeInterpreter::new(base, spec, "evo:path")
         .unwrap()

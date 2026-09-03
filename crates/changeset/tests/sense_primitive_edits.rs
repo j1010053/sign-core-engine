@@ -181,13 +181,17 @@ fn a_sense_changeset_round_trips_and_is_deterministic() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    let dump = resolved.dump();
+    let dump = resolved.dump().expect("dump");
     assert!(dump.contains("gloss = JOURNAL"), "field in dump:\n{dump}");
     let round = UnresolvedChangeSet::parse(&dump)
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    assert_eq!(round.dump(), dump, "dump→parse→resolve 逐位元穩定");
+    assert_eq!(
+        round.dump().expect("dump"),
+        dump,
+        "dump→parse→resolve 逐位元穩定"
+    );
 
     let once = apply(
         "\n    statement 0:\n        update sign(\"book\").sense[\"log\"].gloss = JOURNAL\n",

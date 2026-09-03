@@ -39,7 +39,7 @@ fn local_dim_defs(sign: &SignDef, dim: Dim) -> Vec<(String, String)> {
             }
             SignItem::FeatureValue(feature) if feature.dim == dim => Some((
                 format!("{}.{}", dim.keyword(), feature.name),
-                feature.value.clone(),
+                feature.values.join(" | "),
             )),
             _ => None,
         })
@@ -69,24 +69,23 @@ impl SignDef {
         let categories = reg.sign_categories(self); // 維度中立
                                                     // 繼承 precedence 由 registry 統一計算:遠祖先、近祖後;
                                                     // 同距離後寫 belongs 後套用;菱形節點只出現一次。
-        let mut all: Vec<(String, String)> = Vec::new();
-        for source in reg.inheritance_order(self) {
-            if let Some(node) = reg.node(&source.trait_name) {
-                all.extend(
-                    node.defs
-                        .iter()
-                        .filter(|(p, _)| path_dim(p) == Some(dim)) // 只取本維 Def
-                        .cloned(),
-                );
-                all.extend(node.items.iter().filter_map(|item| match item {
-                    SignItem::FeatureValue(feature) if feature.dim == dim => Some((
-                        format!("{}.{}", dim.keyword(), feature.name),
-                        feature.value.clone(),
-                    )),
-                    _ => None,
-                }));
-            }
-        }
+                                                    // 繼承值走 registry 的**逐包解析**:每個掛載的 trait 先在自己那層解完,
+                                                    // 這裡只看到解完的包。並列包對同一 feature 分歧時是候選聯集(未定案),
+                                                    // 不挑贏家——理由與 `OntologyRegistry::inherited_values` 同。
+        let mut all: Vec<(String, String)> = reg
+            .inherited_values(self)
+            .into_iter()
+            .filter_map(|item| match item {
+                SignItem::Def(def) if path_dim(&def.path) == Some(dim) => {
+                    Some((def.path, def.value))
+                }
+                SignItem::FeatureValue(feature) if feature.dim == dim => Some((
+                    format!("{}.{}", dim.keyword(), feature.name),
+                    feature.values.join(" | "),
+                )),
+                _ => None,
+            })
+            .collect();
         all.extend(local_dim_defs(self, dim)); // 本地在最後 → 覆蓋
         DimProjection {
             dim,

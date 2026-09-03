@@ -85,7 +85,7 @@ fn filtering_by_a_supertype_matches_signs_declared_with_a_subtype() {
     assert!(
         !dog.items.iter().any(|item| matches!(
             item,
-            conlang_language::SignItem::Belongs(name) if name == "Nominal"
+            conlang_language::SignItem::TraitMount { name: name, kind: conlang_language::TraitMountKind::Declaration, .. } if name == "Nominal"
         )),
         "本地並未直接 belongs Nominal——這正是本測試要區分的"
     );

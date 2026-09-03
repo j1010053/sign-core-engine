@@ -67,7 +67,7 @@ sign dog:
 sign Wrapped:
     belongs MappedConstruction
     phon:
-        /{head}/
+        /{$slot.head}/
 ";
     let system = compile_system(Language::parse(source).unwrap()).unwrap();
     let token = system
@@ -95,7 +95,7 @@ sign C:
             x [Noun]
         map ghost internalize
     phon:
-        /{x}/
+        /{$slot.x}/
 ";
     let err = compile_system(Language::parse(unknown).unwrap()).unwrap_err();
     let CompileSystemError::Validation(report) = err else {

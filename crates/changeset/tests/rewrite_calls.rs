@@ -250,7 +250,7 @@ fn the_resolved_changeset_stays_primitive_only() {
         "evo:dump",
     )
     .expect("resolve");
-    let dump = resolved.dump();
+    let dump = resolved.dump().expect("dump");
     assert!(
         !dump.contains("reanalyze("),
         "the call must not survive into the resolved form:\n{dump}"
@@ -263,7 +263,11 @@ fn the_resolved_changeset_stays_primitive_only() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    assert_eq!(round.dump(), dump, "dump→parse→resolve 逐位元穩定");
+    assert_eq!(
+        round.dump().expect("dump"),
+        dump,
+        "dump→parse→resolve 逐位元穩定"
+    );
 }
 
 #[test]
@@ -512,7 +516,8 @@ fn the_derivation_needs_the_authored_text_not_the_resolved_form() {
     let dumped = authored
         .resolve_with(&base, &spec, &donors)
         .expect("resolves")
-        .dump();
+        .dump()
+        .expect("dump");
     let reparsed = UnresolvedChangeSet::parse(&dumped).unwrap();
     assert!(
         reparsed.adoptions().unwrap().is_empty(),

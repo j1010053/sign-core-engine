@@ -78,10 +78,7 @@ fn the_selector_key_is_dimension_qualified() {
     )
     .expect_err("裸 name 不是合法鍵");
     let text = format!("{err}");
-    assert!(
-        text.contains("category"),
-        "錯誤要指出定位不到的鍵:{text}"
-    );
+    assert!(text.contains("category"), "錯誤要指出定位不到的鍵:{text}");
 }
 
 /// `feature[…]` 與 `def[…]` 不互相冒認:各自只認自己那類節點。

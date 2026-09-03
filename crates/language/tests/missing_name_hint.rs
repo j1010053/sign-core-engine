@@ -35,7 +35,10 @@ fn message_for(src: &str, needle: &str) -> String {
 /// `belongs` 指向未宣告套件的匯出名 → 指出該套件。
 #[test]
 fn an_unknown_trait_names_the_package_that_exports_it() {
-    let message = message_for("sign s:\n    belongs EnglishCaseBearer\n", "EnglishCaseBearer");
+    let message = message_for(
+        "sign s:\n    belongs EnglishCaseBearer\n",
+        "EnglishCaseBearer",
+    );
     assert!(
         message.contains("natural:en-standard"),
         "要指出出處:{message}"
@@ -47,7 +50,7 @@ fn an_unknown_trait_names_the_package_that_exports_it() {
 #[test]
 fn an_unknown_slot_category_names_the_package_too() {
     let message = message_for(
-        "sign C:\n    syn:\n        slots:\n            x [EnglishCaseBearer]\n    phon:\n        /{x}/\n",
+        "sign C:\n    syn:\n        slots:\n            x [EnglishCaseBearer]\n    phon:\n        /{$slot.x}/\n",
         "EnglishCaseBearer",
     );
     assert!(message.contains("natural:en-standard"), "{message}");
@@ -57,7 +60,7 @@ fn an_unknown_slot_category_names_the_package_too() {
 #[test]
 fn an_unknown_role_constraint_names_the_package_too() {
     let message = message_for(
-        "sign C:\n    syn:\n        slots:\n            x [*]\n    sem:\n        roles:\n            r [EnglishCaseBearer]\n            r = {x}\n    phon:\n        /{x}/\n",
+        "sign C:\n    syn:\n        slots:\n            x [*]\n    sem:\n        roles:\n            r [EnglishCaseBearer]\n            r = {$slot.x}\n    phon:\n        /{$slot.x}/\n",
         "EnglishCaseBearer",
     );
     assert!(message.contains("natural:en-standard"), "{message}");
@@ -68,7 +71,10 @@ fn an_unknown_role_constraint_names_the_package_too() {
 /// 少了這條,把指路寫成無條件附加也不會紅。
 #[test]
 fn a_name_no_package_exports_gets_no_hint() {
-    let message = message_for("sign s:\n    belongs NoSuchTraitAnywhere\n", "NoSuchTraitAnywhere");
+    let message = message_for(
+        "sign s:\n    belongs NoSuchTraitAnywhere\n",
+        "NoSuchTraitAnywhere",
+    );
     assert!(
         !message.contains("import table"),
         "無出處可指時不得亂指:{message}"

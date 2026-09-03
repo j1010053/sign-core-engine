@@ -26,6 +26,8 @@ fn lang_dump_golden_matches_patch05_sample() {
     l.add_trait(TraitDef {
         name: "CorePhonology".into(),
         global: true,
+        marker: false,
+        type_params: vec![],
         blocks: vec![
             Block {
                 items: vec![SignItem::Rule(r1)],
@@ -41,6 +43,8 @@ fn lang_dump_golden_matches_patch05_sample() {
     l.add_trait(TraitDef {
         name: "VerbCommon".into(),
         global: false,
+        marker: false,
+        type_params: vec![],
         blocks: vec![
             Block {
                 items: vec![
@@ -64,9 +68,10 @@ fn lang_dump_golden_matches_patch05_sample() {
     l.add_sign(
         "go",
         vec![
-            SignItem::TraitUse {
+            SignItem::TraitMount {
                 name: "VerbCommon".into(),
-                block: Some(0),
+                kind: conlang_language::TraitMountKind::Block(0),
+                args: vec![],
             },
             SignItem::Def(Def {
                 path: "phon".into(),
@@ -76,9 +81,10 @@ fn lang_dump_golden_matches_patch05_sample() {
                 path: "sem.senses".into(),
                 value: "[ sense s1 { concept = GO } ]".into(),
             }),
-            SignItem::TraitUse {
+            SignItem::TraitMount {
                 name: "VerbCommon".into(),
-                block: Some(1),
+                kind: conlang_language::TraitMountKind::Block(1),
+                args: vec![],
             },
             SignItem::Def(Def {
                 path: "entrenchment".into(),

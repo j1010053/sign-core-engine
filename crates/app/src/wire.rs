@@ -283,17 +283,24 @@ pub struct DiffSummaryV1 {
     pub structural: usize,
 }
 
+/// **出境契約在此刻意維持扁平。**
+///
+/// `DiffVector` 內部已改成階層(裁定 ①),但把階層送出境會破壞既有消費端
+/// ——欄位由整數變成物件。那個破壞性變更連同 `UI_SCHEMA_V1` → v2 一起做
+/// (見《分層差異向量 v0.2 裁定》§5、§6 第 5 步),不在形狀重構這一刀裡。
+///
+/// 於是此處把 leaf 的 `changed` 攤平回舊欄位:**送出去的數字一個都沒變**。
 impl From<conlang_changeset::diff::DiffVector> for DiffSummaryV1 {
     fn from(value: conlang_changeset::diff::DiffVector) -> Self {
         Self {
-            aligned: value.aligned,
-            born: value.born,
-            died: value.died,
-            phon: value.phon,
-            syn: value.syn,
-            sem: value.sem,
-            prag: value.prag,
-            structural: value.structural,
+            aligned: value.aligned_signs(),
+            born: value.born_signs(),
+            died: value.died_signs(),
+            phon: value.phon.signs.changed,
+            syn: value.syn.signs.changed,
+            sem: value.sem.signs.changed,
+            prag: value.prag.signs.changed,
+            structural: value.structural.signs.changed,
         }
     }
 }

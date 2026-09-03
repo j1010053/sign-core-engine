@@ -134,13 +134,13 @@ fn a_failed_commit_preserves_the_pending_changeset() {
             change: NodeUpdate::Rename("a".to_owned()),
         }])
         .expect("stage");
-    let before = session.pending().expect("pending").dump();
+    let before = session.pending().expect("pending").dump().expect("dump");
 
     // `b → a` 會造成重名，因此 commit 必須失敗；這正是從前會把 pending take 掉的路徑。
     assert!(session.commit(None).is_err(), "重名不可提交");
 
     assert_eq!(
-        session.pending().map(|pending| pending.dump()),
+        session.pending().map(|pending| pending.dump().expect("dump")),
         Some(before),
         "失敗後必須保留可修正、可重試的原草稿"
     );
@@ -361,10 +361,10 @@ fn save_as_writes_the_supplied_editor_version_and_replaces_pending() {
     )
     .expect("lower");
     session.stage(edits).expect("stage visible");
-    let visible = session.pending_source().expect("visible source");
+    let visible = session.pending_source().expect("visible source").expect("non-empty");
 
     session.begin_edit("app:stale").expect("replace with stale");
-    let stale = session.pending_source().expect("stale source");
+    let stale = session.pending_source().expect("stale source").expect("non-empty");
     assert_ne!(
         visible, stale,
         "counterexample requires two distinct versions"
@@ -376,7 +376,7 @@ fn save_as_writes_the_supplied_editor_version_and_replaces_pending() {
         .expect("save visible source");
 
     let saved = fs::read_to_string(path).expect("read saved source");
-    assert_eq!(saved, session.pending_source().expect("new pending"));
+    assert_eq!(saved, session.pending_source().expect("new pending").expect("non-empty"));
     assert_ne!(saved, stale, "Save As must not serialize stale pending");
     assert!(saved.contains("t => k"));
 }
@@ -386,7 +386,7 @@ fn failed_editor_save_as_keeps_both_file_and_pending_unchanged() {
     let temp = TempDir::new("save-visible-failure");
     let (mut session, _root) = session();
     session.begin_edit("app:stale").expect("begin stale");
-    let stale = session.pending_source().expect("stale source");
+    let stale = session.pending_source().expect("stale source").expect("non-empty");
     let path = temp.0.join("draft.chg");
     fs::write(&path, "existing file").expect("seed file");
 
@@ -397,13 +397,13 @@ fn failed_editor_save_as_keeps_both_file_and_pending_unchanged() {
         fs::read_to_string(&path).expect("read file"),
         "existing file"
     );
-    assert_eq!(session.pending_source().expect("pending"), stale);
+    assert_eq!(session.pending_source().expect("pending").expect("non-empty"), stale);
 
     // A valid source paired with an unwritable target must also leave pending
     // unchanged. A directory is not a writable file on both supported hosts.
     assert!(session.save_working_copy_source(&temp.0, &stale).is_err());
     assert_eq!(
-        session.pending_source().expect("pending after I/O error"),
+        session.pending_source().expect("pending after I/O error").expect("non-empty"),
         stale
     );
 }

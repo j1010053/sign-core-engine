@@ -41,6 +41,14 @@ use conlang_language::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+fn format_belongs_target(name: &str, args: &[String]) -> String {
+    if args.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{}<{}>", name, args.join(", "))
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ReconstructError {
     /// 這種節點的淺層欄位比對尚未實作——**明確拒絕,不默默漏掉改動**。
@@ -57,16 +65,20 @@ enum ReconstructCapability {
     Immutable,
     StructuralContainer,
     TypedUpdate,
-    Unsupported,
+    // `Unsupported` 已刪:它唯一的持有者是 V1 的 `NodeKind::RealizationBranch`,
+    // 該 kind 隨扁平 `RealizationBranch` 清單一併移除後,**每一種可持久化的
+    // NodeKind 都有 reconstruction contract**。若日後真的又出現沒有契約的 kind,
+    // 重新加回來要連同它為何無契約的理由一起寫。
 }
 
 /// Exhaustive capability map for every persisted `NodeKind`. Adding a new
 /// addressable kind therefore forces reconstruct to make an explicit choice.
 fn capability(kind: NodeKind) -> ReconstructCapability {
     match kind {
+        // `pass` 沒有欄位:改變它只能靠 delete/insert,沒有 typed update 可言。
+        NodeKind::Pass => ReconstructCapability::Immutable,
         NodeKind::Language => ReconstructCapability::Immutable,
         NodeKind::Block => ReconstructCapability::StructuralContainer,
-        NodeKind::RealizationBranch => ReconstructCapability::Unsupported,
         NodeKind::DslDeclaration
         | NodeKind::Distribution
         | NodeKind::Trait
@@ -82,7 +94,6 @@ fn capability(kind: NodeKind) -> ReconstructCapability {
         | NodeKind::RoleBinding
         | NodeKind::Sense
         | NodeKind::SenseEdge
-        | NodeKind::Realization
         | NodeKind::FeatureRule
         | NodeKind::Definition
         | NodeKind::Rule
@@ -101,7 +112,8 @@ fn capability(kind: NodeKind) -> ReconstructCapability {
 enum ShallowNode {
     Detached(DetachedNode),
     ExpressionItem(SignItem),
-    Realization(Realization),
+    // `Realization` 已刪(2026-08-18):`SignItem::Realization` 現在塌陷成
+    // `NodeKind::Case`,其內容差異由 Case / CaseBranch 節點各自 diff。
     Case(TypedCase),
     CaseBranch(CaseBranch),
     Application(SignApplication),
@@ -112,8 +124,9 @@ enum ShallowNode {
 /// **前提:兩邊的 id 出自同一血脈**。手改出來的 `.lang` 是一段沒有 id 的文字,
 /// 得先「認親」(配 id)才能餵進來——那是另一件事,不在本模組。
 ///
-/// 發出順序:**更新 → 移動 → 新增 → 刪除**。新增排在刪除之前,是為了讓錨點
-/// (`Anchor::After(兄弟)`)在套用當下一定還指得到人。
+/// 發出順序:**放寬型更新 → 移動 → 新增 → 刪除 → 收緊型更新**。新增排在刪除
+/// 之前,是為了讓錨點(`Anchor::After(兄弟)`)在套用當下一定還指得到人；
+/// `marker=true` 延到刪除後，避免內容尚未移除時形成無效的中間狀態。
 pub fn reconstruct(
     before: &LanguageDocument,
     after: &LanguageDocument,
@@ -129,6 +142,7 @@ pub fn reconstruct(
         .collect();
     let mut covered_added = BTreeSet::new();
     let mut covered_removed = BTreeSet::new();
+    let mut deferred_updates = Vec::new();
 
     // ── ① 更新:兩邊都有的,比淺層欄位 ──
     for (id, old_entry) in &old {
@@ -138,12 +152,6 @@ pub fn reconstruct(
         match capability(old_entry.kind) {
             ReconstructCapability::Immutable | ReconstructCapability::StructuralContainer => {
                 continue;
-            }
-            ReconstructCapability::Unsupported => {
-                return Err(ReconstructError::Unsupported {
-                    kind: old_entry.kind,
-                    detail: "persisted node kind has no reconstruction contract".to_owned(),
-                });
             }
             ReconstructCapability::TypedUpdate => {}
         }
@@ -163,6 +171,16 @@ pub fn reconstruct(
                 node: NodeRef::new(id.clone(), old_entry.kind),
                 change,
             };
+            if matches!(
+                &edit,
+                PrimitiveEdit::Update {
+                    change: NodeUpdate::TraitMarker(true),
+                    ..
+                }
+            ) {
+                deferred_updates.push(edit);
+                continue;
+            }
             let previous = working.clone();
             working = apply_structural(working, &edit)?;
             map_updated_descendants(
@@ -327,6 +345,12 @@ pub fn reconstruct(
         edits.push(edit);
     }
 
+    // `marker trait` 承諾沒有內容；先完成子節點刪除，再立起這個契約。
+    for edit in deferred_updates {
+        working = apply_structural(working, &edit)?;
+        edits.push(edit);
+    }
+
     if working.source() != after.source() {
         return Err(ReconstructError::Unsupported {
             kind: NodeKind::Language,
@@ -378,7 +402,7 @@ fn sequence_key(document: &LanguageDocument, entry: &NodeEntryV1) -> Option<Sequ
         ),
         AddressSegment::RuleElse(_) => (8, 0),
         AddressSegment::RuleThen(_) => (9, 0),
-        AddressSegment::RealizationBranches(_) => (10, 0),
+        // 10 = 已刪的 V1 `RealizationBranches`;序號留空。
         AddressSegment::CaseBranches(_) => (12, 0),
         AddressSegment::PhonLeaf(_) => (15, 0),
         AddressSegment::PhonThen(_) => (16, 0),
@@ -670,13 +694,6 @@ fn shallow_at(
         NodeKind::CaseBranch => Ok(ShallowNode::CaseBranch(
             crate::case_branch_at(language, &entry.address)?.clone(),
         )),
-        NodeKind::Realization => match item_at_address(language, &entry.address) {
-            Some(SignItem::Realization(value)) => Ok(ShallowNode::Realization(value.clone())),
-            _ => Err(ReconstructError::Unsupported {
-                kind: NodeKind::Realization,
-                detail: format!("realization address is stale: {:?}", entry.address),
-            }),
-        },
         _ => Ok(ShallowNode::Detached(detached_at(language, entry)?)),
     }
 }
@@ -689,12 +706,6 @@ fn shallow_state_updates(
         (ShallowNode::Detached(old), ShallowNode::Detached(new)) => shallow_updates(old, new),
         (ShallowNode::ExpressionItem(old), ShallowNode::ExpressionItem(new)) => {
             expression_item_updates(old, new)
-        }
-        (ShallowNode::Realization(old), ShallowNode::Realization(new)) => {
-            Ok(match (&old.expression, &new.expression) {
-                (None, None) | (Some(_), Some(_)) => Vec::new(),
-                _ => vec![NodeUpdate::Realization(new.clone())],
-            })
         }
         (ShallowNode::Case(old), ShallowNode::Case(new)) => Ok(case_updates(old, new)),
         (ShallowNode::CaseBranch(old), ShallowNode::CaseBranch(new)) => {
@@ -710,7 +721,6 @@ fn shallow_state_updates(
             kind: match new {
                 ShallowNode::Detached(value) => value.kind(),
                 ShallowNode::ExpressionItem(value) => crate::item_kind(value),
-                ShallowNode::Realization(_) => NodeKind::Realization,
                 ShallowNode::Case(_) => NodeKind::Case,
                 ShallowNode::CaseBranch(_) => NodeKind::CaseBranch,
                 ShallowNode::Application(_) => NodeKind::Application,
@@ -883,8 +893,21 @@ fn shallow_updates(
             if old.name != new.name {
                 updates.push(NodeUpdate::Rename(new.name.clone()));
             }
-            if old.global != new.global {
-                updates.push(NodeUpdate::TraitGlobal(new.global));
+            // 先關閉會排斥 type params / 另一種 trait kind 的旗標。
+            if old.global && !new.global {
+                updates.push(NodeUpdate::TraitGlobal(false));
+            }
+            if old.marker && !new.marker {
+                updates.push(NodeUpdate::TraitMarker(false));
+            }
+            if old.type_params != new.type_params {
+                updates.push(NodeUpdate::TraitTypeParams(new.type_params.clone()));
+            }
+            if !old.global && new.global {
+                updates.push(NodeUpdate::TraitGlobal(true));
+            }
+            if !old.marker && new.marker {
+                updates.push(NodeUpdate::TraitMarker(true));
             }
         }
         (DetachedNode::Sign(old), DetachedNode::Sign(new)) => {
@@ -974,22 +997,36 @@ fn phon_block_kind(block: &PhonBlock) -> &'static str {
 fn item_updates(before: &SignItem, after: &SignItem) -> Result<Vec<NodeUpdate>, ReconstructError> {
     let mut updates = Vec::new();
     match (before, after) {
-        (SignItem::Belongs(old), SignItem::Belongs(new)) => {
-            if old != new {
-                updates.push(NodeUpdate::Belongs(new.clone()));
+        (
+            SignItem::TraitMount {
+                name: old,
+                kind: conlang_language::TraitMountKind::Declaration,
+                args: old_args,
+                ..
+            },
+            SignItem::TraitMount {
+                name: new,
+                kind: conlang_language::TraitMountKind::Declaration,
+                args: new_args,
+                ..
+            },
+        ) => {
+            if old != new || old_args != new_args {
+                updates.push(NodeUpdate::Belongs(format_belongs_target(new, new_args)));
             }
         }
         (
-            SignItem::TraitUse {
+            SignItem::TraitMount {
                 name: old_name,
-                block: old_block,
+                kind: old_kind,
+                ..
             },
-            SignItem::TraitUse { name, block },
+            SignItem::TraitMount { name, kind, .. },
         ) => {
-            if old_name != name || old_block != block {
+            if old_name != name || old_kind != kind {
                 updates.push(NodeUpdate::TraitUse {
                     name: name.clone(),
-                    block: *block,
+                    block: kind.block(),
                 });
             }
         }
@@ -1039,7 +1076,7 @@ fn item_updates(before: &SignItem, after: &SignItem) -> Result<Vec<NodeUpdate>, 
             }
         }
         (SignItem::FeatureValue(old), SignItem::FeatureValue(new)) => {
-            if old.dim != new.dim || old.name != new.name || old.value != new.value {
+            if old.dim != new.dim || old.name != new.name || old.values != new.values {
                 updates.push(NodeUpdate::FeatureValue(new.clone()));
             }
         }

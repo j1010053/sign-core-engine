@@ -77,7 +77,10 @@ fn apply_changeset(base: &LanguageDocument, namespace: &str, body: &str) -> Lang
 
 /// **往返性質**。`body` 是一段已知的 `.chg`;還原出的原語套回 `before` 必須得到 `after`。
 fn round_trip(label: &str, body: &str) {
-    let before = base();
+    round_trip_from(label, base(), body);
+}
+
+fn round_trip_from(label: &str, before: LanguageDocument, body: &str) {
     let after = apply_changeset(&before, "evo:n1", body);
     assert_ne!(
         before.source(),
@@ -191,6 +194,118 @@ fn a_trait_rename_round_trips() {
 }
 
 #[test]
+fn a_trait_marker_round_trips() {
+    round_trip(
+        "trait marker",
+        &statement("update trait(\"LocalNoun\").marker = true"),
+    );
+}
+
+#[test]
+fn marker_enablement_is_replayed_after_content_deletion_and_preserves_identity() {
+    let before = LanguageDocument::import_new_root(
+        "trait Content:\n    syn:\n        provides = NOUN\n",
+        "evo:marker-content",
+    )
+    .expect("content trait parses");
+    let node = |document: &LanguageDocument, kind| {
+        document
+            .identities()
+            .nodes
+            .iter()
+            .find(|entry| entry.kind == kind)
+            .map(|entry| NodeRef::new(entry.id.clone(), entry.kind))
+            .unwrap_or_else(|| panic!("missing {kind:?}"))
+    };
+    let trait_ref = node(&before, NodeKind::Trait);
+    let definition_ref = node(&before, NodeKind::Definition);
+    let spec = LibrarySpec::default();
+    let without_content = apply_edit(
+        &before,
+        PrimitiveEdit::Delete {
+            node: definition_ref,
+        },
+        &spec,
+    )
+    .expect("content deletion")
+    .document;
+    let after = apply_edit(
+        &without_content,
+        PrimitiveEdit::Update {
+            node: trait_ref,
+            change: NodeUpdate::TraitMarker(true),
+        },
+        &spec,
+    )
+    .expect("marker enablement")
+    .document;
+
+    let edits = reconstruct(&before, &after).expect("reconstruct marker conversion");
+    assert!(
+        matches!(
+            edits.as_slice(),
+            [
+                PrimitiveEdit::Delete { .. },
+                PrimitiveEdit::Update {
+                    change: NodeUpdate::TraitMarker(true),
+                    ..
+                }
+            ]
+        ),
+        "marker=true must follow deletion: {edits:#?}"
+    );
+
+    let mut replayed = before;
+    for edit in edits {
+        replayed = apply_edit(&replayed, edit, &spec)
+            .expect("reconstructed edit replays")
+            .document;
+    }
+    assert_eq!(replayed.source(), after.source());
+    assert_eq!(
+        replayed.identities(),
+        after.identities(),
+        "surviving trait/block identities must be unchanged"
+    );
+}
+
+#[test]
+fn trait_type_parameters_and_bounds_round_trip() {
+    round_trip(
+        "trait type parameters",
+        &statement("update trait(\"LocalNoun\").type_params = \"C: Nominal, T\""),
+    );
+}
+
+#[test]
+fn trait_type_parameter_removal_round_trips() {
+    let before = LanguageDocument::import_new_root(
+        "trait Param<C: Nominal, T>:\n    pass\n",
+        "evo:param-removal",
+    )
+    .expect("parameterized trait parses");
+    round_trip_from(
+        "trait type parameter removal",
+        before,
+        &statement("update trait(\"Param\").type_params = \"\""),
+    );
+}
+
+#[test]
+fn trait_type_parameter_bound_change_round_trips() {
+    let before = LanguageDocument::import_new_root(
+        "trait Param<C: Nominal>:\n    pass\n",
+        "evo:param-bound",
+    )
+    .expect("bounded trait parses");
+    round_trip_from(
+        "trait type parameter bound",
+        before,
+        &statement("update trait(\"Param\").type_params = \"C: Animate\""),
+    );
+}
+
+#[test]
 fn a_phon_statement_update_round_trips_as_one_typed_update() {
     let before = base();
     let after = apply_changeset(
@@ -279,14 +394,14 @@ sign alt:
         slots:
             value [*]
     phon:
-        /a{value}/
+        /a{$slot.value}/
 
 sign wrap:
     syn:
         slots:
             value [*]
     phon:
-        /w{value}/
+        /w{$slot.value}/
 
 sign root:
     phon:
@@ -514,7 +629,11 @@ fn reorder_with_insert_and_delete_keeps_final_item_order() {
         PrimitiveEdit::Insert {
             parent: root,
             anchor: Anchor::Before(definitions[1].clone()),
-            subtree: DetachedNode::Item(conlang_language::SignItem::Belongs("D".to_owned())),
+            subtree: DetachedNode::Item(conlang_language::SignItem::TraitMount {
+                name: "D".to_owned(),
+                kind: conlang_language::TraitMountKind::Declaration,
+                args: vec![],
+            }),
         },
         &LibrarySpec::default(),
     )
@@ -639,5 +758,47 @@ fn inserting_a_subtree_emits_one_insert_not_one_per_node() {
         edits.len(),
         1,
         "整棵子樹一次插入(承 P16「優先一次完整 Insert」):{edits:#?}"
+    );
+}
+
+#[test]
+fn belongs_type_args_roundtrip() {
+    let src = "trait Schema<C>:\n    pass\n\nsign Foo:\n    belongs Schema<Noun>\n    Schema\n";
+    let before = LanguageDocument::import_new_root(src, "evo:root").expect("parses");
+
+    let mut after_lang = before.language().clone();
+    for item in &mut after_lang.signs[0].items {
+        if let conlang_language::SignItem::TraitMount {
+            kind: conlang_language::TraitMountKind::Declaration,
+            args,
+            ..
+        } = item
+        {
+            args.clear();
+            args.push("Verb".to_owned());
+        }
+    }
+    let after =
+        LanguageDocument::import_new_root(&after_lang.dump(), "evo:root").expect("re-parses");
+
+    assert_ne!(
+        before.source(),
+        after.source(),
+        "precondition: sources differ"
+    );
+    let edits = reconstruct(&before, &after).expect("reconstruct");
+    assert!(!edits.is_empty(), "changing type args should produce edits");
+
+    let spec = LibrarySpec::default();
+    let mut replayed = before.clone();
+    for edit in &edits {
+        replayed = apply_edit(&replayed, edit.clone(), &spec)
+            .expect("replay")
+            .document;
+    }
+    assert_eq!(
+        replayed.source(),
+        after.source(),
+        "roundtrip: reconstructed edits must reproduce the target"
     );
 }

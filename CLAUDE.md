@@ -11,8 +11,18 @@
    **P1–P64、P69–P70(架構修補層;P1–P19 權威=《架構修補彙整 01–04》§1，
    P20–P64 權威=《架構修補彙整 05–11》§1，
    **P69–P70 權威=`specifications/function分支語意與選擇層_v1.0.md` §6，
-   P71（含增修 A/B/C）權威=`specifications/Def路徑封閉清單與feature分工_v1.0.md` §5、§7–§9
-   （已裁定，**Phase 1 已落地 2026-08-02**；Phase 2 待 M4）**；
+   P71（含增修 A/B/C/**D/E**）權威=`specifications/Def路徑封閉清單與feature分工_v1.0.md` §5、§7–§11
+   （已裁定，**Phase 1 已落地 2026-08-02**；**增修 D＝guard 讀取路徑、E＝值表達式讀取路徑
+   亦受封閉清單約束，均已裁定並落地 2026-08-12**；Phase 2 待 M4），
+   **P75 權威=`specifications/feature缺席語意與optional標記_v1.0.md` §1
+   （已裁定並實作 2026-08-12：feature 宣告尾綴 `?` ＝可以沒有值／無 `?` 而讀到缺席是
+   執行期 Error／範圍限 typed feature／`?` 在 canonical 上可省略故未用到的宣告不生 churn，
+   但 std:core 的 `AgreementBearer.number` 確實需要 `?`，其 digest 已變、`restore.chg` 已重 bless）**，
+   **P72–P74 權威=`architecture/年代切片與歷時分期_v1.0.md` §1
+   （已裁定並實作 2026-08-11：方言群與歷時分期分離／切片=反鏈、判準走拓撲不走 `time`／
+   並存判準只看主幹邊）**，
+   **P84–P92 權威=`architecture/架構修補13_引用與插值語法統一_v0.1.md` §3
+   （引用與插值語法統一；已落地，行為量測見該檔 §6；原引用分支編 P72–P80，因 P72–P74 已被年代切片占用、P77–P83 被語意錨層本體論占用而順延）**；
    個別修補文件保留詳細理由與落地紀錄，出入處一律以彙整為準；
    P7 已廢止→P14，P19 的 nativization 放置由 P56/P58/P64 局部覆寫，
    **P48 的 body 分支語意由 P69 修訂**；
@@ -47,7 +57,8 @@
 | `specifications/分層結構檔本體論_v0.1.md` | 模組 C(節點內部):sign 統一本體、四維特徵結構、組合=運算、固化=語法化、層作視圖投影(v0.1.1 修補)。**設計層,SYN 欄位待 A/B 驅動** |
 | `architecture/AB模組需求分配_v0.2.md` | A=完整 sign 生產者(含組合造詞、借詞、entrenchment 初值);B=**原語集三層定稿**(L1 資料/L2 語言/L3 理論宏),已回填 06 的 ChangeEntry op=L1∪L2。命名分層規約見本檔 §6 |
 | `specifications/Sign生成引擎本體論_v0.1.md` | 模組 A 核心:Sign 稀疏容器、四維、Need→Generator→Builder→Store 職責契約、五連接關係、兩種構詞、生命週期;附 18 案折磨測試(0 破壞)。**設計層** |
-| `specifications/Def路徑封閉清單與feature分工_v1.0.md` | **P71 權威**:`Def` 路徑限封閉清單、自造欄位一律走 `feature:`、`sem.gloss` 併入 `senses`。增修 **A**=封閉清單同時約束 synchronic rule 目標(`gloss` 非法為規則目標)、**B**=`.chg` 新增 `feature[<dim>.<name>]` selector、**C**=`feature:` 開放至 `prag`(`phon` 仍不支援)。§7.5 為 A4 重新量測(§3 的數字是執行次數,已作廢)。**Phase 1 已落地;Phase 2 待 M4** |
+| `specifications/Def路徑封閉清單與feature分工_v1.0.md` | **P71 權威**:`Def` 路徑限封閉清單、自造欄位一律走 `feature:`、`sem.gloss` 併入 `senses`。增修 **A**=封閉清單同時約束 synchronic rule 目標(`gloss` 非法為規則目標)、**B**=`.chg` 新增 `feature[<dim>.<name>]` selector、**C**=`feature:` 開放至 `prag`(`phon` 仍不支援)、**D**(§10,2026-08-12)=**同時約束 guard 讀的欄位路徑**(`RULE_GUARD_NOT_ALLOWED`／`CASE_INVALID_GUARD`;白名單=封閉清單 ∪ **主體可見的 typed feature**,缺後者等於連 R2 正解出口一起關掉;主體靜態已知的具體 sign 嚴查,filler 與 trait 的 `$self` 用語言全域上界;`FeatureRule` 的 guard **不**豁免)。**E**(§11,2026-08-12)=同一份清單**再涵蓋值表達式的讀取**(`$self.`／`$slot.`／`unify`／`require`,`RULE_VALUE_NOT_ALLOWED`;判準沿用 D2/D3,`unify`/`require` 逐運算元查)。§2.1 的「欄位名打錯靜默 `false`」至此在 guard 與值兩側都關閉;**仍未納入**的讀取通道(`.chg` 歷時 function guard、typed `case:` 的 scrutinee)見 §10.3,明列非漏列——前者的障礙是 function 依《修補10》§11.2 為 base-independent,載入時無 language 可查,要補得先裁定「某 base 上讀不到的路徑算錯誤還是合法 false」。⚠ 清單本身對套件座標是**前綴比對**,第三段以後的錯字寫入端與讀取端**都過**(`syn.tam.presnet`),D/E 共用這個盲區,收緊屬 Phase 2。§7.5 為 A4 重新量測(§3 的數字是執行次數,已作廢)。**Phase 1 已落地;Phase 2 待 M4** |
+| `specifications/feature缺席語意與optional標記_v1.0.md` | **P75 權威**:feature 宣告的尾綴 `?` ＝**這條 feature 可以沒有值**;無 `?` 而讀到缺席是**執行期 Error**(不再靜默 `Unmatched` → 不再依 P43 落進 `else` 產出錯的值)。與 `slot N [C]?`／`role N [C]?` 同形同義——`?` 一律住**宣告**處、讀取處繼承,故現有讀取點零改動。**檢查只在「宣告在該主體上可見、但值不存在」時觸發**:非成員看不到宣告,故不受影響(`stone` 讀 trait 上的 `telic` 仍是合法的缺席即假)。範圍**限 typed feature**(封閉清單座標無宣告處可掛,待 P71 Phase 2);`?` canonical **可省略** → **未用到的宣告**零 churn;⚠ std:core 的 `AgreementBearer.number` 實際需要 `?`(覆蓋掃描找到,測試套件的執行覆蓋看不到),故 std:core digest 已變、`tutorials/en-standard-reconstruction/restore.chg` 已重 bless。未納入:編譯期「必然缺席」警告(c-乙,擱置) |
 | `specifications/function分支語意與選擇層_v1.0.md` | **P69–P70 權威**:歷時 function body 的四種形狀(序列/`case:`/`when:`/`choose:`)、分支條件三選一、frozen matching;選擇移出引擎層(零候選為合法結果)。與 `case_when與context_fragment_v2.md` 逐條對齊 |
 | `specifications/統計先驗與抽樣引擎_v0.1.md` | 模組 E:唯讀先驗庫(PHOIBLE/Grambank/WALS/CLICS,附網址與授權)+ 無狀態抽樣;有效分佈=手動>導入 provider>投影>E1 先驗,覆寫層住節點。**設計層;01–10 設計鏈至此閉合** |
 | `verification/測試案例集總索引_v0.1.md` | **全專案測試索引**:DSL 範例 8.1–8.6、18 案折磨測試、十實例、Rust 測試、Lexurgy 黑盒的統一映射與狀態;動工任一模組前先查其驗收案例 |
@@ -61,13 +72,15 @@
 | `architecture/架構2.0總鳥瞰_v1.0.md` | **2.0 單一入口**:Language/ChangeSet 雙軌全圖、四條資訊流、Debug 模塊化、**新實作順序(步驟 8–22,M1–M4)** |
 | `architecture/架構修補05_Primitive與檔案格式_v0.1.md` | P20–P28 詳細來源:DSL 獨立性、IR dump/canonical printer、條件語法、四原語、Ref、檔案格式 |
 | `architecture/架構修補06_插件服務與DSL_API_v0.1.md` | P29–P37 詳細來源:插件 code/data/config、服務生命週期、DSL API；完整插件仍是設計層。**§8 增修 A(2026-08-04)= 裁定 W/E/S 與 R7′/R9-a/R11–R15 的權威掛載點**:std 特權降為可覆寫預設、package 不必是編譯期常數；**§8.5 = P29/P50「無顯式 import」的適用範圍界線**(限 `.lang`／`.chg`) |
-| `architecture/分層差異向量_v0.2_裁定.md` | **已裁定,未實作**(擁有者 2026-08-07)。現行 `diff_vector` **只走 `signs`**,故一條音變規則、或 `trait` 加一行 `belongs`(影響數百詞的閉包)**diff 皆為零**——實測一次音變後互通度 `1.0`,方言分群看不見它。這與《演化圖本體論》§6.1「規則性音變其次」「差異 = ChangeSet 距離的分層投影」不符,屬**實作未達規格**(§6.1 標【M】)。四條裁定:①**階層向量**(外層仍四維,內層分 signs/rules/…)②**不做正規化**,發 `both`/`changed`/`only_before`/`only_after` 四個原始計數,Jaccard 由呼叫端算(§6.4)③補**整個 `traits` 容器**④先忠實計數,權重歸 measure。⚠ **§3.1 待裁**:trait 規則傳播到 sign 要不要重複算。實作會 bump `UI_SCHEMA_V1` |
+| `architecture/分層差異向量_v0.2_裁定.md` | **裁定完備,實作中**(裁定 2026-08-07 / §3.1 補裁 08-09)。原病灶:`diff_vector` **只走 `signs`**,故一條音變規則、或 `trait` 加一行 `belongs`(影響數百詞的閉包)**diff 皆為零**——實測一次音變後互通度 `1.0`,方言分群看不見它。這與《演化圖本體論》§6.1「規則性音變其次」「差異 = ChangeSet 距離的分層投影」不符,屬**實作未達規格**(§6.1 標【M】)。四條裁定:①**階層向量**(外層仍四維,內層分 signs/rules/…)②**不做正規化**,發 `both`/`changed`/`only_before`/`only_after` 四個原始計數,Jaccard 由呼叫端算(§6.4)③補**整個 `traits` 容器**④先忠實計數,權重歸 measure。**§3.1 已裁定丙**(08-09):trait 規則改動在**宣告處算 1**,影響範圍另記 `reach_before`/`reach_after` 兩個旁註欄位(不進四元組)。**進度**(§6 五步):**1–4 已落地**(階層結構 + 四原始計數 + `trait_content`/`trait_rules` leaf + 裁定丙的 `reach_before`/`reach_after`;`crates/changeset/src/diff.rs`)——子節點的軸是**宣告處**(sign 上／trait 上／trait 上的規則),**不是**維度化的 trait:P38 v0.2 的分類樹單一且維度中立,維度一律來自項目自己,理由與命名見裁定 **§1.1**;reach 住在 `TraitDiff` 裡與四元組**同層**(不進 `DiffCounts`,免得被當第五個計數加總),`global trait` 的 reach = 全部的詞(P6 自動引用,不經 `belongs`),落地判斷見 §3.1;第 4 步已重校準 `ExploratoryHeuristicV1`(新增 `trait_rule`=0.25／`trait_content`=0.5,傷害=事件數×reach×係數;一條音變後互通度 0.952,同一 changeset 要 9 條才切開方言群,§4 的硬約束由測試釘住,見 §4.1);**只剩第 5 步**(wire 與前端 `UI_SCHEMA_V1` → v2)。出境的 `DiffSummaryV1` **仍是扁平舊形狀**,故 bump 尚未發生 |
+| `architecture/年代切片與歷時分期_v1.0.md` | **P72–P74 權威**(§1;已裁定並實作 2026-08-11)。舊實作用**親子邊**算「方言群」,但方言是**共時**概念——純鏈狀專案因此得到「古/中/現代英語 = 兩個方言群」,而那是**歷時階段**。**P72**:拆成兩個函式——`periods`(沿主幹邊,答「何時變成另一個語言」;`TreeEdgeCut` 原封不動,`DialectGroupingStrategy` → `PeriodizationStrategy`)與 `dialect_groups`(**年代切片內任意兩點**,答「這個時代誰跟誰互通」);§6.2 的「鄰近點」因此有兩種讀法,各歸一個函式。**P73**:切片 = 圖的**反鏈**,判準走拓撲**不得改用** `EvolutionState::time`(自由字串,修補04 增修 A 明訂無運算依賴它);預設 = 葉節點;違反反鏈必須拒絕(`SLICE_NOT_AN_ANTICHAIN`)。**P74**:並存判準**只看主幹邊**,引用邊不構成祖裔(克里奧爾與來源語確實並存)。**三件未解**:群是連通分量非團、切片內仍可能因收斂併群(語言聯盟未建模)、平行創新低報互通度(實測兄弟各做相同九條音變 → 彼此 0.1429,要修得動 §6.1「以 id 對齊」)。`C(L,2)` 未稀疏化;**IPC/前端仍是分期**,改名隨 `UI_SCHEMA_V1` → v2 |
 | `architecture/接觸痕跡與語言聯盟_v0.1.md` | **問題陳述,未裁定**(S-a/S-b/S-c)。接觸痕跡**只記在節點層**(`.chg` 的 `donor`、`Edge::reference`),沒記在內容層:`Adopt` 不設 `origin`(而 `validate_origin_graph` 的 `::` 豁免因此無生產者)、`SoundChange` 不帶 donor。**語言聯盟(Sprachbund)全 repo 未建模**;§6.2 已把趨同動力學推到【N】multi-agent。附語言聯盟定義與其與借入/克里奧爾的對照 |
 | `architecture/資訊流D應用層框架_v0.1_提案.md` | **提案,未定案,不得引用為決策**(D-a–D-f 待裁)。應用層(步驟 21–22)參考框架:Query 純投影、Command 三分類(Language/View/ProjectData)、內容定址快取、互通度／分群只定接口。**Undo 按使用者活動分三條**:(A) 專案編輯=編輯一份寫到一半的 `.chg`(不落節點,**不需新格式或 `working/` 槽**)、(B) 演化 commit=app history stack(**非** graph parent 遍歷,children 在現行結構不可查)、views/data=文件編輯歷史。**§9 誌誤**記 v0.1 的四處錯 |
 | `architecture/演化專案結構與套件載入_v0.1.md` | **R 系列裁定的詳細推導**(程式碼註解引用 `裁定 W/E/S`、`R7′`、`R9-a`、`R11`–`R14` 者查此檔)。**權威分兩半**:套件載入組(W/E/S、R7′、R9-a、R11–R15)以《修補06》§8 為準,**已實作**;專案結構組(R1–R6:`project.toml`／`packages.lock.json`／`views/`／`data/`／`packages/`)**僅本檔、尚未實作、未編 P 號**(R10 裁定 2026-08-04),隨 M4 落地 |
 | `architecture/架構修補10_歷時function層與載入_v0.1.md` | P47–P55 詳細來源:function surface/load、接力展開、路徑庫、ServiceContext 接點、components、`.chg` canonical |
 | `architecture/架構修補11_演化樹節點模型_v0.1.md` | P56–P64 詳細來源:immutable snapshot、typed rebase、node-v2、全 parent merge、donor、persistence |
 | `architecture/架構修補12_授權面與封裝面分離_v0.1_提案.md` | P65–P68 **提案,未定案**:digest 移至邊、環境鎖分離、授權/封裝二分、bundle |
+| `architecture/架構修補13_引用與插值語法統一_v0.1.md` | **P72–P80 權威**(P75 含**增修 A**=構式內部不回指構式本身;**P79** = function guard 主體改 `$<參數名>` + 環境求值,連言 `&&` 進文法):`$` 只建立引用不求值、`{…}` 求值後嵌入,兩者正交;主體一律顯式(裸寫法與首段猜測移除)、`{…}` 內容只有主體、範疇比對交還 `[Trait]` guard、Path 縮減為點分名段。§6 附行為量測(語料庫分佈、查找端是字串鍵、封閉清單可容納的形狀) |
 | `architecture/架構修補09_phon命名block_v0.md` | P46 詳細來源:phon `name:`、結構化 block、propagate、grouped codegen 與 authoring |
 | `verification/` | 測試索引與封板證據：M1++、Step 13、Step 14、Step 16；只宣告可觀測完成狀態，不取代規範權威 |
 | `specifications/` | 規範性契約：DSL、Language、演化圖、Sign、統計與共時資料語意；02–04 的 D/A/B/C 決策編號保留於檔名。 |
@@ -111,6 +124,36 @@
    fill=逐Ø insert+associate…),不得另闢狀態。
 3. **單一資訊源**:同上;文件層也是——概念定義唯一,其餘引用。
 4. **功能完整下精簡**:以測試界定「完整」;優先刪抽象層而非加。
+5. **測試只准走真實路徑**:見 §3.1。
+
+### 3.1 測試不得使用「產品端不會產生的狀態」(2026-08-17)
+
+> **規則**:一件事若有多層入口(部分完成 / 完整),測試**一律用完整那個**。
+> 用部分入口只有一種情形合法:**該測試的對象就是那一層本身**,且必須在測試註解裡
+> 寫明「本測試刻意停在第 N 階段」。
+>
+> **推論**:一個公開函式若既沒有產品端消費者,又不是任何子系統的完整入口,
+> 它不該是 `pub`。降成 `pub(crate)`,或接上產品端。
+
+**為什麼**(實際踩過的坑,勿重蹈):
+
+`CompiledSystem::apply_construction` 只跑到「把 filler 填進槽」;`derive` / `derive_with_context`
+才會接著跑 token rules、sign-body `case:`、realization、Tshiatūn。**兩者回傳同一個
+`DerivedToken`,型別上分不出來**,而 `realize_phon` 兩者都收。
+
+於是 `apply_construction(...)` + `realize_phon(...)` 是一個編譯得過、執行不報錯,
+但**在真實管線裡永不出現**的組合:production 路徑上 `realize_phon` 永遠只拿到
+`evaluate_applied_sign` 之後的 token。
+
+後果是**測試會安靜地驗證錯的東西**:guard 若讀 `$slot.X`(filler 自帶),停在第一階段
+剛好對;guard 若讀 `$self.<由 token rule 算出的特徵>`,停在第一階段就讀到空值、
+掉進 `else`,而測試照樣綠燈——它驗證的是一個不存在的狀態下的行為。
+
+**自查三問**:
+
+1. 我呼叫的這個函式,`crates/{app,cli,query,command,changeset}` 裡有人用嗎?
+2. 沒有的話,它是某個子系統的**完整**入口,還是中間層?
+3. 是中間層而我仍要用它 —— 我能寫出「本測試刻意停在此階段」的理由嗎?寫不出來就換完整入口。
 
 ## 4. 可移植性規範(core crate,違者 CI 紅燈)
 
@@ -254,7 +297,8 @@ P26 序列性 id(不入印出格式,I15);dsl 域宣告以不透明區塊承載(�
 不及於行/括號結構的 .lang)——dsl 域區依**檔案位置**判定(裁決1:首個 language 構造前
 verbatim)、`==` 切 Block(P27)、`Name[n]` 引用、`=`/`=>` 二分、`@stage`(省略=word)、
 **`else` 鏈**(P22,入 `Rule.else_chain`,printer 同步輸出)、**Path 文法**(修補05 §3.5,
-`path::parse_path`:`.`欄位/`[key]`/`~tier`,Def 路徑驗證+步驟 13 定址複用)。
+`path::parse_path`,Def 路徑驗證+步驟 13 定址複用;當時含 `.`欄位/`[key]`/`~tier`
+三種段,**`[key]`/`~tier` 已由 P80 移除**,現為 `Name ('.' Name)*`)。
 出口過:**round-trip 恆等**(canonical 輸入逐位元;id 依文件序決定性再生)、
 非 canonical 輸入正規化為不動點、source→AST golden、錯誤定位(行號)。
 規則 env/action 內部與守衛求值的結構化 = 步驟 10(compile pass 需求驅動)。
@@ -322,7 +366,9 @@ Matched/Unmatched/Error(P43)、每維規則只改自己那維(P44)。
 projection。`crates/language/ontology.rs` 的 `OntologyRegistry` 自一組 Language 建成
 一棵分類樹；phon/syn/sem/prag 是正交內容投影，不各建同名分類樹。**最小本體 =
 額外引用的 stdlib `.lang`**；`std_ontology()`/`with_std()` 保持相容。`belongs` 閉包
-菱形去重、循環安全，有效內容依遠祖→近祖、同距離後寫 `belongs`、本地最後決議；
+菱形去重、循環安全；**值合併走逐包解析(I30)**——每個直接 `belongs` 的 trait
+先在自己那層解完，sign 只看到解完的包，並列包對同一 feature 分歧時取**候選聯集**
+(未定案值域，`FeatureValue.values`)，決議留給構式求交，sign 顯式最高(P6)；
 與 `Name[n]` macro 並存分工。建構期診斷涵蓋未知目標、循環、重名、Def winner
 provenance 與 slot conflict。出口見 `tests/ontology.rs` 與 M1++ 封板矩陣。
 
@@ -380,7 +426,7 @@ patch);`RuleRecord` 保 status/changed/branch/diag/RuleId。出口過:
 workbench M1++ 封板回歸綠；引擎零觸動。
 
 **共時 `.lang` surface 補齊(2026-07-21)**:維度 Def lhs 接完整 Path
-(`.`/`[key]`/`~tier`)；`syn:` 內平坦 `map SLOT OP [ARG]` 與 Rust 共用
+(當時為 `.`/`[key]`/`~tier`;**後兩者已由 P80 移除**)；`syn:` 內平坦 `map SLOT OP [ARG]` 與 Rust 共用
 `SlotMapOp`，source mapping 經 compile 驗證後進 construction runtime；sign 頂層
 `origin/provenance/lifecycle` typed 化。歷史 attestation 年代/文本/可信度仍不進
 Language，對照見 docs/14 與 `tests/lang_surface.rs`。

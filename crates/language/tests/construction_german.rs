@@ -192,7 +192,8 @@ fn unknown_slot_duplicate_and_non_construction_are_rejected() {
 fn filler_licensing_uses_belongs_closure() {
     let (lang, _art, reg) = setup();
     let cats = reg.sign_categories(lang.sign_named("sag").unwrap());
-    assert_eq!(cats, // P71-S:`Verb belongs Event`
+    assert_eq!(
+        cats, // P71-S:`Verb belongs Event`
         vec![
             "VerbStem",
             "Verb",
@@ -201,7 +202,8 @@ fn filler_licensing_uses_belongs_closure() {
             "EventFrame",
             "SemanticFrame",
             "Semantic"
-        ]);
+        ]
+    );
 }
 
 /// 固定素材:fixture round-trip 恆等(slot `?` 語法不破 P21)。

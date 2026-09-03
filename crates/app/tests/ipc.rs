@@ -1007,9 +1007,14 @@ fn every_guided_body_item_lowers_through_chg_and_replays() {
         },
         BodyItemInput::Feature {
             dim: "syn".to_owned(),
-            name: "number".to_owned(),
-            enum_values: vec!["sg".to_owned(), "pl".to_owned()],
-            value: "sg".to_owned(),
+            // 不能用 `number`:這個 sign `belongs Noun`,而 `Noun` 經
+            // `AgreementBearer` 已宣告 `syn.number`,再宣告一次會撞
+            // Q1「值域宣告一次」(FEATURE_DECLARATION_SHADOWED)。
+            // 這條測的是「每種 body item 都下得了 `.chg` 並重播」,與宣告
+            // 唯一性無關,故換一個沒被繼承的欄位名。
+            name: "hostshape".to_owned(),
+            enum_values: vec!["round".to_owned(), "flat".to_owned()],
+            value: "round".to_owned(),
         },
         BodyItemInput::Sense {
             name: "core".to_owned(),

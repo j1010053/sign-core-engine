@@ -36,6 +36,7 @@ pub mod patch;
 pub mod path;
 pub mod printer;
 pub mod projection;
+pub mod reference;
 pub mod sampling;
 pub mod sem;
 pub mod semantic_dto;
@@ -68,13 +69,12 @@ pub use semantic_dto::{
 pub use stdlib::{StdExport, StdExportKind, StdLoadError, StdPackage};
 pub use system::{
     check_document, check_document_with_packages, check_language, check_language_with_libraries,
-    check_language_with_packages, compile_document, compile_document_with_packages,
-    compile_system, compile_system_ref, compile_with_libraries, compile_with_libraries_ref,
-    compile_with_packages_ref,
-    CandidateSelectionTrace, CandidateSelector, CandidateSet, CaseBranchStatus, CaseRecord,
-    CompileSystemError, CompiledSystem, ConstructionCandidate, DerivationContext, PhonRealization,
-    COMPILER_SEMANTICS_VERSION,
-    RealizedPhonInput, SignExpressionEvaluation, SignValue, SystemDerivation, SystemError,
+    check_language_with_packages, compile_document, compile_document_with_packages, compile_system,
+    compile_system_ref, compile_with_libraries, compile_with_libraries_ref,
+    compile_with_packages_ref, CandidateSelectionTrace, CandidateSelector, CandidateSet,
+    CaseBranchStatus, CaseRecord, CompileSystemError, CompiledSystem, ConstructionCandidate,
+    DerivationContext, EvaluatedToken, PhonRealization, RealizedPhonInput,
+    SignExpressionEvaluation, SignValue, SystemDerivation, SystemError, COMPILER_SEMANTICS_VERSION,
 };
 pub use tshiatun_dsl::lower::Stage;
 
@@ -277,17 +277,56 @@ pub struct FeatureDecl {
     pub dim: Dim,
     pub name: String,
     pub values: Vec<String>,
+    /// P75:尾綴 `?` = **這條 feature 可以沒有值**。
+    ///
+    /// 與 `slot NAME [C]?` / `role NAME [C]?` 同形同義——`?` 在本語言裡只有一個
+    /// 意思(可以不提供),而且一律住在**宣告**處,讀取處繼承。沒有 `?` 時,讀到
+    /// 缺席是執行期 Error 而非靜默 `Unmatched`。
+    ///
+    /// **canonical 上可省略**:`false` 不印,故未使用此語法的套件其 canonical form
+    /// 與 library lock digest 逐位元不變(P75 §3 b)。
+    pub optional: bool,
     pub source: SourceLocation,
 }
 
 /// A typed feature value. Unlike a generic [`Def`], this is only valid when a
 /// matching [`FeatureDecl`] is visible on the effective sign.
+///
+/// **值域,不是宣告域。**`FeatureDecl.values` 說「哪些值合法」(型別,作者寫的
+/// schema);這裡的 `values` 說「這個主體實際是哪幾個」,恆為宣告域的子集。
+///
+/// * `len == 1` — 已定案,等同舊的單值語意。
+/// * `len >= 2` — **未定案值域**:此主體在該維度尚未收斂,候選就是這幾個。
+///   來源有二:作者直寫(`number = singular | plural`,如單複同形的 *fish*),
+///   或投影時多個掛載 trait 給了不同的值而取聯集。決議留給構式——同一個 sign
+///   在不同構式中收斂到不同的值,是語言事實而非錯誤,所以這裡不靠優先序挑一個
+///   贏家(挑了就把事實刪掉了)。
+///
+/// 空集合不合法:「沒有值」由**不寫這個項目**表示,那條路歸 P75 的 `?` 管。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeatureValue {
     pub dim: Dim,
     pub name: String,
-    pub value: String,
+    pub values: Vec<String>,
     pub source: SourceLocation,
+}
+
+impl FeatureValue {
+    /// 已定案時回傳那個唯一的值;未定案(`len >= 2`)回 `None`。
+    ///
+    /// 下游凡是「非得有一個值才能繼續」的地方都該走這裡,而不是 `values[0]`
+    /// ——取 `[0]` 會把未定案默默當成已定案,正是這個型別要擋掉的事。
+    pub fn decided(&self) -> Option<&str> {
+        match self.values.as_slice() {
+            [only] => Some(only),
+            _ => None,
+        }
+    }
+
+    /// 未定案 = 候選多於一個。
+    pub fn is_undecided(&self) -> bool {
+        self.values.len() > 1
+    }
 }
 
 /// A construction-local binding for a `syn` feature on one of its slots.
@@ -392,7 +431,9 @@ impl DerivationKind {
 /// 註:15a 造出了表面語法(`sem: edges:` 的 `opaque` 尾綴)卻尚無消費者,
 /// 這一點繞過了《共時lang語法與資料貼合度》「不先造無消費者語法」的原則;
 /// 保留現狀是為了讓實例 7 落地時四案有共同著力點。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum SenseTransparency {
     #[default]
@@ -427,12 +468,53 @@ pub struct SenseEdge {
     pub source: SourceLocation,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// `Default` 已移除:沒有「空 realization」這個狀態(見 `expression` 的說明)。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Realization {
     /// Context-typed realization: a `PhonContext` `case:` selecting a full phon
     /// template by guard (shared typed-case machinery; the former flat V1
     /// `RealizationBranch` list was removed with the v1 path).
-    pub expression: Option<TypedCase>,
+    ///
+    /// **非 `Option`(2026-08-18)**:parser 只在 `case:` 到位時才建這個 item,
+    /// 所以「空 realization」在型別上不存在。此前它是 `Option`,而那個 `None`
+    /// 是 `NodeUpdate::Realization` 唯一承載的語意(None↔Some 切換);
+    /// 收掉 `Option` 之後那個 update 隨之不可達。
+    pub expression: TypedCase,
+}
+
+impl Expression {
+    /// P93:取一個 phon case 分支的**深層模板**。
+    ///
+    /// 分支有兩種表示:`PhonTemplate`(結構化 phon 表達式,如 interpolation 那類
+    /// 的鄰居)與 phon `DimFragment`(模板 + 若干規則)。四個消費端都要問同一個
+    /// 問題「這一支的模板是什麼」,故收成一個存取器,免得各自展開 fragment 而
+    /// 漏掉其中一處(實作 P93 時就漏過三處)。
+    ///
+    /// `None` = 這一支沒有自己的模板:純規則分支的 base 是 sign 的深層形。
+    pub fn phon_base_template(&self) -> Option<&str> {
+        match self {
+            Expression::PhonTemplate(template) => Some(template),
+            Expression::DimFragment {
+                dim: Dim::Phon,
+                items,
+            } => items.iter().rev().find_map(|item| match item {
+                SignItem::Def(def) if def.path == "phon" => Some(def.value.as_str()),
+                _ => None,
+            }),
+            _ => None,
+        }
+    }
+
+    /// P93:這一支帶的實現規則。非 phon fragment 一律空。
+    pub fn phon_branch_rules(&self) -> &[SignItem] {
+        match self {
+            Expression::DimFragment {
+                dim: Dim::Phon,
+                items,
+            } => items,
+            _ => &[],
+        }
+    }
 }
 
 /// The type expected at an expression site.  `Feature` carries its declared
@@ -669,13 +751,28 @@ pub struct Block {
 
 /// Trait:**維度中立的分類節點 / macro 模板**(修補07 P38 v0.2:單一分類樹)。
 /// - `global = true` = phon-rule macro,預設自動引用(P6),codegen 收入 phon 側;
+/// - `marker = true` = **純分類節點**,以 `marker trait` 宣告:承諾**永不帶內容**,
+///   由驗證強制。它讓「這個 trait 只是個標記」成為**契約**而不是當下的事實
+///   ——差別在於改變它必須改宣告行(看得見),而不是往 body 裡塞一行(看不見);
 /// - 一般 trait = 分類節點(`belongs` 建單一繼承樹)+ 可帶 dimension 內容(繼承給
 ///   後代,projection 解析)。`Name[n]` block-indexed macro(P5/P27)仍支援。
 ///   **無 `syn trait` 維度標記**(維度是內容面向,非分類樹)。
+/// P76:trait 型別參數。`trait Agreement<C: Nominal, T>:` 中的 `C: Nominal` 和 `T`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraitTypeParam {
+    pub name: String,
+    /// 上界:實例化時填入的範疇必須是此範疇的子範疇。`None` = 無約束(`[*]`)。
+    pub bound: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraitDef {
     pub name: String,
     pub global: bool,
+    /// **純分類節點**(`marker trait`):承諾永不帶內容。見型別說明。
+    pub marker: bool,
+    /// P76:型別參數列表。空 = 非泛型(今天的行為)。
+    pub type_params: Vec<TraitTypeParam>,
     pub blocks: Vec<Block>,
 }
 
@@ -713,18 +810,75 @@ impl SignItem {
     }
 }
 
+/// 一次 trait 掛載的三種語法形式(見 [`SignItem::TraitMount`])。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TraitMountKind {
+    /// `belongs X` —— **載入並確定 trait**:分類邊的來源,身分的唯一權威。
+    /// 它本身**不展開內容**。
+    Declaration,
+    /// 裸 `X` —— 在此處展開**全部**塊(繞過 P5 的逐塊完整性)。
+    Whole,
+    /// `X[n]` —— 在此處展開第 n 塊(0 起算;indexed 須覆蓋全部塊,P5)。
+    Block(u32),
+}
+
+impl TraitMountKind {
+    /// 展開點的塊索引。**宣告沒有索引**(它不展開),裸 `X` 也沒有(它是全塊)。
+    pub fn block(&self) -> Option<u32> {
+        match self {
+            TraitMountKind::Block(index) => Some(*index),
+            TraitMountKind::Declaration | TraitMountKind::Whole => None,
+        }
+    }
+
+    /// 這是不是「載入並確定 trait」的那一份。
+    pub fn is_declaration(&self) -> bool {
+        matches!(self, TraitMountKind::Declaration)
+    }
+
+    /// `.chg` 舊契約的 `block: Option<u32>` → 展開點。**不會產生宣告**
+    /// ——宣告走 `NodeKind::Belongs`,不經這條路。
+    pub fn from_block(block: Option<u32>) -> TraitMountKind {
+        match block {
+            Some(index) => TraitMountKind::Block(index),
+            None => TraitMountKind::Whole,
+        }
+    }
+}
+
 /// sign 內項目:trait 引用位置有語意(P5),故與 Def/Rule 同列保序。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SignItem {
-    /// trait macro 引用(P5/P27)。`block`:**0 起算**——
-    /// - `Some(n)` = `Name[n]`,只引用第 n 個 block(indexed 須覆蓋全部 block,P5);
-    /// - `None` = **整個 trait**(裸 `Name` 或 `Name[]`,全 block 依序 inline)。
-    TraitUse {
+    /// `pass`:**這一塊是故意空的**。
+    ///
+    /// 空塊本身一直是合法的,問題是它**啞**——看不出是刻意留白還是寫到一半。
+    /// `pass` 讓作者說出來,而沒有 `pass` 的空塊會發診斷(警告,不是錯誤)。
+    ///
+    /// 做成語法而不是註解,是因為 canonical printer 由 AST 印出,**註解過不了
+    /// 一次 `dump()`**——而 `.chg` 的 replay、reconstruct、工作副本存檔全走
+    /// canonical 形式。要活過往返的意圖就必須是語法。
+    ///
+    /// 與其他項目**互斥**:`pass` 和內容同時出現是錯誤(驗證擋)。
+    Pass,
+    /// **掛載一個 trait**:`belongs X` 與 `X[n]` 是同一件事的兩半,故是同一個項目。
+    ///
+    /// # 為什麼合成一個
+    ///
+    /// `X[n]` **不可能獨立出現**——它是展開點,指的是哪一個掛載由 `belongs`
+    /// 決定;而有 `belongs` 就必須把展開點寫出來(否則內容不會進來)。兩者拆成
+    /// 兩種項目時,trait 名(以及日後 P76 的實參)得在每一處重複帶一份,而
+    /// 「哪一份是權威」沒有型別上的答案——`.chg` 因此可以只改展開點的目標、
+    /// 留下指向舊 trait 的 `belongs`,產生一個不連貫的文件。
+    ///
+    /// 合成一個之後,**身分只有一個來源**([`crate::TraitMountKind::Declaration`]),
+    /// 展開點只說「在這裡展開哪一塊」。
+    TraitMount {
         name: String,
-        block: Option<u32>,
+        kind: TraitMountKind,
+        /// P76:型別實參。只有 `Declaration` 可帶實參(參數寫在 `belongs` 上);
+        /// `Whole`/`Block` 時為空,展開時回查同容器的 Declaration 取實參。
+        args: Vec<String>,
     },
-    /// `belongs Transitive`(P40):sign 掛入某 ontology 節點;閉包由 registry 走。
-    Belongs(String),
     /// `slot NAME [Filler]`(可尾綴 `?` = optional;P41 valence=slots,I21)。
     /// 帶 ≥1 slot 的 sign = construction(P42);filler 是 syn ontology 範疇約束。
     Slot(Slot),
@@ -805,9 +959,7 @@ impl SlotConstraint {
     ) -> bool {
         match self {
             SlotConstraint::AnySign => true,
-            SlotConstraint::Category(required) => {
-                registry.categories_satisfy(categories, required)
-            }
+            SlotConstraint::Category(required) => registry.categories_satisfy(categories, required),
         }
     }
 
@@ -864,6 +1016,8 @@ impl TraitDef {
     pub fn content_eq(&self, other: &TraitDef) -> bool {
         self.name == other.name
             && self.global == other.global
+            && self.marker == other.marker
+            && self.type_params == other.type_params
             && self.blocks.len() == other.blocks.len()
             && self
                 .blocks

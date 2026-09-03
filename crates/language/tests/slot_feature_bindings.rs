@@ -8,7 +8,7 @@ trait LocalCaseBearer:
     belongs Noun
     syn:
         feature:
-            case = enum(nominative, accusative)
+            case = enum(nominative, accusative)?
 
 trait LocalCaseAssigner:
     belongs Predicate
@@ -53,7 +53,7 @@ fn slot_feature_contract_rejects_unknown_anysign_and_bad_domains() {
         slot_features:
             ghost.case = nominative
     phon:
-        /{item}/
+        /{$slot.item}/
 "#,
     );
     assert!(unknown_target.contains(&"SLOT_FEATURE_UNKNOWN_TARGET".to_owned()));
@@ -66,7 +66,7 @@ fn slot_feature_contract_rejects_unknown_anysign_and_bad_domains() {
         slot_features:
             item.case = nominative
     phon:
-        /{item}/
+        /{$slot.item}/
 "#,
     );
     assert!(any_sign.contains(&"SLOT_FEATURE_ANY_SIGN_TARGET".to_owned()));
@@ -79,7 +79,7 @@ fn slot_feature_contract_rejects_unknown_anysign_and_bad_domains() {
         slot_features:
             item.case = ergative
     phon:
-        /{item}/
+        /{$slot.item}/
 "#,
     );
     assert!(out_of_domain.contains(&"SLOT_FEATURE_VALUE_OUT_OF_DOMAIN".to_owned()));
@@ -92,7 +92,7 @@ fn slot_feature_contract_rejects_unknown_anysign_and_bad_domains() {
         slot_features:
             item.case = $slot.ghost.syn.assigned_case
     phon:
-        /{item}/
+        /{$slot.item}/
 "#,
     );
     assert!(unknown_source.contains(&"SLOT_FEATURE_UNKNOWN_SOURCE".to_owned()));
@@ -111,7 +111,7 @@ sign Bad:
         slot_features:
             item.case = $slot.source.syn.assigned_case
     phon:
-        /{source}{item}/
+        /{$slot.source}{$slot.item}/
 "#,
     );
     assert!(domain_mismatch.contains(&"SLOT_FEATURE_DOMAIN_MISMATCH".to_owned()));
@@ -125,7 +125,7 @@ sign Bad:
             item.case = nominative
             item.case = accusative
     phon:
-        /{item}/
+        /{$slot.item}/
 "#,
     );
     assert!(duplicate.contains(&"SLOT_FEATURE_DUPLICATE_TARGET".to_owned()));
@@ -143,7 +143,7 @@ sign OptionalCase:
         slot_features:
             target.case = $slot.source.syn.assigned_case
     phon:
-        /{{source}}{{target}}/
+        /{{$slot.source}}{{$slot.target}}/
 "#
     );
     let system = compile_system(Language::parse(&source).unwrap()).unwrap();
@@ -200,7 +200,7 @@ sign InnerNominal:
     sem:
         feature:
             interpreted_case = enum(nominative, accusative)
-            interpreted_case =>
+            interpreted_case =
                 case:
                     $self.syn.case == accusative:
                         accusative
@@ -211,21 +211,21 @@ sign InnerNominal:
             argument =
                 case:
                     $self.syn.case == accusative:
-                        {{stem}}
+                        {{$slot.stem}}
                     else:
-                        {{stem}}
+                        {{$slot.stem}}
     prag:
         feature:
             discourse_case = enum(nominative, accusative)
             discourse_case => $self.sem.interpreted_case
     phon:
-        /{{stem}}/
+        /{{$slot.stem}}/
         realization:
             case:
                 $self.syn.case == accusative:
-                    /{{stem}}a/
+                    /{{$slot.stem}}a/
                 else:
-                    /{{stem}}/
+                    /{{$slot.stem}}/
 sign OuterCase:
     syn:
         slots:
@@ -234,7 +234,7 @@ sign OuterCase:
         slot_features:
             target.case = $slot.source.syn.assigned_case
     phon:
-        /{{source}}{{target}}/
+        /{{$slot.source}}{{$slot.target}}/
 "#
     );
     let system = compile_system(Language::parse(&source).unwrap()).unwrap();

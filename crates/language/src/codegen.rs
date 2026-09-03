@@ -434,7 +434,15 @@ pub fn codegen(ordered: &Language) -> Result<(CompiledGrammar, Vec<CompiledSign>
 
 /// ①–⑤ 一步到位(compile 管線 + codegen)。
 pub fn compile_full(source: &Language) -> Result<Artifacts, CodegenError> {
-    let pipeline = compile::compile(source)?;
+    compile_full_with(source, &[])
+}
+
+/// 同上,但展開時可額外查外部語言的 trait(std / 套件)。
+pub fn compile_full_with(
+    source: &Language,
+    externals: &[&Language],
+) -> Result<Artifacts, CodegenError> {
+    let pipeline = compile::compile_with(source, externals)?;
     let (grammar, signs) = codegen(&pipeline.ordered)?;
     Ok(Artifacts {
         pipeline,

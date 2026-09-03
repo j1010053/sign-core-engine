@@ -46,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prelude = change_set_prelude(&base, &libraries, "evo:en-standard-restore")?;
     let mut resolved = UnresolvedChangeSet::parse(&prelude)?.resolve(&base, &libraries)?;
     resolved.statements = vec![ResolvedStatement { ordinal: 0, edits }];
-    let regenerated = resolved.dump();
+    let regenerated = resolved.dump().expect("dump");
 
     let previous = std::fs::read_to_string(&path).unwrap_or_default();
     if previous == regenerated {
@@ -80,10 +80,7 @@ fn diff_lines<'a>(before: &'a str, after: &'a str) -> Vec<(&'a str, &'a str)> {
     if old.len() != new.len() {
         return vec![("<行數不同,整份重寫>", "<see git diff>")];
     }
-    old.into_iter()
-        .zip(new)
-        .filter(|(a, b)| a != b)
-        .collect()
+    old.into_iter().zip(new).filter(|(a, b)| a != b).collect()
 }
 
 /// prelude 之後的部分(第一個 `#` 語句標記起)。

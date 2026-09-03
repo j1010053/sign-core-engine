@@ -6,93 +6,101 @@
 
 trait PrepositionalPhrase:
     belongs AdpositionConstruction
+    AdpositionConstruction[0]
     phon:
-        /{marker} {complement}/
+        /{$slot.marker} {$slot.complement}/
     syn:
         feature:
             order = enum(marker_complement)
             order = marker_complement
     constraints:
-        before(marker, complement)
-        adjacent(marker, complement)
+        before($slot.marker, $slot.complement)
+        adjacent($slot.marker, $slot.complement)
 
 trait PostpositionalPhrase:
     belongs AdpositionConstruction
+    AdpositionConstruction[0]
     phon:
-        /{complement} {marker}/
+        /{$slot.complement} {$slot.marker}/
     syn:
         feature:
             order = enum(complement_marker)
             order = complement_marker
     constraints:
-        before(complement, marker)
-        adjacent(complement, marker)
+        before($slot.complement, $slot.marker)
+        adjacent($slot.complement, $slot.marker)
 
 trait SVOTransitiveClause:
     belongs TransitiveClauseConstruction
+    TransitiveClauseConstruction[0]
     phon:
-        /{subject} {predicate} {object}/
+        /{$slot.subject} {$slot.predicate} {$slot.object}/
     syn:
         feature:
             order = enum(subject_predicate_object)
             order = subject_predicate_object
     constraints:
-        before(subject, predicate)
-        before(predicate, object)
-        adjacent(subject, predicate)
-        adjacent(predicate, object)
+        before($slot.subject, $slot.predicate)
+        before($slot.predicate, $slot.object)
+        adjacent($slot.subject, $slot.predicate)
+        adjacent($slot.predicate, $slot.object)
 
 trait OVSTransitiveClause:
     belongs TransitiveClauseConstruction
+    TransitiveClauseConstruction[0]
     phon:
-        /{object} {predicate} {subject}/
+        /{$slot.object} {$slot.predicate} {$slot.subject}/
     syn:
         feature:
             order = enum(object_predicate_subject)
             order = object_predicate_subject
     constraints:
-        before(object, predicate)
-        before(predicate, subject)
-        adjacent(object, predicate)
-        adjacent(predicate, subject)
+        before($slot.object, $slot.predicate)
+        before($slot.predicate, $slot.subject)
+        adjacent($slot.object, $slot.predicate)
+        adjacent($slot.predicate, $slot.subject)
 
 trait PrefixNegation:
     belongs NegationConstruction
+    NegationConstruction[0]
     syn:
         slots:
             negator [*]
     phon:
-        /{negator}{predicate}/
+        /{$slot.negator}{$slot.predicate}/
     constraints:
-        before(negator, predicate)
-        adjacent(negator, predicate)
+        before($slot.negator, $slot.predicate)
+        adjacent($slot.negator, $slot.predicate)
 
 trait SuffixNegation:
     belongs NegationConstruction
+    NegationConstruction[0]
     syn:
         slots:
             negator [*]
     phon:
-        /{predicate}{negator}/
+        /{$slot.predicate}{$slot.negator}/
     constraints:
-        before(predicate, negator)
-        adjacent(predicate, negator)
+        before($slot.predicate, $slot.negator)
+        adjacent($slot.predicate, $slot.negator)
 
 trait InitialPolarQuestion:
     belongs PolarQuestionConstruction
+    PolarQuestionConstruction[0]
     syn:
         slots:
             particle [*]
     phon:
-        /{particle} {clause}/
+        /{$slot.particle} {$slot.clause}/
     constraints:
-        before(particle, clause)
-        adjacent(particle, clause)
+        before($slot.particle, $slot.clause)
+        adjacent($slot.particle, $slot.clause)
 
 trait SerialPredicate:
     belongs SerialPredicateConstruction
+    SerialPredicateConstruction[0]
     phon:
-        /{first} {second}/
+        /{$slot.first} {$slot.second}/
     constraints:
-        before(first, second)
-        adjacent(first, second)
+        before($slot.first, $slot.second)
+        adjacent($slot.first, $slot.second)

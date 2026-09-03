@@ -2,9 +2,9 @@ changeset evo:en-standard-restore:
     schema = conlang.changeset/v1
     base_source = sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
     base_identities = sha256:b60d365862eecde76dd4557a2e82f7487a492c0635b61c10d0d4404af130a9c8
-    library std:core@0.1.0 sha256:89ed07916012fc68f5a4a37d8a141d46767258ec25afcd4ac0f14bfc558f5dd6
-    library std:cxg@0.1.0 sha256:aee53c11251c216d58a6d5f3d62076c5431bfcd3997555c9bd926a67a4151b85
-    library std:grambank@1.0-subset.1 sha256:9f8a01abbb8f5c1795bac21616cc7a3719e69e45ccd83b89ddc77bd86b75bed9
+    library std:core@0.1.0 sha256:ba59a480c593673c8440e6493a9f78901ba52b934425dd089132800aa31371e2
+    library std:cxg@0.1.0 sha256:3d67129858634b7d07a77409fa864b6ee87afb04d7b71f4dc095bb71efb4d3b2
+    library std:grambank@1.0-subset.1 sha256:ff23ec9ce86a3857f5ed83bb52ba02ffb687cab85061784dcac36f698a078618
     library std:grammaticalization@0.6.0 sha256:5663f653a7764ba93b13318728d37a185973305686f4dc8c897e745ed1a2effd
 
     #0:
@@ -221,7 +221,7 @@ changeset evo:en-standard-restore:
                         order = enum(attribute_nominal)
                         order = attribute_nominal
                 phon:
-                    /{attribute} {nominal}/
+                    /{$slot.attribute} {$slot.nominal}/
         insert sign under node(language, @evo:en-standard:0) at end:
             sign EnglishCopularPredication:
                 belongs EnglishConstruction
@@ -239,10 +239,10 @@ changeset evo:en-standard-restore:
                     realization:
                         case:
                             $self.syn.finite_form == third_singular:
-                                /{subject} is {predicate}/
+                                /{$slot.subject} is {$slot.predicate}/
                             else:
-                                /{subject} {copula} {predicate}/
-                    /{subject} {copula} {predicate}/
+                                /{$slot.subject} {$slot.copula} {$slot.predicate}/
+                    /{$slot.subject} {$slot.copula} {$slot.predicate}/
                 prag:
                     clause-type = declarative
         insert sign under node(language, @evo:en-standard:0) at end:
@@ -258,16 +258,16 @@ changeset evo:en-standard-restore:
                     realization:
                         case:
                             $self.syn.number == plural:
-                                /{stem}s/
+                                /{$slot.stem}s/
                             else:
-                                /{stem}/
-                    /{stem}/
+                                /{$slot.stem}/
+                    /{$slot.stem}/
                 sem:
                     feature:
                         number => $self.syn.number @stage word
                     roles:
                         referent [Entity]
-                        referent = {stem}
+                        referent = {$slot.stem}
         insert sign under node(language, @evo:en-standard:0) at end:
             sign EnglishDefiniteNP:
                 belongs EnglishConstruction
@@ -278,7 +278,7 @@ changeset evo:en-standard-restore:
                         determination = enum(definite, indefinite)
                         determination = definite
                 phon:
-                    /{determiner} {nominal}/
+                    /{$slot.determiner} {$slot.nominal}/
                 prag:
                     identifiability = identifiable
         insert sign under node(language, @evo:en-standard:0) at end:
@@ -302,10 +302,10 @@ changeset evo:en-standard-restore:
                     realization:
                         case:
                             $self.syn.finite_form == third_singular:
-                                /{subject} does {negator} {predicate}/
+                                /{$slot.subject} does {$slot.negator} {$slot.predicate}/
                             else:
-                                /{subject} {auxiliary} {negator} {predicate}/
-                    /{subject} {auxiliary} {negator} {predicate}/
+                                /{$slot.subject} {$slot.auxiliary} {$slot.negator} {$slot.predicate}/
+                    /{$slot.subject} {$slot.auxiliary} {$slot.negator} {$slot.predicate}/
                 prag:
                     clause-type = declarative
         insert sign under node(language, @evo:en-standard:0) at end:
@@ -318,7 +318,7 @@ changeset evo:en-standard-restore:
                         determination = enum(definite, indefinite)
                         determination = indefinite
                 phon:
-                    /{determiner} {nominal}/
+                    /{$slot.determiner} {$slot.nominal}/
                 prag:
                     identifiability = non-identifiable
         insert sign under node(language, @evo:en-standard:0) at end:
@@ -344,10 +344,10 @@ changeset evo:en-standard-restore:
                     realization:
                         case:
                             $self.syn.finite_form == third_singular:
-                                /{subject} {predicate}s/
+                                /{$slot.subject} {$slot.predicate}s/
                             else:
-                                /{subject} {predicate}/
-                    /{subject} {predicate}/
+                                /{$slot.subject} {$slot.predicate}/
+                    /{$slot.subject} {$slot.predicate}/
                 prag:
                     clause-type = declarative
         insert sign under node(language, @evo:en-standard:0) at end:
@@ -367,10 +367,10 @@ changeset evo:en-standard-restore:
                     realization:
                         case:
                             $self.syn.finite_form == third_singular:
-                                /{patient} is {predicate} by {agent}/
+                                /{$slot.patient} is {$slot.predicate} by {$slot.agent}/
                             else:
-                                /{patient} {auxiliary} {predicate} by {agent}/
-                    /{patient} {auxiliary} {predicate} by {agent}/
+                                /{$slot.patient} {$slot.auxiliary} {$slot.predicate} by {$slot.agent}/
+                    /{$slot.patient} {$slot.auxiliary} {$slot.predicate} by {$slot.agent}/
                 prag:
                     perspective = patient-prominent
         insert sign under node(language, @evo:en-standard:0) at end:
@@ -384,7 +384,7 @@ changeset evo:en-standard-restore:
                     feature:
                         number = plural
                 phon:
-                    /{nominal}{marker}/
+                    /{$slot.nominal}{$slot.marker}/
                 sem:
                     feature:
                         number = plural
@@ -408,17 +408,17 @@ changeset evo:en-standard-restore:
                     realization:
                         case:
                             $self.syn.finite_form == third_singular:
-                                /does {subject} {clause}/
+                                /does {$slot.subject} {$slot.clause}/
                             else:
-                                /{auxiliary} {subject} {clause}/
-                    /{auxiliary} {subject} {clause}/
+                                /{$slot.auxiliary} {$slot.subject} {$slot.clause}/
+                    /{$slot.auxiliary} {$slot.subject} {$slot.clause}/
         insert sign under node(language, @evo:en-standard:0) at end:
             sign EnglishPossessiveNP:
                 belongs EnglishConstruction
                 belongs PossessionConstruction
                 belongs EnglishReferenceFrame
                 phon:
-                    /{possessor}s {possessed}/
+                    /{$slot.possessor}s {$slot.possessed}/
         insert sign under node(language, @evo:en-standard:0) at end:
             sign EnglishPrepositionalPhrase:
                 belongs EnglishConstruction
@@ -450,10 +450,10 @@ changeset evo:en-standard-restore:
                     realization:
                         case:
                             $self.syn.finite_form == third_singular:
-                                /{subject} {predicate}s {object}/
+                                /{$slot.subject} {$slot.predicate}s {$slot.object}/
                             else:
-                                /{subject} {predicate} {object}/
-                    /{subject} {predicate} {object}/
+                                /{$slot.subject} {$slot.predicate} {$slot.object}/
+                    /{$slot.subject} {$slot.predicate} {$slot.object}/
                 prag:
                     clause-type = declarative
         insert sign under node(language, @evo:en-standard:0) at end:

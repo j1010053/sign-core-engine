@@ -168,10 +168,6 @@ pub enum FunctionError {
     CandidateLayer { function: String, candidate: String },
     #[error("FUNCTION_GUARD_NO_SUBJECT: {function:?} guard {guard:?} reads no bound parameter")]
     GuardNoSubject { function: String, guard: String },
-    #[error(
-        "FUNCTION_GUARD_MULTI_SUBJECT: {function:?} guard {guard:?} reads more than one parameter"
-    )]
-    GuardMultiSubject { function: String, guard: String },
     #[error("FUNCTION_GUARD_SUBJECT_NOT_A_SIGN: {function:?} guard {guard:?} needs sign(\"…\"), got {value:?}")]
     GuardSubjectNotASign {
         function: String,
@@ -238,7 +234,6 @@ impl FunctionError {
             FunctionError::CandidatesRequireSelection { .. }
             | FunctionError::CandidateLayer { .. }
             | FunctionError::GuardNoSubject { .. }
-            | FunctionError::GuardMultiSubject { .. }
             | FunctionError::GuardSubjectNotASign { .. }
             | FunctionError::ConstraintNotASign { .. }
             | FunctionError::Argument { .. }
@@ -1008,7 +1003,7 @@ fn validate_constraint(
     if !definition.items.iter().any(|item| {
         matches!(
             item,
-            SignItem::Belongs(name)
+            SignItem::TraitMount { name: name, kind: conlang_language::TraitMountKind::Declaration, .. }
                 if name == constraint || system.ontology.category_is_a(name, constraint)
         )
     }) {
@@ -1040,91 +1035,6 @@ fn sign_argument(value: &str) -> Option<&str> {
 /// 字串比對會誤判成「這個 guard 讀的是該參數」。
 /// `<param> == [Trait]` —— **範疇成員形式**的主體。
 ///
-/// guard 語言用 `$self == [Trait]`(`Guard::SelfIsA`,走 `belongs` 閉包)測範疇,
-/// 而不是讀某個欄位——範疇是本體樹的成員關係,不是 def。函數層寫成
-/// `x == [Verb]`,主體 `x` 是**裸識別字**,不在任何路徑頭上。
-///
-/// 這是 `guard_subjects` 的路徑頭掃描看不到的唯一形狀:先前寫成 `x == [Verb]`
-/// 會得到 `FUNCTION_GUARD_NO_SUBJECT`,於是函數層根本用不了範疇分支——而範疇正是
-/// 歷時分支最常見的依據(`reanalyze` 搬的就是它)。
-fn category_guard_subject<'a>(
-    guard: &'a str,
-    bindings: &BTreeMap<String, String>,
-) -> Option<&'a str> {
-    let (left, right) = guard.split_once("==")?;
-    let left = left.trim();
-    if !right.trim_start().starts_with('[') {
-        return None;
-    }
-    bindings.contains_key(left).then_some(left)
-}
-
-fn guard_subjects(guard: &str, bindings: &BTreeMap<String, String>) -> BTreeSet<String> {
-    if let Some(subject) = category_guard_subject(guard, bindings) {
-        return BTreeSet::from([subject.to_owned()]);
-    }
-    let bytes = guard.as_bytes();
-    let mut subjects = BTreeSet::new();
-    let mut index = 0;
-    while index < bytes.len() {
-        if !(bytes[index].is_ascii_alphabetic() || bytes[index] == b'_') {
-            index += 1;
-            continue;
-        }
-        let start = index;
-        while index < bytes.len() && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
-        {
-            index += 1;
-        }
-        // 只有後面緊跟 `.` 才是「路徑頭」;單獨出現的識別字是**值**(如 `== verb`)。
-        if bytes.get(index) == Some(&b'.') {
-            let name = &guard[start..index];
-            if bindings.contains_key(name) {
-                subjects.insert(name.to_owned());
-            }
-        }
-    }
-    subjects
-}
-
-/// 把 guard 改寫成求值器認得的形式:主體換成 `$self`,**其餘已綁定的參數換成它的值**。
-///
-/// 兩者都必要:`x.syn.category == y` 裡 `x` 是主體、`y` 是**值**。只換主體的話,
-/// 右端會拿字面上的 `y` 去比,而那**永遠不相等** —— 是靜默的錯答案,不是錯誤。
-fn rewrite_guard(guard: &str, subject: &str, bindings: &BTreeMap<String, String>) -> String {
-    if let Some(found) = category_guard_subject(guard, bindings) {
-        if found == subject {
-            let (_, right) = guard.split_once("==").expect("checked above");
-            return format!("$self == {}", right.trim());
-        }
-    }
-    let bytes = guard.as_bytes();
-    let mut output = String::with_capacity(guard.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if !(bytes[index].is_ascii_alphabetic() || bytes[index] == b'_') {
-            output.push(bytes[index] as char);
-            index += 1;
-            continue;
-        }
-        let start = index;
-        while index < bytes.len() && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
-        {
-            index += 1;
-        }
-        let name = &guard[start..index];
-        let is_path_head = bytes.get(index) == Some(&b'.');
-        if is_path_head && name == subject {
-            output.push_str("$self");
-        } else if !is_path_head && bindings.contains_key(name) {
-            output.push_str(&bindings[name]);
-        } else {
-            output.push_str(name);
-        }
-    }
-    output
-}
-
 /// 對一個 function guard 求值(P49 `function Name(…) / guard:`;
 /// 分支的 `<call> / guard` 同一套)。
 ///
@@ -1248,46 +1158,63 @@ fn guard_holds(
             path_builtin_key(owner, guard, &args, bindings, document, libraries)?;
         return Ok(paths.contains(&source, &target));
     }
-    let subjects = guard_subjects(guard, bindings);
-    let subject = match subjects.len() {
-        1 => subjects.into_iter().next().expect("len == 1"),
-        0 => {
-            return Err(FunctionError::GuardNoSubject {
-                function: owner.to_owned(),
-                guard: guard.to_owned(),
-            }
-            .into())
-        }
-        // **明確拒絕而非猜一個**:跨參數的 guard 需要多主體求值,`.lang` 的求值器
-        // 只認一個 `$self`。挑其中一個會靜默給出錯的答案。
-        _ => {
-            return Err(FunctionError::GuardMultiSubject {
-                function: owner.to_owned(),
-                guard: guard.to_owned(),
-            }
-            .into())
-        }
-    };
-    let value = bindings.get(&subject).expect("subject is bound");
-    let name = sign_argument(value).ok_or_else(|| FunctionError::GuardSubjectNotASign {
-        function: owner.to_owned(),
-        guard: guard.to_owned(),
-        value: value.to_owned(),
-    })?;
-    let sign = document
-        .language()
-        .signs
-        .iter()
-        .find(|candidate| candidate.name == name)
-        .ok_or_else(|| FunctionError::GuardUnknownSign {
+    // P91:主體以 `$<參數名>` 顯式書寫,由**環境**解析,不再掃描識別字再
+    // 文字代換成 `$self`。跨參數的 guard 因此可表達——舊路徑只有一個隱含
+    // 主體,故必須以 `FUNCTION_GUARD_MULTI_SUBJECT` 拒絕。
+    let roles = conlang_language::synchronic::guard_binding_roles(guard);
+    if roles.subjects.is_empty() && roles.scalars.is_empty() {
+        return Err(FunctionError::GuardNoSubject {
             function: owner.to_owned(),
             guard: guard.to_owned(),
-            sign: name.to_owned(),
-        })?;
+        }
+        .into());
+    }
+
+    let unbound = || -> ReplayError {
+        FunctionError::GuardNoSubject {
+            function: owner.to_owned(),
+            guard: guard.to_owned(),
+        }
+        .into()
+    };
+
     let system = libraries.compile(document)?;
-    let effective = system.ontology.effective_sign(sign);
-    let rewritten = rewrite_guard(guard, &subject, bindings);
-    conlang_language::synchronic::guard_matches_sign(&effective, &rewritten, &system.ontology)
+    let mut effective = BTreeMap::new();
+    for name in &roles.subjects {
+        let value = bindings.get(name).ok_or_else(unbound)?;
+        // 主體必須綁到 sign——`$x.syn.f` 的 `x` 是「哪個 sign」。
+        let sign_name =
+            sign_argument(value).ok_or_else(|| FunctionError::GuardSubjectNotASign {
+                function: owner.to_owned(),
+                guard: guard.to_owned(),
+                value: value.to_owned(),
+            })?;
+        let sign = document
+            .language()
+            .signs
+            .iter()
+            .find(|candidate| candidate.name == sign_name)
+            .ok_or_else(|| FunctionError::GuardUnknownSign {
+                function: owner.to_owned(),
+                guard: guard.to_owned(),
+                sign: sign_name.to_owned(),
+            })?;
+        effective.insert(name.clone(), system.ontology.effective_sign(sign));
+    }
+    let env = effective
+        .iter()
+        .map(|(name, sign)| (name.clone(), sign))
+        .collect();
+    // 純量參數:右端的 `$y`,綁的是字面值而非 sign。
+    let mut scalars = BTreeMap::new();
+    for name in &roles.scalars {
+        scalars.insert(
+            name.clone(),
+            bindings.get(name).ok_or_else(unbound)?.clone(),
+        );
+    }
+
+    conlang_language::synchronic::guard_matches_bindings(guard, &env, &scalars, &system.ontology)
         .map_err(|error| {
             FunctionError::GuardEvaluation {
                 function: owner.to_owned(),

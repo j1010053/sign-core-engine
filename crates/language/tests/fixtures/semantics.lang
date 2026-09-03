@@ -65,13 +65,13 @@ sign GiveEvent:
         roles:
             giver [*]
             gift [*]
-            giver = {agent}
-            gift = {theme}
+            giver = {$slot.agent}
+            gift = {$slot.theme}
         feature:
             frame = enum(giving)
             frame = giving
     phon:
-        /gi{agent}{theme}/
+        /gi{$slot.agent}{$slot.theme}/
 
 sign BadSem:
     belongs Transitive
@@ -81,6 +81,6 @@ sign BadSem:
     sem:
         roles:
             agent-role [*]
-            agent-role = {nonexistent}
+            agent-role = {$slot.nonexistent}
     phon:
-        /x{agent}/
+        /x{$slot.agent}/

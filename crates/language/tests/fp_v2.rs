@@ -27,13 +27,13 @@ sign en_3sg:
         slots:
             stem [TestVerb]
     phon:
-        /{stem}+s/
+        /{$slot.stem}+s/
         realization:
-            case stem.phon:
-                == SibilantFinal:
-                    /{stem}+es/
+            case:
+                $slot.stem == [SibilantFinal]:
+                    /{$slot.stem}+es/
                 else:
-                    /{stem}+s/
+                    /{$slot.stem}+s/
 
 sign walk:
     belongs TestVerb
@@ -60,8 +60,104 @@ fn v2_round_trip_keeps_context_typed_case() {
     let parsed = Language::parse(FP_SOURCE).expect("V2 source parses");
     let canonical = parsed.dump();
     assert_eq!(Language::parse(&canonical).unwrap().dump(), canonical);
-    assert!(canonical.contains("case stem.phon:"));
+    assert!(canonical.contains("$slot.stem == [SibilantFinal]:"));
     assert!(canonical.contains("en_3sg({$self})"));
+}
+
+/// 🔑 `case <slot>.phon:` **被拒絕**(2026-08-17 移除)。
+///
+/// 該形式的 `.phon` 不讀音韻——執行期比的是 filler 的**範疇**,`.phon` 只是個
+/// 字面標記(`scrutinee.split_once('.')` 後比對後半是不是 `"phon"`)。名實不符,
+/// 而且整個 case 共用一個 scrutinee,強迫所有分支討論同一個槽。
+///
+/// **拒絕而非忽略**:比照舊 `schema conlang.lang/v2` 標頭——留著一個名實不符的
+/// 形式,作者會以為它在讀音韻。取代寫法是 guard 分支(下一個測試證明等價)。
+#[test]
+fn slot_phon_scrutinee_is_rejected() {
+    let source = r#"trait Atom:
+
+trait SibilantFinal:
+    belongs Atom
+
+sign en_3sg:
+    syn:
+        slots:
+            stem [Atom]
+    phon:
+        /{stem}+s/
+        realization:
+            case stem.phon:
+                == SibilantFinal:
+                    /{stem}+es/
+                else:
+                    /{stem}+s/
+"#;
+    let error = Language::parse(source).expect_err("`case <slot>.phon:` must be rejected");
+    let message = format!("{error:?}");
+    assert!(
+        message.contains("was removed"),
+        "診斷須說明它已移除:{message}"
+    );
+    assert!(
+        message.contains("$slot.stem == [Category]"),
+        "診斷須指出取代寫法:{message}"
+    );
+}
+
+/// 🔑 一個 `phon:` block 至多一個 `realization:`(2026-08-18)。
+///
+/// 未擋之前:兩個 `realization:` 會 parse 成兩個 `SignItem::Realization`,printer
+/// 把它們合併印在**一個**標頭下、兩個 `case:`,而那份 dump **重新 parse 會失敗**
+/// (「realization may contain one typed case」)——**P21 round-trip 恆等破**。
+/// 且求值端一律 `find_map` 只取第一個,第二個寫了不生效。
+#[test]
+fn a_phon_block_takes_at_most_one_realization() {
+    let source = r#"sign x:
+    syn:
+        feature:
+            n = enum(sg, pl)
+    phon:
+        /a/
+        realization:
+            case:
+                $self.syn.n == pl:
+                    /first/
+        realization:
+            case:
+                $self.syn.n == pl:
+                    /second/
+"#;
+    let error = Language::parse(source).expect_err("第二個 realization 必須被拒");
+    let message = format!("{error:?}");
+    assert!(
+        message.contains("at most one `realization:`"),
+        "診斷須說明限制:{message}"
+    );
+}
+
+/// 🔑 取代寫法**行為等價**,且嚴格更強:每支 guard 可測不同對象、可 `&&`,
+/// `[...]` 也明示這是範疇測試。
+#[test]
+fn slot_category_guard_replaces_the_removed_scrutinee() {
+    let system = compile_system(Language::parse(FP_SOURCE).expect("parses")).expect("compiles");
+    for (filler, expected) in [("hiss", "hiss+es"), ("walk", "walk+s")] {
+        let token = system
+            .evaluate_token(
+                system
+                    .apply_construction(
+                        "en_3sg",
+                        &[SlotFiller::sign("stem", filler)],
+                        &SlotMap::identity(),
+                    )
+                    .expect("apply"),
+            )
+            .expect("evaluate");
+        assert_eq!(
+            system.realize_phon(&token).expect("realize").input.as_str(),
+            expected,
+            "{filler}"
+        );
+    }
 }
 
 #[test]
@@ -124,23 +220,23 @@ sign walk:
         .sign
         .items
         .iter()
-        .any(|item| matches!(item, SignItem::Belongs(name) if name == "FragmentThirdSingular")));
+        .any(|item| matches!(item, SignItem::TraitMount { name: name, kind: conlang_language::TraitMountKind::Declaration, .. } if name == "FragmentThirdSingular")));
     assert!(stored.sign.items.iter().any(|item| {
         matches!(item, SignItem::FeatureValue(value)
             if value.dim == Dim::Syn
                 && value.name == "inflection"
-                && value.value == "third")
+                && value.decided() == Some("third"))
     }));
     assert!(stored.sign.items.iter().any(
         |item| matches!(item, SignItem::Def(def) if def.path == "phon" && def.value == "/walks/")
     ));
     assert!(stored.sign.items.iter().any(|item| {
         matches!(item, SignItem::FeatureValue(value)
-            if value.dim == Dim::Sem && value.name == "exponent" && value.value == "third_singular")
+            if value.dim == Dim::Sem && value.name == "exponent" && value.decided() == Some("third_singular"))
     }));
     assert!(stored.sign.items.iter().any(|item| {
         matches!(item, SignItem::FeatureValue(value)
-            if value.dim == Dim::Prag && value.name == "selected" && value.value == "yes")
+            if value.dim == Dim::Prag && value.name == "selected" && value.decided() == Some("yes"))
     }));
 
     let unmatched = system
@@ -160,7 +256,7 @@ sign walk:
         .sign
         .items
         .iter()
-        .any(|item| matches!(item, SignItem::Belongs(name) if name == "FragmentThirdSingular")));
+        .any(|item| matches!(item, SignItem::TraitMount { name: name, kind: conlang_language::TraitMountKind::Declaration, .. } if name == "FragmentThirdSingular")));
 }
 
 #[test]
@@ -224,7 +320,9 @@ fn when_guards_share_one_frozen_pre_merge_snapshot() {
     };
     let feature = |name: &str| {
         stored.sign.items.iter().rev().find_map(|item| match item {
-            SignItem::FeatureValue(value) if value.name == name => Some(value.value.as_str()),
+            SignItem::FeatureValue(value) if value.name == name => {
+                Some(value.decided().unwrap_or_default())
+            }
             _ => None,
         })
     };
@@ -240,11 +338,11 @@ fn when_guards_share_one_frozen_pre_merge_snapshot() {
     );
     assert!(stored.sign.items.iter().any(|item| {
         matches!(item, SignItem::FeatureValue(value)
-            if value.dim == Dim::Sem && value.name == "selected" && value.value == "semantic")
+            if value.dim == Dim::Sem && value.name == "selected" && value.decided() == Some("semantic"))
     }));
     assert!(stored.sign.items.iter().any(|item| {
         matches!(item, SignItem::FeatureValue(value)
-            if value.dim == Dim::Prag && value.name == "licensed" && value.value == "yes")
+            if value.dim == Dim::Prag && value.name == "licensed" && value.decided() == Some("yes"))
     }));
 
     let syn_records = evaluated
@@ -297,7 +395,7 @@ fn when_else_uses_the_same_external_default_policy() {
     };
     assert!(stored.sign.items.iter().rev().any(|item| {
         matches!(item, SignItem::FeatureValue(value)
-            if value.name == "result" && value.value == "fallback")
+            if value.name == "result" && value.decided() == Some("fallback"))
     }));
 }
 
@@ -327,7 +425,7 @@ sign atomic:
                 feature:
                     outcome = second
     phon:
-        /{subject}/
+        /{$slot.subject}/
 "#,
         )
         .unwrap(),
@@ -346,7 +444,7 @@ sign atomic:
     let unchanged = system.evaluate_sign("atomic").unwrap();
     assert!(unchanged.sign.items.iter().rev().any(|item| {
         matches!(item, SignItem::FeatureValue(value)
-            if value.name == "outcome" && value.value == "base")
+            if value.name == "outcome" && value.decided() == Some("base"))
     }));
 }
 
@@ -431,7 +529,7 @@ fn sign_context_fragment_is_checked_as_a_typed_sign_body() {
     };
     assert!(evaluated.sign.items.iter().rev().any(|item| {
         matches!(item, SignItem::FeatureValue(value)
-            if value.name == "mode" && value.value == "b")
+            if value.name == "mode" && value.decided() == Some("b"))
     }));
 }
 
@@ -492,20 +590,26 @@ fn sign_application_returns_a_full_typed_sign() {
         .feature(Dim::Syn, "number", "singular")
         .feature(Dim::Syn, "person", "third");
     let evaluated = system.evaluate_sign_expression("walk", &context).unwrap();
-    let SignValue::Applied(token) = evaluated.value else {
-        panic!("3sg case should apply the en_3sg Sign function")
-    };
-    assert!(token
+    let cases = evaluated.cases.len();
+    let token = evaluated
+        .value
+        .into_evaluated()
+        .expect("3sg case should apply the en_3sg Sign function");
+    let token_view = token.as_token();
+    assert!(token_view
         .syn_categories
         .iter()
         .any(|item| item == "ThirdSingular"));
-    assert!(token.syn_categories.iter().any(|item| item == "FiniteVerb"));
-    assert!(token.is_saturated());
+    assert!(token_view
+        .syn_categories
+        .iter()
+        .any(|item| item == "FiniteVerb"));
+    assert!(token_view.is_saturated());
     assert_eq!(
         system.realize_phon(&token).unwrap().input.as_str(),
         "walk+s"
     );
-    assert_eq!(evaluated.cases.len(), 1);
+    assert_eq!(cases, 1);
 
     let plural = DerivationContext::new()
         .feature(Dim::Syn, "number", "plural")
@@ -519,10 +623,14 @@ fn sign_application_returns_a_full_typed_sign() {
     ));
 
     let sibilant = system
-        .apply_construction(
-            "en_3sg",
-            &[SlotFiller::sign("stem", "hiss")],
-            &SlotMap::identity(),
+        .evaluate_token(
+            system
+                .apply_construction(
+                    "en_3sg",
+                    &[SlotFiller::sign("stem", "hiss")],
+                    &SlotMap::identity(),
+                )
+                .unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -564,11 +672,11 @@ sign Agreement:
             subject [TestNominal]
             predicate [TestNominal]
     phon:
-        /{subject} {predicate}/
+        /{$slot.subject} {$slot.predicate}/
     constraints:
-        equal(subject.syn.number, predicate.syn.number)
-        before(subject, predicate)
-        adjacent(subject, predicate)
+        equal($slot.subject.syn.number, $slot.predicate.syn.number)
+        before($slot.subject, $slot.predicate)
+        adjacent($slot.subject, $slot.predicate)
 "#,
     )
     .unwrap();
@@ -624,7 +732,7 @@ sign Pairing:
         feature:
             selected => $slot.second.syn.mark
     phon:
-        /{first} {second}/
+        /{$slot.first} {$slot.second}/
 
 sign seed:
     belongs Piece
@@ -687,7 +795,7 @@ sign Inner:
         slots:
             stem [NestedPiece]
     phon:
-        /{stem}/
+        /{$slot.stem}/
 
 sign Pair:
     syn:
@@ -695,7 +803,7 @@ sign Pair:
             left [*]
             right [*]
     phon:
-        /{left} {right}/
+        /{$slot.left} {$slot.right}/
 
 sign seed:
     phon:
@@ -752,7 +860,7 @@ sign A:
         slots:
             value [Atom]
     phon:
-        /a {value}/
+        /a {$slot.value}/
 
 sign B:
     belongs CompetingConstruction
@@ -761,7 +869,7 @@ sign B:
         slots:
             value [Atom]
     phon:
-        /b {value}/
+        /b {$slot.value}/
 "#,
     )
     .unwrap();
@@ -886,7 +994,7 @@ sign Suffix:
         slots:
             base [OuterCategory]
     phon:
-        /{base}!/
+        /{$slot.base}!/
 
 sign Outer:
     belongs OuterCategory
@@ -894,7 +1002,7 @@ sign Outer:
         slots:
             stem [ProjectionAtom]
     phon:
-        /{stem}/
+        /{$slot.stem}/
         realization:
             case:
                 $self == [OuterCategory]:
@@ -906,10 +1014,14 @@ sign Outer:
     assert!(canonical.contains("/{Suffix({$self}).phon.ret}/"));
     let system = compile_system(language).unwrap();
     let token = system
-        .apply_construction(
-            "Outer",
-            &[SlotFiller::sign("stem", "x")],
-            &SlotMap::identity(),
+        .evaluate_token(
+            system
+                .apply_construction(
+                    "Outer",
+                    &[SlotFiller::sign("stem", "x")],
+                    &SlotMap::identity(),
+                )
+                .unwrap(),
         )
         .unwrap();
     assert_eq!(system.realize_phon(&token).unwrap().input.as_str(), "x!");
@@ -925,7 +1037,7 @@ sign Wrapper:
         slots:
             value [*]
     phon:
-        /{value}/
+        /{$slot.value}/
 
 sign root:
     belongs Atom
@@ -951,7 +1063,7 @@ sign root:
         slots:
             value [*]
     phon:
-        /{value}/
+        /{$slot.value}/
     case:
         else:
             B({$self})
@@ -961,7 +1073,7 @@ sign B:
         slots:
             value [*]
     phon:
-        /{value}/
+        /{$slot.value}/
     case:
         else:
             A({$self})
@@ -1020,7 +1132,7 @@ sign Chooser:
     sem:
         feature:
             boundedness = enum(bounded, unbounded)
-            boundedness =>
+            boundedness =
                 case:
                     $self.syn.number == plural:
                         unbounded
@@ -1031,11 +1143,11 @@ sign Chooser:
             agent =
                 case:
                     $self.syn.selection == first:
-                        {first}
+                        {$slot.first}
                     else:
-                        {second}
+                        {$slot.second}
     phon:
-        /{first} {second}/
+        /{$slot.first} {$slot.second}/
 "#,
     )
     .unwrap();
@@ -1090,12 +1202,12 @@ sign MissingDefault:
     sem:
         feature:
             result = enum(yes, no)
-            result =>
+            result =
                 case:
                     $self.syn.trigger == on:
                         yes
     phon:
-        /{value}/
+        /{$slot.value}/
 "#,
     )
     .unwrap();
@@ -1139,7 +1251,7 @@ sign Prefix:
             committed = enum(no, yes)
             committed => yes
     phon:
-        /pre {base}/
+        /pre {$slot.base}/
 
 sign Root:
     syn:
@@ -1148,7 +1260,7 @@ sign Root:
         feature:
             apply = enum(no, yes)
     phon:
-        /{value}/
+        /{$slot.value}/
     case:
         $self.syn.apply == yes:
             Prefix({$self})
@@ -1210,7 +1322,7 @@ sign Invalid:
     syn:
         feature:
             value = enum(one, two)
-            value =>
+            value =
                 case:
                     else:
                         Helper()
@@ -1239,6 +1351,7 @@ fn typed_features_are_supported_in_prag_but_not_phon() {
             dim,
             name: "register".to_owned(),
             values: vec!["formal".to_owned(), "informal".to_owned()],
+            optional: false,
             source: SourceLocation::unknown(),
         })]
     };
@@ -1276,7 +1389,7 @@ fn nested_case_leaves_are_statically_type_checked() {
         feature:
             trigger = enum(on, off)
             result = enum(yes, no)
-            result =>
+            result =
                 case:
                     $self.syn.trigger == on:
                         case:
@@ -1328,7 +1441,7 @@ sign NestedChoice:
     sem:
         feature:
             outcome = enum(yes, no)
-            outcome =>
+            outcome =
                 case:
                     $self.syn.trigger == on:
                         case:
@@ -1345,21 +1458,21 @@ sign NestedChoice:
                     $self.syn.trigger == on:
                         case:
                             else:
-                                {value}
+                                {$slot.value}
                     else:
-                        {value}
+                        {$slot.value}
     phon:
-        /{value}/
+        /{$slot.value}/
         realization:
             case:
                 $self.syn.trigger == on:
                     case:
                         $self.syn.trigger == on:
-                            /x {value}/
+                            /x {$slot.value}/
                         else:
                             /never/
                 else:
-                    /{value}/
+                    /{$slot.value}/
 "#,
     )
     .unwrap();
@@ -1418,14 +1531,14 @@ sign Wrapper:
         slots:
             base [*]
     phon:
-        /wrapped {base}/
+        /wrapped {$slot.base}/
 
 sign Root:
     syn:
         slots:
             value [NestedAtom]
     phon:
-        /{value}/
+        /{$slot.value}/
     case:
         else:
             case:
@@ -1468,7 +1581,7 @@ sign marked:
     sem:
         feature:
             outcome = enum(yes, no)
-            outcome =>
+            outcome =
                 case:
                     $self.syn.trigger == on:
                         yes
@@ -1482,7 +1595,7 @@ sign Holder:
         slots:
             item [CaseUnit]
     phon:
-        /{item}/
+        /{$slot.item}/
 "#,
     )
     .unwrap();
@@ -1525,12 +1638,12 @@ trait EnrichedContract:
     sem:
         roles:
             theme [ContractEntity]
-            theme = {adjunct}
+            theme = {$slot.adjunct}
     phon:
         realization:
             case:
                 $self.syn.committed == yes:
-                    /{adjunct}/
+                    /{$slot.adjunct}/
 
 sign seed:
     belongs ContractAtom
@@ -1547,7 +1660,7 @@ sign Wrapper:
         slots:
             stem [ContractAtom]
     phon:
-        /{stem}/
+        /{$slot.stem}/
 
 sign stored_root:
     belongs ContractAtom
@@ -1672,14 +1785,15 @@ sign root:
     let completed = system
         .apply_arguments(&value, &[SlotFiller::sign("adjunct", "adjunct")])
         .unwrap();
-    let SignValue::Applied(completed) = completed else {
-        panic!("supplying the inherited slot must saturate the same Sign")
-    };
-    assert_eq!(completed.construction_id, wrapper_id);
-    assert_eq!(completed.provenance.construction, "Wrapper");
-    assert!(completed.is_saturated());
+    let completed = completed
+        .into_evaluated()
+        .expect("supplying the inherited slot must saturate the same Sign");
+    let view = completed.as_token();
+    assert_eq!(view.construction_id, wrapper_id);
+    assert_eq!(view.provenance.construction, "Wrapper");
+    assert!(view.is_saturated());
     assert_eq!(
-        completed.sem.role("theme").unwrap().source.sign,
+        view.sem.role("theme").unwrap().source.sign,
         "adjunct",
         "the inherited role schema and binding must execute after saturation"
     );

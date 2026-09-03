@@ -262,7 +262,7 @@ pub fn build(
 fn materialize(need: &Need, chosen: &Proposal) -> SignDef {
     let mut items = Vec::new();
     for category in &need.categories {
-        items.push(SignItem::Belongs(category.clone()));
+        items.push(SignItem::TraitMount { name: category.clone(), kind: conlang_language::TraitMountKind::Declaration, args: vec![] });
     }
     items.push(SignItem::Def(conlang_language::Def {
         path: "phon".to_owned(),

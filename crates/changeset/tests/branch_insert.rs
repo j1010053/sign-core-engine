@@ -52,7 +52,7 @@ fn inserts_an_else_branch_into_an_addressed_rule() {
 
     // 降階為單一 Insert{RuleElseBranch};父定址成 stable node。
     assert_eq!(resolved.statements[0].edits.len(), 1);
-    let dump = resolved.dump();
+    let dump = resolved.dump().expect("dump");
     assert!(
         dump.contains("insert into node(rule, @"),
         "父為 stable rule node:\n{dump}"
@@ -64,7 +64,7 @@ fn inserts_an_else_branch_into_an_addressed_rule() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    assert_eq!(round.dump(), dump);
+    assert_eq!(round.dump().expect("dump"), dump);
 
     // apply:else 分支寫入 rule。
     let doc = ChangeInterpreter::new(base, spec, "evo:else")

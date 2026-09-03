@@ -336,7 +336,7 @@ fn intervening_at_any_layer_reaches_the_same_surface() {
 
     // 層① PrimitiveEdit:`dump()` 排出的是降階後的純原語(步驟 14 封板契約),
     // 把它重跑一次就是「直接寫四原語」那一層。
-    let primitives = resolved.dump();
+    let primitives = resolved.dump().expect("dump");
     assert!(
         !primitives.contains("sound_change"),
         "dump 必須已降階為原語:\n{primitives}"

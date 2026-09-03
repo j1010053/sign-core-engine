@@ -148,6 +148,8 @@ pub enum AtomicRewrite {
     Reanalyze {
         sign: String,
         target: ReanalysisTarget,
+        /// 多 belongs 時指定要換掉的那一條;單 belongs 時可省略。
+        from: Option<String>,
         to: String,
     },
 
@@ -353,11 +355,16 @@ pub fn expand(
             }])
         }
 
-        AtomicRewrite::Reanalyze { sign, target, to } => {
+        AtomicRewrite::Reanalyze {
+            sign,
+            target,
+            from,
+            to,
+        } => {
             if let Some(reason) = target.unsupported() {
                 return Err(RewriteError::Unsupported(reason.to_owned()));
             }
-            reanalyze_category(document, sign, to)
+            reanalyze_category(document, sign, from.as_deref(), to)
         }
 
         AtomicRewrite::Entrench { sign, delta } => entrenchment_edit(document, sign, *delta),
@@ -483,41 +490,60 @@ fn phon_rule(document: &LanguageDocument, body: &str) -> conlang_language::Rule 
 /// 約束 `[Verb]` 讀的也是它。所以「重新分析成助動詞」就是把 `belongs` 換掉;
 /// 換完之後 `[Verb]` 約束會**真的**不再成立,這正是語法化該有的可觀測後果。
 ///
-/// **恰好一個 `belongs` 才換**。多個時顯式拒絕:哪一個才是被重分析的那一個,
-/// 是呼叫端才知道的事,猜一個會靜默給出錯的結果(比照 guard 多主體的處理)。
-/// 一個都沒有時同樣拒絕——沒有範疇可搬。
+/// `from` 指定要換掉的那一條 `belongs`。單 belongs 時可省略(自動推斷);
+/// 多 belongs 時必須給(不猜,猜錯會靜默給出錯的範疇)。
+/// 一個都沒有時拒絕——沒有範疇可搬。
 fn reanalyze_category(
     document: &LanguageDocument,
     sign: &str,
+    from: Option<&str>,
     to: &str,
 ) -> Result<Vec<PrimitiveEdit>, RewriteError> {
-    // 目標範疇**不在這裡檢查**:`expand` 拿不到 `LibrarySpec`,而範疇多半來自套件
-    // (`Aux`/`Verb` 都住 std:core,文件自身的 `traits` 是空的)。懸空的 `belongs`
-    // 由 compile 層的 `ONTOLOGY_UNKNOWN_TRAIT` 抓,那裡才看得到合併後的本體樹。
     let definition = document
         .language()
         .signs
         .iter()
         .find(|candidate| candidate.name == sign)
         .ok_or_else(|| RewriteError::Target(format!("unknown sign {sign:?}")))?;
-    let existing = definition
+    let belongs: Vec<&str> = definition
         .items
         .iter()
-        .filter(|item| matches!(item, SignItem::Belongs(_)))
-        .count();
-    if existing != 1 {
-        return Err(RewriteError::Unsupported(format!(
-            "reanalyze{{target: Category}} needs exactly one `belongs` on sign {sign:?}, found {existing}"
-        )));
-    }
-    let current = definition
-        .items
-        .iter()
-        .find_map(|item| match item {
-            SignItem::Belongs(name) => Some(name.clone()),
+        .filter_map(|item| match item {
+            SignItem::TraitMount {
+                name: name,
+                kind: conlang_language::TraitMountKind::Declaration,
+                ..
+            } => Some(name.as_str()),
             _ => None,
         })
-        .expect("counted exactly one above");
+        .collect();
+    if belongs.is_empty() {
+        return Err(RewriteError::Unsupported(format!(
+            "reanalyze{{target: Category}} needs at least one `belongs` on sign {sign:?}, found 0"
+        )));
+    }
+    let current = match from {
+        Some(f) => {
+            if !belongs.contains(&f) {
+                return Err(RewriteError::Target(format!(
+                    "sign {sign:?} does not `belongs {f}` (has: {})",
+                    belongs.join(", ")
+                )));
+            }
+            f.to_owned()
+        }
+        None => {
+            if belongs.len() != 1 {
+                return Err(RewriteError::Unsupported(format!(
+                    "reanalyze{{target: Category}} on sign {sign:?} has {} `belongs` — \
+                     specify `from:` to pick which one to replace (has: {})",
+                    belongs.len(),
+                    belongs.join(", ")
+                )));
+            }
+            belongs[0].to_owned()
+        }
+    };
     let target = node(document, &format!("sign({sign:?}).belongs[{current:?}]"))?;
     Ok(vec![PrimitiveEdit::Update {
         node: target,

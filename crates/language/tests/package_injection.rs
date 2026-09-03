@@ -86,7 +86,9 @@ fn an_injected_plugin_is_not_loaded_unless_declared() {
 fn an_injected_package_faces_the_same_validation() {
     // rule_namespace 必須等於 package id
     let mut bad = plugin("bogus", "", "trait bogusMarker:\n");
-    bad.config = bad.config.replace("rule_namespace = plugin:bogus", "rule_namespace = wrong");
+    bad.config = bad
+        .config
+        .replace("rule_namespace = plugin:bogus", "rule_namespace = wrong");
     assert!(
         LibraryCatalog::with_packages([bad]).is_err(),
         "namespace 不符應被拒"
@@ -134,7 +136,9 @@ fn an_injected_package_may_not_collide_with_an_embedded_one() {
 #[test]
 fn injected_data_files_are_carried_like_any_other_package_data() {
     let mut sources = plugin("priors", "", "trait priorsMarker:\n");
-    sources.config = sources.config.replace("data = data/notes.tsv\n", "data = data/freq.tsv\n");
+    sources.config = sources
+        .config
+        .replace("data = data/notes.tsv\n", "data = data/freq.tsv\n");
     sources.data = "symbol\tweight\nk\t0.15\n".to_owned();
     sources.data_files = vec![PackageFile {
         path: "data/freq.tsv".to_owned(),

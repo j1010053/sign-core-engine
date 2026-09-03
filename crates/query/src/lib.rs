@@ -35,7 +35,8 @@ pub mod lexicon;
 
 pub use derivation::{derivation_family, DerivationDag, DerivationNode, SenseLink};
 pub use grouping::{
-    dialect_groups, DialectGroupingStrategy, GroupId, Grouping, GroupingOverride, TreeEdgeCut,
+    dialect_groups, periods, GroupId, Grouping, GroupingOverride, PeriodizationStrategy, Slice,
+    SliceError, TreeEdgeCut,
 };
 pub use intelligibility::{
     intelligibility, DimensionWeights, ExploratoryHeuristicV1, IntelligibilityInput,

@@ -39,6 +39,15 @@ pub enum CompileError {
     DuplicateSign(String),
     #[error("trait expansion cycle in {sign:?}: {path}")]
     TraitExpansionCycle { sign: String, path: String },
+    #[error("sign {sign:?}: `belongs {name}` provides {given} type argument(s) but trait {name} expects {expected}")]
+    TypeParamArityMismatch {
+        sign: String,
+        name: String,
+        expected: usize,
+        given: usize,
+    },
+    #[error("trait {name:?} is a marker trait and cannot have type parameters")]
+    TypeParamOnMarkerTrait { name: String },
 }
 
 /// 全管線產物:各 stage 的 Language(皆可 dump)+ Trait 索引(Compile Artifact)。
@@ -69,26 +78,27 @@ fn check_names(l: &Language) -> Result<(), CompileError> {
 
 fn expand_expression_contexts(
     src: &Language,
+    externals: &[&Language],
     sign: &str,
     expression: &mut crate::Expression,
     active: &mut Vec<String>,
 ) -> Result<(), CompileError> {
     match expression {
         crate::Expression::SignFragment(items) => {
-            *items = expand_item_sequence(src, sign, items, active)?;
+            *items = expand_item_sequence(src, externals, sign, items, active)?;
         }
         crate::Expression::DimFragment { items, .. } => {
             for item in items {
-                expand_item_expressions(src, sign, item, active)?;
+                expand_item_expressions(src, externals, sign, item, active)?;
             }
         }
         crate::Expression::Case(case) => {
             for branch in &mut case.branches {
-                expand_expression_contexts(src, sign, &mut branch.result, active)?;
+                expand_expression_contexts(src, externals, sign, &mut branch.result, active)?;
             }
         }
         crate::Expression::Projection { value, .. } => {
-            expand_expression_contexts(src, sign, value, active)?;
+            expand_expression_contexts(src, externals, sign, value, active)?;
         }
         _ => {}
     }
@@ -97,25 +107,24 @@ fn expand_expression_contexts(
 
 fn expand_item_expressions(
     src: &Language,
+    externals: &[&Language],
     sign: &str,
     item: &mut SignItem,
     active: &mut Vec<String>,
 ) -> Result<(), CompileError> {
     match item {
         SignItem::SignExpression(expression) => {
-            expand_expression_contexts(src, sign, &mut expression.expression, active)
+            expand_expression_contexts(src, externals, sign, &mut expression.expression, active)
         }
         SignItem::FeatureExpression(expression) => {
-            expand_expression_contexts(src, sign, &mut expression.expression, active)
+            expand_expression_contexts(src, externals, sign, &mut expression.expression, active)
         }
         SignItem::RoleExpression(expression) => {
-            expand_expression_contexts(src, sign, &mut expression.expression, active)
+            expand_expression_contexts(src, externals, sign, &mut expression.expression, active)
         }
         SignItem::Realization(realization) => {
-            if let Some(case) = &mut realization.expression {
-                for branch in &mut case.branches {
-                    expand_expression_contexts(src, sign, &mut branch.result, active)?;
-                }
+            for branch in &mut realization.expression.branches {
+                expand_expression_contexts(src, externals, sign, &mut branch.result, active)?;
             }
             Ok(())
         }
@@ -123,28 +132,129 @@ fn expand_item_expressions(
     }
 }
 
+/// 找一個 trait:**先看本語言,再看外部來源**(std / 套件)。
+///
+/// 展開原本只查 `src.traits`,而投影用的 registry 是 `[std, user]` 兩份建的
+/// ——於是 `belongs 某個 std trait` 配上顯式的 `X[n]` 會報 `UnknownTrait`,
+/// **顯式引用只對同一份文件裡宣告的 trait 有效**。那個缺口讓兩階段的主幹道不通。
+///
+/// 本語言優先:同名 trait 在別處已由 `ONTOLOGY_DUPLICATE_TRAIT` 擋下,這裡的順序
+/// 只是讓「文件自己宣告的東西」在任何情況下都不會被套件蓋掉。
+fn find_trait<'a>(
+    src: &'a Language,
+    externals: &[&'a Language],
+    name: &str,
+) -> Option<&'a crate::TraitDef> {
+    src.traits
+        .iter()
+        .chain(externals.iter().flat_map(|lang| lang.traits.iter()))
+        .find(|trait_def| trait_def.name == name)
+}
+
+/// P76:在項目向量中,把型別參數名替換為對應的實參。
+///
+/// 替換觸及 `SlotConstraint::Category`、`RoleDecl` constraint、
+/// 以及巢狀 `TraitMount::Declaration` 的 args(傳播)。
+fn substitute_type_params(items: &mut [SignItem], subst: &[(&str, &str)]) {
+    if subst.is_empty() {
+        return;
+    }
+    for item in items {
+        match item {
+            SignItem::Slot(slot) => {
+                if let crate::SlotConstraint::Category(ref mut cat) = slot.constraint {
+                    for &(param, arg) in subst {
+                        if cat.as_str() == param {
+                            *cat = arg.to_owned();
+                            break;
+                        }
+                    }
+                }
+            }
+            SignItem::RoleDecl(role) => {
+                if let crate::SlotConstraint::Category(ref mut cat) = role.constraint {
+                    for &(param, arg) in subst {
+                        if cat.as_str() == param {
+                            *cat = arg.to_owned();
+                            break;
+                        }
+                    }
+                }
+            }
+            SignItem::TraitMount { args, .. } => {
+                for a in args.iter_mut() {
+                    for &(param, arg) in subst {
+                        if a.as_str() == param {
+                            *a = arg.to_owned();
+                            break;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// P76:從同容器的 Declaration 中找出某個 trait 的型別實參。
+fn find_declaration_args<'a>(items: &'a [SignItem], trait_name: &str) -> Option<&'a [String]> {
+    for item in items {
+        if let SignItem::TraitMount {
+            name, kind, args, ..
+        } = item
+        {
+            if kind.is_declaration() && name == trait_name {
+                return Some(args);
+            }
+        }
+    }
+    None
+}
+
 fn expand_item_sequence(
     src: &Language,
+    externals: &[&Language],
     sign: &str,
     source: &[SignItem],
     active: &mut Vec<String>,
 ) -> Result<Vec<SignItem>, CompileError> {
+    expand_item_sequence_with(src, externals, sign, source, active, false)
+}
+
+/// `expand_declarations`:`belongs X` 要不要也展開。
+///
+/// 正式的編譯路徑傳 `false`——宣告是分類邊,展開由 `X[n]` 負責(兩階段)。
+/// [`trait_view`] 傳 `true`,因為視圖問的是「這個 trait **有效**有什麼」,
+/// 而那包含它從父輩繼承來的;不展開宣告就只看得到它自己寫的那一層。
+fn expand_item_sequence_with(
+    src: &Language,
+    externals: &[&Language],
+    sign: &str,
+    source: &[SignItem],
+    active: &mut Vec<String>,
+    expand_declarations: bool,
+) -> Result<Vec<SignItem>, CompileError> {
     let mut used: BTreeMap<&str, (bool, Vec<u32>)> = BTreeMap::new();
     for item in source {
-        if let SignItem::TraitUse { name, block } = item {
+        if let SignItem::TraitMount { name, kind, .. } = item {
+            // **宣告不進這張表。** 它不展開,故不參與完整性計算;更重要的是
+            // 這張表的每個鍵稍後都會在 `src.traits` 裡查一次,而 `belongs` 指得到
+            // **std 的 trait**(不在使用者語言裡)——把宣告放進來會讓每一個
+            // 指向 std 的 `belongs` 都報 `UnknownTrait`。
+            if kind.is_declaration() {
+                continue;
+            }
             let entry = used.entry(name).or_default();
-            match block {
-                None => entry.0 = true,
-                Some(index) => entry.1.push(*index),
+            match kind {
+                crate::TraitMountKind::Declaration => {}
+                crate::TraitMountKind::Whole => entry.0 = true,
+                crate::TraitMountKind::Block(index) => entry.1.push(*index),
             }
         }
     }
     for (name, (whole, indices)) in &used {
-        let trait_def = src
-            .traits
-            .iter()
-            .find(|trait_def| &trait_def.name == name)
-            .ok_or_else(|| CompileError::UnknownTrait {
+        let trait_def =
+            find_trait(src, externals, name).ok_or_else(|| CompileError::UnknownTrait {
                 sign: sign.to_owned(),
                 name: (*name).to_owned(),
             })?;
@@ -174,7 +284,53 @@ fn expand_item_sequence(
     let mut output = Vec::new();
     for item in source {
         match item {
-            SignItem::TraitUse { name, block } => {
+            // **宣告原樣留下。** `belongs X` 是分類邊,不是展開對象——它必須
+            // 活到 ②③④ 與 ontology 建樹那一刻。把它當成「展開出空集合」會讓
+            // 分類邊在展開後消失,整棵 ontology 樹跟著垮。
+            SignItem::TraitMount {
+                name, kind, args, ..
+            } if kind.is_declaration() => {
+                output.push(item.clone());
+                if !expand_declarations {
+                    continue;
+                }
+                let Some(trait_def) = find_trait(src, externals, name) else {
+                    continue;
+                };
+                if active.iter().any(|candidate| candidate == name) {
+                    continue;
+                }
+                let mut selected: Vec<SignItem> = trait_def
+                    .blocks
+                    .iter()
+                    .flat_map(|block| block.items.iter().cloned())
+                    .collect();
+                if !trait_def.type_params.is_empty() && args.len() == trait_def.type_params.len() {
+                    let subst: Vec<(&str, &str)> = trait_def
+                        .type_params
+                        .iter()
+                        .zip(args.iter())
+                        .map(|(p, a)| (p.name.as_str(), a.as_str()))
+                        .collect();
+                    substitute_type_params(&mut selected, &subst);
+                }
+                active.push(name.clone());
+                output.extend(expand_item_sequence_with(
+                    src,
+                    externals,
+                    sign,
+                    &selected,
+                    active,
+                    expand_declarations,
+                )?);
+                active.pop();
+            }
+            SignItem::TraitMount {
+                name,
+                kind,
+                args: direct_args,
+                ..
+            } => {
                 if let Some(start) = active.iter().position(|candidate| candidate == name) {
                     let mut path = active[start..].to_vec();
                     path.push(name.clone());
@@ -183,29 +339,63 @@ fn expand_item_sequence(
                         path: path.join(" -> "),
                     });
                 }
-                let trait_def = src
-                    .traits
-                    .iter()
-                    .find(|trait_def| trait_def.name == *name)
-                    .ok_or_else(|| CompileError::UnknownTrait {
+                let trait_def =
+                    find_trait(src, externals, name).ok_or_else(|| CompileError::UnknownTrait {
                         sign: sign.to_owned(),
                         name: name.clone(),
                     })?;
-                let selected = match block {
-                    None => trait_def
+                // P76:取得型別實參——Declaration 的 args 或同容器 Declaration 的 args
+                let args: &[String] = if !direct_args.is_empty() {
+                    direct_args
+                } else {
+                    find_declaration_args(source, name).unwrap_or(&[])
+                };
+                // 驗證 arity
+                if !trait_def.type_params.is_empty() || !args.is_empty() {
+                    if args.len() != trait_def.type_params.len() {
+                        return Err(CompileError::TypeParamArityMismatch {
+                            sign: sign.to_owned(),
+                            name: name.clone(),
+                            expected: trait_def.type_params.len(),
+                            given: args.len(),
+                        });
+                    }
+                }
+                let mut selected = match kind {
+                    crate::TraitMountKind::Declaration => Vec::new(),
+                    crate::TraitMountKind::Whole => trait_def
                         .blocks
                         .iter()
                         .flat_map(|block| block.items.iter().cloned())
                         .collect::<Vec<_>>(),
-                    Some(index) => trait_def.blocks[*index as usize].items.clone(),
+                    crate::TraitMountKind::Block(index) => {
+                        trait_def.blocks[*index as usize].items.clone()
+                    }
                 };
+                // P76:參數替換
+                if !trait_def.type_params.is_empty() && !args.is_empty() {
+                    let subst: Vec<(&str, &str)> = trait_def
+                        .type_params
+                        .iter()
+                        .zip(args.iter())
+                        .map(|(p, a)| (p.name.as_str(), a.as_str()))
+                        .collect();
+                    substitute_type_params(&mut selected, &subst);
+                }
                 active.push(name.clone());
-                output.extend(expand_item_sequence(src, sign, &selected, active)?);
+                output.extend(expand_item_sequence_with(
+                    src,
+                    externals,
+                    sign,
+                    &selected,
+                    active,
+                    expand_declarations,
+                )?);
                 active.pop();
             }
             other => {
                 let mut expanded = other.clone();
-                expand_item_expressions(src, sign, &mut expanded, active)?;
+                expand_item_expressions(src, externals, sign, &mut expanded, active)?;
                 output.push(expanded);
             }
         }
@@ -213,17 +403,55 @@ fn expand_item_sequence(
     Ok(output)
 }
 
+/// 一個 **trait 的有效內容視圖**:把它當成「一個只掛載它的 sign」展開。
+///
+/// # 為什麼需要這個
+///
+/// trait 不是 sign,但 trait 上可以寫規則,而驗證那些規則得知道它引用的 slot /
+/// feature 存不存在。舊做法是造一個只寫 `belongs X` 的合成 sign,再靠**投影**
+/// 把 X 的內容攤出來——那用的是投影的「內容」那一半,而兩階段要把那一半關掉。
+///
+/// # 為什麼走展開而不是直接讀 X 的 blocks
+///
+/// 直接讀只看得到 **X 自己寫的**,看不到它從父輩繼承來的。若某條規則引用的 slot
+/// 宣告在祖先上,直接讀會誤報「找不到」。走展開則遞迴把祖先的內容一併拉進來,
+/// 而且**與真實編譯走同一條路**——驗證看到的與編譯產出的不會分岔。
+pub fn trait_view(
+    src: &Language,
+    externals: &[&Language],
+    trait_name: &str,
+) -> Result<Vec<SignItem>, CompileError> {
+    let args = find_trait(src, externals, trait_name)
+        .map(|t| t.type_params.iter().map(|p| p.name.clone()).collect())
+        .unwrap_or_default();
+    let mount = SignItem::TraitMount {
+        name: trait_name.to_owned(),
+        kind: crate::TraitMountKind::Whole,
+        args,
+    };
+    expand_item_sequence_with(src, externals, trait_name, &[mount], &mut Vec::new(), true)
+}
+
 /// Pass ①→②:Trait Expansion(I16-a/b)。
 /// Trait uses in a typed SignContext fragment follow the exact same expansion
 /// path as top-level Sign items.  The fragment remains anonymous: expansion
 /// contributes Sign items but never creates another Sign node.
 pub fn expand_traits(src: &Language) -> Result<Language, CompileError> {
+    expand_traits_with(src, &[])
+}
+
+/// 同上,但可額外查**外部語言**的 trait(std / 套件)——見 [`find_trait`]。
+pub fn expand_traits_with(
+    src: &Language,
+    externals: &[&Language],
+) -> Result<Language, CompileError> {
     check_names(src)?;
     let mut out = src.clone();
     out.signs.clear();
     for sign in &src.signs {
         let mut expanded = sign.clone();
-        expanded.items = expand_item_sequence(src, &sign.name, &sign.items, &mut Vec::new())?;
+        expanded.items =
+            expand_item_sequence(src, externals, &sign.name, &sign.items, &mut Vec::new())?;
         out.signs.push(expanded);
     }
     Ok(out)
@@ -317,6 +545,11 @@ pub fn order_stages(resolved: &Language) -> Language {
 
 /// 全管線(① → ④)+ Trait 索引。
 pub fn compile(src: &Language) -> Result<Pipeline, CompileError> {
+    compile_with(src, &[])
+}
+
+/// 同上,但展開時可額外查**外部語言**的 trait(std / 套件)——見 [`find_trait`]。
+pub fn compile_with(src: &Language, externals: &[&Language]) -> Result<Pipeline, CompileError> {
     // Index Generation(Compile Artifact;自 ① 收集,展開後即不可得)
     let mut trait_index: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for t in src.traits.iter().filter(|t| !t.global) {
@@ -324,7 +557,12 @@ pub fn compile(src: &Language) -> Result<Pipeline, CompileError> {
     }
     for s in &src.signs {
         for it in &s.items {
-            if let SignItem::TraitUse { name, .. } = it {
+            if let SignItem::TraitMount {
+                name,
+                kind: crate::TraitMountKind::Whole | crate::TraitMountKind::Block(_),
+                ..
+            } = it
+            {
                 let v = trait_index.entry(name.clone()).or_default();
                 if !v.contains(&s.name) {
                     v.push(s.name.clone());
@@ -332,7 +570,7 @@ pub fn compile(src: &Language) -> Result<Pipeline, CompileError> {
             }
         }
     }
-    let expanded = expand_traits(src)?;
+    let expanded = expand_traits_with(src, externals)?;
     let resolved = resolve(&expanded);
     let ordered = order_stages(&resolved);
     Ok(Pipeline {

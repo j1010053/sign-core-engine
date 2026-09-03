@@ -337,7 +337,7 @@ sign EnglishDefiniteNP:
     prag:
         identifiability = identifiable
     phon:
-        /{determiner} {nominal}/
+        /{$slot.determiner} {$slot.nominal}/
 
 sign EnglishIndefiniteNP:
     belongs EnglishConstruction
@@ -350,7 +350,7 @@ sign EnglishIndefiniteNP:
     prag:
         identifiability = non-identifiable
     phon:
-        /{determiner} {nominal}/
+        /{$slot.determiner} {$slot.nominal}/
 
 /* One deep noun-form construction.  A DerivationContext supplies its number
    constraint; the sem feature reads finalized syn state through read-only
@@ -368,15 +368,15 @@ sign EnglishCountNounForm:
             number => $self.syn.number
         roles:
             referent [Entity]
-            referent = {stem}
+            referent = {$slot.stem}
     phon:
-        /{stem}/
+        /{$slot.stem}/
         realization:
             case:
                 $self.syn.number == plural:
-                    /{stem}s/
+                    /{$slot.stem}s/
                 else:
-                    /{stem}/
+                    /{$slot.stem}/
 
 sign EnglishPluralNP:
     belongs EnglishConstruction
@@ -391,14 +391,14 @@ sign EnglishPluralNP:
         feature:
             number = plural
     phon:
-        /{nominal}{marker}/
+        /{$slot.nominal}{$slot.marker}/
 
 sign EnglishPossessiveNP:
     belongs EnglishConstruction
     belongs PossessionConstruction
     belongs EnglishReferenceFrame
     phon:
-        /{possessor}s {possessed}/
+        /{$slot.possessor}s {$slot.possessed}/
 
 sign EnglishAttributiveNP:
     belongs EnglishConstruction
@@ -409,7 +409,7 @@ sign EnglishAttributiveNP:
             order = enum(attribute_nominal)
             order = attribute_nominal
     phon:
-        /{attribute} {nominal}/
+        /{$slot.attribute} {$slot.nominal}/
 
 sign EnglishPrepositionalPhrase:
     belongs EnglishConstruction
@@ -437,13 +437,13 @@ sign EnglishIntransitiveClause:
     prag:
         clause-type = declarative
     phon:
-        /{subject} {predicate}/
+        /{$slot.subject} {$slot.predicate}/
         realization:
             case:
                 $self.syn.finite_form == third_singular:
-                    /{subject} {predicate}s/
+                    /{$slot.subject} {$slot.predicate}s/
                 else:
-                    /{subject} {predicate}/
+                    /{$slot.subject} {$slot.predicate}/
 
 sign EnglishSVOTransitiveClause:
     belongs EnglishConstruction
@@ -469,13 +469,13 @@ sign EnglishSVOTransitiveClause:
     prag:
         clause-type = declarative
     phon:
-        /{subject} {predicate} {object}/
+        /{$slot.subject} {$slot.predicate} {$slot.object}/
         realization:
             case:
                 $self.syn.finite_form == third_singular:
-                    /{subject} {predicate}s {object}/
+                    /{$slot.subject} {$slot.predicate}s {$slot.object}/
                 else:
-                    /{subject} {predicate} {object}/
+                    /{$slot.subject} {$slot.predicate} {$slot.object}/
 
 sign EnglishCopularPredication:
     belongs EnglishConstruction
@@ -492,13 +492,13 @@ sign EnglishCopularPredication:
     prag:
         clause-type = declarative
     phon:
-        /{subject} {copula} {predicate}/
+        /{$slot.subject} {$slot.copula} {$slot.predicate}/
         realization:
             case:
                 $self.syn.finite_form == third_singular:
-                    /{subject} is {predicate}/
+                    /{$slot.subject} is {$slot.predicate}/
                 else:
-                    /{subject} {copula} {predicate}/
+                    /{$slot.subject} {$slot.copula} {$slot.predicate}/
 
 sign EnglishDoNegation:
     belongs EnglishConstruction
@@ -519,13 +519,13 @@ sign EnglishDoNegation:
     prag:
         clause-type = declarative
     phon:
-        /{subject} {auxiliary} {negator} {predicate}/
+        /{$slot.subject} {$slot.auxiliary} {$slot.negator} {$slot.predicate}/
         realization:
             case:
                 $self.syn.finite_form == third_singular:
-                    /{subject} does {negator} {predicate}/
+                    /{$slot.subject} does {$slot.negator} {$slot.predicate}/
                 else:
-                    /{subject} {auxiliary} {negator} {predicate}/
+                    /{$slot.subject} {$slot.auxiliary} {$slot.negator} {$slot.predicate}/
 
 sign EnglishPolarQuestion:
     belongs EnglishConstruction
@@ -543,13 +543,13 @@ sign EnglishPolarQuestion:
             finite_form => third_singular / $slot.subject == [EnglishThirdSingular]
             else finite_form => base
     phon:
-        /{auxiliary} {subject} {clause}/
+        /{$slot.auxiliary} {$slot.subject} {$slot.clause}/
         realization:
             case:
                 $self.syn.finite_form == third_singular:
-                    /does {subject} {clause}/
+                    /does {$slot.subject} {$slot.clause}/
                 else:
-                    /{auxiliary} {subject} {clause}/
+                    /{$slot.auxiliary} {$slot.subject} {$slot.clause}/
 
 sign EnglishPeriphrasticPassive:
     belongs EnglishConstruction
@@ -566,10 +566,10 @@ sign EnglishPeriphrasticPassive:
     prag:
         perspective = patient-prominent
     phon:
-        /{patient} {auxiliary} {predicate} by {agent}/
+        /{$slot.patient} {$slot.auxiliary} {$slot.predicate} by {$slot.agent}/
         realization:
             case:
                 $self.syn.finite_form == third_singular:
-                    /{patient} is {predicate} by {agent}/
+                    /{$slot.patient} is {$slot.predicate} by {$slot.agent}/
                 else:
-                    /{patient} {auxiliary} {predicate} by {agent}/
+                    /{$slot.patient} {$slot.auxiliary} {$slot.predicate} by {$slot.agent}/

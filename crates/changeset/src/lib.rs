@@ -25,14 +25,16 @@ pub mod rewrite;
 pub mod state;
 
 use crate::rewrite::DonorScope;
+use conlang_language::reference;
 use conlang_language::{
     check_document, check_document_with_packages, compile_document, sha256_hex, AddressSegment,
     BinaryConstraint, Block, CaseBranch, CompileSystemError, CompiledSystem, Def, DerivationKind,
-    Dim, Expression, FeatureDecl, FeatureValue, IdentityError, IdentityManifestV2, Language,
-    LanguageDocument, LibraryCatalog, LibraryId, LibrarySpec, NodeAddress, NodeEntryV1, NodeId,
-    NodeKind, NodeRef, PhonBlock, Realization, ResolvedPackages, RoleBinding, RoleDecl, Rule,
-    SenseTransparency, Severity, SignApplication, SignArgumentValue, SignDef, SignItem, Slot,
-    SlotConstraint, SlotFeatureBinding, SlotMapOp, Stage, TraitDef, TypedCase, ValidationReport,
+    Diagnostic, Dim, Expression, FeatureDecl, FeatureValue, IdentityError, IdentityManifestV2,
+    Language, LanguageDocument, LibraryCatalog, LibraryId, LibrarySpec, NodeAddress, NodeEntryV1,
+    NodeId, NodeKind, NodeRef, PhonBlock, Realization, ResolvedPackages, RoleBinding, RoleDecl,
+    Rule, SenseTransparency, Severity, SignApplication, SignArgumentValue, SignDef, SignItem, Slot,
+    SlotConstraint, SlotFeatureBinding, SlotMapOp, Stage, TraitDef, TraitTypeParam, TypedCase,
+    ValidationReport,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,6 +89,8 @@ impl DetachedNode {
 pub enum NodeUpdate {
     Rename(String),
     TraitGlobal(bool),
+    TraitMarker(bool),
+    TraitTypeParams(Vec<TraitTypeParam>),
     DslDeclaration(String),
     Distribution {
         key: String,
@@ -140,7 +144,6 @@ pub enum NodeUpdate {
     /// `RoleExpression`, `Projection`, interpolation vs application). This is
     /// deliberately restricted to an expression-bearing SignItem root.
     ExpressionItem(SignItem),
-    Realization(Realization),
     /// Explicit flat → structured phon authoring/update. A structural root
     /// replacement is never inferred from a child insert.
     PhonBlockRoot(PhonBlock),
@@ -284,7 +287,7 @@ fn sequence_tag(address: &NodeAddress) -> u8 {
         Some(AddressSegment::Items(_)) => 6,
         Some(AddressSegment::RuleElse(_)) => 7,
         Some(AddressSegment::RuleThen(_)) => 8,
-        Some(AddressSegment::RealizationBranches(_)) => 9,
+        // 9 = 已刪的 V1 `RealizationBranches`;序號留空,不重編以免動到既有相對次序。
         Some(AddressSegment::CaseExpression) => 10,
         Some(AddressSegment::CaseBranches(_)) => 11,
         Some(AddressSegment::CaseResult) => 12,
@@ -517,7 +520,6 @@ enum ListKey {
     PhonLeaf,
     PhonThen,
     PhonElse,
-    Realization,
     CaseBranches,
 }
 
@@ -534,7 +536,6 @@ fn segment(key: ListKey, index: usize) -> AddressSegment {
         ListKey::PhonLeaf => AddressSegment::PhonLeaf(index),
         ListKey::PhonThen => AddressSegment::PhonThen(index),
         ListKey::PhonElse => AddressSegment::PhonElse(index),
-        ListKey::Realization => AddressSegment::RealizationBranches(index),
         ListKey::CaseBranches => AddressSegment::CaseBranches(index),
     }
 }
@@ -551,8 +552,7 @@ fn segment_index(value: &AddressSegment, key: ListKey) -> Option<usize> {
         | (ListKey::RuleThen, AddressSegment::RuleThen(index))
         | (ListKey::PhonLeaf, AddressSegment::PhonLeaf(index))
         | (ListKey::PhonThen, AddressSegment::PhonThen(index))
-        | (ListKey::PhonElse, AddressSegment::PhonElse(index))
-        | (ListKey::Realization, AddressSegment::RealizationBranches(index)) => Some(*index),
+        | (ListKey::PhonElse, AddressSegment::PhonElse(index)) => Some(*index),
         (ListKey::CaseBranches, AddressSegment::CaseBranches(index)) => Some(*index),
         _ => None,
     }
@@ -1025,11 +1025,6 @@ fn child_addresses(
             let block = phon_container_block(language, address)?;
             push_phon_children(block, address, &mut children);
         }
-        NodeKind::Realization => {
-            if realization_at(language, address)?.expression.is_some() {
-                children.push(address.child(AddressSegment::CaseExpression));
-            }
-        }
         NodeKind::Case => {
             let case = case_at(language, address)
                 .ok_or_else(|| EditError::FieldMismatch("case address is stale".to_owned()))?;
@@ -1297,7 +1292,23 @@ fn update_payload(
             Ok(None)
         }
         (NodeKind::Trait, NodeUpdate::TraitGlobal(value)) => {
-            trait_at_mut(language, &node.address)?.global = value;
+            let trait_def = trait_at_mut(language, &node.address)?;
+            if value && trait_def.marker {
+                return Err(trait_global_marker_conflict(&trait_def.name));
+            }
+            trait_def.global = value;
+            Ok(None)
+        }
+        (NodeKind::Trait, NodeUpdate::TraitMarker(value)) => {
+            let trait_def = trait_at_mut(language, &node.address)?;
+            if value && trait_def.global {
+                return Err(trait_global_marker_conflict(&trait_def.name));
+            }
+            trait_def.marker = value;
+            Ok(None)
+        }
+        (NodeKind::Trait, NodeUpdate::TraitTypeParams(value)) => {
+            trait_at_mut(language, &node.address)?.type_params = value;
             Ok(None)
         }
         (NodeKind::DslDeclaration, NodeUpdate::DslDeclaration(value)) => {
@@ -1421,11 +1432,20 @@ fn update_payload(
             Ok(None)
         }
         (NodeKind::TraitUse, NodeUpdate::TraitUse { name, block }) => {
-            *item_at_address_mut(language, &node.address)? = SignItem::TraitUse { name, block };
+            *item_at_address_mut(language, &node.address)? = SignItem::TraitMount {
+                name,
+                kind: conlang_language::TraitMountKind::from_block(block),
+                args: vec![],
+            };
             Ok(Some("trait_use.name".to_owned()))
         }
         (NodeKind::Belongs, NodeUpdate::Belongs(value)) => {
-            *item_at_address_mut(language, &node.address)? = SignItem::Belongs(value);
+            let (name, args) = parse_belongs_target(&value);
+            *item_at_address_mut(language, &node.address)? = SignItem::TraitMount {
+                name,
+                kind: conlang_language::TraitMountKind::Declaration,
+                args,
+            };
             Ok(Some("belongs".to_owned()))
         }
         (NodeKind::FeatureDeclaration, NodeUpdate::FeatureDeclaration(value)) => {
@@ -1439,7 +1459,9 @@ fn update_payload(
         (NodeKind::FeatureValue, NodeUpdate::FeatureAssignment(value)) => {
             // 只動值:維度與特徵名是這個節點的身分,改名要走 rename 通道。
             match item_at_address_mut(language, &node.address)? {
-                SignItem::FeatureValue(existing) => existing.value = value,
+                // `.chg` 的 `value = "X"` 維持既有語意:設成單元素值域(已定案)。
+                // 多候選的未定案值域走整節點替換 `NodeUpdate::FeatureValue`。
+                SignItem::FeatureValue(existing) => existing.values = vec![value],
                 _ => {
                     return Err(EditError::FieldMismatch(
                         "node is not a feature assignment".to_owned(),
@@ -1513,10 +1535,6 @@ fn update_payload(
             *target = value;
             Ok(Some("case.references".to_owned()))
         }
-        (NodeKind::Realization, NodeUpdate::Realization(value)) => {
-            *item_at_address_mut(language, &node.address)? = SignItem::Realization(value);
-            Ok(Some("case.references".to_owned()))
-        }
         (NodeKind::Rule | NodeKind::FeatureRule, NodeUpdate::PhonBlockRoot(value)) => {
             let rule = rule_at_mut(language, &node.address)?;
             if rule.dim != Dim::Phon {
@@ -1541,6 +1559,16 @@ fn update_payload(
         }
         _ => Err(field_mismatch(node, "update variant")),
     }
+}
+
+fn trait_global_marker_conflict(name: &str) -> EditError {
+    let mut report = ValidationReport::new();
+    report.push(Diagnostic::new(
+        Severity::Error,
+        "TRAIT_GLOBAL_MARKER_CONFLICT",
+        format!("trait {name:?} cannot be both `global trait` and `marker trait`"),
+    ));
+    EditError::Validation(Box::new(report))
 }
 
 fn field_mismatch(node: &NodeEntryV1, field: &str) -> EditError {
@@ -1822,7 +1850,6 @@ fn address_list_position(address: &NodeAddress) -> Result<(ListKey, usize), Edit
         AddressSegment::PhonLeaf(index) => (ListKey::PhonLeaf, *index),
         AddressSegment::PhonThen(index) => (ListKey::PhonThen, *index),
         AddressSegment::PhonElse(index) => (ListKey::PhonElse, *index),
-        AddressSegment::RealizationBranches(index) => (ListKey::Realization, *index),
         AddressSegment::CaseBranches(index) => (ListKey::CaseBranches, *index),
         AddressSegment::CaseExpression
         | AddressSegment::CaseResult
@@ -1837,8 +1864,17 @@ fn address_list_position(address: &NodeAddress) -> Result<(ListKey, usize), Edit
 
 fn item_kind(item: &SignItem) -> NodeKind {
     match item {
-        SignItem::TraitUse { .. } => NodeKind::TraitUse,
-        SignItem::Belongs(_) => NodeKind::Belongs,
+        SignItem::Pass => NodeKind::Pass,
+        SignItem::TraitMount {
+            kind:
+                conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_),
+            ..
+        } => NodeKind::TraitUse,
+        SignItem::TraitMount {
+            name: _,
+            kind: conlang_language::TraitMountKind::Declaration,
+            ..
+        } => NodeKind::Belongs,
         SignItem::Slot(_) => NodeKind::Slot,
         SignItem::SlotMap(_) => NodeKind::SlotMap,
         SignItem::FeatureDecl(_) => NodeKind::FeatureDeclaration,
@@ -1848,7 +1884,9 @@ fn item_kind(item: &SignItem) -> NodeKind {
         SignItem::RoleBinding(_) => NodeKind::RoleBinding,
         SignItem::Sense(_) => NodeKind::Sense,
         SignItem::SenseEdge(_) => NodeKind::SenseEdge,
-        SignItem::Realization(_) => NodeKind::Realization,
+        // **必須與 `identity::item_kind` 一致**:取徑 A 之後 realization 塌陷成
+        // 自己的 expression root(`Case`)。兩表對不上就會排出自己讀不回來的 `.chg`。
+        SignItem::Realization(_) => NodeKind::Case,
         SignItem::SignExpression(expression) => {
             expression_node_kind(&expression.expression).unwrap_or(NodeKind::Case)
         }
@@ -2268,6 +2306,7 @@ fn parse_kind(value: &str) -> Result<NodeKind, ReplayError> {
         "block" => Ok(NodeKind::Block),
         "trait_use" => Ok(NodeKind::TraitUse),
         "belongs" => Ok(NodeKind::Belongs),
+        "pass" => Ok(NodeKind::Pass),
         "definition" | "def" => Ok(NodeKind::Definition),
         "slot" => Ok(NodeKind::Slot),
         "slot_map" => Ok(NodeKind::SlotMap),
@@ -2283,8 +2322,6 @@ fn parse_kind(value: &str) -> Result<NodeKind, ReplayError> {
         "sense" => Ok(NodeKind::Sense),
         "sense_edge" => Ok(NodeKind::SenseEdge),
         "phon_block" => Ok(NodeKind::PhonBlockNode),
-        "realization" => Ok(NodeKind::Realization),
-        "realization_branch" => Ok(NodeKind::RealizationBranch),
         "application" => Ok(NodeKind::Application),
         "case" => Ok(NodeKind::Case),
         "case_branch" => Ok(NodeKind::CaseBranch),
@@ -2311,6 +2348,7 @@ fn parse_kind(value: &str) -> Result<NodeKind, ReplayError> {
 /// 補上對應的一行。兩表的一致性由 `kind_keyword_round_trips_for_every_node_kind` 釘住。
 fn kind_keyword(kind: NodeKind) -> &'static str {
     match kind {
+        NodeKind::Pass => "pass",
         NodeKind::Language => "language",
         NodeKind::DslDeclaration => "dsl_declaration",
         NodeKind::Distribution => "distribution",
@@ -2336,8 +2374,6 @@ fn kind_keyword(kind: NodeKind) -> &'static str {
         NodeKind::Sense => "sense",
         NodeKind::SenseEdge => "sense_edge",
         NodeKind::PhonBlockNode => "phon_block",
-        NodeKind::Realization => "realization",
-        NodeKind::RealizationBranch => "realization_branch",
         NodeKind::Application => "application",
         NodeKind::Case => "case",
         NodeKind::CaseBranch => "case_branch",
@@ -3222,7 +3258,7 @@ fn resolve_path_child(
                 entry.kind == NodeKind::Belongs
                     && matches!(
                         item_at_address(document.language(), &entry.address),
-                        Some(SignItem::Belongs(target)) if target == name
+                        Some(SignItem::TraitMount { name: target, kind: conlang_language::TraitMountKind::Declaration, .. }) if target == name
                     )
             })
         }
@@ -3232,7 +3268,8 @@ fn resolve_path_child(
                 entry.kind == NodeKind::TraitUse
                     && matches!(
                         item_at_address(document.language(), &entry.address),
-                        Some(SignItem::TraitUse { name: target, .. }) if target == name
+                        Some(SignItem::TraitMount { name: target, kind, .. })
+                            if target == name && !kind.is_declaration()
                     )
             })
         }
@@ -3317,6 +3354,14 @@ fn update_for(reference: &NodeRef, field: &str, value: &str) -> Result<NodeUpdat
             ))),
         },
         (NodeKind::Trait, "global") => Ok(NodeUpdate::TraitGlobal(parse_bool(value)?)),
+        (NodeKind::Trait, "marker") => Ok(NodeUpdate::TraitMarker(parse_bool(value)?)),
+        (NodeKind::Trait, "type_params") => {
+            conlang_language::parser::parse_trait_type_param_list(value)
+                .map(NodeUpdate::TraitTypeParams)
+                .map_err(|error| {
+                    ReplayError::Selector(format!("invalid trait type parameters: {error}"))
+                })
+        }
         (NodeKind::Rule | NodeKind::FeatureRule | NodeKind::PhonBlockNode, "propagate") => {
             Ok(NodeUpdate::Propagate(parse_bool(value)?))
         }
@@ -3337,6 +3382,13 @@ fn update_for(reference: &NodeRef, field: &str, value: &str) -> Result<NodeUpdat
             }),
         (NodeKind::Slot, "optional") => Ok(NodeUpdate::SlotOptional(parse_bool(value)?)),
         (NodeKind::Belongs, "target") => Ok(NodeUpdate::Belongs(value.to_owned())),
+        // `trait_use["Foo"].target = Bar[1]` —— 值的文法**與 `.lang` 表面一致**:
+        // `Name[n]` 指定塊,裸 `Name` 是整個 trait(`block: None`)。
+        //
+        // 用一個欄位承載 name + block 而不是拆兩個,是因為 `.chg` 的
+        // `field = value` 只給得起一個字串,而 `update_for` 拿不到文件、
+        // 讀不到「另一半現在是什麼」。塞進同一個值就不必為此開放文件存取。
+        (NodeKind::TraitUse, "target") => parse_trait_use_target(value),
         (NodeKind::Rule | NodeKind::FeatureRule, "dim") => Ok(NodeUpdate::RuleDimension(
             Dim::parse(value)
                 .ok_or_else(|| ReplayError::Selector(format!("unknown dim {value:?}")))?,
@@ -3348,6 +3400,37 @@ fn update_for(reference: &NodeRef, field: &str, value: &str) -> Result<NodeUpdat
             "field {field:?} is not editable on {:?}",
             reference.expected
         ))),
+    }
+}
+
+/// `Bar[1]` / `Bar` → [`NodeUpdate::TraitUse`]。與 [`dump_trait_use_target`] 互為反函數。
+fn parse_trait_use_target(value: &str) -> Result<NodeUpdate, ReplayError> {
+    let text = value.trim();
+    let Some((name, rest)) = text.split_once('[') else {
+        return Ok(NodeUpdate::TraitUse {
+            name: text.to_owned(),
+            block: None,
+        });
+    };
+    let index = rest.strip_suffix(']').ok_or_else(|| {
+        ReplayError::Selector(format!(
+            "trait use target must be `Name[n]` or `Name`, got {value:?}"
+        ))
+    })?;
+    let block = index.trim().parse::<u32>().map_err(|_| {
+        ReplayError::Selector(format!("trait use block must be a number, got {index:?}"))
+    })?;
+    Ok(NodeUpdate::TraitUse {
+        name: name.trim().to_owned(),
+        block: Some(block),
+    })
+}
+
+/// [`parse_trait_use_target`] 的反向。
+fn dump_trait_use_target(name: &str, block: Option<u32>) -> String {
+    match block {
+        Some(index) => format!("{name}[{index}]"),
+        None => name.to_owned(),
     }
 }
 
@@ -3587,6 +3670,8 @@ fn render_phon_root_block(block: &PhonBlock) -> Option<String> {
     fragment.traits.push(TraitDef {
         name: FRAGMENT_PHON_TRAIT.to_owned(),
         global: true,
+        marker: false,
+        type_params: vec![],
         blocks: vec![Block {
             items: vec![SignItem::Rule(Rule {
                 id: conlang_language::RuleId::local(0),
@@ -3910,12 +3995,71 @@ fn dump_anchor(anchor: &Anchor) -> String {
 }
 
 fn dump_value(value: &str) -> String {
-    if value.chars().all(|character| {
-        character.is_alphanumeric() || matches!(character, '_' | '-' | ':' | '/' | '.')
-    }) {
+    if !value.is_empty()
+        && value.chars().all(|character| {
+            character.is_alphanumeric() || matches!(character, '_' | '-' | ':' | '/' | '.')
+        })
+    {
         value.to_owned()
     } else {
         format!("\"{}\"", value.replace('"', "\\\""))
+    }
+}
+
+/// 一種 update 排不排得成 `.chg` 的 `field = value` 一行。
+///
+/// # 為什麼是**窮盡** match
+///
+/// 原本以 `_ => None` 收尾,而呼叫端遇到 `None` 時**什麼都不做**——那條編輯就
+/// 從排出來的 `.chg` 裡消失了,沒有錯誤、沒有標記。`ResolvedChangeSet::dump()`
+/// 是工作副本存檔的路徑(`Session::save_working_copy`),所以那是**存檔會掉編輯**。
+///
+/// 窮盡 match 讓「新增一個 `NodeUpdate` 變體卻忘了想它怎麼排」變成編譯錯誤
+/// ——同 `kind_keyword` 那次的修法(見 `tests/belongs_addressing.rs` 的誌誤)。
+/// 回 `None` 仍然合法,但現在是**寫出來的決定**,而且呼叫端會把它變成錯誤而非丟棄。
+///
+/// 回 `None` 的那些不是懶:它們的酬載是結構(`FeatureValue` 整個節點、
+/// `SlotMap` 的操作、typed `case:` 的分支…),一個字串裝不下。要支援得先給
+/// 它們各自的表面語法,不是在這裡硬湊。
+/// `NodeUpdate` 的變體名,只給 [`DumpError`] 報訊息用。
+fn update_kind_name(change: &NodeUpdate) -> &'static str {
+    match change {
+        NodeUpdate::Rename(_) => "Rename",
+        NodeUpdate::TraitGlobal(_) => "TraitGlobal",
+        NodeUpdate::TraitMarker(_) => "TraitMarker",
+        NodeUpdate::TraitTypeParams(_) => "TraitTypeParams",
+        NodeUpdate::DslDeclaration(_) => "DslDeclaration",
+        NodeUpdate::Distribution { .. } => "Distribution",
+        NodeUpdate::DefinitionPath(_) => "DefinitionPath",
+        NodeUpdate::DefinitionValue(_) => "DefinitionValue",
+        NodeUpdate::RuleName(_) => "RuleName",
+        NodeUpdate::RuleBody(_) => "RuleBody",
+        NodeUpdate::RuleStage(_) => "RuleStage",
+        NodeUpdate::RuleDimension(_) => "RuleDimension",
+        NodeUpdate::RuleBranchBody(_) => "RuleBranchBody",
+        NodeUpdate::Propagate(_) => "Propagate",
+        NodeUpdate::SenseGloss(_) => "SenseGloss",
+        NodeUpdate::SenseEdgeKind(_) => "SenseEdgeKind",
+        NodeUpdate::SenseEdgeTransparency(_) => "SenseEdgeTransparency",
+        NodeUpdate::SlotName(_) => "SlotName",
+        NodeUpdate::SlotConstraint(_) => "SlotConstraint",
+        NodeUpdate::SlotOptional(_) => "SlotOptional",
+        NodeUpdate::TraitUse { .. } => "TraitUse",
+        NodeUpdate::Belongs(_) => "Belongs",
+        NodeUpdate::FeatureDeclaration(_) => "FeatureDeclaration",
+        NodeUpdate::FeatureValue(_) => "FeatureValue",
+        NodeUpdate::FeatureAssignment(_) => "FeatureAssignment",
+        NodeUpdate::SlotFeatureBinding(_) => "SlotFeatureBinding",
+        NodeUpdate::SlotMap(_) => "SlotMap",
+        NodeUpdate::RoleDeclaration(_) => "RoleDeclaration",
+        NodeUpdate::RoleBinding(_) => "RoleBinding",
+        NodeUpdate::CaseSelection(_) => "CaseSelection",
+        NodeUpdate::CaseHeader { .. } => "CaseHeader",
+        NodeUpdate::CaseBranch(_) => "CaseBranch",
+        NodeUpdate::SignApplication(_) => "SignApplication",
+        NodeUpdate::ExpressionItem(_) => "ExpressionItem",
+        NodeUpdate::PhonBlockRoot(_) => "PhonBlockRoot",
+        NodeUpdate::Constraint(_) => "Constraint",
     }
 }
 
@@ -3937,6 +4081,11 @@ fn dump_update(change: &NodeUpdate) -> Option<(&'static str, String)> {
             .to_owned(),
         )),
         NodeUpdate::TraitGlobal(value) => Some(("global", value.to_string())),
+        NodeUpdate::TraitMarker(value) => Some(("marker", value.to_string())),
+        NodeUpdate::TraitTypeParams(value) => Some((
+            "type_params",
+            conlang_language::printer::format_trait_type_param_list(value),
+        )),
         NodeUpdate::Propagate(value) => Some(("propagate", value.to_string())),
         NodeUpdate::FeatureAssignment(value) => Some(("value", value.clone())),
         NodeUpdate::SenseGloss(value) => Some(("gloss", value.clone())),
@@ -3946,14 +4095,50 @@ fn dump_update(change: &NodeUpdate) -> Option<(&'static str, String)> {
         }
         NodeUpdate::SlotOptional(value) => Some(("optional", value.to_string())),
         NodeUpdate::Belongs(value) => Some(("target", value.clone())),
+        NodeUpdate::TraitUse { name, block } => {
+            Some(("target", dump_trait_use_target(name, *block)))
+        }
         NodeUpdate::RuleDimension(dim) => Some(("dim", dim.keyword().to_owned())),
         NodeUpdate::RuleStage(stage) => Some(("stage", stage_keyword(*stage).to_owned())),
-        _ => None,
+        // `phon_block:` 有自己的多行排法,由呼叫端處理,不走 `field = value`。
+        NodeUpdate::PhonBlockRoot(_) => None,
+        // 以下酬載是結構,一個字串裝不下——要支援得先給它們各自的表面語法。
+        // **列在這裡是決定,不是遺漏**;窮盡 match 保證新變體不會靜靜落進來。
+        NodeUpdate::DslDeclaration(_)
+        | NodeUpdate::Distribution { .. }
+        | NodeUpdate::RuleName(_)
+        | NodeUpdate::SlotConstraint(_)
+        | NodeUpdate::FeatureDeclaration(_)
+        | NodeUpdate::FeatureValue(_)
+        | NodeUpdate::SlotFeatureBinding(_)
+        | NodeUpdate::SlotMap(_)
+        | NodeUpdate::RoleDeclaration(_)
+        | NodeUpdate::RoleBinding(_)
+        | NodeUpdate::CaseHeader { .. }
+        | NodeUpdate::CaseBranch(_)
+        | NodeUpdate::SignApplication(_)
+        | NodeUpdate::ExpressionItem(_)
+        | NodeUpdate::Constraint(_) => None,
     }
 }
 
+/// `dump()` 遇到排不出來的編輯。
+///
+/// **不排出來就必須報錯,不能丟掉。** `dump()` 是工作副本存檔的路徑
+/// (`Session::save_working_copy`),靜默丟棄等於存出一份**不等於記憶體狀態**的
+/// `.chg`——replay 回來會少那些編輯,而 base digest 驗的是基底不是結果,擋不到。
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "CHANGESET_DUMP_UNREPRESENTABLE: {kind} 的這種改動排不成 `.chg` 的一行 `field = value`;\
+         它的酬載是結構,需要先給它表面語法"
+)]
+pub struct DumpError {
+    /// 排不出來的那種 update(`NodeUpdate` 的變體名)。
+    pub kind: &'static str,
+}
+
 impl ResolvedChangeSet {
-    pub fn dump(&self) -> String {
+    pub fn dump(&self) -> Result<String, DumpError> {
         let mut output = format!(
             "changeset {}:\n    schema = {}\n    base_source = sha256:{}\n    base_identities = sha256:{}\n",
             self.namespace, self.schema, self.base_source, self.base_identities
@@ -3973,18 +4158,24 @@ impl ResolvedChangeSet {
                 match edit {
                     PrimitiveEdit::Update { node, change } => {
                         if let NodeUpdate::PhonBlockRoot(block) = change {
-                            if let Some(fragment) = render_phon_root_block(block) {
-                                output.push_str(&format!(
-                                    "        update {}.phon_block:\n",
-                                    dump_node(node)
-                                ));
-                                for line in fragment.lines() {
-                                    output.push_str("            ");
-                                    output.push_str(line);
-                                    output.push('\n');
-                                }
+                            let fragment = render_phon_root_block(block).ok_or(DumpError {
+                                kind: "PhonBlockRoot",
+                            })?;
+                            output.push_str(&format!(
+                                "        update {}.phon_block:\n",
+                                dump_node(node)
+                            ));
+                            for line in fragment.lines() {
+                                output.push_str("            ");
+                                output.push_str(line);
+                                output.push('\n');
                             }
-                        } else if let Some((field, value)) = dump_update(change) {
+                        } else {
+                            // **排不出來就報錯,不得跳過。** 跳過會讓存出來的 `.chg`
+                            // 少一條編輯,而那份檔案看起來完全正常。
+                            let (field, value) = dump_update(change).ok_or(DumpError {
+                                kind: update_kind_name(change),
+                            })?;
                             output.push_str(&format!(
                                 "        update {}.{} = {}\n",
                                 dump_node(node),
@@ -4130,7 +4321,7 @@ impl ResolvedChangeSet {
                 }
             }
         }
-        output
+        Ok(output)
     }
 }
 
@@ -4652,7 +4843,6 @@ fn is_item_kind(kind: NodeKind) -> bool {
             | NodeKind::RoleBinding
             | NodeKind::Sense
             | NodeKind::SenseEdge
-            | NodeKind::Realization
             | NodeKind::Case
             | NodeKind::Constraint
             | NodeKind::FeatureRule
@@ -4677,8 +4867,18 @@ fn dim_base(dim: Dim) -> u16 {
 
 fn item_group(item: &SignItem) -> u16 {
     match item {
-        SignItem::Belongs(_) => 0,
-        SignItem::TraitUse { .. } => 1,
+        // `pass` 與內容互斥(驗證擋),故與 `belongs` 同組不會造成排序歧義
+        SignItem::Pass => 0,
+        SignItem::TraitMount {
+            name: _,
+            kind: conlang_language::TraitMountKind::Declaration,
+            ..
+        } => 0,
+        SignItem::TraitMount {
+            kind:
+                conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_),
+            ..
+        } => 1,
         SignItem::Def(def) if def_dimension(&def.path).is_none() => 2,
         SignItem::Slot(_) => dim_base(Dim::Syn),
         SignItem::SlotFeatureBinding(_) => dim_base(Dim::Syn) + 1,
@@ -4762,11 +4962,6 @@ fn kind_at(language: &Language, address: &NodeAddress) -> Option<NodeKind> {
                         _ => None,
                     }
                 }
-                AddressSegment::CaseExpression => realization_at(language, &parent)
-                    .ok()?
-                    .expression
-                    .as_ref()
-                    .map(|_| NodeKind::Case),
                 AddressSegment::CaseBranches(index) => {
                     let case_parent = NodeAddress(path[..path.len() - 1].to_vec());
                     let case = case_at(language, &case_parent)?;
@@ -4943,12 +5138,8 @@ fn root_case<'a, 'b>(
         SignItem::RoleExpression(expression) => {
             expression_case(&expression.expression).map(|case| (case, tail))
         }
-        SignItem::Realization(realization) => match tail.split_first() {
-            Some((AddressSegment::CaseExpression, rest)) => {
-                realization.expression.as_ref().map(|case| (case, rest))
-            }
-            _ => None,
-        },
+        // 塌陷後不再有 `CaseExpression` 那一跳:branches 直接掛在 item 位址上。
+        SignItem::Realization(realization) => Some((&realization.expression, tail)),
         _ => None,
     }
 }
@@ -4967,12 +5158,7 @@ fn root_case_mut<'a, 'b>(
         SignItem::RoleExpression(expression) => {
             expression_case_mut(&mut expression.expression).map(|case| (case, tail))
         }
-        SignItem::Realization(realization) => match tail.split_first() {
-            Some((AddressSegment::CaseExpression, rest)) => {
-                realization.expression.as_mut().map(|case| (case, rest))
-            }
-            _ => None,
-        },
+        SignItem::Realization(realization) => Some((&mut realization.expression, tail)),
         _ => None,
     }
 }
@@ -5129,6 +5315,17 @@ fn expression_node_kind(expression: &Expression) -> Option<NodeKind> {
     }
 }
 
+fn parse_belongs_target(value: &str) -> (String, Vec<String>) {
+    if let Some(open) = value.find('<') {
+        let name = value[..open].to_owned();
+        if let Some(inside) = value[open + 1..].strip_suffix('>') {
+            let args = inside.split(',').map(|s| s.trim().to_owned()).collect();
+            return (name, args);
+        }
+    }
+    (value.to_owned(), vec![])
+}
+
 fn trait_at<'a>(language: &'a Language, address: &NodeAddress) -> Result<&'a TraitDef, EditError> {
     let [AddressSegment::Traits(index)] = address.0.as_slice() else {
         return Err(EditError::FieldMismatch(
@@ -5273,11 +5470,8 @@ fn item_at_address<'a>(language: &'a Language, address: &NodeAddress) -> Option<
                 expression_item_at(&expression.expression, path)
             }
             SignItem::Realization(realization) => {
-                let [AddressSegment::CaseExpression, tail @ ..] = path else {
-                    return None;
-                };
-                let case = realization.expression.as_ref()?;
-                let [AddressSegment::CaseBranches(branch), rest @ ..] = tail else {
+                let case = &realization.expression;
+                let [AddressSegment::CaseBranches(branch), rest @ ..] = path else {
                     return None;
                 };
                 let result = &case.branches.get(*branch)?.result;
@@ -5375,11 +5569,8 @@ fn item_at_address_mut_option<'a>(
                 expression_item_at_mut(&mut expression.expression, path)
             }
             SignItem::Realization(realization) => {
-                let [AddressSegment::CaseExpression, tail @ ..] = path else {
-                    return None;
-                };
-                let case = realization.expression.as_mut()?;
-                let [AddressSegment::CaseBranches(branch), rest @ ..] = tail else {
+                let case = &mut realization.expression;
+                let [AddressSegment::CaseBranches(branch), rest @ ..] = path else {
                     return None;
                 };
                 let result = &mut case.branches.get_mut(*branch)?.result;
@@ -5622,18 +5813,6 @@ fn phon_statement_at_mut<'a>(
     }
 }
 
-fn realization_at<'a>(
-    language: &'a Language,
-    address: &NodeAddress,
-) -> Result<&'a Realization, EditError> {
-    match item_at_address(language, address) {
-        Some(SignItem::Realization(value)) => Ok(value),
-        _ => Err(EditError::FieldMismatch(
-            "expected realization address".to_owned(),
-        )),
-    }
-}
-
 fn definition_at_mut<'a>(
     language: &'a mut Language,
     address: &NodeAddress,
@@ -5760,7 +5939,11 @@ fn slot_rename_scope(
                 let probe = SignDef {
                     id: conlang_language::SignId::synthetic(),
                     name: "__slot_rename_probe".to_owned(),
-                    items: vec![SignItem::Belongs(trait_def.name.clone())],
+                    items: vec![SignItem::TraitMount {
+                        name: trait_def.name.clone(),
+                        kind: conlang_language::TraitMountKind::Declaration,
+                        args: vec![],
+                    }],
                 };
                 let inherited_owner = registry
                     .inheritance_order(&probe)
@@ -5842,8 +6025,9 @@ fn rewrite_slot_consumers(language: &mut Language, scope: &SlotRenameScope, old:
 fn rewrite_local_slot_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
     for item in items {
         match item {
-            // 義項/衍生邊不持 slot 引用。
-            SignItem::Slot(_)
+            // 義項/衍生邊與 `pass` 不持 slot 引用。
+            SignItem::Pass
+            | SignItem::Slot(_)
             | SignItem::FeatureDecl(_)
             | SignItem::FeatureValue(_)
             | SignItem::Sense(_)
@@ -5852,7 +6036,7 @@ fn rewrite_local_slot_refs_in_items(items: &mut [SignItem], old: &str, new: &str
                 if binding.slot == old {
                     binding.slot = new.to_owned();
                 }
-                binding.value = rewrite_slot_accesses(&binding.value, old, new);
+                binding.value = reference::rename_slot(&binding.value, old, new);
             }
             SignItem::SlotMap(operation) => match operation {
                 SlotMapOp::Preserve { slot }
@@ -5870,28 +6054,25 @@ fn rewrite_local_slot_refs_in_items(items: &mut [SignItem], old: &str, new: &str
                 binding.slot = new.to_owned();
             }
             SignItem::Constraint(constraint) => {
-                constraint.left = rewrite_slot_operand(&constraint.left, old, new);
-                constraint.right = rewrite_slot_operand(&constraint.right, old, new);
+                constraint.left = reference::rename_slot(&constraint.left, old, new);
+                constraint.right = reference::rename_slot(&constraint.right, old, new);
             }
             SignItem::Rule(rule) | SignItem::FeatureRule(rule) => {
-                rule.body = rewrite_slot_accesses(&rule.body, old, new);
+                rule.body = reference::rename_slot(&rule.body, old, new);
                 for branch in &mut rule.else_chain {
-                    *branch = rewrite_slot_accesses(branch, old, new);
+                    *branch = reference::rename_slot(branch, old, new);
                 }
                 for branch in &mut rule.then_chain {
-                    *branch = rewrite_slot_accesses(branch, old, new);
+                    *branch = reference::rename_slot(branch, old, new);
                 }
             }
             SignItem::Def(def) => {
-                def.value = rewrite_slot_template(&def.value, old, new);
-                def.value = rewrite_slot_accesses(&def.value, old, new);
+                def.value = reference::rename_slot(&def.value, old, new);
             }
             SignItem::Realization(realization) => {
                 // Typed realization case slot-renames flow through the shared
                 // case-expression rewrite; the former flat branches are gone.
-                if let Some(case) = &mut realization.expression {
-                    rewrite_local_slot_refs_in_case(case, old, new);
-                }
+                rewrite_local_slot_refs_in_case(&mut realization.expression, old, new);
             }
             SignItem::SignExpression(expression) => {
                 rewrite_local_slot_refs_in_expression(&mut expression.expression, old, new)
@@ -5902,8 +6083,16 @@ fn rewrite_local_slot_refs_in_items(items: &mut [SignItem], old: &str, new: &str
             SignItem::RoleExpression(expression) => {
                 rewrite_local_slot_refs_in_expression(&mut expression.expression, old, new)
             }
-            SignItem::TraitUse { .. }
-            | SignItem::Belongs(_)
+            SignItem::TraitMount {
+                kind:
+                    conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_),
+                ..
+            }
+            | SignItem::TraitMount {
+                name: _,
+                kind: conlang_language::TraitMountKind::Declaration,
+                ..
+            }
             | SignItem::RoleDecl(_)
             | SignItem::RoleBinding(_) => {}
         }
@@ -5912,12 +6101,11 @@ fn rewrite_local_slot_refs_in_items(items: &mut [SignItem], old: &str, new: &str
 
 fn rewrite_local_slot_refs_in_case(case: &mut TypedCase, old: &str, new: &str) {
     if let Some(scrutinee) = &mut case.scrutinee {
-        *scrutinee = rewrite_slot_operand(scrutinee, old, new);
-        *scrutinee = rewrite_slot_accesses(scrutinee, old, new);
+        *scrutinee = reference::rename_slot(scrutinee, old, new);
     }
     for branch in &mut case.branches {
         if let conlang_language::CaseCondition::Guard(guard) = &mut branch.condition {
-            *guard = rewrite_slot_accesses(guard, old, new);
+            *guard = reference::rename_slot(guard, old, new);
         }
         rewrite_local_slot_refs_in_expression(&mut branch.result, old, new);
     }
@@ -5934,7 +6122,9 @@ fn rewrite_local_slot_refs_in_expression(expression: &mut Expression, old: &str,
         Expression::SignFragment(items) | Expression::DimFragment { items, .. } => {
             rewrite_local_slot_refs_in_items(items, old, new)
         }
-        Expression::PhonTemplate(template) => *template = rewrite_slot_template(template, old, new),
+        Expression::PhonTemplate(template) => {
+            *template = reference::rename_slot(template, old, new)
+        }
         Expression::Slot(slot) if slot == old => *slot = new.to_owned(),
         Expression::Case(case) => rewrite_local_slot_refs_in_case(case, old, new),
         Expression::EnumValue(_) | Expression::SelfSign | Expression::Slot(_) => {}
@@ -5982,15 +6172,14 @@ fn rewrite_application_parameters_in_items(
                 new,
             ),
             SignItem::Realization(realization) => {
-                if let Some(case) = &mut realization.expression {
-                    for branch in &mut case.branches {
-                        rewrite_application_parameters_in_expression(
-                            &mut branch.result,
-                            callees,
-                            old,
-                            new,
-                        );
-                    }
+                let case = &mut realization.expression;
+                for branch in &mut case.branches {
+                    rewrite_application_parameters_in_expression(
+                        &mut branch.result,
+                        callees,
+                        old,
+                        new,
+                    );
                 }
             }
             _ => {}
@@ -6046,49 +6235,6 @@ fn rewrite_application_parameters(
     }
 }
 
-fn rewrite_slot_operand(source: &str, old: &str, new: &str) -> String {
-    if source == old {
-        return new.to_owned();
-    }
-    source
-        .strip_prefix(old)
-        .filter(|rest| rest.starts_with('.'))
-        .map(|rest| format!("{new}{rest}"))
-        .unwrap_or_else(|| source.to_owned())
-}
-
-fn rewrite_slot_template(source: &str, old: &str, new: &str) -> String {
-    source.replace(&format!("{{{old}}}"), &format!("{{{new}}}"))
-}
-
-fn rewrite_slot_accesses(source: &str, old: &str, new: &str) -> String {
-    let needle = format!("$slot.{old}");
-    let mut output = String::with_capacity(source.len());
-    let mut cursor = 0;
-    while let Some(offset) = source[cursor..].find(&needle) {
-        let start = cursor + offset;
-        let end = start + needle.len();
-        let boundary = source[end..]
-            .chars()
-            .next()
-            .is_none_or(|character| character == '.' || !is_identifier_character(character));
-        output.push_str(&source[cursor..start]);
-        if boundary {
-            output.push_str("$slot.");
-            output.push_str(new);
-        } else {
-            output.push_str(&source[start..end]);
-        }
-        cursor = end;
-    }
-    output.push_str(&source[cursor..]);
-    output
-}
-
-fn is_identifier_character(character: char) -> bool {
-    character.is_alphanumeric() || matches!(character, '_' | '-' | ':' | '/')
-}
-
 fn rewrite_sign_refs(language: &mut Language, old: &str, new: &str) {
     for sign in &mut language.signs {
         rewrite_sign_refs_in_items(&mut sign.items, old, new);
@@ -6119,9 +6265,8 @@ fn rewrite_sign_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
                 rewrite_sign_refs_in_expression(&mut expression.expression, old, new)
             }
             SignItem::Realization(realization) => {
-                if let Some(case) = &mut realization.expression {
-                    rewrite_sign_refs_in_case(case, old, new);
-                }
+                let case = &mut realization.expression;
+                rewrite_sign_refs_in_case(case, old, new);
             }
             _ => {}
         }
@@ -6170,9 +6315,17 @@ fn rewrite_trait_refs(language: &mut Language, old: &str, new: &str) {
 fn rewrite_trait_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
     for item in items {
         match item {
-            SignItem::TraitUse { name, .. } | SignItem::Belongs(name) if name == old => {
-                *name = new.to_owned()
+            SignItem::TraitMount {
+                name,
+                kind:
+                    conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_),
+                ..
             }
+            | SignItem::TraitMount {
+                name: name,
+                kind: conlang_language::TraitMountKind::Declaration,
+                ..
+            } if name == old => *name = new.to_owned(),
             SignItem::Slot(slot) => {
                 if let SlotConstraint::Category(name) = &mut slot.constraint {
                     if name == old {
@@ -6197,9 +6350,8 @@ fn rewrite_trait_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
                 rewrite_trait_refs_in_expression(&mut expression.expression, old, new)
             }
             SignItem::Realization(realization) => {
-                if let Some(case) = &mut realization.expression {
-                    rewrite_trait_refs_in_case(case, old, new);
-                }
+                let case = &mut realization.expression;
+                rewrite_trait_refs_in_case(case, old, new);
             }
             _ => {}
         }

@@ -1,5 +1,6 @@
 ---
 source: crates/language/tests/roundtrip.rs
+assertion_line: 115
 expression: "format!(\"{lang:#?}\")"
 ---
 Language {
@@ -23,6 +24,8 @@ Language {
         TraitDef {
             name: "CorePhonology",
             global: true,
+            marker: false,
+            type_params: [],
             blocks: [
                 Block {
                     items: [
@@ -95,6 +98,8 @@ Language {
         TraitDef {
             name: "VerbCommon",
             global: false,
+            marker: false,
+            type_params: [],
             blocks: [
                 Block {
                     items: [
@@ -135,17 +140,19 @@ Language {
             ),
             name: "go",
             items: [
-                TraitUse {
+                TraitMount {
                     name: "VerbCommon",
-                    block: Some(
+                    kind: Block(
                         0,
                     ),
+                    args: [],
                 },
-                TraitUse {
+                TraitMount {
                     name: "VerbCommon",
-                    block: Some(
+                    kind: Block(
                         1,
                     ),
+                    args: [],
                 },
                 Def(
                     Def {

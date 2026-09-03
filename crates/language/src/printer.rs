@@ -130,8 +130,12 @@ fn expression_source(expression: &Expression) -> String {
                 .iter()
                 .map(|argument| {
                     let value = match &argument.value {
-                        SignArgumentValue::SelfSign => "{$self}".to_owned(),
-                        SignArgumentValue::Slot(slot) => format!("{{{slot}}}"),
+                        SignArgumentValue::SelfSign => crate::reference::render_interpolation(
+                            &crate::reference::Subject::SelfSign,
+                        ),
+                        SignArgumentValue::Slot(slot) => crate::reference::render_interpolation(
+                            &crate::reference::Subject::Slot(slot.clone()),
+                        ),
                         SignArgumentValue::Application(application) => {
                             expression_source(&Expression::SignApplication((**application).clone()))
                         }
@@ -164,7 +168,9 @@ fn expression_source(expression: &Expression) -> String {
         Expression::PhonTemplate(template) => template.clone(),
         Expression::EnumValue(value) => value.clone(),
         Expression::SelfSign => "$self".to_owned(),
-        Expression::Slot(slot) => format!("{{{slot}}}"),
+        Expression::Slot(slot) => {
+            crate::reference::render_interpolation(&crate::reference::Subject::Slot(slot.clone()))
+        }
         // Valid nested cases are emitted structurally by `push_case`.  This
         // marker is only reachable for an invalid programmatic AST (for
         // example, a case embedded inside a scalar projection), which the
@@ -247,18 +253,38 @@ fn push_body(out: &mut String, blocks: &[Block]) {
             out.push_str("    ==\n"); // P27 block 邊界
         }
         let items = &block.items;
+        // 0) `pass`:故意留白的塊。它與內容互斥(驗證擋),故獨佔一塊時就是全部。
+        for it in items {
+            if matches!(it, SignItem::Pass) {
+                out.push_str("    pass\n");
+            }
+        }
         // 1) belongs(保序)
         for it in items {
-            if let SignItem::Belongs(n) = it {
-                out.push_str(&format!("    belongs {n}\n"));
+            if let SignItem::TraitMount {
+                name: n,
+                kind: crate::TraitMountKind::Declaration,
+                args,
+                ..
+            } = it
+            {
+                out.push_str(&format!("    belongs {n}"));
+                if !args.is_empty() {
+                    out.push('<');
+                    out.push_str(&args.join(", "));
+                    out.push('>');
+                }
+                out.push('\n');
             }
         }
         // 2) trait macro 引用(保序):None = 裸 Name(整個 trait)、Some(n) = Name[n]
         for it in items {
-            if let SignItem::TraitUse { name, block } = it {
-                match block {
-                    Some(n) => out.push_str(&format!("    {name}[{n}]\n")),
-                    None => out.push_str(&format!("    {name}\n")),
+            if let SignItem::TraitMount { name, kind, .. } = it {
+                match kind {
+                    // 宣告那一份由 belongs 區段印,這裡只印展開點
+                    crate::TraitMountKind::Declaration => {}
+                    crate::TraitMountKind::Block(n) => out.push_str(&format!("    {name}[{n}]\n")),
+                    crate::TraitMountKind::Whole => out.push_str(&format!("    {name}\n")),
                 }
             }
         }
@@ -377,23 +403,29 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                 for item in items {
                     match item {
                         SignItem::FeatureDecl(feature) if feature.dim == parsed_dim => {
+                            // P75 §3 b:`?` **可省略**——`optional == false` 不印,
+                            // 未用此語法的套件 canonical form 逐位元不變(零 digest churn)。
                             out.push_str(&format!(
-                                "            {} = enum({})\n",
+                                "            {} = enum({}){}\n",
                                 feature.name,
-                                feature.values.join(", ")
+                                feature.values.join(", "),
+                                if feature.optional { "?" } else { "" }
                             ));
                         }
                         SignItem::FeatureValue(feature) if feature.dim == parsed_dim => {
                             out.push_str(&format!(
+                                // 已定案(len==1)印回原樣 → 未用到多值的套件其
+                                // canonical form 逐位元不變,library lock digest 不動。
                                 "            {} = {}\n",
-                                feature.name, feature.value
+                                feature.name,
+                                feature.values.join(" | ")
                             ));
                         }
                         SignItem::FeatureRule(rule) if rule.dim == parsed_dim => {
                             push_rule(out, "            ", rule);
                         }
                         SignItem::FeatureExpression(expression) if expression.dim == parsed_dim => {
-                            out.push_str(&format!("            {} =>\n", expression.name));
+                            out.push_str(&format!("            {} =\n", expression.name));
                             if let Expression::Case(case) = &expression.expression {
                                 push_case(out, "                ", case);
                             }
@@ -412,8 +444,13 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                             role.constraint.display_name(),
                             if role.optional { "?" } else { "" }
                         )),
-                        SignItem::RoleBinding(role) => out
-                            .push_str(&format!("            {} = {{{}}}\n", role.name, role.slot)),
+                        SignItem::RoleBinding(role) => out.push_str(&format!(
+                            "            {} = {}\n",
+                            role.name,
+                            crate::reference::render_interpolation(
+                                &crate::reference::Subject::Slot(role.slot.clone())
+                            )
+                        )),
                         SignItem::RoleExpression(role) => {
                             out.push_str(&format!("            {} =\n", role.name));
                             if let Expression::Case(case) = &role.expression {
@@ -455,9 +492,7 @@ fn push_body(out: &mut String, blocks: &[Block]) {
                 out.push_str("        realization:\n");
                 for item in items {
                     if let SignItem::Realization(realization) = item {
-                        if let Some(case) = &realization.expression {
-                            push_case(out, "            ", case);
-                        }
+                        push_case(out, "            ", &realization.expression);
                     }
                 }
             }
@@ -536,9 +571,33 @@ fn rule_dim(r: &crate::Rule) -> &'static str {
 }
 
 fn push_trait(out: &mut String, t: &TraitDef) {
-    let kw = if t.global { "global trait" } else { "trait" };
-    out.push_str(&format!("{kw} {}:\n", t.name));
+    let kw = if t.global {
+        "global trait"
+    } else if t.marker {
+        "marker trait"
+    } else {
+        "trait"
+    };
+    out.push_str(&format!("{kw} {}", t.name));
+    if !t.type_params.is_empty() {
+        out.push('<');
+        out.push_str(&format_trait_type_param_list(&t.type_params));
+        out.push('>');
+    }
+    out.push_str(":\n");
     push_body(out, &t.blocks);
+}
+
+/// Canonical form of a trait type-parameter list, without the surrounding `<…>`.
+pub fn format_trait_type_param_list(params: &[crate::TraitTypeParam]) -> String {
+    params
+        .iter()
+        .map(|param| match &param.bound {
+            Some(bound) => format!("{}: {bound}", param.name),
+            None => param.name.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// canonical 印出;空 Language → 空字串。
@@ -603,13 +662,21 @@ mod tests {
             let a = TraitDef {
                 name: "Alpha".into(),
                 global: false,
+                marker: false,
+                type_params: vec![],
                 blocks: vec![Block {
-                    items: vec![SignItem::Belongs("Beta".into())],
+                    items: vec![SignItem::TraitMount {
+                        name: "Beta".into(),
+                        kind: crate::TraitMountKind::Declaration,
+                        args: vec![],
+                    }],
                 }],
             };
             let b = TraitDef {
                 name: "Beta".into(),
                 global: false,
+                marker: false,
+                type_params: vec![],
                 blocks: vec![Block::default()],
             };
             if flip {

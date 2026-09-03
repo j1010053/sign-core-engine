@@ -3,7 +3,7 @@
    be overridden locally.  Keep executable declarations in code/, lookup
    metadata in data/, and package policy in config/ (architecture repair 6). */
 
-trait Semantic:
+marker trait Semantic:
 trait SemanticFrame:
     belongs Semantic
 trait EventFrame:
@@ -13,13 +13,16 @@ trait Entity:
 trait Relation:
     belongs Semantic
 
+/* P75:`number` 帶 `?` —— agreement number 依定義是**由脈絡供給**的
+   (DerivationContext 注入,或外層構式經 slot_features 設定),詞條自己不一定有。
+   `person` 不標:實測沒有任何讀取路徑會在它缺席時觸發,不無憑據放寬。 */
 trait AgreementBearer:
     syn:
         feature:
-            number = enum(singular, plural)
+            number = enum(singular, plural)?
             person = enum(first, second, third)
 
-trait Predicate:
+marker trait Predicate:
 trait Copula:
     belongs Predicate
 trait Verb:
@@ -38,18 +41,19 @@ trait Ditransitive:
    故不 belongs Predicate。 */
 trait Aux:
     belongs Predicate
-trait Bound:
+marker trait Bound:
 
 /* 名詞性 → 語意實體。P71-S:這類推論是**語言學分析**,故住套件而非引擎;
    換一個 std 就換一套推論(此前硬寫在 `sem.rs` 的 bridge)。 */
 trait Nominal:
     belongs AgreementBearer
+    AgreementBearer[0]
     belongs Entity
 trait Noun:
     belongs Nominal
 trait Pronoun:
     belongs Nominal
-trait Adposition:
+marker trait Adposition:
 trait Locative:
     belongs Adposition
 
@@ -72,8 +76,9 @@ trait TransferFrame:
             recipient [Animate]?
 trait Transfer:
     belongs TransferFrame
+    TransferFrame[0]
 
-trait Pragmatic:
+marker trait Pragmatic:
 trait Illocution:
     belongs Pragmatic
 trait SocialDeixis:

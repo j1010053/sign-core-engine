@@ -86,7 +86,7 @@ fn insert_block_round_trips_through_dump() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    let dump = resolved.dump();
+    let dump = resolved.dump().expect("dump");
     assert!(dump.contains("insert into node(language, @"));
     assert!(dump.contains("trait Nocturnal:"));
     assert!(dump.contains("g => k"));
@@ -95,7 +95,11 @@ fn insert_block_round_trips_through_dump() {
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    assert_eq!(round.dump(), dump, "dump→parse→resolve→dump 穩定");
+    assert_eq!(
+        round.dump().expect("dump"),
+        dump,
+        "dump→parse→resolve→dump 穩定"
+    );
 }
 
 /// §④:一個多 item block 展成 N 個 `Insert`(同 statement,只驗最終態),
@@ -131,12 +135,12 @@ fn multi_item_block_fans_out_to_ordered_inserts() {
     );
 
     // 正規形 = 每 item 一 block;round-trip 穩定。
-    let dump = resolved.dump();
+    let dump = resolved.dump().expect("dump");
     let round = UnresolvedChangeSet::parse(&dump)
         .unwrap()
         .resolve(&base, &spec)
         .unwrap();
-    assert_eq!(round.dump(), dump);
+    assert_eq!(round.dump().expect("dump"), dump);
     assert_eq!(round.statements[0].edits.len(), 2, "正規形仍 2 個 edit");
 }
 
@@ -227,7 +231,7 @@ fn symbol_and_class_insert_replay_and_dump_round_trip() {
     let class = replayed.source().find("Class front {a}").unwrap();
     assert!(symbol < class, "authored declaration order is retained");
 
-    let dump = resolved.dump();
+    let dump = resolved.dump().expect("dump");
     assert!(dump.contains("Symbol a"));
     assert!(dump.contains("Class front {a}"));
     let round = UnresolvedChangeSet::parse(&dump)
@@ -239,7 +243,7 @@ fn symbol_and_class_insert_replay_and_dump_round_trip() {
         .run(&round)
         .unwrap()
         .document;
-    assert_eq!(round.dump(), dump);
+    assert_eq!(round.dump().expect("dump"), dump);
     assert_eq!(replayed_round.source(), replayed.source());
     assert_eq!(replayed_round.identities(), replayed.identities());
 }

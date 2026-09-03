@@ -46,10 +46,13 @@ syn:
 5. `else` 只在沒有任何普通 branch Matched 時命中。
 
 > **guard 讀得到的東西一律以 `feature:` 為正解**(P71,見
-> `Def路徑封閉清單與feature分工_v1.0.md`)。裸 `<dim>.<field>` 的欄位名**打錯是靜默
+> `Def路徑封閉清單與feature分工_v1.0.md`)。裸 `<dim>.<field>` 的欄位名打錯**曾是靜默
 > `false`**(只有維度名錯才報 `Err`),作者得不到訊號;`feature:` 則有
 > `FEATURE_UNDECLARED` 與 `FEATURE_VALUE_OUT_OF_DOMAIN` 兩道檢查。P71 Phase 1 起
-> 自造欄位的裸 Def 路徑已被封閉清單擋下,`feature:` 是唯一出口。
+> 自造欄位的裸 Def 路徑已被封閉清單擋下,`feature:` 是唯一出口;
+> **增修 D(§10,2026-08-12)起 guard 讀的路徑也受同一份清單約束**
+> ——既不在清單上、也沒宣告成 feature 的欄位名報 `RULE_GUARD_NOT_ALLOWED`
+> (typed `case:` 分支的 guard 則是 `CASE_INVALID_GUARD`),不再靜默。
 
 ```lang
 sign cumulative:

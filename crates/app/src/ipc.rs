@@ -430,6 +430,7 @@ fn ensure_authoring_revision(document: &LanguageDocument, expected: &str) -> Res
 
 fn source_kind(kind: NodeKind) -> &'static str {
     match kind {
+        NodeKind::Pass => "pass",
         NodeKind::Language => "language",
         NodeKind::DslDeclaration => "dsl_declaration",
         NodeKind::Distribution => "distribution",
@@ -447,7 +448,6 @@ fn source_kind(kind: NodeKind) -> &'static str {
         NodeKind::RoleBinding => "role_binding",
         NodeKind::Sense => "sense",
         NodeKind::SenseEdge => "sense_edge",
-        NodeKind::Realization => "realization",
         NodeKind::FeatureRule => "feature_rule",
         NodeKind::Definition => "definition",
         NodeKind::Rule => "rule",
@@ -455,7 +455,6 @@ fn source_kind(kind: NodeKind) -> &'static str {
         NodeKind::RuleThenBranch => "then",
         NodeKind::PhonStatement => "phon_statement",
         NodeKind::PhonBlockNode => "phon_block",
-        NodeKind::RealizationBranch => "realization_branch",
         NodeKind::Application => "application",
         NodeKind::Case => "case",
         NodeKind::CaseBranch => "case_branch",
@@ -551,6 +550,8 @@ fn update_fields(kind: NodeKind, categories: &[AuthoringChoiceV1]) -> Vec<Author
         NodeKind::Trait => vec![
             field("name", "Name", "text", Vec::new()),
             field("global", "Global", "boolean", boolean()),
+            field("marker", "Marker", "boolean", boolean()),
+            field("type_params", "Type parameters", "text", Vec::new()),
         ],
         NodeKind::Definition => vec![
             field("path", "Path", "text", Vec::new()),
@@ -634,7 +635,6 @@ fn structurally_movable(snapshot: &NodeSnapshot) -> bool {
                 | AddressSegment::PhonLeaf(_)
                 | AddressSegment::PhonThen(_)
                 | AddressSegment::PhonElse(_)
-                | AddressSegment::RealizationBranches(_)
                 | AddressSegment::CaseBranches(_)
         )
     )
@@ -654,7 +654,6 @@ fn is_body_item(kind: NodeKind) -> bool {
             | NodeKind::RoleBinding
             | NodeKind::Sense
             | NodeKind::SenseEdge
-            | NodeKind::Realization
             | NodeKind::FeatureRule
             | NodeKind::Definition
             | NodeKind::Rule
@@ -683,7 +682,6 @@ fn parent_accepts_move(child: NodeKind, parent: NodeKind) -> bool {
             NodeKind::Rule | NodeKind::FeatureRule | NodeKind::PhonBlockNode
         ),
         NodeKind::CaseBranch => parent == NodeKind::Case,
-        NodeKind::RealizationBranch => parent == NodeKind::Realization,
         _ => false,
     }
 }
@@ -1735,7 +1733,7 @@ impl UiSession {
     pub fn pending_change(&self) -> Result<PendingChangeV1, UiError> {
         let session = self.workspace.session();
         let source = session
-            .pending_source()
+            .pending_source()?
             .ok_or_else(|| ui_error("APP_NO_PENDING_CHANGE", "no pending .chg"))?;
         let statements = session
             .pending()

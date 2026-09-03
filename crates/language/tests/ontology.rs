@@ -174,7 +174,10 @@ fn projection_inherits_category_defaults_and_local_overrides() {
     // 不是經 Transfer。原不變式(Transfer 是 frame 契約,不蘊含 Event 範疇)因此
     // 改在一個不是 Verb 的 Transfer sign 上觀察,否則被 Verb 那條路徑遮蔽。
     assert!(syn.is_a("Event"), "give 經 Verb 取得 Event");
-    let frame_only = user.sign_named("frame_only").unwrap().project(Dim::Syn, &reg);
+    let frame_only = user
+        .sign_named("frame_only")
+        .unwrap()
+        .project(Dim::Syn, &reg);
     assert!(frame_only.is_a("TransferFrame") && frame_only.is_a("EventFrame"));
     assert!(
         !frame_only.is_a("Event"),
