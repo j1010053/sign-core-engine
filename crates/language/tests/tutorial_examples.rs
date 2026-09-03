@@ -1,13 +1,16 @@
 use conlang_language::construction::{SlotFiller, SlotMap};
-use conlang_language::{compile_system, DerivationContext, Dim, Language};
+use conlang_language::{check_language, compile_system, DerivationContext, Dim, Language};
 
 const FIXTURE: &str = include_str!("fixtures/tutorial_complete.lang");
 const TUTORIAL: &str = include_str!("../../../tutorials/共時lang語法教學_v1.md");
 
-fn tagged_complete_example() -> String {
-    let marker = "<!-- conlang-test: tutorial-complete -->";
+fn tagged_lang_example(name: &str) -> String {
+    let marker = format!("<!-- conlang-test: {name} -->");
     let normalized = TUTORIAL.replace("\r\n", "\n").replace('\r', "\n");
-    let after = normalized.split_once(marker).unwrap().1;
+    let after = normalized
+        .split_once(&marker)
+        .unwrap_or_else(|| panic!("missing tutorial example {name:?}"))
+        .1;
     after
         .split_once("```lang\n")
         .unwrap()
@@ -18,6 +21,10 @@ fn tagged_complete_example() -> String {
         .to_owned()
 }
 
+fn tagged_complete_example() -> String {
+    tagged_lang_example("tutorial-complete")
+}
+
 #[test]
 fn documented_complete_grammar_is_the_compiled_fixture() {
     let documented = tagged_complete_example();
@@ -26,6 +33,46 @@ fn documented_complete_grammar_is_the_compiled_fixture() {
         Language::parse(FIXTURE).unwrap().dump()
     );
     compile_system(Language::parse(&documented).unwrap()).unwrap();
+}
+
+#[test]
+fn documented_parameter_scope_and_narrower_bound_are_valid() {
+    let language = Language::parse(&tagged_lang_example("parameterized-trait-scope")).unwrap();
+    let report = check_language(&language);
+    assert!(
+        !report.has_errors(),
+        "documented generic trait should validate: {:?}",
+        report.diagnostics()
+    );
+}
+
+#[test]
+fn documented_unknown_categories_are_not_implicit_parameters() {
+    let language =
+        Language::parse(&tagged_lang_example("parameterized-trait-invalid-scope")).unwrap();
+    let report = check_language(&language);
+    let codes = report
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+    assert!(codes.contains(&"SLOT_UNKNOWN_CATEGORY"), "{codes:?}");
+    assert!(codes.contains(&"ROLE_UNKNOWN_CONSTRAINT"), "{codes:?}");
+}
+
+#[test]
+fn documented_unbounded_forwarding_is_rejected() {
+    let language =
+        Language::parse(&tagged_lang_example("parameterized-trait-invalid-bound")).unwrap();
+    let report = check_language(&language);
+    assert!(
+        report
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "TYPE_PARAM_BOUND_VIOLATION"),
+        "documented invalid bound forwarding should be rejected: {:?}",
+        report.diagnostics()
+    );
 }
 
 #[test]

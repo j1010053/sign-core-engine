@@ -124,8 +124,9 @@ enum ShallowNode {
 /// **前提:兩邊的 id 出自同一血脈**。手改出來的 `.lang` 是一段沒有 id 的文字,
 /// 得先「認親」(配 id)才能餵進來——那是另一件事,不在本模組。
 ///
-/// 發出順序:**更新 → 移動 → 新增 → 刪除**。新增排在刪除之前,是為了讓錨點
-/// (`Anchor::After(兄弟)`)在套用當下一定還指得到人。
+/// 發出順序:**放寬型更新 → 移動 → 新增 → 刪除 → 收緊型更新**。新增排在刪除
+/// 之前,是為了讓錨點(`Anchor::After(兄弟)`)在套用當下一定還指得到人；
+/// `marker=true` 延到刪除後，避免內容尚未移除時形成無效的中間狀態。
 pub fn reconstruct(
     before: &LanguageDocument,
     after: &LanguageDocument,
@@ -141,6 +142,7 @@ pub fn reconstruct(
         .collect();
     let mut covered_added = BTreeSet::new();
     let mut covered_removed = BTreeSet::new();
+    let mut deferred_updates = Vec::new();
 
     // ── ① 更新:兩邊都有的,比淺層欄位 ──
     for (id, old_entry) in &old {
@@ -169,6 +171,16 @@ pub fn reconstruct(
                 node: NodeRef::new(id.clone(), old_entry.kind),
                 change,
             };
+            if matches!(
+                &edit,
+                PrimitiveEdit::Update {
+                    change: NodeUpdate::TraitMarker(true),
+                    ..
+                }
+            ) {
+                deferred_updates.push(edit);
+                continue;
+            }
             let previous = working.clone();
             working = apply_structural(working, &edit)?;
             map_updated_descendants(
@@ -329,6 +341,12 @@ pub fn reconstruct(
         let edit = PrimitiveEdit::Delete {
             node: NodeRef::new(entry.id.clone(), entry.kind),
         };
+        working = apply_structural(working, &edit)?;
+        edits.push(edit);
+    }
+
+    // `marker trait` 承諾沒有內容；先完成子節點刪除，再立起這個契約。
+    for edit in deferred_updates {
         working = apply_structural(working, &edit)?;
         edits.push(edit);
     }
@@ -875,8 +893,21 @@ fn shallow_updates(
             if old.name != new.name {
                 updates.push(NodeUpdate::Rename(new.name.clone()));
             }
-            if old.global != new.global {
-                updates.push(NodeUpdate::TraitGlobal(new.global));
+            // 先關閉會排斥 type params / 另一種 trait kind 的旗標。
+            if old.global && !new.global {
+                updates.push(NodeUpdate::TraitGlobal(false));
+            }
+            if old.marker && !new.marker {
+                updates.push(NodeUpdate::TraitMarker(false));
+            }
+            if old.type_params != new.type_params {
+                updates.push(NodeUpdate::TraitTypeParams(new.type_params.clone()));
+            }
+            if !old.global && new.global {
+                updates.push(NodeUpdate::TraitGlobal(true));
+            }
+            if !old.marker && new.marker {
+                updates.push(NodeUpdate::TraitMarker(true));
             }
         }
         (DetachedNode::Sign(old), DetachedNode::Sign(new)) => {

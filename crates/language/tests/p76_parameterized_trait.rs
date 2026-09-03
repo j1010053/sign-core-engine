@@ -489,3 +489,229 @@ sign Good:
         "Mammal is a subtype of Animal, should pass: {violations:?}"
     );
 }
+
+#[test]
+fn abstract_params_are_valid_slot_and_role_constraints_in_their_own_trait() {
+    let lang = parse(
+        "\
+trait Schema<C>:
+    syn:
+        slots:
+            head [C]
+    sem:
+        roles:
+            referent [C]
+",
+    );
+    let report = conlang_language::check_language(&lang);
+    assert!(
+        !report.has_errors(),
+        "a declared abstract parameter is not an unknown category: {:?}",
+        report.diagnostics()
+    );
+}
+
+#[test]
+fn an_unknown_concrete_constraint_is_not_mistaken_for_an_abstract_param() {
+    let lang = parse(
+        "\
+trait Other<OtherParam>:
+    pass
+
+trait Schema<C>:
+    syn:
+        slots:
+            head [MisspelledCategory]
+    sem:
+        roles:
+            referent [OtherParam]
+",
+    );
+    let report = conlang_language::check_language(&lang);
+    let codes = report
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+    assert!(codes.contains(&"SLOT_UNKNOWN_CATEGORY"), "{codes:?}");
+    assert!(codes.contains(&"ROLE_UNKNOWN_CONSTRAINT"), "{codes:?}");
+}
+
+#[test]
+fn concrete_expansion_still_validates_the_actual_category() {
+    let lang = parse(
+        "\
+trait Schema<C>:
+    syn:
+        slots:
+            head [C]
+    sem:
+        roles:
+            referent [C]
+
+sign Bad:
+    belongs Schema<MisspelledCategory>
+    Schema
+",
+    );
+    let report = conlang_language::check_language(&lang);
+    let codes = report
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+    assert!(codes.contains(&"SLOT_UNKNOWN_CATEGORY"), "{codes:?}");
+    assert!(codes.contains(&"ROLE_UNKNOWN_CONSTRAINT"), "{codes:?}");
+}
+
+#[test]
+fn a_narrower_outer_bound_satisfies_an_inner_bound() {
+    let lang = parse(
+        "\
+trait Animal:
+    pass
+
+trait Mammal:
+    belongs Animal
+    Animal
+
+trait Inner<C: Animal>:
+    syn:
+        slots:
+            head [C]
+
+trait Outer<T: Mammal>:
+    belongs Inner<T>
+    Inner
+",
+    );
+    let report = conlang_language::check_language(&lang);
+    let violations = report
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "TYPE_PARAM_BOUND_VIOLATION")
+        .collect::<Vec<_>>();
+    assert!(violations.is_empty(), "{violations:?}");
+}
+
+#[test]
+fn an_unbounded_outer_param_cannot_satisfy_a_bounded_inner_param() {
+    let lang = parse(
+        "\
+trait Animal:
+    pass
+
+trait Inner<C: Animal>:
+    syn:
+        slots:
+            head [C]
+
+trait Outer<T>:
+    belongs Inner<T>
+    Inner
+",
+    );
+    let report = conlang_language::check_language(&lang);
+    assert!(
+        report
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "TYPE_PARAM_BOUND_VIOLATION"),
+        "an unbounded outer parameter cannot guarantee the inner bound: {:?}",
+        report.diagnostics()
+    );
+}
+
+#[test]
+fn a_wider_outer_bound_cannot_satisfy_a_narrower_inner_bound() {
+    let lang = parse(
+        "\
+trait Living:
+    pass
+
+trait Animal:
+    belongs Living
+    Living
+
+trait Inner<C: Animal>:
+    syn:
+        slots:
+            head [C]
+
+trait Outer<T: Living>:
+    belongs Inner<T>
+    Inner
+",
+    );
+    let report = conlang_language::check_language(&lang);
+    assert!(
+        report
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "TYPE_PARAM_BOUND_VIOLATION"),
+        "a Living parameter is too broad for an Animal requirement: {:?}",
+        report.diagnostics()
+    );
+}
+
+#[test]
+fn nested_generic_roles_are_substituted_once_in_a_concrete_sign() {
+    let lang = parse(
+        "\
+trait TutorialGenericRoot:
+    pass
+
+trait TutorialGenericLeaf:
+    belongs TutorialGenericRoot
+    TutorialGenericRoot
+
+trait TutorialAgreement<C: TutorialGenericRoot, T: TutorialGenericRoot>:
+    syn:
+        slots:
+            controller [C]
+    sem:
+        roles:
+            target [T]?
+
+trait TutorialSubjectAgreement<T: TutorialGenericLeaf>:
+    belongs TutorialAgreement<TutorialGenericLeaf, T>
+    TutorialAgreement
+
+sign TutorialConcreteAgreement:
+    belongs TutorialSubjectAgreement<TutorialGenericLeaf>
+    TutorialSubjectAgreement
+    phon:
+        /{$slot.controller}/
+",
+    );
+
+    let expanded = compile::expand_traits(&lang).expect("generic mounts expand");
+    let sign = expanded
+        .signs
+        .iter()
+        .find(|sign| sign.name == "TutorialConcreteAgreement")
+        .expect("concrete sign");
+    let target_constraints = sign
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            conlang_language::SignItem::RoleDecl(role) if role.name == "target" => {
+                Some(role.constraint.clone())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        target_constraints,
+        vec![conlang_language::SlotConstraint::Category(
+            "TutorialGenericLeaf".to_owned()
+        )]
+    );
+
+    let report = conlang_language::check_language(&lang);
+    assert!(
+        !report.has_errors(),
+        "the abstract and concrete role contracts must not be double-counted: {:?}",
+        report.diagnostics()
+    );
+}

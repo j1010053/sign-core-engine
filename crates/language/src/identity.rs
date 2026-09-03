@@ -105,6 +105,8 @@ pub struct NodeRef {
 pub enum EditableField {
     Name,
     Global,
+    Marker,
+    TypeParams,
     Text,
     DistributionKey,
     DistributionValue,
@@ -680,6 +682,8 @@ fn editable_field(kind: NodeKind, name: &str) -> Option<EditableField> {
     match (kind, name) {
         (NodeKind::Trait | NodeKind::Sign, "name") => Some(EditableField::Name),
         (NodeKind::Trait, "global") => Some(EditableField::Global),
+        (NodeKind::Trait, "marker") => Some(EditableField::Marker),
+        (NodeKind::Trait, "type_params") => Some(EditableField::TypeParams),
         (NodeKind::DslDeclaration, "text") => Some(EditableField::Text),
         (NodeKind::Distribution, "key") => Some(EditableField::DistributionKey),
         (NodeKind::Distribution, "value") => Some(EditableField::DistributionValue),

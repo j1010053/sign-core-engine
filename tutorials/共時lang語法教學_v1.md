@@ -107,7 +107,9 @@ trait TutorialAgreement<C, T>:
     syn:
         slots:
             controller [C]
-            target [T]
+    sem:
+        roles:
+            target [T]?
 ```
 
 `<C, T>` 是宣告；使用時在 `belongs` 提供具體類別：
@@ -118,7 +120,9 @@ sign TutorialSVA:
     TutorialAgreement
 ```
 
-展開後 `controller` 的 constraint 變成 `[TutorialNominal]`，`target` 變成 `[TutorialPredicate]`——和手寫一模一樣，但只定義一次。
+展開後 slot `controller` 的 constraint 變成 `[TutorialNominal]`，role `target` 變成
+`[TutorialPredicate]`——slot 與 role 使用同一套型別參數規則，和手寫一模一樣，
+但只定義一次。
 
 **trait 之間的傳播**：一個 trait 可以只填部分參數，剩下的向上傳播給使用者：
 
@@ -136,7 +140,83 @@ sign TutorialSVA2:
     TutorialSubjectAgreement
 ```
 
-parameter 也可以加上 bound：`<C: TutorialEntity>` 表示 `C` 只接受 `TutorialEntity` 或其子類型。`marker trait` 和 `global trait` 不能有 type parameter。
+parameter 也可以加上 bound：`<C: TutorialEntity>` 表示 `C` 只接受
+`TutorialEntity` 或其子類型。參數只在**宣告它的同一個 trait** 裡有效：大寫開頭
+不會自動變成參數，另一個 trait 恰好宣告同名參數也不算；拼錯的具體 category
+仍會得到 `SLOT_UNKNOWN_CATEGORY` 或 `ROLE_UNKNOWN_CONSTRAINT`。
+
+trait 把自己的自由參數傳給另一個泛型 trait 時，外層 bound 必須等於或窄於內層
+要求。換句話說，`T: TutorialNominal` 可以傳給要求 `C: TutorialEntity` 的位置，
+但無 bound 的 `T` 或更寬的 `T: Semantic` 不行，會得到
+`TYPE_PARAM_BOUND_VIOLATION`。
+
+下面是可直接驗證的完整正例；`T: Predicate` 比內層要求的 `Entity` 更窄：
+
+<!-- conlang-test: parameterized-trait-scope -->
+```lang
+trait TutorialGenericEntity:
+    pass
+
+trait TutorialGenericNominal:
+    belongs TutorialGenericEntity
+    TutorialGenericEntity
+
+trait TutorialGenericPredicate:
+    belongs TutorialGenericEntity
+    TutorialGenericEntity
+
+trait TutorialAgreement<C: TutorialGenericEntity, T: TutorialGenericEntity>:
+    syn:
+        slots:
+            controller [C]
+    sem:
+        roles:
+            target [T]?
+
+trait TutorialSubjectAgreement<T: TutorialGenericPredicate>:
+    belongs TutorialAgreement<TutorialGenericNominal, T>
+    TutorialAgreement
+
+sign TutorialSVA:
+    belongs TutorialSubjectAgreement<TutorialGenericPredicate>
+    TutorialSubjectAgreement
+    phon:
+        /{$slot.controller}/
+```
+
+反例中，未宣告的 `MisspelledCategory` 不會因為大寫就被放行：
+
+<!-- conlang-test: parameterized-trait-invalid-scope -->
+```lang
+trait Schema<C>:
+    syn:
+        slots:
+            head [MisspelledCategory]
+    sem:
+        roles:
+            referent [OtherParam]
+```
+
+而無 bound 的外層參數不能保證符合內層要求：
+
+<!-- conlang-test: parameterized-trait-invalid-bound -->
+```lang
+trait TutorialBoundEntity:
+    pass
+
+trait Inner<C: TutorialBoundEntity>:
+    syn:
+        slots:
+            head [C]
+
+trait Outer<T>:
+    belongs Inner<T>
+    Inner
+```
+
+`marker trait` 是「永遠沒有內容」的分類契約，所以不能有 type parameter；
+`global trait` 也不能有 type parameter。`marker` 與 `global` 互斥，同一個 trait
+不能同時具有兩種旗標，違反時是 `TRAIT_GLOBAL_MARKER_CONFLICT`。
 
 ## 6. `$slot`／`$self`、Then 與 Else
 

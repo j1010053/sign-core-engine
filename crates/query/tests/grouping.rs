@@ -8,12 +8,11 @@
 //! 4. `labels` 只改顯示,不改身分。
 
 use conlang_changeset::evolution::{Edge, EvolutionGraph, Nativization, NodeId};
-use conlang_changeset::{change_set_prelude, UnresolvedChangeSet};
-use conlang_query::{
-    intelligibility, periods, ExploratoryHeuristicV1, Grouping, GroupingOverride,
-    TreeEdgeCut,
-};
+use conlang_changeset::{change_set_prelude, ChangeInterpreter, UnresolvedChangeSet};
 use conlang_language::{LanguageDocument, LibrarySpec};
+use conlang_query::{
+    intelligibility, periods, ExploratoryHeuristicV1, Grouping, GroupingOverride, TreeEdgeCut,
+};
 
 const BASE: &str = "Symbol k\nSymbol a\nSymbol t\nSymbol u\nSymbol s\n\nClass vowel {a, u}\n\n\
 global trait Core:\n\n\
@@ -55,8 +54,26 @@ fn chain(steps: &[&str]) -> (EvolutionGraph, Vec<NodeId>) {
     (graph, ids)
 }
 
+fn apply_once(source: &str, body: &str) -> (LanguageDocument, LanguageDocument) {
+    let spec = LibrarySpec::default();
+    let before = LanguageDocument::import_new_root(source, "grp:event-reach").expect("root");
+    let mut text = change_set_prelude(&before, &spec, "grp:event-reach-child").expect("prelude");
+    text.push_str(body);
+    let resolved = UnresolvedChangeSet::parse(&text)
+        .expect("changeset parses")
+        .resolve(&before, &spec)
+        .expect("changeset resolves");
+    let after = ChangeInterpreter::new(before.clone(), spec, "grp:event-reach-child".to_owned())
+        .expect("interpreter")
+        .run(&resolved)
+        .expect("changeset runs")
+        .document;
+    (before, after)
+}
+
 /// 砍掉四分之三的詞彙 —— 差異很大,但留 `one` 供後續步驟改。
-const WIPE: &str = "\n    #0:\n        delete sign(\"two\")\n        delete sign(\"three\")\n        \
+const WIPE: &str =
+    "\n    #0:\n        delete sign(\"two\")\n        delete sign(\"three\")\n        \
 delete sign(\"four\")\n";
 
 /// 只改一個詞的底層形 —— 差異很小。
@@ -71,9 +88,13 @@ const TWEAK: &str = "\n    #0:\n        update sign(\"one\").def[phon].value = /
 /// 都是**一個** `Rule` 節點(P46 結構化 block,語句住 `phon_block`),依 `RuleId`
 /// 對齊時只算一個事件。要造出 `count` 個規則事件就得有 `count` 個規則節點。
 fn sound_changes(count: usize) -> String {
-    let mut body = String::from("\n    #0:\n        insert into trait(\"Core\").block[0] at end:\n            phon:\n");
+    let mut body = String::from(
+        "\n    #0:\n        insert into trait(\"Core\").block[0] at end:\n            phon:\n",
+    );
     for index in 0..count {
-        body.push_str(&format!("                shift{index}: a => u{index} / _#\n"));
+        body.push_str(&format!(
+            "                shift{index}: a => u{index} / _#\n"
+        ));
     }
     body
 }
@@ -102,7 +123,11 @@ fn identical_documents_score_one_and_a_wiped_lexicon_scores_much_lower() {
     let (graph, ids) = chain(&[TWEAK, WIPE]);
     let root = graph.snapshot(&ids[0]).expect("root");
 
-    assert_eq!(intelligibility(root, root, &measure()).value, 1.0, "自己與自己");
+    assert_eq!(
+        intelligibility(root, root, &measure()).value,
+        1.0,
+        "自己與自己"
+    );
 
     let tweaked = intelligibility(root, graph.snapshot(&ids[1]).expect("b"), &measure()).value;
     let wiped = intelligibility(root, graph.snapshot(&ids[2]).expect("c"), &measure()).value;
@@ -229,7 +254,10 @@ fn reference_edges_do_not_count_as_genealogical_adjacency() {
     let text = change_set_prelude(&base, &spec, "grp:ref").expect("prelude");
     let merged = graph
         .commit(
-            vec![Edge::trunk(root.clone(), text), Edge::reference(wiped.clone())],
+            vec![
+                Edge::trunk(root.clone(), text),
+                Edge::reference(wiped.clone()),
+            ],
             Nativization::None,
             Some("grp:ref".to_owned()),
         )
@@ -354,7 +382,10 @@ fn labels_change_the_display_but_never_the_membership() {
     assert_eq!(labelled.members, plain.members, "身分逐欄位不變");
     assert_eq!(labelled.labels.len(), 1);
     assert_eq!(
-        labelled.labels.get(group_of(&plain, &ids[0])).map(String::as_str),
+        labelled
+            .labels
+            .get(group_of(&plain, &ids[0]))
+            .map(String::as_str),
         Some("古語群")
     );
 }
@@ -470,7 +501,6 @@ fn a_large_batch_of_sound_changes_does_split_a_dialect() {
     assert_eq!(grouping.groups().len(), 2, "一次十二條音變應切開");
 }
 
-
 /// **餘裕的邊界釘在哪裡**:同一個 changeset 裡 8 條音變還在同群,9 條切開。
 ///
 /// 這條測試的用途不是宣稱「9 是對的」——那是可被反駁的主張——而是讓**任何
@@ -491,6 +521,36 @@ fn the_calibration_margin_sits_between_eight_and_nine_sound_changes() {
     };
     assert_eq!(groups(8), 1, "8 條仍在同一個方言群");
     assert_eq!(groups(9), 2, "9 條切開");
+}
+
+#[test]
+fn disjoint_local_events_do_not_form_a_cartesian_product_with_union_reach() {
+    let mut source = String::from("Symbol a\nSymbol b\n\n");
+    for index in 0..9 {
+        source.push_str(&format!(
+            "trait Local{index}:\n\nsign word{index}:\n    belongs Local{index}\n    phon:\n        /a/\n\n"
+        ));
+    }
+    let mut changes = String::from("\n    #0:\n");
+    for index in 0..9 {
+        changes.push_str(&format!(
+            "        insert into trait(\"Local{index}\").block[0] at end:\n            phon:\n                shift{index}: a => b / _#\n"
+        ));
+    }
+    let (before, after) = apply_once(&source, &changes);
+    let local = intelligibility(&before, &after, &measure()).value;
+
+    let (global_graph, global_ids) = chain(&[&sound_changes(9)]);
+    let global = intelligibility(
+        global_graph.snapshot(&global_ids[0]).expect("root"),
+        global_graph.snapshot(&global_ids[1]).expect("child"),
+        &measure(),
+    )
+    .value;
+
+    assert!((local - 0.952_380_952_380_952_3).abs() < 1e-12, "{local}");
+    assert!((global - 0.571_428_571_428_571_4).abs() < 1e-12, "{global}");
+    assert!(local > global, "disjoint local events must cost less");
 }
 
 /// **trait 的生滅只算一次**——不因為它在幾個維度上有內容而被記幾次。
@@ -521,10 +581,7 @@ fn a_new_trait_is_charged_once_no_matter_how_many_dimensions_it_carries() {
     let (bare, rich) = (score(bare), score(with_content));
 
     assert!(bare < 1.0, "前提:這個編輯本來就該壓低分數,實得 {bare}");
-    assert_eq!(
-        bare, rich,
-        "新 trait 帶幾個維度的內容,不該改變它被記幾次"
-    );
+    assert_eq!(bare, rich, "新 trait 帶幾個維度的內容,不該改變它被記幾次");
 }
 
 // ── ⑥ 群的語意:主幹邊上的連通分量 ────────────────────────────────────────
@@ -699,7 +756,10 @@ fn a_slice_rejects_a_parent_and_its_child() {
     );
     // 祖孫也一樣(不只直接父子)
     let (graph, ids) = chain(&[TWEAK, TWEAK]);
-    assert!(Slice::new(&graph, [ids[0].clone(), ids[2].clone()]).is_err(), "隔一代照樣不行");
+    assert!(
+        Slice::new(&graph, [ids[0].clone(), ids[2].clone()]).is_err(),
+        "隔一代照樣不行"
+    );
     // 各自單獨則合法
     assert!(Slice::new(&graph, [ids[2].clone()]).is_ok());
 }

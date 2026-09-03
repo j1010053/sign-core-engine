@@ -707,6 +707,10 @@ fn validate_typed_schemas(
     registry: &OntologyRegistry,
     report: &mut ValidationReport,
 ) {
+    let mut scope_languages = externals.to_vec();
+    scope_languages.push(language);
+    let type_param_scopes = crate::ontology::trait_type_param_scopes(&scope_languages);
+
     fn expression_leaves<'a>(expression: &'a Expression, output: &mut Vec<&'a Expression>) {
         match expression {
             Expression::Case(case) => {
@@ -796,9 +800,23 @@ fn validate_typed_schemas(
             })
     }
 
-    fn inherited_items(source: &SignDef, registry: &OntologyRegistry) -> Vec<SignItem> {
+    fn inherited_items(
+        source: &SignDef,
+        registry: &OntologyRegistry,
+        type_param_scopes: &crate::ontology::TraitTypeParamScopes,
+    ) -> Vec<SignItem> {
         let mut items = Vec::new();
         for provenance in registry.inheritance_order(source) {
+            // 泛型 trait 的內容必須經帶實參的 mount 展開；ontology projection
+            // 沒有實參環境，只能拿到 `[T]` 之類的抽象原稿。若再和 expanded
+            // source 合併，就會把同一個 role 看成 `[T]` 與 `[Concrete]` 兩份
+            // 不相容契約。非泛型 trait 仍保留 legacy projection。
+            if type_param_scopes
+                .get(&provenance.trait_name)
+                .is_some_and(|params| !params.is_empty())
+            {
+                continue;
+            }
             if let Some(node) = registry.node(&provenance.trait_name) {
                 items.extend(node.items.iter().cloned());
             }
@@ -810,11 +828,12 @@ fn validate_typed_schemas(
         owner: &str,
         source: &SignDef,
         registry: &OntologyRegistry,
+        type_param_scopes: &crate::ontology::TraitTypeParamScopes,
         report: &mut ValidationReport,
     ) {
         let mut features = BTreeMap::<(Dim, String), crate::FeatureDecl>::new();
         let mut roles = BTreeMap::<String, crate::RoleDecl>::new();
-        for item in inherited_items(source, registry) {
+        for item in inherited_items(source, registry, type_param_scopes) {
             match item {
                 SignItem::FeatureDecl(feature) => {
                     let key = (feature.dim, feature.name.clone());
@@ -902,7 +921,7 @@ fn validate_typed_schemas(
     }
 
     for sign in &language.signs {
-        validate_inherited_contracts(&sign.name, sign, registry, report);
+        validate_inherited_contracts(&sign.name, sign, registry, &type_param_scopes, report);
     }
     for trait_def in &language.traits {
         let source = SignDef {
@@ -911,7 +930,13 @@ fn validate_typed_schemas(
             items: crate::compile::trait_view(language, externals, &trait_def.name)
                 .unwrap_or_default(),
         };
-        validate_inherited_contracts(&trait_def.name, &source, registry, report);
+        validate_inherited_contracts(
+            &trait_def.name,
+            &source,
+            registry,
+            &type_param_scopes,
+            report,
+        );
     }
 
     let mut candidates = language
@@ -988,6 +1013,43 @@ fn validate_typed_schemas(
             }
         }
         let slots = construction::slots_of(&effective);
+        for slot in &slots {
+            let Some(required) = slot.constraint.category() else {
+                continue;
+            };
+            let abstract_here = type_param_scopes
+                .get(&owner)
+                .is_some_and(|params| params.contains_key(required));
+            if registry.has(required) || abstract_here {
+                continue;
+            }
+            let path = format!("slot {}", slot.name);
+            let already_reported = report.diagnostics().iter().any(|diagnostic| {
+                diagnostic.code == "SLOT_UNKNOWN_CATEGORY"
+                    && diagnostic.sources.iter().any(|source| {
+                        source.owner == owner && source.path.as_deref() == Some(path.as_str())
+                    })
+            });
+            if !already_reported {
+                report.push(
+                    Diagnostic::new(
+                        Severity::Error,
+                        "SLOT_UNKNOWN_CATEGORY",
+                        format!(
+                            "slot {:?} in {owner:?} requires unknown category {:?}{}",
+                            slot.name,
+                            required,
+                            registry.missing_name_hint(required)
+                        ),
+                    )
+                    .with_sources(vec![DiagnosticSource {
+                        owner: owner.clone(),
+                        path: Some(path),
+                        location: SourceLocation::unknown(),
+                    }]),
+                );
+            }
+        }
         let declarations = effective
             .items
             .iter()
@@ -1426,7 +1488,10 @@ fn validate_typed_schemas(
         for role in role_declarations.values() {
             // `[*]` 不指名任何 trait,無存在性可驗。
             if let Some(category) = role.constraint.category() {
-                if !registry.has(category) {
+                let abstract_here = type_param_scopes
+                    .get(&owner)
+                    .is_some_and(|params| params.contains_key(category));
+                if !registry.has(category) && !abstract_here {
                     report.push(
                         Diagnostic::new(
                             Severity::Error,

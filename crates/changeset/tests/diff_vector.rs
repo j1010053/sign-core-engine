@@ -674,6 +674,94 @@ fn a_global_trait_reaches_every_sign() {
     );
 }
 
+#[test]
+fn moving_an_unchanged_rule_between_traits_is_a_changed_event() {
+    let before = LanguageDocument::import_new_root(
+        "Symbol a\nSymbol b\n\n\
+         global trait Core:\n\
+         \x20   phon:\n\
+         \x20       shift: a => b\n\n\
+         trait LocalNoun:\n\n\
+         sign x:\n\
+         \x20   belongs LocalNoun\n\
+         \x20   phon:\n\
+         \x20       /a/\n\n\
+         sign y:\n\
+         \x20   phon:\n\
+         \x20       /a/\n",
+        "evo:rule-home",
+    )
+    .expect("rule-home root parses");
+    let after = apply(
+        &before,
+        "evo:rule-home-moved",
+        &statement(
+            "move trait(\"Core\").block[0].rule[\"shift\"] to trait(\"LocalNoun\").block[0] at end",
+        ),
+    );
+    let vector = diff_vector(&before, &after);
+    let rules = &vector.phon.trait_rules;
+
+    assert_eq!(rules.counts.both, 1, "RuleId 仍是同一條規則");
+    assert_eq!(rules.counts.changed, 1, "只搬宣告處也必須是變更");
+    assert_eq!((rules.reach_before, rules.reach_after), (2, 1));
+    assert_eq!(
+        rules.event_reaches.changed,
+        [conlang_changeset::diff::TraitReachPair {
+            before: 2,
+            after: 1,
+        }]
+    );
+    assert!(!vector.is_identical());
+}
+
+#[test]
+fn moving_a_rule_between_dimensions_is_removal_plus_addition() {
+    let before = LanguageDocument::import_new_root(
+        "Symbol a\n\n\
+         global trait Core:\n\
+         \x20   syn:\n\
+         \x20       feature:\n\
+         \x20           state = enum(off, on)\n\
+         \x20           state => on @name shift\n\
+         \x20   sem:\n\
+         \x20       feature:\n\
+         \x20           state = enum(off, on)\n\n\
+         sign x:\n\
+         \x20   phon:\n\
+         \x20       /a/\n",
+        "evo:rule-dimension",
+    )
+    .expect("rule-dimension root parses");
+    let after = apply(
+        &before,
+        "evo:rule-dimension-moved",
+        &statement("update trait(\"Core\").block[0].rule[\"shift\"].dim = sem"),
+    );
+    let vector = diff_vector(&before, &after);
+
+    assert_eq!(vector.syn.trait_rules.counts.only_before, 1);
+    assert_eq!(vector.syn.trait_rules.counts.both, 0);
+    assert_eq!(vector.syn.trait_rules.counts.changed, 0);
+    assert_eq!(vector.sem.trait_rules.counts.only_after, 1);
+    assert_eq!(vector.sem.trait_rules.counts.both, 0);
+    assert_eq!(vector.sem.trait_rules.counts.changed, 0);
+    assert_eq!(
+        vector.syn.trait_rules.event_reaches.only_before[0],
+        conlang_changeset::diff::TraitReachPair {
+            before: 1,
+            after: 0,
+        }
+    );
+    assert_eq!(
+        vector.sem.trait_rules.event_reaches.only_after[0],
+        conlang_changeset::diff::TraitReachPair {
+            before: 0,
+            after: 1,
+        }
+    );
+}
+
 /// **兩個數,不是一個**:同一批編輯裡波及面本身會移動。
 ///
 /// 這裡一次做兩件事:改 `LocalNoun` 的內容,並複製一個 `belongs LocalNoun`
@@ -727,12 +815,12 @@ fn reach_stays_zero_when_no_trait_has_an_event() {
         "前提:改的是 sign 上的 belongs"
     );
     for (name, leaf) in [
-        ("phon.trait_content", vector.phon.trait_content),
-        ("syn.trait_content", vector.syn.trait_content),
-        ("sem.trait_content", vector.sem.trait_content),
-        ("prag.trait_content", vector.prag.trait_content),
-        ("structural.trait_content", vector.structural.trait_content),
-        ("phon.trait_rules", vector.phon.trait_rules),
+        ("phon.trait_content", &vector.phon.trait_content),
+        ("syn.trait_content", &vector.syn.trait_content),
+        ("sem.trait_content", &vector.sem.trait_content),
+        ("prag.trait_content", &vector.prag.trait_content),
+        ("structural.trait_content", &vector.structural.trait_content),
+        ("phon.trait_rules", &vector.phon.trait_rules),
     ] {
         assert!(leaf.is_identical(), "{name} 不該有事件");
         assert_eq!(
@@ -750,7 +838,7 @@ fn a_new_trait_is_a_birth_not_a_change() {
     let after = apply(
         &before,
         "evo:t3",
-        "\n    #0:\n        insert into language at end:\n            trait Nocturnal:\n",
+        "\n    #0:\n        insert into language at end:\n            global trait Nocturnal:\n",
     );
     let vector = diff_vector(&before, &after);
 
@@ -763,7 +851,63 @@ fn a_new_trait_is_a_birth_not_a_change() {
         vector.structural.trait_content.counts.changed, 0,
         "既有 trait 沒被改,changed 就該是 0"
     );
+    for leaf in [
+        &vector.phon.trait_content,
+        &vector.syn.trait_content,
+        &vector.sem.trait_content,
+        &vector.prag.trait_content,
+    ] {
+        assert_eq!(
+            leaf.event_reaches.only_after,
+            [conlang_changeset::diff::TraitReachPair::default()],
+            "沒有該維內容的生滅事件仍有一筆、但波及為零"
+        );
+    }
+    assert_eq!(
+        vector.structural.trait_content.event_reaches.only_after,
+        [conlang_changeset::diff::TraitReachPair {
+            before: 0,
+            after: 1,
+        }],
+        "structural 永遠記 trait 生滅的實際波及"
+    );
     assert_signs_untouched(&vector);
+}
+
+#[test]
+fn trait_marker_and_type_parameter_headers_are_structural_changes() {
+    let before = trait_base();
+    let parameterized = apply(
+        &before,
+        "evo:trait-params",
+        &statement("update trait(\"LocalNoun\").type_params = \"C: Nominal\""),
+    );
+    let parameter_diff = diff_vector(&before, &parameterized);
+    assert_eq!(parameter_diff.structural.trait_content.counts.changed, 1);
+    assert_eq!(
+        parameter_diff
+            .structural
+            .trait_content
+            .event_reaches
+            .changed[0],
+        conlang_changeset::diff::TraitReachPair {
+            before: 1,
+            after: 1,
+        }
+    );
+
+    let marked = apply(
+        &before,
+        "evo:trait-marker",
+        &statement("update trait(\"LocalAnimate\").marker = true"),
+    );
+    let marker_diff = diff_vector(&before, &marked);
+    assert_eq!(marker_diff.structural.trait_content.counts.changed, 1);
+    assert_eq!(
+        marker_diff.structural.trait_content.event_reaches.changed[0],
+        conlang_changeset::diff::TraitReachPair::default(),
+        "unused trait still counts as changed but reaches no sign"
+    );
 }
 
 /// **範圍邊界**:掛在 sign 上的規則留在 `signs`,不進 `rules`。
@@ -797,6 +941,7 @@ fn a_rule_on_a_sign_stays_in_the_signs_component() {
             },
             reach_before: 0,
             reach_after: 0,
+            event_reaches: Default::default(),
         },
         "trait 的規則一條沒動,trait_rules leaf 不該有任何變化(reach 也不該憑空出現)"
     );

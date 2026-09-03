@@ -550,6 +550,8 @@ fn update_fields(kind: NodeKind, categories: &[AuthoringChoiceV1]) -> Vec<Author
         NodeKind::Trait => vec![
             field("name", "Name", "text", Vec::new()),
             field("global", "Global", "boolean", boolean()),
+            field("marker", "Marker", "boolean", boolean()),
+            field("type_params", "Type parameters", "text", Vec::new()),
         ],
         NodeKind::Definition => vec![
             field("path", "Path", "text", Vec::new()),

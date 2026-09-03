@@ -25,9 +25,9 @@
 //! **不叫 `Default`**——名字要說出它是什麼:一組可探索用的權宜係數,
 //! 不是引擎對「互通度」的主張。係數是**建構參數**,不是藏起來的常數。
 
-use serde::{Deserialize, Serialize};
-use conlang_changeset::diff::{diff_vector, DiffVector, TraitDiff};
+use conlang_changeset::diff::{diff_vector, DiffVector, TraitReachPair};
 use conlang_language::{Dim, LanguageDocument};
+use serde::{Deserialize, Serialize};
 
 /// 一次互通度查詢的輸入。
 #[derive(Debug, Clone, Copy)]
@@ -101,8 +101,8 @@ pub struct DimensionWeights {
 ///
 /// ```text
 /// 直接傷害ᵢ = 該維有差異的對齊詞數
-/// 間接傷害ᵢ = ρ_rule    × 該維規則事件數   × 那些規則波及的詞數
-///           + ρ_content × 該維 trait 內容改動數 × 那些 trait 波及的詞數
+/// 間接傷害ᵢ = ρ_rule    × Σ 每個規則事件自己的波及詞數
+///           + ρ_content × Σ 每個 trait 內容事件自己的波及詞數
 /// 相異度   = Σ(wᵢ × (直接ᵢ + 間接ᵢ)) / (Σwᵢ × 對齊詞數)
 ///            再與 生滅比 依 birth_death 權重混合
 /// 互通度   = 1 − 相異度
@@ -113,7 +113,7 @@ pub struct DimensionWeights {
 /// # 間接傷害為什麼要乘 reach
 ///
 /// 一條音變**宣告一次、作用到一整片詞**(裁定丙:diff 在宣告處記 1,波及面
-/// 另記於 `reach_*`)。若只看「改了幾條規則」,一條作用於全語言的音變與一條
+/// 另記於逐事件 reach)。若只看「改了幾條規則」,一條作用於全語言的音變與一條
 /// 作用於三個詞的音變會得到同一個數字——而互通度問的正是「有多少詞聽不懂」。
 ///
 /// **reach 取前後的 max**:裁定 §3.1 明說引擎發兩個數、由呼叫端決定怎麼合成
@@ -129,6 +129,13 @@ pub struct DimensionWeights {
 #[derive(Debug, Clone)]
 pub struct ExploratoryHeuristicV1 {
     pub weights: DimensionWeights,
+}
+
+fn indirect_damage<'a>(events: impl Iterator<Item = &'a TraitReachPair>, ratio: f64) -> f64 {
+    ratio
+        * events
+            .map(|event| event.before.max(event.after))
+            .sum::<usize>() as f64
 }
 
 impl ExploratoryHeuristicV1 {
@@ -213,12 +220,6 @@ impl IntelligibilityMeasure for ExploratoryHeuristicV1 {
                 (Dim::Sem, w.sem),
                 (Dim::Prag, w.prag),
             ];
-            // 一個 trait 那側的 leaf 造成多少「詞的傷害」:事件數 × 波及的詞數
-            // × 傷害比。reach 取前後 max(見型別說明)。
-            let indirect = |leaf: &TraitDiff, events: usize, ratio: f64| -> f64 {
-                ratio * events as f64 * leaf.reach_before.max(leaf.reach_after) as f64
-            };
-
             let mut weighted = 0.0;
             let mut mass = 0.0;
             for (dim, weight) in per_dim {
@@ -227,18 +228,19 @@ impl IntelligibilityMeasure for ExploratoryHeuristicV1 {
                 weighted += weight
                     * (layer.signs.changed as f64
                         // 規則依 `RuleId` 對齊,生滅是這一維自己的事,可以全算。
-                        + indirect(
-                            rules,
-                            rules.counts.changed
-                                + rules.counts.only_before
-                                + rules.counts.only_after,
+                        + indirect_damage(
+                            rules
+                                .event_reaches
+                                .changed
+                                .iter()
+                                .chain(&rules.event_reaches.only_before)
+                                .chain(&rules.event_reaches.only_after),
                             w.trait_rule,
                         )
                         // trait 內容只取 `changed`——生滅是 trait **集合**的性質,
                         // 五個 leaf 的數字相同,逐維相加會記五次。
-                        + indirect(
-                            &layer.trait_content,
-                            layer.trait_content.counts.changed,
+                        + indirect_damage(
+                            layer.trait_content.event_reaches.changed.iter(),
                             w.trait_content,
                         ));
                 mass += weight * aligned as f64;
@@ -248,11 +250,13 @@ impl IntelligibilityMeasure for ExploratoryHeuristicV1 {
                 * (diff.structural.signs.changed as f64
                     // trait 的生滅在這裡算,且只算這一次(第 3 步的歸戶規則
                     // 保證每個生滅的 trait 都會出現在 structural)。
-                    + indirect(
-                        structural_traits,
-                        structural_traits.counts.changed
-                            + structural_traits.counts.only_before
-                            + structural_traits.counts.only_after,
+                    + indirect_damage(
+                        structural_traits
+                            .event_reaches
+                            .changed
+                            .iter()
+                            .chain(&structural_traits.event_reaches.only_before)
+                            .chain(&structural_traits.event_reaches.only_after),
                         w.trait_content,
                     ));
             mass += w.structural * aligned as f64;

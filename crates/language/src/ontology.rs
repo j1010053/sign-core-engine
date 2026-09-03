@@ -15,6 +15,32 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use crate::diagnostic::{Diagnostic, DiagnosticSource, Severity, SourceLocation, ValidationReport};
 use crate::{Dim, Language, SignDef, SignItem, Slot, Stage, TraitDef};
 
+pub(crate) type TraitTypeParamScopes = BTreeMap<String, BTreeMap<String, Option<String>>>;
+
+/// 每個 trait 自己宣告的型別參數作用域。
+///
+/// 參數名與具體 category 共用字串表示，但只有 owner 自己宣告的名字才是抽象
+/// placeholder；不能用「大寫開頭」之類的詞法猜測，否則拼錯的 category 會被放行。
+pub(crate) fn trait_type_param_scopes(langs: &[&Language]) -> TraitTypeParamScopes {
+    let mut scopes = BTreeMap::new();
+    for trait_def in langs.iter().flat_map(|language| &language.traits) {
+        scopes.entry(trait_def.name.clone()).or_insert_with(|| {
+            trait_def
+                .type_params
+                .iter()
+                .map(|param| (param.name.clone(), param.bound.clone()))
+                .collect()
+        });
+    }
+    scopes
+}
+
+fn is_abstract_type_param(scopes: &TraitTypeParamScopes, owner: &str, candidate: &str) -> bool {
+    scopes
+        .get(owner)
+        .is_some_and(|params| params.contains_key(candidate))
+}
+
 /// ontology 建構期診斷(全為 error 級;分級資料,不 panic)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OntologyDiag {
@@ -325,6 +351,16 @@ fn block_shape_diagnostics(langs: &[&Language]) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     for lang in langs {
         for def in &lang.traits {
+            if def.global && def.marker {
+                out.push(Diagnostic::new(
+                    Severity::Error,
+                    "TRAIT_GLOBAL_MARKER_CONFLICT",
+                    format!(
+                        "trait {:?} cannot be both `global trait` and `marker trait`",
+                        def.name
+                    ),
+                ));
+            }
             // P76:marker trait 不得有型別參數
             if def.marker && !def.type_params.is_empty() {
                 out.push(Diagnostic::new(
@@ -1062,6 +1098,7 @@ impl OntologyRegistry {
         legacy: &[OntologyDiag],
     ) -> ValidationReport {
         let mut report = ValidationReport::new();
+        let type_param_scopes = trait_type_param_scopes(langs);
         report.extend(block_shape_diagnostics(langs));
         for diagnostic in legacy {
             match diagnostic {
@@ -1377,7 +1414,9 @@ impl OntologyRegistry {
                         let Some(required) = slot.constraint.category() else {
                             continue;
                         };
-                        if !self.has(required) {
+                        if !self.has(required)
+                            && !is_abstract_type_param(&type_param_scopes, &owner, required)
+                        {
                             report.push(
                                 Diagnostic::new(
                                     Severity::Error,
@@ -1492,6 +1531,13 @@ pub(crate) fn type_param_bound_diagnostics(
             if args.len() != trait_def.type_params.len() {
                 continue;
             }
+            let owner_params = all_traits.get(owner).map(|trait_def| {
+                trait_def
+                    .type_params
+                    .iter()
+                    .map(|param| (param.name.as_str(), param))
+                    .collect::<BTreeMap<_, _>>()
+            });
             for (param, arg) in trait_def.type_params.iter().zip(args.iter()) {
                 let Some(ref bound) = param.bound else {
                     continue;
@@ -1499,13 +1545,33 @@ pub(crate) fn type_param_bound_diagnostics(
                 if !registry.has(bound) {
                     continue;
                 }
-                if !registry.category_is_a(arg, bound) {
+                let outer_param = owner_params
+                    .as_ref()
+                    .and_then(|params| params.get(arg.as_str()))
+                    .copied();
+                let satisfies = match outer_param {
+                    Some(outer_param) => outer_param
+                        .bound
+                        .as_deref()
+                        .is_some_and(|outer_bound| registry.category_is_a(outer_bound, bound)),
+                    None => registry.category_is_a(arg, bound),
+                };
+                if !satisfies {
+                    let reason = match outer_param.and_then(|param| param.bound.as_deref()) {
+                        Some(outer_bound) => format!(
+                            "outer type parameter {arg:?} is bounded by {outer_bound:?}, which is not within {bound:?}"
+                        ),
+                        None if outer_param.is_some() => format!(
+                            "outer type parameter {arg:?} is unbounded and cannot satisfy {bound:?}"
+                        ),
+                        None => format!("{arg} is not a subtype of {bound}"),
+                    };
                     out.push(Diagnostic::new(
                         Severity::Error,
                         "TYPE_PARAM_BOUND_VIOLATION",
                         format!(
                             "{owner:?}: `belongs {name}<…>` 的實參 {arg:?} \
-                             不滿足 bound {bound:?}（{arg} 不是 {bound} 的子類型）"
+                             不滿足 bound {bound:?}（{reason}）"
                         ),
                     ));
                 }

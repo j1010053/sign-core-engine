@@ -97,6 +97,27 @@ fn split_type_params(
     let Some(inside) = rest.strip_suffix('>') else {
         return Err(err(line, "unclosed `<` in type parameter list"));
     };
+    if inside.trim().is_empty() {
+        return Err(err(line, "empty type parameter"));
+    }
+    Ok((base, parse_trait_type_param_list_at(inside, line)?))
+}
+
+/// 解析不含角括號的 trait 型別參數清單；空字串表示清除全部參數。
+///
+/// `.lang` 宣告與 `.chg` 的 `type_params` update 共用這個入口，避免兩套
+/// `name: Bound` 文法各自漂移。
+pub fn parse_trait_type_param_list(value: &str) -> Result<Vec<crate::TraitTypeParam>, ParseError> {
+    if value.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    parse_trait_type_param_list_at(value, 1)
+}
+
+fn parse_trait_type_param_list_at(
+    inside: &str,
+    line: usize,
+) -> Result<Vec<crate::TraitTypeParam>, ParseError> {
     let mut params = Vec::new();
     for part in inside.split(',') {
         let part = part.trim();
@@ -126,7 +147,7 @@ fn split_type_params(
             });
         }
     }
-    Ok((base, params))
+    Ok(params)
 }
 
 /// P76:`belongs Name<Arg1, Arg2>` → (name, args)。

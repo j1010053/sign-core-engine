@@ -581,20 +581,23 @@ fn push_trait(out: &mut String, t: &TraitDef) {
     out.push_str(&format!("{kw} {}", t.name));
     if !t.type_params.is_empty() {
         out.push('<');
-        for (i, p) in t.type_params.iter().enumerate() {
-            if i > 0 {
-                out.push_str(", ");
-            }
-            out.push_str(&p.name);
-            if let Some(ref bound) = p.bound {
-                out.push_str(": ");
-                out.push_str(bound);
-            }
-        }
+        out.push_str(&format_trait_type_param_list(&t.type_params));
         out.push('>');
     }
     out.push_str(":\n");
     push_body(out, &t.blocks);
+}
+
+/// Canonical form of a trait type-parameter list, without the surrounding `<…>`.
+pub fn format_trait_type_param_list(params: &[crate::TraitTypeParam]) -> String {
+    params
+        .iter()
+        .map(|param| match &param.bound {
+            Some(bound) => format!("{}: {bound}", param.name),
+            None => param.name.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// canonical 印出;空 Language → 空字串。

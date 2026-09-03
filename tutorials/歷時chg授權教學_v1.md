@@ -273,13 +273,16 @@ sign 的 items 則是字面順序，`at start` 真的會放到最前面：
 | 目標 kind | field |
 |---|---|
 | Sign／Trait | `name` |
-| Trait | `global` |
+| Trait | `global`、`marker`、`type_params` |
 | Definition | `path`、`value` |
-| Rule／FeatureRule | `body`、`dim`、`stage` |
-| else／then branch | `body` |
+| FeatureValue | `value` |
+| Rule／FeatureRule | `body`、`dim`、`stage`、`propagate` |
+| else／then branch、PhonStatement | `body` |
+| PhonBlockNode | `propagate` |
 | Slot | `name`、`optional` |
-| Belongs | `target` |
-| RealizationBranch | `template`、`guard` |
+| Belongs／TraitUse | `target` |
+| Sense | `gloss` |
+| SenseEdge | `kind`、`transparency` |
 | Case | `selection`（`case`／`when`） |
 
 改一個 sign 的底層音韻模板：
@@ -292,6 +295,44 @@ sign 的 items 則是字面順序，`at start` 真的會放到最前面：
 
 值的型別會驗——`update trait("LocalNoun").global = maybe` 會被擋下來，錯誤訊息
 會告訴你這裡只收 `true`／`false`。
+
+### Trait 標頭也能完整 replay
+
+`type_params` 的值只寫角括號**裡面**的清單；`.lang` 與 `.chg` 共用同一個
+`name: Bound, T` parser 與 canonical printer：
+
+<!-- chg-test: base=self:1; ns=evo:params; expect=trait LocalNoun<C: Nominal, T>: -->
+```chg
+    #0:
+        update trait("LocalNoun").type_params = "C: Nominal, T"
+```
+
+空字串表示清除參數。下面先新增、再清除，最後把空 trait 收緊成 marker；replay
+結果不會殘留角括號：
+
+<!-- chg-test: base=self:1; ns=evo:marker; expect=marker trait LocalNoun:; absent=trait LocalNoun< -->
+```chg
+    #0:
+        update trait("LocalNoun").type_params = "C: Nominal, T"
+    #1:
+        update trait("LocalNoun").type_params = ""
+    #2:
+        update trait("LocalNoun").marker = true
+```
+
+`global` 與 `marker` 互斥；不論是手寫 `.lang` 或程式化 edit 都會得到同一個
+`TRAIT_GLOBAL_MARKER_CONFLICT`，不會先做出 printer 無法 round-trip 的狀態：
+
+<!-- chg-test: base=self:1; ns=evo:trait-conflict; error=TRAIT_GLOBAL_MARKER_CONFLICT -->
+```chg
+    #0:
+        update trait("LocalNoun").marker = true
+        update trait("LocalNoun").global = true
+```
+
+從兩份有共同 identity 的文件產生 reconstruction 時，trait 本身與既有子節點都保
+ID；產生器會先關閉衝突旗標、更新 type parameters、完成必要的子節點刪除，最後才
+開啟 `marker=true`。因此「有內容的普通 trait → 空 marker trait」不會卡在非法中間態。
 
 ---
 
@@ -319,6 +360,19 @@ resolve 後會看到它其實是 `insert sign under node(language, @evo:root:0) 
 
 `Delete` ＋ `Insert` 必然換 ID；`Update`（rename）保 ID；`Move` 保整棵子樹的 ID。
 要保身分就別用「刪掉重建」。
+
+### `Move` 之後，diff 怎麼看
+
+規則以穩定 `RuleId` 對齊，所以把內容不變的規則搬到另一個 trait，不會被誤認成
+「刪一條、另造一條」。若前後仍在同一維，它是一個 `changed` 事件，但事件的
+before reach 取舊 trait 的波及詞、after reach 取新 trait 的波及詞；兩邊各自維護，
+不會把 global 與 local 的範圍混在一起。
+
+若同一 `RuleId` 同時換了維度，舊 leaf 是 `only_before`、新 leaf 是
+`only_after`。`reach_before/reach_after` 仍表示整個 leaf 碰到的 sign 聯集；Rust/query
+另外保留逐事件 `event_reaches`，讓互通度逐筆計算，而不是拿「事件總數 × 聯集」
+製造 Cartesian-product 膨脹。這些是 diff/reconstruction 對 stable identity 的兩個
+互補觀察：前者說同一節點改了什麼，後者把同一節點的歷史重播回來。
 
 ---
 

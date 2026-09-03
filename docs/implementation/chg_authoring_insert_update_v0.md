@@ -160,22 +160,30 @@ dead branch）。故：
 update <selector>.<field> = <value>
 ```
 
-現有 8 個對應（`update_for`／`dump_update`）：
+目前已接表層且 `update_for`／`dump_update` 對稱的純量欄位：
 
 | target kind | field → NodeUpdate |
 |---|---|
 | Sign/Trait | `name` → Rename |
+| Trait | `global` → TraitGlobal；`marker` → TraitMarker；`type_params` → TraitTypeParams |
 | Definition | `path` → DefinitionPath；`value` → DefinitionValue |
+| FeatureValue | `value` → FeatureAssignment |
 | Rule/FeatureRule | `body` → RuleBody |
-| Else/Then branch | `body` → RuleBranchBody |
+| Rule/FeatureRule/PhonBlockNode | `propagate` → Propagate |
+| Rule/FeatureRule | `dim` → RuleDimension；`stage` → RuleStage |
+| Else/Then branch、PhonStatement | `body` → RuleBranchBody |
 | Slot | `name` → SlotName |
-| RealizationBranch | `template` → RealizationTemplate |
+| Slot | `optional` → SlotOptional |
+| Belongs/TraitUse | `target` → Belongs/TraitUse |
+| Sense | `gloss` → SenseGloss |
+| SenseEdge | `kind` → SenseEdgeKind；`transparency` → SenseEdgeTransparency |
 | Case | `selection` → CaseSelection（`case`/`when`） |
 
-**待補（20 個 `NodeUpdate` 未接表層）**：TraitGlobal、RuleStage、RuleDimension、SlotConstraint、
-SlotOptional、TraitUse、Belongs、FeatureDeclaration、FeatureValue、SlotFeatureBinding、SlotMap、
-RoleDeclaration、RoleBinding、RealizationGuard、CaseBranch、SignApplication、Constraint，以及
-③ 的 DslDeclaration／Prosody／Distribution。原則：`update_for`（讀）與 `dump_update`（寫）**對稱**補齊。
+**仍無單行 `field = value` 表面的結構酬載**：RuleName、SlotConstraint、
+FeatureDeclaration、完整 FeatureValue、SlotFeatureBinding、SlotMap、RoleDeclaration、
+RoleBinding、CaseHeader、CaseBranch、SignApplication、ExpressionItem、Constraint，以及③的
+DslDeclaration／Distribution。`PhonBlockRoot` 另走既有多行 `phon_block:` 語法。原則：
+`update_for`（讀）與 `dump_update`（寫）必須**對稱**補齊。
 sign 級 metadata（`origin`/`provenance`/`lifecycle`/`entrenchment`）走 top-level Def path。
 
 ### 4.2 Tier-2 維度片段整替（block-valued，糖）
@@ -309,7 +317,11 @@ crate 320 綠、clippy 0）：
 - **dump 對稱**：`Insert{Trait}`／`Insert{Item}` 經 wrapper-print 還原；正規形＝每 primitive 一
   block；`dump→parse→resolve→dump` 逐位元穩定。
 - **update 欄位（8→14）**：＋`trait.global`／`slot.optional`／`belongs.target`／`rule.dim`／
-  `rule.stage`／`realization.guard`（對稱 `update_for`／`dump_update`）。
+  `rule.stage`／`realization.guard`（當時狀態；realization branch 後續已塌陷為 Case，
+  現行表面以 §4.1 的表格為準）。
+- **trait 標頭 replay（2026-09-03）**：＋`trait.marker`／`trait.type_params`；後者與
+  `.lang` 共用型別參數 parser/printer，`""` 清除參數，`global && marker` 以
+  `TRAIT_GLOBAL_MARKER_CONFLICT` 拒絕。
 
 已落地（續）：
 

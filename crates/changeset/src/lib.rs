@@ -29,11 +29,12 @@ use conlang_language::reference;
 use conlang_language::{
     check_document, check_document_with_packages, compile_document, sha256_hex, AddressSegment,
     BinaryConstraint, Block, CaseBranch, CompileSystemError, CompiledSystem, Def, DerivationKind,
-    Dim, Expression, FeatureDecl, FeatureValue, IdentityError, IdentityManifestV2, Language,
-    LanguageDocument, LibraryCatalog, LibraryId, LibrarySpec, NodeAddress, NodeEntryV1, NodeId,
-    NodeKind, NodeRef, PhonBlock, Realization, ResolvedPackages, RoleBinding, RoleDecl, Rule,
-    SenseTransparency, Severity, SignApplication, SignArgumentValue, SignDef, SignItem, Slot,
-    SlotConstraint, SlotFeatureBinding, SlotMapOp, Stage, TraitDef, TypedCase, ValidationReport,
+    Diagnostic, Dim, Expression, FeatureDecl, FeatureValue, IdentityError, IdentityManifestV2,
+    Language, LanguageDocument, LibraryCatalog, LibraryId, LibrarySpec, NodeAddress, NodeEntryV1,
+    NodeId, NodeKind, NodeRef, PhonBlock, Realization, ResolvedPackages, RoleBinding, RoleDecl,
+    Rule, SenseTransparency, Severity, SignApplication, SignArgumentValue, SignDef, SignItem, Slot,
+    SlotConstraint, SlotFeatureBinding, SlotMapOp, Stage, TraitDef, TraitTypeParam, TypedCase,
+    ValidationReport,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +89,8 @@ impl DetachedNode {
 pub enum NodeUpdate {
     Rename(String),
     TraitGlobal(bool),
+    TraitMarker(bool),
+    TraitTypeParams(Vec<TraitTypeParam>),
     DslDeclaration(String),
     Distribution {
         key: String,
@@ -1289,7 +1292,23 @@ fn update_payload(
             Ok(None)
         }
         (NodeKind::Trait, NodeUpdate::TraitGlobal(value)) => {
-            trait_at_mut(language, &node.address)?.global = value;
+            let trait_def = trait_at_mut(language, &node.address)?;
+            if value && trait_def.marker {
+                return Err(trait_global_marker_conflict(&trait_def.name));
+            }
+            trait_def.global = value;
+            Ok(None)
+        }
+        (NodeKind::Trait, NodeUpdate::TraitMarker(value)) => {
+            let trait_def = trait_at_mut(language, &node.address)?;
+            if value && trait_def.global {
+                return Err(trait_global_marker_conflict(&trait_def.name));
+            }
+            trait_def.marker = value;
+            Ok(None)
+        }
+        (NodeKind::Trait, NodeUpdate::TraitTypeParams(value)) => {
+            trait_at_mut(language, &node.address)?.type_params = value;
             Ok(None)
         }
         (NodeKind::DslDeclaration, NodeUpdate::DslDeclaration(value)) => {
@@ -1540,6 +1559,16 @@ fn update_payload(
         }
         _ => Err(field_mismatch(node, "update variant")),
     }
+}
+
+fn trait_global_marker_conflict(name: &str) -> EditError {
+    let mut report = ValidationReport::new();
+    report.push(Diagnostic::new(
+        Severity::Error,
+        "TRAIT_GLOBAL_MARKER_CONFLICT",
+        format!("trait {name:?} cannot be both `global trait` and `marker trait`"),
+    ));
+    EditError::Validation(Box::new(report))
 }
 
 fn field_mismatch(node: &NodeEntryV1, field: &str) -> EditError {
@@ -3325,6 +3354,14 @@ fn update_for(reference: &NodeRef, field: &str, value: &str) -> Result<NodeUpdat
             ))),
         },
         (NodeKind::Trait, "global") => Ok(NodeUpdate::TraitGlobal(parse_bool(value)?)),
+        (NodeKind::Trait, "marker") => Ok(NodeUpdate::TraitMarker(parse_bool(value)?)),
+        (NodeKind::Trait, "type_params") => {
+            conlang_language::parser::parse_trait_type_param_list(value)
+                .map(NodeUpdate::TraitTypeParams)
+                .map_err(|error| {
+                    ReplayError::Selector(format!("invalid trait type parameters: {error}"))
+                })
+        }
         (NodeKind::Rule | NodeKind::FeatureRule | NodeKind::PhonBlockNode, "propagate") => {
             Ok(NodeUpdate::Propagate(parse_bool(value)?))
         }
@@ -3958,9 +3995,11 @@ fn dump_anchor(anchor: &Anchor) -> String {
 }
 
 fn dump_value(value: &str) -> String {
-    if value.chars().all(|character| {
-        character.is_alphanumeric() || matches!(character, '_' | '-' | ':' | '/' | '.')
-    }) {
+    if !value.is_empty()
+        && value.chars().all(|character| {
+            character.is_alphanumeric() || matches!(character, '_' | '-' | ':' | '/' | '.')
+        })
+    {
         value.to_owned()
     } else {
         format!("\"{}\"", value.replace('"', "\\\""))
@@ -3987,6 +4026,8 @@ fn update_kind_name(change: &NodeUpdate) -> &'static str {
     match change {
         NodeUpdate::Rename(_) => "Rename",
         NodeUpdate::TraitGlobal(_) => "TraitGlobal",
+        NodeUpdate::TraitMarker(_) => "TraitMarker",
+        NodeUpdate::TraitTypeParams(_) => "TraitTypeParams",
         NodeUpdate::DslDeclaration(_) => "DslDeclaration",
         NodeUpdate::Distribution { .. } => "Distribution",
         NodeUpdate::DefinitionPath(_) => "DefinitionPath",
@@ -4040,6 +4081,11 @@ fn dump_update(change: &NodeUpdate) -> Option<(&'static str, String)> {
             .to_owned(),
         )),
         NodeUpdate::TraitGlobal(value) => Some(("global", value.to_string())),
+        NodeUpdate::TraitMarker(value) => Some(("marker", value.to_string())),
+        NodeUpdate::TraitTypeParams(value) => Some((
+            "type_params",
+            conlang_language::printer::format_trait_type_param_list(value),
+        )),
         NodeUpdate::Propagate(value) => Some(("propagate", value.to_string())),
         NodeUpdate::FeatureAssignment(value) => Some(("value", value.clone())),
         NodeUpdate::SenseGloss(value) => Some(("gloss", value.clone())),

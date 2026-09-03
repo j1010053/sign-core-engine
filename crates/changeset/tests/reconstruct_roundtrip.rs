@@ -77,7 +77,10 @@ fn apply_changeset(base: &LanguageDocument, namespace: &str, body: &str) -> Lang
 
 /// **往返性質**。`body` 是一段已知的 `.chg`;還原出的原語套回 `before` 必須得到 `after`。
 fn round_trip(label: &str, body: &str) {
-    let before = base();
+    round_trip_from(label, base(), body);
+}
+
+fn round_trip_from(label: &str, before: LanguageDocument, body: &str) {
     let after = apply_changeset(&before, "evo:n1", body);
     assert_ne!(
         before.source(),
@@ -187,6 +190,118 @@ fn a_trait_rename_round_trips() {
     round_trip(
         "trait rename",
         &statement("update trait(\"LocalNoun\").name = LocalThing"),
+    );
+}
+
+#[test]
+fn a_trait_marker_round_trips() {
+    round_trip(
+        "trait marker",
+        &statement("update trait(\"LocalNoun\").marker = true"),
+    );
+}
+
+#[test]
+fn marker_enablement_is_replayed_after_content_deletion_and_preserves_identity() {
+    let before = LanguageDocument::import_new_root(
+        "trait Content:\n    syn:\n        provides = NOUN\n",
+        "evo:marker-content",
+    )
+    .expect("content trait parses");
+    let node = |document: &LanguageDocument, kind| {
+        document
+            .identities()
+            .nodes
+            .iter()
+            .find(|entry| entry.kind == kind)
+            .map(|entry| NodeRef::new(entry.id.clone(), entry.kind))
+            .unwrap_or_else(|| panic!("missing {kind:?}"))
+    };
+    let trait_ref = node(&before, NodeKind::Trait);
+    let definition_ref = node(&before, NodeKind::Definition);
+    let spec = LibrarySpec::default();
+    let without_content = apply_edit(
+        &before,
+        PrimitiveEdit::Delete {
+            node: definition_ref,
+        },
+        &spec,
+    )
+    .expect("content deletion")
+    .document;
+    let after = apply_edit(
+        &without_content,
+        PrimitiveEdit::Update {
+            node: trait_ref,
+            change: NodeUpdate::TraitMarker(true),
+        },
+        &spec,
+    )
+    .expect("marker enablement")
+    .document;
+
+    let edits = reconstruct(&before, &after).expect("reconstruct marker conversion");
+    assert!(
+        matches!(
+            edits.as_slice(),
+            [
+                PrimitiveEdit::Delete { .. },
+                PrimitiveEdit::Update {
+                    change: NodeUpdate::TraitMarker(true),
+                    ..
+                }
+            ]
+        ),
+        "marker=true must follow deletion: {edits:#?}"
+    );
+
+    let mut replayed = before;
+    for edit in edits {
+        replayed = apply_edit(&replayed, edit, &spec)
+            .expect("reconstructed edit replays")
+            .document;
+    }
+    assert_eq!(replayed.source(), after.source());
+    assert_eq!(
+        replayed.identities(),
+        after.identities(),
+        "surviving trait/block identities must be unchanged"
+    );
+}
+
+#[test]
+fn trait_type_parameters_and_bounds_round_trip() {
+    round_trip(
+        "trait type parameters",
+        &statement("update trait(\"LocalNoun\").type_params = \"C: Nominal, T\""),
+    );
+}
+
+#[test]
+fn trait_type_parameter_removal_round_trips() {
+    let before = LanguageDocument::import_new_root(
+        "trait Param<C: Nominal, T>:\n    pass\n",
+        "evo:param-removal",
+    )
+    .expect("parameterized trait parses");
+    round_trip_from(
+        "trait type parameter removal",
+        before,
+        &statement("update trait(\"Param\").type_params = \"\""),
+    );
+}
+
+#[test]
+fn trait_type_parameter_bound_change_round_trips() {
+    let before = LanguageDocument::import_new_root(
+        "trait Param<C: Nominal>:\n    pass\n",
+        "evo:param-bound",
+    )
+    .expect("bounded trait parses");
+    round_trip_from(
+        "trait type parameter bound",
+        before,
+        &statement("update trait(\"Param\").type_params = \"C: Animate\""),
     );
 }
 

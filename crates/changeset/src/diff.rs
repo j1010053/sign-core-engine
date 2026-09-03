@@ -78,6 +78,27 @@ impl DiffCounts {
     }
 }
 
+/// 一個 trait 差異事件在前後狀態各自的 sign 波及數。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TraitReachPair {
+    /// 這一個事件在前狀態波及的 sign 數。
+    pub before: usize,
+    /// 這一個事件在後狀態波及的 sign 數。
+    pub after: usize,
+}
+
+/// trait leaf 中每一個差異事件各自的波及面。
+///
+/// [`TraitDiff::reach_before`] / [`TraitDiff::reach_after`] 仍是整個 leaf 的
+/// sign 聯集；這裡保留逐事件資料，讓 measure 可以計算「事件 × 它自己的
+/// reach」，而不會把互不相交的事件誤乘成 Cartesian product。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TraitEventReaches {
+    pub changed: Vec<TraitReachPair>,
+    pub only_before: Vec<TraitReachPair>,
+    pub only_after: Vec<TraitReachPair>,
+}
+
 /// trait 那一側的葉節點:**四個原始計數 + 影響範圍旁註**(裁定丙)。
 ///
 /// # 為什麼 reach 不住在 [`DiffCounts`] 裡面
@@ -94,7 +115,7 @@ impl DiffCounts {
 ///
 /// 反過來,**零波及不等於沒改**:改一個沒人用的 trait,reach 是 0 而
 /// `changed` 仍是 1。那正是丙相對於乙的全部意義。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TraitDiff {
     /// §2 的四元組。
     pub counts: DiffCounts,
@@ -106,6 +127,8 @@ pub struct TraitDiff {
     /// 不同;只發一個就得先挑「用哪一邊」,那又是一次隱形的合成選擇
     /// (§6.4 已裁定引擎不做那件事)。要 max、要平均,呼叫端自己決定。
     pub reach_after: usize,
+    /// 每一個 changed / birth / death 事件自己的前後波及面。
+    pub event_reaches: TraitEventReaches,
 }
 
 impl TraitDiff {
@@ -135,7 +158,7 @@ impl TraitDiff {
 /// 為什麼要分宣告處:改一條 trait 上的規則會經 `belongs` 閉包作用到一整片
 /// 詞,改一個 sign 只動那一個詞。§6.1 明說詞彙差異與規則性音變的權重不同
 /// ——分不開就沒得加權。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DimensionDiff {
     /// **sign 上宣告**的該維內容(依 `SignId` 對齊)。
     ///
@@ -174,7 +197,7 @@ impl DimensionDiff {
 /// 若沿用 `DimensionDiff`,`structural.trait_rules` 會是一個永遠為零的欄位——
 /// 而永遠為零的計數會被下游當成「這裡沒事發生」而加總、比較、畫進圖表。
 /// 一個結構上不可能非零的數字,比沒有這個數字更糟。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct StructuralDiff {
     /// **sign 上宣告**的無維項目(`belongs` / trait 引用 / 無維 Def / 約束)。
     pub signs: DiffCounts,
@@ -199,7 +222,7 @@ impl StructuralDiff {
 ///
 /// **不是單一數字**——規格明令差異是分層向量,把它壓成一個標量是互通度
 /// (§6.2)的工作,且那是**可替換函數**,不屬於這一層。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DiffVector {
     pub phon: DimensionDiff,
     pub syn: DimensionDiff,
@@ -306,31 +329,33 @@ pub fn diff_vector(before: &LanguageDocument, after: &LanguageDocument) -> DiffV
     };
     let content = trait_content_counts(before, after, &closures);
     let rules = trait_rule_counts(before, after, &closures);
+    let [phon_content, syn_content, sem_content, prag_content, structural_content] = content;
+    let [phon_rules, syn_rules, sem_rules, prag_rules] = rules;
 
     DiffVector {
         phon: DimensionDiff {
             signs: sign_leaf(changed[0]),
-            trait_content: content[0],
-            trait_rules: rules[0],
+            trait_content: phon_content,
+            trait_rules: phon_rules,
         },
         syn: DimensionDiff {
             signs: sign_leaf(changed[1]),
-            trait_content: content[1],
-            trait_rules: rules[1],
+            trait_content: syn_content,
+            trait_rules: syn_rules,
         },
         sem: DimensionDiff {
             signs: sign_leaf(changed[2]),
-            trait_content: content[2],
-            trait_rules: rules[2],
+            trait_content: sem_content,
+            trait_rules: sem_rules,
         },
         prag: DimensionDiff {
             signs: sign_leaf(changed[3]),
-            trait_content: content[3],
-            trait_rules: rules[3],
+            trait_content: prag_content,
+            trait_rules: prag_rules,
         },
         structural: StructuralDiff {
             signs: sign_leaf(changed[4]),
-            trait_content: content[4],
+            trait_content: structural_content,
         },
     }
 }
@@ -389,6 +414,24 @@ fn reach(index: &ReachIndex, targets: &BTreeSet<String>) -> usize {
         .count()
 }
 
+/// 一個 trait 事件自己的前後波及面。缺少的一側（birth / death）固定為 0。
+fn event_reach(
+    closures: &SignClosures,
+    before: Option<&str>,
+    after: Option<&str>,
+) -> TraitReachPair {
+    let singleton = |index: &ReachIndex, name: Option<&str>| {
+        name.map_or(0, |name| {
+            let targets = BTreeSet::from([name.to_owned()]);
+            reach(index, &targets)
+        })
+    };
+    TraitReachPair {
+        before: singleton(&closures.before, before),
+        after: singleton(&closures.after, after),
+    }
+}
+
 /// trait 上宣告的**非規則內容**差異,依 **trait 名**對齊,
 /// 回傳 `[phon, syn, sem, prag, structural]`。
 ///
@@ -424,8 +467,11 @@ fn trait_content_counts(
     let new = traits_by_name(after);
 
     let mut counts = [DiffCounts::default(); 5];
-    // 每個 leaf 記到事件的 trait 名——reach 只看這些(見 [`TraitDiff`])。
-    let mut touched: [BTreeSet<String>; 5] = Default::default();
+    // 每個 leaf 記到事件的 trait 名——前後必須分開，否則 birth/death 或 scope
+    // 移動會把另一邊不存在的 trait 也算進聯集 reach。
+    let mut touched_before: [BTreeSet<String>; 5] = Default::default();
+    let mut touched_after: [BTreeSet<String>; 5] = Default::default();
+    let mut event_reaches: [TraitEventReaches; 5] = std::array::from_fn(|_| Default::default());
     let both = old.keys().filter(|name| new.contains_key(*name)).count();
     let only_before = old.len() - both;
     let only_after = new.len() - both;
@@ -433,8 +479,17 @@ fn trait_content_counts(
     for (name, old_trait) in &old {
         let Some(new_trait) = new.get(name) else {
             // 只在 before:滅。依內容所在的維歸戶,並一律進 structural。
-            for slot in dims_with_content(old_trait) {
-                touched[slot].insert((*name).to_owned());
+            let assigned = dims_with_content(old_trait);
+            for slot in 0..5 {
+                let is_assigned = assigned.contains(&slot);
+                event_reaches[slot].only_before.push(if is_assigned {
+                    event_reach(closures, Some(name), None)
+                } else {
+                    TraitReachPair::default()
+                });
+                if is_assigned {
+                    touched_before[slot].insert((*name).to_owned());
+                }
             }
             continue;
         };
@@ -444,7 +499,11 @@ fn trait_content_counts(
         {
             if trait_projection(old_trait, Some(dim)) != trait_projection(new_trait, Some(dim)) {
                 counts[slot].changed += 1;
-                touched[slot].insert((*name).to_owned());
+                touched_before[slot].insert((*name).to_owned());
+                touched_after[slot].insert((*name).to_owned());
+                event_reaches[slot]
+                    .changed
+                    .push(event_reach(closures, Some(name), Some(name)));
             }
         }
         // 跨維:無維項目(`belongs` 等)**加上** `global` 旗標。
@@ -452,9 +511,15 @@ fn trait_content_counts(
         // 那是跨維的身分改變,不屬於任何單一維。
         if trait_projection(old_trait, None) != trait_projection(new_trait, None)
             || old_trait.global != new_trait.global
+            || old_trait.marker != new_trait.marker
+            || old_trait.type_params != new_trait.type_params
         {
             counts[4].changed += 1;
-            touched[4].insert((*name).to_owned());
+            touched_before[4].insert((*name).to_owned());
+            touched_after[4].insert((*name).to_owned());
+            event_reaches[4]
+                .changed
+                .push(event_reach(closures, Some(name), Some(name)));
         }
     }
     for (name, new_trait) in &new {
@@ -462,8 +527,17 @@ fn trait_content_counts(
             continue;
         }
         // 只在 after:生。
-        for slot in dims_with_content(new_trait) {
-            touched[slot].insert((*name).to_owned());
+        let assigned = dims_with_content(new_trait);
+        for slot in 0..5 {
+            let is_assigned = assigned.contains(&slot);
+            event_reaches[slot].only_after.push(if is_assigned {
+                event_reach(closures, None, Some(name))
+            } else {
+                TraitReachPair::default()
+            });
+            if is_assigned {
+                touched_after[slot].insert((*name).to_owned());
+            }
         }
     }
 
@@ -474,8 +548,9 @@ fn trait_content_counts(
         leaf.only_after = only_after;
         TraitDiff {
             counts: leaf,
-            reach_before: reach(&closures.before, &touched[slot]),
-            reach_after: reach(&closures.after, &touched[slot]),
+            reach_before: reach(&closures.before, &touched_before[slot]),
+            reach_after: reach(&closures.after, &touched_after[slot]),
+            event_reaches: std::mem::take(&mut event_reaches[slot]),
         }
     })
 }
@@ -514,7 +589,9 @@ fn trait_rule_counts(
     let new = trait_rules_by_id(after);
 
     let mut counts = [DiffCounts::default(); 4];
-    let mut touched: [BTreeSet<String>; 4] = Default::default();
+    let mut touched_before: [BTreeSet<String>; 4] = Default::default();
+    let mut touched_after: [BTreeSet<String>; 4] = Default::default();
+    let mut event_reaches: [TraitEventReaches; 4] = std::array::from_fn(|_| Default::default());
     let slot_of = |dim: Dim| match dim {
         Dim::Phon => 0,
         Dim::Syn => 1,
@@ -525,32 +602,70 @@ fn trait_rule_counts(
     for (id, entry) in &old {
         match new.get(id) {
             None => {
-                counts[slot_of(entry.dim)].only_before += 1;
-                touched[slot_of(entry.dim)].insert(entry.declared_in.clone());
+                let slot = slot_of(entry.dim);
+                counts[slot].only_before += 1;
+                touched_before[slot].insert(entry.declared_in.clone());
+                event_reaches[slot].only_before.push(event_reach(
+                    closures,
+                    Some(&entry.declared_in),
+                    None,
+                ));
             }
             Some(other) => {
-                counts[slot_of(entry.dim)].both += 1;
-                if entry.item != other.item {
-                    counts[slot_of(entry.dim)].changed += 1;
-                    // 前後都記:規則可能**連同它的 trait 一起搬家**,那樣兩邊
-                    // 的波及面本來就不同,而 reach 發兩個數正是為了讓它現形。
-                    touched[slot_of(entry.dim)].insert(entry.declared_in.clone());
-                    touched[slot_of(other.dim)].insert(other.declared_in.clone());
+                let old_slot = slot_of(entry.dim);
+                let new_slot = slot_of(other.dim);
+                if old_slot == new_slot {
+                    counts[old_slot].both += 1;
+                    if entry.item != other.item || entry.declared_in != other.declared_in {
+                        counts[old_slot].changed += 1;
+                        touched_before[old_slot].insert(entry.declared_in.clone());
+                        touched_after[new_slot].insert(other.declared_in.clone());
+                        event_reaches[old_slot].changed.push(event_reach(
+                            closures,
+                            Some(&entry.declared_in),
+                            Some(&other.declared_in),
+                        ));
+                    }
+                } else {
+                    // leaf 按維度分；同一 RuleId 換維時，在舊 leaf 是刪除，
+                    // 在新 leaf 是新增，不能只在舊維記一筆 changed。
+                    counts[old_slot].only_before += 1;
+                    touched_before[old_slot].insert(entry.declared_in.clone());
+                    event_reaches[old_slot].only_before.push(event_reach(
+                        closures,
+                        Some(&entry.declared_in),
+                        None,
+                    ));
+
+                    counts[new_slot].only_after += 1;
+                    touched_after[new_slot].insert(other.declared_in.clone());
+                    event_reaches[new_slot].only_after.push(event_reach(
+                        closures,
+                        None,
+                        Some(&other.declared_in),
+                    ));
                 }
             }
         }
     }
     for (id, entry) in &new {
         if !old.contains_key(id) {
-            counts[slot_of(entry.dim)].only_after += 1;
-            touched[slot_of(entry.dim)].insert(entry.declared_in.clone());
+            let slot = slot_of(entry.dim);
+            counts[slot].only_after += 1;
+            touched_after[slot].insert(entry.declared_in.clone());
+            event_reaches[slot].only_after.push(event_reach(
+                closures,
+                None,
+                Some(&entry.declared_in),
+            ));
         }
     }
 
     std::array::from_fn(|slot| TraitDiff {
         counts: counts[slot],
-        reach_before: reach(&closures.before, &touched[slot]),
-        reach_after: reach(&closures.after, &touched[slot]),
+        reach_before: reach(&closures.before, &touched_before[slot]),
+        reach_after: reach(&closures.after, &touched_after[slot]),
+        event_reaches: std::mem::take(&mut event_reaches[slot]),
     })
 }
 

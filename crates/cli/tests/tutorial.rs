@@ -42,10 +42,8 @@ struct Sandbox {
 impl Sandbox {
     fn new() -> Sandbox {
         let ordinal = NEXT.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "conlang-tutorial-{}-{ordinal}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("conlang-tutorial-{}-{ordinal}", std::process::id()));
         if dir.exists() {
             fs::remove_dir_all(&dir).unwrap();
         }
@@ -184,7 +182,9 @@ fn the_evolution_section_adds_a_node_without_touching_the_old_one() {
     let sandbox = Sandbox::initialised();
     let before = sandbox.cli(&["open", &sandbox.project()]).expect("open");
     let root = node_id(&before, "active: ");
-    let root_lexicon = sandbox.cli(&["lexicon", &sandbox.project()]).expect("lexicon");
+    let root_lexicon = sandbox
+        .cli(&["lexicon", &sandbox.project()])
+        .expect("lexicon");
 
     let out = sandbox
         .cli(&["evolve", &sandbox.project(), "--rule", "t => k"])
@@ -226,7 +226,10 @@ fn the_coining_section_lists_then_adopts() {
     let listed = sandbox.cli(&args).expect("§5 list");
     assert!(listed.contains("candidates for \"miku\""), "{listed}");
     // 教學說「分數都是 1.000——引擎不定義評分合成公式」
-    let scores: Vec<&str> = listed.lines().filter_map(|l| l.split("score=").nth(1)).collect();
+    let scores: Vec<&str> = listed
+        .lines()
+        .filter_map(|l| l.split("score=").nth(1))
+        .collect();
     assert!(!scores.is_empty(), "{listed}");
     assert!(
         scores.iter().all(|s| s.trim() == "1.000"),
@@ -309,14 +312,7 @@ fn the_projection_never_becomes_a_sampling_source() {
 
     // 但沒給 --weights 就是提不出候選,而且說得出為什麼
     let error = sandbox
-        .cli(&[
-            "propose",
-            &sandbox.project(),
-            "--name",
-            "x",
-            "--gloss",
-            "X",
-        ])
+        .cli(&["propose", &sandbox.project(), "--name", "x", "--gloss", "X"])
         .expect_err("§5 沒有分佈就該拒絕");
     assert!(format!("{error}").contains("§6.1"), "{error}");
 }
@@ -328,11 +324,18 @@ fn the_projection_never_becomes_a_sampling_source() {
 fn the_stats_section_reports_its_segmentation() {
     let sandbox = Sandbox::initialised();
     let matched = sandbox
-        .cli(&["stats", &sandbox.project(), "--weights", &sandbox.path("weights.tsv")])
+        .cli(&[
+            "stats",
+            &sandbox.project(),
+            "--weights",
+            &sandbox.path("weights.tsv"),
+        ])
         .expect("§6 with weights");
     assert!(matched.contains("longest-match"), "{matched}");
 
-    let bare = sandbox.cli(&["stats", &sandbox.project()]).expect("§6 bare");
+    let bare = sandbox
+        .cli(&["stats", &sandbox.project()])
+        .expect("§6 bare");
     assert!(bare.contains("per-character"), "{bare}");
 }
 
@@ -347,7 +350,10 @@ fn the_grouping_section_holds() {
         .expect("evolve");
 
     let groups = sandbox.cli(&["groups", &sandbox.project()]).expect("§7");
-    assert!(groups.contains("measure: exploratory_heuristic_v1"), "{groups}");
+    assert!(
+        groups.contains("measure: exploratory_heuristic_v1"),
+        "{groups}"
+    );
     assert!(groups.contains("threshold: 0.6"), "{groups}");
     let count = |out: &str| out.lines().filter(|l| l.starts_with("  ")).count();
     assert_eq!(count(&groups), 1, "教學說還在同一群:{groups}");
@@ -358,13 +364,31 @@ fn the_grouping_section_holds() {
     assert_eq!(count(&split), 2, "閾值調高就切碎:{split}");
 }
 
+#[test]
+fn the_grouping_tutorial_explains_per_event_reach() {
+    for required in [
+        "係數 × Σ max(event.before, event.after)",
+        "9 筆各只碰 1 個詞的 local 事件",
+        "各碰全部 9 個詞的 global 事件",
+        "0.9524",
+        "0.5714",
+    ] {
+        assert!(
+            TUTORIAL.contains(required),
+            "grouping tutorial must retain the event-reach explanation: {required:?}"
+        );
+    }
+}
+
 // ── §8 旁註 ──────────────────────────────────────────────────────────────
 
 /// 🔑 教學的主張:**寫旁註不會改變詞典或統計**(07 §5c 正交於本體)。
 #[test]
 fn annotations_do_not_change_the_language() {
     let sandbox = Sandbox::initialised();
-    let lexicon_before = sandbox.cli(&["lexicon", &sandbox.project()]).expect("before");
+    let lexicon_before = sandbox
+        .cli(&["lexicon", &sandbox.project()])
+        .expect("before");
     let stats_before = sandbox.cli(&["stats", &sandbox.project()]).expect("before");
 
     sandbox
@@ -378,15 +402,22 @@ fn annotations_do_not_change_the_language() {
         ])
         .expect("§8 write");
 
-    let listed = sandbox.cli(&["annotate", &sandbox.project()]).expect("§8 list");
-    assert!(listed.contains("annotations: 1") && listed.contains("culture.md"), "{listed}");
+    let listed = sandbox
+        .cli(&["annotate", &sandbox.project()])
+        .expect("§8 list");
+    assert!(
+        listed.contains("annotations: 1") && listed.contains("culture.md"),
+        "{listed}"
+    );
     assert!(sandbox
         .cli(&["annotate", &sandbox.project(), "--path", "culture.md"])
         .expect("§8 read")
         .contains("象徵盟約"));
 
     assert_eq!(
-        sandbox.cli(&["lexicon", &sandbox.project()]).expect("after"),
+        sandbox
+            .cli(&["lexicon", &sandbox.project()])
+            .expect("after"),
         lexicon_before,
         "旁註不是語言內容"
     );
@@ -405,8 +436,12 @@ fn state_is_editable_without_disturbing_any_existing_node() {
     sandbox
         .cli(&["evolve", &sandbox.project(), "--rule", "t => k"])
         .expect("evolve");
-    let lexicon_before = sandbox.cli(&["lexicon", &sandbox.project()]).expect("before");
-    let groups_before = sandbox.cli(&["groups", &sandbox.project()]).expect("before");
+    let lexicon_before = sandbox
+        .cli(&["lexicon", &sandbox.project()])
+        .expect("before");
+    let groups_before = sandbox
+        .cli(&["groups", &sandbox.project()])
+        .expect("before");
 
     let out = sandbox
         .cli(&[
@@ -424,7 +459,9 @@ fn state_is_editable_without_disturbing_any_existing_node() {
 
     // **既有節點的重放產物逐字元不變**——State 是雜湊外的
     assert_eq!(
-        sandbox.cli(&["lexicon", &sandbox.project()]).expect("after"),
+        sandbox
+            .cli(&["lexicon", &sandbox.project()])
+            .expect("after"),
         lexicon_before
     );
     assert_eq!(
