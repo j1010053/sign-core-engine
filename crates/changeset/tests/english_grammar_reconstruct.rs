@@ -6,7 +6,7 @@
 //!
 //! | | 內容 | 性質 |
 //! |---|---|---|
-//! | **statements** | `reconstruct` 產出的 85 條原語 | **真正的 golden**,值得逐字元比 |
+//! | **statements** | `reconstruct` 產出的 89 條原語 | **真正的 golden**,值得逐字元比 |
 //! | **prelude** | base source / identity / 四個套件的 lock digest | **衍生值**,隨套件內容漂移 |
 //!
 //! 先前一條 `assert_eq!(dumped, RESTORE)` 把兩者綁在一起,於是套件內容一變,
@@ -85,7 +85,7 @@ fn reconstructs_the_english_grammar_through_a_dumped_changeset() {
                  cargo run -p conlang-changeset --example bless_en_standard_restore"
             )
         });
-    assert_eq!(reparsed.statements[0].edits.len(), 85);
+    assert_eq!(reparsed.statements[0].edits.len(), 89);
     assert_eq!(
         reparsed.statements[0]
             .edits

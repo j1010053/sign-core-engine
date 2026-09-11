@@ -128,7 +128,7 @@ branch 無名字，`before/after` 若只吃穩定 NodeId 幾乎無法手寫。�
 |---|---|---|
 | `#n` | 第 n 支（0-based） | 隨重排失效 |
 | `guard "<expr>"` / `== <value>` | condition 命中的那支 | **對重排穩定** |
-| `else` / `default` | `CaseCondition::Else` ／ realization `guard=None` 的 catch-all | 每鏈至多一 |
+| `base` / `else` / `default` | `case` 的 `CaseCondition::Base`／`when` 的 `CaseCondition::Else`／realization catch-all | 每鏈至多一 |
 | `node(<kind>,@ns:ord)` | 穩定 NodeId | **canonical** |
 
 ### 3.4 determiner 分級
@@ -137,7 +137,7 @@ branch 無名字，`before/after` 若只吃穩定 NodeId 幾乎無法手寫。�
 |---|---|
 | Sign／Trait／Distribution | **僅 `at end`** |
 | Items（group-aware） | `first/last`、`before/after #n\|node(...)`（限同群） |
-| CaseBranch | ＋ `before/after guard\|==\|else` |
+| CaseBranch | ＋ `before/after guard\|==\|base\|else` |
 | else／then 鏈 | ＋ `before/after guard\|#n\|else` |
 | Realization 分支 | ＋ `before/after guard\|else` |
 
@@ -146,8 +146,9 @@ branch 無名字，`before/after` 若只吃穩定 NodeId 幾乎無法手寫。�
 first-match（`case:`、Lexurgy `else`）下順序即優先序；`at end` 常是陷阱（插在 catch-all 之後 ＝
 dead branch）。故：
 
-1. **first-match 不預設 `end`**：省略位置時預設 `before else`（無 Else 才 fallback `last`）。
-2. **出口驗證**：first-match 區塊「Else 之後不得有 guarded branch」→ 插入後 `check_document` 報
+1. **first-match 不預設 `end`**：省略位置時預設放在 `base`／rule `else` 前（沒有
+   catch-all 才 fallback `last`）。
+2. **出口驗證**：first-match 區塊「catch-all 之後不得有 guarded branch」→ 插入後 `check_document` 報
    unreachable-branch，把慣例升級為不變式。
 
 ---
@@ -233,7 +234,7 @@ constraints:                             # sign 級（語意屬 syn）
 
 - **`realization:`**：`RealizationBranch { template:/…/, guard:Option }`；guard **唯讀** `$self`／frozen
   `$slot`（跨維讀取 syn 範疇/feature/filler）→ **選一個 phon template**。是 form 端 spell-out／選形橋，
-  **讀取／投影**他維、**不改**他維（P44）。phon 的分支（guard/else/case）一律住這裡。
+  **讀取／投影**他維、**不改**他維（P44）。phon 的分支（guard/base/case）一律住這裡。
 - **`phon:` 直接規則**：`b => p / _ #` → `Rule{dim:Phon}` ＝ **純音韻改寫（Tshiatūn rule）**，
   不讀他維、不分支。codegen 放進 `CompiledGrammar.phon_source` 交 Tshiatūn 跑（雙軌 8.1–8.6 為證）。
 - 邊界：匿名 PhonContext fragment 只收 template／full-sign projection，trait 不可展開到 phon；
@@ -250,6 +251,7 @@ constraints:                             # sign 級（語意屬 syn）
 ### 5.4 case/when、else/then
 
 - `case:`＝FirstMatch（第一 Matched 勝）；`when:`＝Accumulate（所有 Matched 依來源序合併）。
+- typed `.lang` 的 `case` fallback 寫 `base:`，`when` fallback 寫 `else:`。
 - `else` 鏈＝Lexurgy 第一匹配 fallback；`then` 鏈＝循序（下一支讀更新後狀態）；**同一 rule 上互斥**。
 - 四者皆 ordered，位置語意由 §3.3–3.5 的符號式 determiner 表達。
 
@@ -286,7 +288,7 @@ structured → flat 仍無合法便利語法，會明確拒絕。
 | 表層 | 降階為四原語 |
 |---|---|
 | `insert … sign/trait …` | 1×`Insert{Sign/Trait}` |
-| `insert … 維/sign/case/else 片段`（N items） | **N×`Insert{Item/Branch}`**（同一 statement，只驗最終態） |
+| `insert … 維/sign/case/base/when/else 片段`（N items） | **N×`Insert{Item/Branch}`**（同一 statement，只驗最終態） |
 | `insert … branch` | 1×`Insert{CaseBranch/RuleElse/RuleThen/RealizationBranch}` |
 | `update …field = v` | 1×`Update` |
 | `update …dim:` fragment | **delete 舊 + insert 新**（同一 atomic statement） |
@@ -356,8 +358,9 @@ crate 320 綠、clippy 0）：
   node 尚無定址段。
 - **符號式確定詞**（before else／after guard／#n，§3.3–3.5）——目前以 `.else[m]`/`.rule[n]` 路徑段
   等效表達；符號糖為便利層。
-- **剩餘 struct 值 update 欄位**（SlotConstraint/FeatureValue/RoleBinding/SlotMap/Constraint/
-  SignApplication/CaseBranch）——各需值語法子 parser。
+- **剩餘 struct 值 update 欄位**（SlotConstraint/FeatureValue/RoleBinding/SlotMap/Constraint）
+  ——各需值語法子 parser。V3 已補 Application `.application`、Case `.match_features`
+  與 CaseBranch `.condition`。
 - **③ set-ops**：`set distribution[key]=v` 及其 dump 白名單。
 - **Tier-2 維度片段整替**（`update <sign>.<dim>:` = delete 舊 + insert 新）。
 
@@ -379,5 +382,6 @@ insert／update 欄位泛化。
 
 - 不承諾舊 v1 `.chg` 相容（v1 已硬移除；見
   `docs/verification/Step14_ChangeSetInterpreter_封板_v1.md`）。
-- Application 是 expression 內部件、非獨立 insert target（有 `SignApplication` update 但無定址位）。
+- Application 是 expression 內部件、非獨立 insert target；但已有 stable address／NodeId，
+  可用 `.application` 原地更新並在 reconstruct／replay 中保留身分。
 - 本文為 v0 設計稿；封板前不得宣稱已實作。實作各步以測試出口收尾（CLAUDE.md §0-2）。

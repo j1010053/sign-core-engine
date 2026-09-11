@@ -256,6 +256,12 @@ fn explicit_name(document: &LanguageDocument, entry: &NodeEntryV1) -> Option<Str
         [AddressSegment::Traits(index)] => {
             return language.traits.get(*index).map(|value| value.name.clone())
         }
+        [AddressSegment::Paradigms(index)] => {
+            return language
+                .paradigms
+                .get(*index)
+                .map(|value| value.name.clone())
+        }
         [AddressSegment::Signs(index)] => {
             return language.signs.get(*index).map(|value| value.name.clone())
         }
@@ -270,7 +276,7 @@ fn explicit_name(document: &LanguageDocument, entry: &NodeEntryV1) -> Option<Str
                 ..
             }
             | SignItem::TraitMount {
-                name: name,
+                name,
                 kind: conlang_language::TraitMountKind::Declaration,
                 ..
             } => Some(name.clone()),
@@ -337,6 +343,13 @@ fn anonymous_node_value(document: &LanguageDocument, entry: &NodeEntryV1) -> Str
             value.name = "<identity-name>".to_owned();
             let mut fragment = Language::new();
             fragment.signs.push(value);
+            fragment.dump()
+        }
+        [AddressSegment::Paradigms(index)] => {
+            let mut value = language.paradigms[*index].clone();
+            value.name = "<identity-name>".to_owned();
+            let mut fragment = Language::new();
+            fragment.paradigms.push(value);
             fragment.dump()
         }
         _ => semantic_node_value(document, entry),

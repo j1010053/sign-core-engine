@@ -115,6 +115,36 @@ fn a_score_always_carries_the_measure_that_produced_it() {
     assert!(score.value > 0.0 && score.value < 1.0, "{}", score.value);
 }
 
+#[test]
+fn changing_a_paradigm_is_visible_to_the_structural_measure() {
+    let source = r#"paradigm PICK:
+    case [syn.choice]:
+        [left]: left()
+        base: right()
+
+sign left:
+    syn:
+        feature:
+            choice = enum(left, right)
+            choice = left
+
+sign right:
+    syn:
+        feature:
+            choice = enum(left, right)
+            choice = left | right
+"#;
+    let (before, after) = apply_once(
+        source,
+        "\n    #0:\n        update paradigm(\"PICK\").name = CHOOSE\n",
+    );
+    let forward = intelligibility(&before, &after, &measure()).value;
+    let backward = intelligibility(&after, &before, &measure()).value;
+
+    assert!(forward > 0.0 && forward < 1.0, "{forward}");
+    assert_eq!(forward, backward, "the V1 heuristic remains symmetric");
+}
+
 /// 相同文件得 1.0;砍光詞彙的差得明顯較低。
 ///
 /// 判別性:若公式忽略分量(恆回同一個數),這兩個斷言不會同時成立。

@@ -1,7 +1,8 @@
 # realization 收縮與規則分支 v0.1
 
-> **狀態:語法核心已定,實作進行中(2026-08-30)。** 本檔 §2 的四條決策**擬編 P93–P96**,
-> 待擁有者確認編號後回填《架構修補彙整》。§5 的補充形機制**未定**,不得當作已裁定引用。
+> **狀態:語法核心已定；補充形缺口已由 V3 結清(2026-09-06)。** 本檔 §2 的四條決策
+> **擬編 P93–P96**，待擁有者確認編號後回填《架構修補彙整》。§5 保留原問題脈絡，
+> 現行裁定以 `Paradigm與SignApplication_V3.md` 為準。
 >
 > 上游依賴:Tshiatūn `3105363`(插入語法 `* => er / _ #`、方向敏感邊界、1→N 擴張)。
 
@@ -17,8 +18,8 @@
 | **構式** | 槽的排列(深層模板)、範疇的**計算**(`=>` 規則) |
 | **realization** | **音段變換**,條件寫在範疇上 |
 
-**終局是 realization 只剩規則。** 這一輪到不了——會逼出那一步的語料案例(語序交替、補充形)全部卡在
-§5 的待決議,故**模板分支本輪保留**。
+**終局是 realization 只剩規則。** V3 已把補充形移成 Paradigm 選擇的 stored Sign；
+模板分支仍為其他尚未遷移的語序與詞位內 allomorph 案例保留。
 
 ### 1.1 為什麼不是新增 `block` 機制
 
@@ -33,7 +34,7 @@ agent/patient 兩個槽是同一件事。PFM 反對「詞素是獨立詞項」�
 
 ### 1.2 語料證據
 
-`en-standard/grammar.lang` 八條 realization 全數盤點,**沒有一條**在做音韻條件化的同位異形;
+以下是 V3 遷移前對 `en-standard/grammar.lang` 八條 realization 的全數盤點；當時**沒有一條**在做音韻條件化的同位異形；
 七條在做「這個槽該填什麼」,只是沒有語法可寫,只好整份模板複寫:
 
 | 行 | sign | 分支實際改了什麼 |
@@ -56,6 +57,9 @@ agent/patient 兩個槽是同一件事。PFM 反對「詞素是獨立詞項」�
 
 **根因**:名詞有屈折構式(`EnglishCountNounForm` 有 `stem [Noun]` 槽),**動詞完全沒有**,
 所以動詞形態只能做在小句構式上。
+
+V3 後 #5–#8 已改由 `EnglishBE`／`EnglishDO` Paradigm 透過 deferred autofill 選取
+獨立的 `is`／`does` stored Sign；上表只保留為問題發現紀錄。
 
 ---
 
@@ -199,10 +203,11 @@ C1/C3 免費得到,是 P93「不新增 `Expression` variant、改用既有 `DimF
 | D3 | #2 `EnglishCountNounForm` | 規則分支處理 `mouse`→`mice` | 可做 |
 | D4 | `EnglishPluralNP`、std:cxg 的 `PrefixNegation` / `SuffixNegation` | 三處相鄰槽補 `+` | 可做;三處皆為真缺陷,但 **B1 只抓到第一處**(見 §5 覆蓋缺口) |
 | D5 | #1 `she`/`her` | **不動**,合法的詞位內部替換 | — |
-| D6 | #5–#8 硬編 `is`/`does` | **本輪不動** | **卡 §5** |
+| D6 | #5–#8 硬編 `is`/`does` | `EnglishBE`／`EnglishDO` 選 stored Sign | **V3 已完成** |
 
-**D6 為何不做**:四條全涉及 `be`/`do` 的補充形。搬進屈折構式的分支只是把違反從小句層挪到
-屈折層——`is` 仍不是 sign,範疇仍不在它身上。**做一半的錯移比不動更難清。**
+**D6 的 V3 解法**不是把字串分支搬到另一個構式，而是讓 `is`／`does` 成為帶範疇的
+獨立 Sign，由具名 Paradigm 在 frozen bundle 上 first-match，consumer 再用 deferred
+autofill 取得它們。因此補充形的本體、選擇與槽填充分層保存。
 
 ### E. 文件
 
@@ -238,12 +243,12 @@ C1/C3 免費得到,是 P93「不新增 `Expression` variant、改用既有 `DimF
 
 ---
 
-## 5. 待決議
+## 5. 決議紀錄與其餘待辦
 
 > 本節是這些項目的**權威出處**。跨主題的總覽(含語料遷移、文件、測試等已定方向
 > 的欠項)見 [`待辦清冊_P72-P96_v0.1.md`](待辦清冊_P72-P96_v0.1.md)。
 
-### ★ 補充形機制(填充者選擇)
+### ✅ 補充形機制(填充者選擇；V3 已解)
 
 **問題**:「be + 三單 = is」是詞位事實。按 §1 的定調,`is` 應是 sign:
 
@@ -266,16 +271,18 @@ sign is:
 - **槽約束機制已經存在**——`syn: slot_features:`。
 - 缺的是同一套邏輯搬到**填充者軸**。
 
-| 選項 | 內容 | 代價 |
+| 選項 | 內容 | 結果 |
 |---|---|---|
-| **1** | 填充者選擇:補充形成為 sign,構式依槽約束比對選中 | 新入口,邏輯是 `derive_candidates` 的鏡像;**架構正確** |
+| **1** | 填充者選擇:補充形成為 sign,構式依槽約束比對選中 | **採用並具體化為 V3 Paradigm + deferred callable autofill** |
 | **2** | 詞位儲存屈折形,構式讀取 | 需要 phon 值的 feature;是「word 延伸」模型的變形,已判定為病灶 |
-| **3** | 不做,補充形留在構式分支當字串 | 現況;範疇繼續散在 realization 裡 |
+| **3** | 不做,補充形留在構式分支當字串 | 已淘汰；en-standard 不再硬編 `is`／`does` |
 
-**阻塞**:D6(#5–#8)、以及「realization 只剩規則」的終局。
+D6(#5–#8) 的阻塞已解除。Paradigm 使用 bundle `case`、顯式 SignApplication 與必填
+`base`；選中後保留成員 SignId，詳細契約見
+[`Paradigm與SignApplication_V3.md`](../specifications/Paradigm與SignApplication_V3.md)。
 
-這是**已知缺口,非疏漏**。補充形是 blocking 的詞彙層樣貌(儲存形阻斷派生形,Elsewhere
-Condition);可派生形態不需要填充者選擇,補充形需要。
+補充形仍是 blocking 的詞彙層樣貌；可派生形態走規則／realization，補充形則由
+Paradigm 明列的 stored Sign 承擔，兩者不再共用字串模板作為假詞彙層。
 
 ### ✅ 表示塌陷(已解,選 (a))
 
@@ -320,7 +327,7 @@ PFM 的 rule block),但這是獨立語意決定。
 
 ## 6. 不做 / Phase 2
 
-- **語序交替拆成獨立構式**(#7 倒裝)——卡在同一批補充形案例
+- **語序交替拆成獨立構式**(#7 倒裝)——補充形阻塞已解除，但語序構式拆分仍是獨立工作
 - **reduplication**——上游 qy 的 capture 尚未降階實作;1→N 擴張的輸出端必須是字面符號序列,
   「複製匹配到的內容」是另一套機制
 - **Romanizer 分層**——`Deromanizer:` 在所有規則前、`Romanizer:` 在所有規則後,上游已備;

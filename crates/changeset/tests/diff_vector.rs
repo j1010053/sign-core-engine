@@ -263,6 +263,101 @@ fn a_cross_dimension_item_moves_the_structural_component() {
     assert_eq!((vector.born_signs(), vector.died_signs()), (0, 0));
 }
 
+const PARADIGM_ROOT: &str = r#"paradigm PICK:
+    case [syn.choice]:
+        [left]: left()
+        base: right()
+
+sign left:
+    syn:
+        feature:
+            choice = enum(left, right)
+            choice = left
+
+sign right:
+    syn:
+        feature:
+            choice = enum(left, right)
+            choice = left | right
+"#;
+
+fn paradigm_base() -> LanguageDocument {
+    LanguageDocument::import_new_root(PARADIGM_ROOT, "evo:paradigm-diff")
+        .expect("paradigm root parses")
+}
+
+#[test]
+fn a_paradigm_edit_is_an_identity_aligned_structural_event() {
+    let before = paradigm_base();
+    let after = apply(
+        &before,
+        "evo:paradigm-rename",
+        &statement("update paradigm(\"PICK\").name = CHOOSE"),
+    );
+    let vector = diff_vector(&before, &after);
+
+    assert_eq!(
+        (
+            vector.structural.paradigms.both,
+            vector.structural.paradigms.changed,
+            vector.born_paradigms(),
+            vector.died_paradigms(),
+        ),
+        (1, 1, 0, 0),
+        "rename changes the same Paradigm; it is not a birth/death"
+    );
+    assert_eq!(vector.aligned_paradigms(), 1);
+    assert_signs_untouched(&vector);
+    assert!(!vector.is_identical());
+}
+
+#[test]
+fn paradigm_birth_and_death_are_mirrored_without_creating_fake_signs() {
+    let before = base();
+    let after = apply(
+        &before,
+        "evo:paradigm-birth",
+        r#"
+    #0:
+        insert into language at end:
+            paradigm PICK:
+                case [syn.category]:
+                    [noun]: x()
+                    base: y()
+"#,
+    );
+    let forward = diff_vector(&before, &after);
+    let backward = diff_vector(&after, &before);
+
+    assert_eq!((forward.born_paradigms(), forward.died_paradigms()), (1, 0));
+    assert_eq!(
+        (backward.born_paradigms(), backward.died_paradigms()),
+        (0, 1)
+    );
+    assert_eq!((forward.born_signs(), forward.died_signs()), (0, 0));
+}
+
+#[test]
+fn shifting_a_paradigms_source_lines_does_not_change_its_content() {
+    let before = paradigm_base();
+    let after = apply(
+        &before,
+        "evo:paradigm-line-shift",
+        "\n    #0:\n        insert into language at end:\n            trait EarlierSection:\n",
+    );
+    let paradigms = diff_vector(&before, &after).structural.paradigms;
+    assert_eq!(
+        (
+            paradigms.both,
+            paradigms.changed,
+            paradigms.only_before,
+            paradigms.only_after
+        ),
+        (1, 0, 0, 0),
+        "source locations are provenance, not Paradigm content"
+    );
+}
+
 // ── 階層形狀的不變量(裁定 ①)────────────────────────────────────────────────
 
 /// 五個 leaf 的 `both`/`only_before`/`only_after` 必然相同——**只有 `changed`
@@ -834,7 +929,11 @@ fn reach_stays_zero_when_no_trait_has_an_event() {
 /// 新增一個 trait → `traits` 的 `only_after`,不是 `changed`。
 #[test]
 fn a_new_trait_is_a_birth_not_a_change() {
-    let before = trait_base();
+    let before = LanguageDocument::import_new_root(
+        &TRAIT_ROOT.replace("global trait Core:", "trait Core:"),
+        "evo:troot-without-global",
+    )
+    .expect("trait root without a selected global parses");
     let after = apply(
         &before,
         "evo:t3",

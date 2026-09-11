@@ -204,7 +204,7 @@ sign InnerNominal:
                 case:
                     $self.syn.case == accusative:
                         accusative
-                    else:
+                    base:
                         nominative
         roles:
             argument [Entity]
@@ -212,7 +212,7 @@ sign InnerNominal:
                 case:
                     $self.syn.case == accusative:
                         {{$slot.stem}}
-                    else:
+                    base:
                         {{$slot.stem}}
     prag:
         feature:
@@ -224,7 +224,7 @@ sign InnerNominal:
             case:
                 $self.syn.case == accusative:
                     /{{$slot.stem}}a/
-                else:
+                base:
                     /{{$slot.stem}}/
 sign OuterCase:
     syn:

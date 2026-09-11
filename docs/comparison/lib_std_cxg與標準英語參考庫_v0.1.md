@@ -69,7 +69,7 @@ data/realizations.tsv     實現索引與查表 metadata
 ```
 
 manifest 的 `code` 接受有序逗號列表；宣告與 Rule 順序依該列表固定。對外可見性只由
-`config/exports.tsv` 決定，`.lang` 不增加 `export` 前綴：表內 `kind=trait|sign` 是實際
+`config/exports.tsv` 決定，`.lang` 不增加 `export` 前綴：表內 `kind=trait|paradigm|sign` 是實際
 AST kind，stable ID 的 `realization:` 只是契約路徑，不是語法關鍵字。
 `std:cxg` 不依賴 `std:grambank`；反而是 natural-language construction 同時引用
 Grambank observation 與 cxg schema，避免類型學資料反向決定唯一實現。

@@ -246,8 +246,14 @@ impl IntelligibilityMeasure for ExploratoryHeuristicV1 {
                 mass += weight * aligned as f64;
             }
             let structural_traits = &diff.structural.trait_content;
+            let paradigms = diff.structural.paradigms;
             weighted += w.structural
                 * (diff.structural.signs.changed as f64
+                    // Paradigm 是 bundle→Sign 的水平關係；修改、生、滅各算
+                    // 一個 structural event，不冒充任何成員 Sign 的內容差異。
+                    + paradigms.changed as f64
+                    + paradigms.only_before as f64
+                    + paradigms.only_after as f64
                     // trait 的生滅在這裡算,且只算這一次(第 3 步的歸戶規則
                     // 保證每個生滅的 trait 都會出現在 structural)。
                     + indirect_damage(

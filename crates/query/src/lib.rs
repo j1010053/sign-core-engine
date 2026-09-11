@@ -32,6 +32,7 @@ pub mod derivation;
 pub mod grouping;
 pub mod intelligibility;
 pub mod lexicon;
+pub mod paradigm;
 
 pub use derivation::{derivation_family, DerivationDag, DerivationNode, SenseLink};
 pub use grouping::{
@@ -43,6 +44,10 @@ pub use intelligibility::{
     IntelligibilityMeasure, IntelligibilityScore,
 };
 pub use lexicon::{lexicon, Lexicon, LexiconEntry, LexiconFilter, SortKey, ViewConfig};
+pub use paradigm::{
+    paradigms, ParadigmBranch, ParadigmBranchSelector, ParadigmCatalog, ParadigmEntry,
+    ParadigmParameter,
+};
 
 // 既有能力原樣轉出,使 Query 的門面是一處而非四處。**不重新實作**。
 pub use conlang_changeset::diff::{diff_vector, DiffVector};

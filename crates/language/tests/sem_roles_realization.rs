@@ -88,7 +88,7 @@ sign TestCountTransfer:
             case:
                 $self.syn.number == plural:
                     /{$slot.agent}{$slot.theme}s/
-                else:
+                base:
                     /{$slot.agent}{$slot.theme}/
 
 sign FixedCountForm:
@@ -610,7 +610,7 @@ sign GuardedForm:
             case:
                 $slot.stem == [Noun]:
                     /x/
-                else:
+                base:
                     /y/
 "#;
     let system = compile_system(Language::parse(source).expect("fixture parses"))
@@ -746,7 +746,7 @@ sign s:
             case:
                 $self.syn.n == a:
                     /x/
-                else:
+                base:
                     /y/
 ";
     assert!(

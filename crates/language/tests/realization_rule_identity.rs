@@ -28,7 +28,7 @@ sign sing:
                 $self == [Ablauting]:
                     /singing/
                     i => a / _ n g
-                else:
+                base:
                     /sing/
 "#;
 

@@ -102,6 +102,64 @@ fn insert_block_round_trips_through_dump() {
     );
 }
 
+#[test]
+fn inserts_and_replays_a_top_level_paradigm_without_turning_it_into_a_sign() {
+    let base = LanguageDocument::import_new_root(
+        r#"sign be:
+    syn:
+        feature:
+            person = enum(first, third)
+            person = first | third
+
+sign is:
+    syn:
+        feature:
+            person = enum(first, third)
+            person = third
+"#,
+        "evo:paradigm-base",
+    )
+    .unwrap();
+    let spec = LibrarySpec::default();
+    let mut source = change_set_prelude(&base, &spec, "evo:paradigm-insert").unwrap();
+    source.push_str(
+        r#"
+    statement 0:
+        insert into language at end:
+            paradigm BE:
+                case [syn.person]:
+                    [third]: is()
+                    base: be()
+"#,
+    );
+    let resolved = UnresolvedChangeSet::parse(&source)
+        .unwrap()
+        .resolve(&base, &spec)
+        .unwrap();
+    assert!(matches!(
+        resolved.statements[0].edits.as_slice(),
+        [PrimitiveEdit::Insert {
+            subtree: DetachedNode::Paradigm(_),
+            ..
+        }]
+    ));
+    let dump = resolved.dump().expect("paradigm insert dumps");
+    assert!(dump.contains("paradigm BE:"));
+    let reparsed = UnresolvedChangeSet::parse(&dump)
+        .unwrap()
+        .resolve(&base, &spec)
+        .unwrap();
+    assert_eq!(reparsed.dump().unwrap(), dump);
+
+    let document = ChangeInterpreter::new(base, spec, "evo:paradigm-insert")
+        .unwrap()
+        .run(&reparsed)
+        .unwrap()
+        .document;
+    assert!(document.ref_for_paradigm("BE").is_some());
+    assert!(document.ref_for_sign("BE").is_none());
+}
+
 /// §④:一個多 item block 展成 N 個 `Insert`(同 statement,只驗最終態),
 /// 依來源序插入;dump→parse→resolve→dump 逐位元穩定(正規形 = 每 item 一 block)。
 #[test]

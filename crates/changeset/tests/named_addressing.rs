@@ -94,7 +94,7 @@ sign walk:
     case @name agr:
         $self.syn.number == singular @name sg:
             belongs Zfinite
-        else @name other:
+        base @name other:
             belongs Zverb
 "#;
 
@@ -128,6 +128,11 @@ fn named_case_and_branch_round_trip_and_address() {
     assert!(
         doc.source().contains("when @name agr:"),
         "selection→when:\n{}",
+        doc.source()
+    );
+    assert!(
+        doc.source().contains("else @name other:"),
+        "fallback must follow selection:\n{}",
         doc.source()
     );
 
@@ -190,6 +195,58 @@ fn inserts_a_case_branch_into_a_named_case() {
     );
 }
 
+#[test]
+fn a_bundle_row_insert_round_trips_through_the_changeset_surface() {
+    let base = LanguageDocument::import_new_root(
+        r#"sign root:
+    syn:
+        feature:
+            tense = enum(present, past)
+            tense = present
+            result = enum(base, selected)
+            result = base
+    phon:
+        /r/
+    case [syn.tense]:
+        [present]:
+            syn:
+                feature:
+                    result = selected
+        base:
+"#,
+        "evo:bundle-row",
+    )
+    .unwrap();
+    let spec = LibrarySpec::default();
+    let mut source = change_set_prelude(&base, &spec, "evo:bundle-row-insert").unwrap();
+    source.push_str(concat!(
+        "\n    #0:\n",
+        "        insert into sign(\"root\").case[0] at start:\n",
+        "            [past]:\n",
+        "                syn:\n",
+        "                    feature:\n",
+        "                        result = base\n",
+    ));
+    let resolved = UnresolvedChangeSet::parse(&source)
+        .unwrap()
+        .resolve(&base, &spec)
+        .unwrap();
+    let dumped = resolved.dump().unwrap();
+    assert!(dumped.contains("[past]:"), "{dumped}");
+    let reparsed = UnresolvedChangeSet::parse(&dumped)
+        .unwrap()
+        .resolve(&base, &spec)
+        .unwrap();
+    assert_eq!(reparsed.dump().unwrap(), dumped);
+
+    let document = ChangeInterpreter::new(base, spec, "evo:bundle-row-insert")
+        .unwrap()
+        .run(&reparsed)
+        .unwrap()
+        .document;
+    assert!(document.source().contains("        [past]:"));
+}
+
 /// 🔑 **realization 內的 `@name` 現在定得到址**(取徑 A,2026-08-18)。
 ///
 /// 此前:標籤 parse 得過、canonical dump 印得出來,但六條路徑全部解不到——
@@ -219,7 +276,7 @@ sign she:
             case @name pron_case:
                 $self.syn.case == accusative @name acc:
                     /her/
-                else @name nom:
+                base @name nom:
                     /she/
 "#;
 

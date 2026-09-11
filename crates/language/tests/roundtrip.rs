@@ -57,7 +57,7 @@ fn roundtrip_identity_on_canonical_p21() {
     assert_eq!(a, b, "決定性 id");
 }
 
-/// 非 canonical(亂序容器、省略 @stage)→ 正規化不動點。
+/// 非 canonical(亂序容器、省略 @stage)→ 正規化不動點，含 V3 Paradigm 區段。
 #[test]
 fn non_canonical_input_normalizes() {
     let messy = "\
@@ -66,6 +66,11 @@ Feature voice(+voice, -voice)
 sign zz:
     phon:
         /z/
+
+paradigm Middle:
+    case [syn.choice]:
+        [picked]: zz()
+        base: zz()
 
 trait Beta:
     phon:
@@ -78,8 +83,12 @@ global trait Alpha:
     let dump = Language::parse(messy).unwrap().dump();
     let ia = dump.find("global trait Alpha").unwrap();
     let ib = dump.find("trait Beta").unwrap();
+    let ip = dump.find("paradigm Middle").unwrap();
     let iz = dump.find("sign zz").unwrap();
-    assert!(ia < ib && ib < iz, "區段序:global → trait → sign");
+    assert!(
+        ia < ib && ib < ip && ip < iz,
+        "區段序:global → trait → paradigm → sign"
+    );
     assert!(
         dump.contains("x => y @stage word"),
         "canonical 補 @stage word"

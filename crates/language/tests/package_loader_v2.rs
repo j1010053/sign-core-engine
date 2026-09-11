@@ -100,6 +100,257 @@ fn v2_reference_package_selects_at_an_exact_version() {
 }
 
 #[test]
+fn v3_package_exports_a_paradigm_as_a_distinct_callable_kind() {
+    let id: PackageId = "catalog:copula-paradigm".parse().unwrap();
+    let sources = PackageSources {
+        config: r#"schema = 2
+id = "catalog:copula-paradigm"
+version = "1.0.0"
+layer = "overlay"
+capabilities = ["signs", "paradigms"]
+code = ["code/main.lang"]
+"#
+        .to_owned(),
+        exports: concat!(
+            "stable_id\tkind\talias\n",
+            "catalog:copula-paradigm:BE\tparadigm\tBE\n",
+        )
+        .to_owned(),
+        code: r#"paradigm BE:
+    case [syn.person]:
+        [third]: is()
+        base: be()
+
+sign be:
+    syn:
+        feature:
+            person = enum(first, third)
+            person = first | third
+
+sign is:
+    syn:
+        feature:
+            person = enum(first, third)
+            person = third
+"#
+        .to_owned(),
+        ..PackageSources::default()
+    };
+    let catalog = LibraryCatalog::with_packages([sources]).expect("Paradigm package loads");
+    let resolved = catalog
+        .resolve(&PackageSpec::default().with_root(id.clone()))
+        .expect("Paradigm package resolves");
+    let package = resolved.package(&id).unwrap();
+    assert!(package.capabilities.paradigms);
+    assert_eq!(
+        package.exports[0].kind,
+        conlang_language::LibraryExportKind::Paradigm
+    );
+    assert!(resolved.selection.overlay.paradigm_named("BE").is_some());
+
+    let system = compile_with_packages_ref(&Language::new(), &resolved).unwrap();
+    let expected = system
+        .effective_language()
+        .sign_named("is")
+        .unwrap()
+        .id
+        .clone();
+    let selected = system
+        .evaluate_paradigm(
+            "BE",
+            &conlang_language::DerivationContext::new().feature(
+                conlang_language::Dim::Syn,
+                "person",
+                "third",
+            ),
+        )
+        .unwrap();
+    assert_eq!(selected.value.sign_id(), &expected);
+}
+
+#[test]
+fn v3_manifest_rejects_paradigm_content_without_the_capability() {
+    let sources = PackageSources {
+        config: r#"schema = 2
+id = "catalog:missing-paradigm-capability"
+version = "1.0.0"
+layer = "overlay"
+capabilities = ["signs"]
+code = ["code/main.lang"]
+"#
+        .to_owned(),
+        exports: concat!(
+            "stable_id\tkind\talias\n",
+            "catalog:missing-paradigm-capability:be\tsign\tbe\n",
+        )
+        .to_owned(),
+        code: r#"paradigm BE:
+    case [syn.person]:
+        [third]: is()
+        base: be()
+
+sign be:
+    syn:
+        feature:
+            person = enum(first, third)
+            person = first | third
+
+sign is:
+    syn:
+        feature:
+            person = enum(first, third)
+            person = third
+"#
+        .to_owned(),
+        ..PackageSources::default()
+    };
+    let error = LibraryCatalog::with_packages([sources])
+        .expect_err("Paradigm code requires the paradigms capability");
+
+    assert!(
+        matches!(
+            &error,
+            LibraryLoadError::UnsupportedContent { package, message }
+                if package.to_string() == "catalog:missing-paradigm-capability"
+                    && message.contains("paradigms capability")
+        ),
+        "unexpected error: {error:?}"
+    );
+    assert_eq!(error.code(), "LIBRARY_CONTENT_UNSUPPORTED");
+}
+
+fn overlay_callable_package(id: &str, exported_sign: &str, code: &str) -> PackageSources {
+    PackageSources {
+        config: format!(
+            "schema = 2\n\
+             id = \"{id}\"\n\
+             version = \"1.0.0\"\n\
+             layer = \"overlay\"\n\
+             capabilities = [\"signs\", \"paradigms\"]\n\
+             code = [\"code/main.lang\"]\n"
+        ),
+        exports: format!("stable_id\tkind\talias\n{id}:{exported_sign}\tsign\t{exported_sign}\n"),
+        code: code.to_owned(),
+        ..PackageSources::default()
+    }
+}
+
+#[test]
+fn selected_packages_reject_duplicate_paradigms_and_cross_kind_callable_names() {
+    let first_id: PackageId = "natural:first-callables".parse().unwrap();
+    let second_id: PackageId = "natural:second-callables".parse().unwrap();
+    let first = overlay_callable_package(
+        "natural:first-callables",
+        "alpha",
+        r#"paradigm SHARED:
+    case [syn.choice]:
+        [a]: alpha()
+        base: alpha()
+
+sign alpha:
+    syn:
+        feature:
+            choice = enum(a, b)
+            choice = a | b
+"#,
+    );
+    let second = overlay_callable_package(
+        "natural:second-callables",
+        "beta",
+        r#"paradigm SHARED:
+    case [syn.choice]:
+        [b]: beta()
+        base: beta()
+
+sign beta:
+    syn:
+        feature:
+            choice = enum(a, b)
+            choice = a | b
+"#,
+    );
+    let catalog = LibraryCatalog::with_packages([first, second]).unwrap();
+    let error = catalog
+        .resolve(
+            &PackageSpec::default()
+                .with_root(first_id.clone())
+                .with_root(second_id.clone()),
+        )
+        .expect_err("two selected packages cannot define the same Paradigm name");
+    assert!(matches!(&error, LibraryLoadError::DuplicateParadigm(name) if name == "SHARED"));
+    assert_eq!(error.code(), "LIBRARY_PARADIGM_DUPLICATE");
+
+    let paradigm_package = overlay_callable_package(
+        "natural:first-callables",
+        "alpha",
+        r#"paradigm COLLIDE:
+    case [syn.choice]:
+        [a]: alpha()
+        base: alpha()
+
+sign alpha:
+    syn:
+        feature:
+            choice = enum(a, b)
+            choice = a | b
+"#,
+    );
+    let sign_package = overlay_callable_package(
+        "natural:second-callables",
+        "COLLIDE",
+        r#"sign COLLIDE:
+    syn:
+        feature:
+            choice = enum(a, b)
+            choice = a | b
+"#,
+    );
+    let catalog = LibraryCatalog::with_packages([paradigm_package, sign_package]).unwrap();
+    let error = catalog
+        .resolve(
+            &PackageSpec::default()
+                .with_root(first_id)
+                .with_root(second_id),
+        )
+        .expect_err("Sign and Paradigm share one callable namespace across packages");
+    assert!(matches!(&error, LibraryLoadError::CallableNameCollision(name) if name == "COLLIDE"));
+    assert_eq!(error.code(), "LIBRARY_CALLABLE_NAME_COLLISION");
+}
+
+#[test]
+fn reference_packages_reject_paradigms_even_when_the_capability_is_declared() {
+    let sources = PackageSources {
+        config: r#"schema = 2
+id = "catalog:reference-paradigm"
+version = "1.0.0"
+layer = "reference"
+capabilities = ["paradigms"]
+code = ["code/main.lang"]
+"#
+        .to_owned(),
+        exports: concat!(
+            "stable_id\tkind\talias\n",
+            "catalog:reference-paradigm:PICK\tparadigm\tPICK\n",
+        )
+        .to_owned(),
+        code: r#"paradigm PICK:
+    case [syn.choice]:
+        [a]: missing()
+        base: missing()
+"#
+        .to_owned(),
+        ..PackageSources::default()
+    };
+    let error =
+        LibraryCatalog::with_packages([sources]).expect_err("reference layer remains trait-only");
+    assert!(matches!(
+        &error,
+        LibraryLoadError::UnsupportedContent { message, .. }
+            if message.contains("trait declarations only")
+    ));
+}
+
+#[test]
 fn v2_data_only_package_accepts_zero_exports() {
     let id: PackageId = "dataset:grammatical-observations".parse().unwrap();
     let sources = PackageSources {

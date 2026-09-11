@@ -2,7 +2,8 @@
 //! I17 顯式拒絕(else/Scan+stage/dsl 拒收)、決定性。
 
 use conlang_language::codegen::{self, CodegenError};
-use conlang_language::{Language, Stage};
+use conlang_language::compile::CompileError;
+use conlang_language::{check_language, Language, Stage};
 
 /// dsl-valid 的最小綜合樣例:stage≠word 規則、`;` 多語句塊、Scan 塊、
 /// 非 global trait 引用、sign 欄位與局部規則。
@@ -104,9 +105,9 @@ fn codegen_is_deterministic_and_pure() {
     assert_eq!(s2, a.signs);
 }
 
-/// 多 global trait:規則依 canonical 名稱序拼接(決定性;I17-c)。
+/// V3:global trait 是唯一的自動套用模板；多個候選必須由作者明確選一個。
 #[test]
-fn multiple_global_traits_emit_in_canonical_name_order() {
+fn multiple_global_traits_require_an_explicit_selection() {
     let src = "\
 Symbol a
 
@@ -121,11 +122,53 @@ global trait Alpha:
         a => a / #_
 ";
     let l = Language::parse(src).unwrap();
-    let a = codegen::compile_full(&l).unwrap();
-    let s = &a.grammar.phon_source;
-    let i_alpha = s.find("a => a / #_").expect("Alpha rule present");
-    let i_zeta = s.find("a => a / _#").expect("Zeta rule present");
-    assert!(i_alpha < i_zeta, "canonical 名稱序:Alpha 先於 Zeta\n{s}");
+    assert_eq!(
+        codegen::compile_full(&l).unwrap_err(),
+        CodegenError::Compile(CompileError::MultipleGlobalTraits {
+            names: vec!["Alpha".to_owned(), "Zeta".to_owned()],
+        })
+    );
+    assert_eq!(
+        codegen::codegen(&l).unwrap_err(),
+        CodegenError::Compile(CompileError::MultipleGlobalTraits {
+            names: vec!["Alpha".to_owned(), "Zeta".to_owned()],
+        }),
+        "low-level codegen must enforce the same invariant"
+    );
+    let codes = check_language(&l)
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+    assert!(
+        codes.contains(&"GLOBAL_TRAIT_SELECTION_REQUIRED"),
+        "diagnostics: {codes:?}"
+    );
+}
+
+#[test]
+fn the_only_global_trait_is_the_selected_automatic_template() {
+    let src = "\
+Symbol a
+
+Class vowel {a}
+
+trait Zeta:
+    phon:
+        a => a / _#
+
+global trait Alpha:
+    phon:
+        a => a / #_
+";
+    let l = Language::parse(src).unwrap();
+    let artifacts = codegen::compile_full(&l).unwrap();
+    assert!(artifacts.grammar.phon_source.contains("a => a / #_"));
+    assert!(
+        !artifacts.grammar.phon_source.contains("a => a / _#"),
+        "ordinary trait must not be auto-applied:\n{}",
+        artifacts.grammar.phon_source
+    );
 }
 
 // ── 顯式拒絕(I17-d):不默默近似 ──

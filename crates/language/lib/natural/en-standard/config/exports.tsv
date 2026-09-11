@@ -3,6 +3,8 @@ natural:en-standard:profile	trait	StandardEnglishProfile
 natural:en-standard:case:bearer	trait	EnglishCaseBearer
 natural:en-standard:case:subject-assigner	trait	EnglishSubjectCaseAssigner
 natural:en-standard:case:transitive-assigner	trait	EnglishFiniteTransitiveCaseAssigner
+natural:en-standard:paradigm:be	paradigm	EnglishBE
+natural:en-standard:paradigm:do	paradigm	EnglishDO
 natural:en-standard:construction:definite-np	sign	EnglishDefiniteNP
 natural:en-standard:construction:indefinite-np	sign	EnglishIndefiniteNP
 natural:en-standard:construction:count-noun-form	sign	EnglishCountNounForm

@@ -157,23 +157,23 @@ sign root:
             number = enum(singular, plural)
             number =
                 case:
-                    else:
+                    base:
                         singular
     sem:
         roles:
             actor [Entity]
             actor =
                 case:
-                    else:
+                    base:
                         atom()
     phon:
         /{$slot.actor}/
         realization:
             case:
-                else:
+                base:
                     /{Outer(value: Wrap(value: {$self})).phon.ret}/
     case:
-        else:
+        base:
             Outer(value: Wrap(value: {$self}))
             belongs Marked
 "#;
@@ -253,7 +253,7 @@ sign root:
     phon:
         /r/
     case:
-        else:
+        base:
             belongs FragmentMark
             sem:
                 feature:

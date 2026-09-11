@@ -67,6 +67,14 @@ V2 typed `case` 以封閉 context type 檢查 branch。Sign body 可回傳完整
 確定 match 結果後才按來源序 merge，前一命中不能影響後一 guard。完整契約與反例見
 [docs/specifications/case_when與context_fragment_v2.md](docs/specifications/case_when與context_fragment_v2.md)。
 
+V3 將三種連結正式分開：trait 負責模板／分類的 vertical inheritance，Sign 以
+`name(...)` 作可 partial apply 的 callable，Paradigm 則以 bundle first-match 表示
+horizontal allomorph link。`map SLOT autofill Paradigm()` 會在 consumer feature probe
+完成後才選 stored member Sign；零參 Sign application 保留原 SignId。Standard English
+的 `is`／`does` 已改由 `EnglishBE`／`EnglishDO` 選擇，不再硬編在 phon template。
+完整契約見
+[docs/specifications/Paradigm與SignApplication_V3.md](docs/specifications/Paradigm與SignApplication_V3.md)。
+
 **Step 13 source interface 與 Primitive Edit 的語義／API 契約已封板**：caller `.lang` 搭配版本化
 identity sidecar，為 V1 節點及 V2 Application／Case／CaseBranch／Constraint 提供 stable
 `NodeId`／typed resolver；四原語、`check_language`、Language diff 與 trace 均只修改
@@ -89,7 +97,7 @@ rebase、全 parent 3-way merge、donor／`adopt` 與狀態→四原語重建均
 仍嚴格驗 digest）、同父有序序列以決定性 LCS 重建 Move、persisted expression／
 realization 節點具明確 typed reconstruct capability，structured phon 可用 `.phon_block:`
 顯式 bootstrap 並從 `.chg` 插入 leaf／Then／Else／propagate sub-block。P60／P64
-亦由 `crates/persistence` 收官：canonical sign／trait／non-sign fragment、changeset 與
+亦由 `crates/persistence` 收官：canonical sign／trait／paradigm／non-container fragment、changeset 與
 identity sidecar 進共享內容定址物件庫，節點落在 `nodes/<id>/`，annotation／config
 留在 node-v2 雜湊外。下一個歷時層為 Step 17；刻意不支援的細界線見 Step 16 收官矩陣。
 收官矩陣見
@@ -122,8 +130,14 @@ sign give:
     entrenchment = 0.5          /* 跨維 meta 欄位(無動力學) */
 ```
 
-容器頭 `sign`/`trait`/`global trait Name:`;body 統一(trait ≡ sign);維度區塊
+容器頭 `sign`/`trait`/`global trait`/`paradigm Name:`；trait 與 sign body 統一，
+Paradigm body 則固定為 bundle `case`；維度區塊
 `syn:`/`phon:`/`sem:`/`prag:`;`/* … */` 區塊註解可置任意位置。
+同一份有效語言至多一個 `global trait`；它是顯式選中的自動套用模板，多個會以
+`GLOBAL_TRAIT_SELECTION_REQUIRED` 拒絕，其餘候選應宣告為普通 `trait`。選中的
+global 會把 slot、feature／role schema、預設值及 syn／sem／prag 行為以最低優先級
+帶入每個 Sign；特定 trait 可覆寫其值，Sign 本地值再覆寫特定 trait。global
+繼承鏈上的 phon 規則則只進 Compiled Grammar 一次，不會在每個 Sign 重跑。
 `.lang` 只記 construction type 與共時狀態；年代、文本出處、原文/正規化與可信度
 屬 Evidence/Attestation，不混入 Language。完整貼合矩陣見
 `docs/comparison/共時lang語法與資料貼合度_v0.1.md`。

@@ -184,6 +184,18 @@ trait EnglishBigProperty:
 trait EnglishInRelation:
     belongs Relation
 
+/* Horizontal allomorph links.  Clause constructions derive `finite_form`
+   first; deferred autofill then selects a stored member Sign. */
+paradigm EnglishBE:
+    case [syn.finite_form]:
+        [third_singular]: is()
+        base: be()
+
+paradigm EnglishDO:
+    case [syn.finite_form]:
+        [third_singular]: does()
+        base: do()
+
 sign john:
     belongs Noun
     belongs EnglishCaseBearer
@@ -299,14 +311,42 @@ sign see:
 sign be:
     belongs EnglishCopula
     belongs EnglishCopulaFrame
+    syn:
+        feature:
+            finite_form = enum(base, third_singular)
+            finite_form = base
     phon:
         /be/
 
 sign do:
     belongs EnglishAuxiliary
     belongs EnglishDoSupportFrame
+    syn:
+        feature:
+            finite_form = enum(base, third_singular)
+            finite_form = base
     phon:
         /do/
+
+sign does:
+    belongs EnglishAuxiliary
+    belongs EnglishDoSupportFrame
+    syn:
+        feature:
+            finite_form = enum(base, third_singular)
+            finite_form = third_singular
+    phon:
+        /does/
+
+sign is:
+    belongs EnglishCopula
+    belongs EnglishCopulaFrame
+    syn:
+        feature:
+            finite_form = enum(base, third_singular)
+            finite_form = third_singular
+    phon:
+        /is/
 
 sign not:
     belongs EnglishNegator
@@ -375,7 +415,7 @@ sign EnglishCountNounForm:
             case:
                 $self.syn.number == plural:
                     /{$slot.stem}s/
-                else:
+                base:
                     /{$slot.stem}/
 
 sign EnglishPluralNP:
@@ -442,7 +482,7 @@ sign EnglishIntransitiveClause:
             case:
                 $self.syn.finite_form == third_singular:
                     /{$slot.subject} {$slot.predicate}s/
-                else:
+                base:
                     /{$slot.subject} {$slot.predicate}/
 
 sign EnglishSVOTransitiveClause:
@@ -474,7 +514,7 @@ sign EnglishSVOTransitiveClause:
             case:
                 $self.syn.finite_form == third_singular:
                     /{$slot.subject} {$slot.predicate}s {$slot.object}/
-                else:
+                base:
                     /{$slot.subject} {$slot.predicate} {$slot.object}/
 
 sign EnglishCopularPredication:
@@ -483,6 +523,7 @@ sign EnglishCopularPredication:
     belongs EnglishCopularFrame
     belongs AgreementBearer
     syn:
+        map copula autofill EnglishBE()
         feature:
             finite_form = enum(base, third_singular)
             number => $slot.subject.syn.number
@@ -493,12 +534,6 @@ sign EnglishCopularPredication:
         clause-type = declarative
     phon:
         /{$slot.subject} {$slot.copula} {$slot.predicate}/
-        realization:
-            case:
-                $self.syn.finite_form == third_singular:
-                    /{$slot.subject} is {$slot.predicate}/
-                else:
-                    /{$slot.subject} {$slot.copula} {$slot.predicate}/
 
 sign EnglishDoNegation:
     belongs EnglishConstruction
@@ -510,6 +545,7 @@ sign EnglishDoNegation:
             subject [Nominal]
             auxiliary [EnglishAuxiliary]
             negator [EnglishNegator]
+        map auxiliary autofill EnglishDO()
         feature:
             finite_form = enum(base, third_singular)
             number => $slot.subject.syn.number
@@ -520,12 +556,6 @@ sign EnglishDoNegation:
         clause-type = declarative
     phon:
         /{$slot.subject} {$slot.auxiliary} {$slot.negator} {$slot.predicate}/
-        realization:
-            case:
-                $self.syn.finite_form == third_singular:
-                    /{$slot.subject} does {$slot.negator} {$slot.predicate}/
-                else:
-                    /{$slot.subject} {$slot.auxiliary} {$slot.negator} {$slot.predicate}/
 
 sign EnglishPolarQuestion:
     belongs EnglishConstruction
@@ -536,6 +566,7 @@ sign EnglishPolarQuestion:
         slots:
             auxiliary [EnglishAuxiliary]
             subject [Nominal]
+        map auxiliary autofill EnglishDO()
         feature:
             finite_form = enum(base, third_singular)
             number => $slot.subject.syn.number
@@ -544,12 +575,6 @@ sign EnglishPolarQuestion:
             else finite_form => base
     phon:
         /{$slot.auxiliary} {$slot.subject} {$slot.clause}/
-        realization:
-            case:
-                $self.syn.finite_form == third_singular:
-                    /does {$slot.subject} {$slot.clause}/
-                else:
-                    /{$slot.auxiliary} {$slot.subject} {$slot.clause}/
 
 sign EnglishPeriphrasticPassive:
     belongs EnglishConstruction
@@ -557,6 +582,7 @@ sign EnglishPeriphrasticPassive:
     belongs EnglishPassiveFrame
     belongs AgreementBearer
     syn:
+        map auxiliary autofill EnglishBE()
         feature:
             finite_form = enum(base, third_singular)
             number => $slot.patient.syn.number
@@ -567,9 +593,3 @@ sign EnglishPeriphrasticPassive:
         perspective = patient-prominent
     phon:
         /{$slot.patient} {$slot.auxiliary} {$slot.predicate} by {$slot.agent}/
-        realization:
-            case:
-                $self.syn.finite_form == third_singular:
-                    /{$slot.patient} is {$slot.predicate} by {$slot.agent}/
-                else:
-                    /{$slot.patient} {$slot.auxiliary} {$slot.predicate} by {$slot.agent}/

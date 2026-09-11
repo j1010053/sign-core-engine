@@ -510,7 +510,7 @@ fn reanalyze_category(
         .iter()
         .filter_map(|item| match item {
             SignItem::TraitMount {
-                name: name,
+                name,
                 kind: conlang_language::TraitMountKind::Declaration,
                 ..
             } => Some(name.as_str()),

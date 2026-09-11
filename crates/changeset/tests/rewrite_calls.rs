@@ -134,6 +134,28 @@ fn a_call_with_a_block_carries_a_whole_sign() {
     assert!(lang.contains("sign kaffe:"), "{lang}");
 }
 
+#[test]
+fn a_sign_block_cannot_smuggle_in_a_paradigm_that_the_rewrite_would_drop() {
+    let error = resolve(
+        concat!(
+            "\n    statement 0:\n        create():\n",
+            "            paradigm HIDDEN:\n",
+            "                case [syn.category]:\n",
+            "                    [noun]: extra()\n",
+            "                    base: extra()\n",
+            "\n",
+            "            sign extra:\n",
+            "                syn:\n",
+            "                    feature:\n",
+            "                        category = enum(noun, verb)\n",
+            "                        category = noun\n",
+        ),
+        "evo:create-exactly-one",
+    )
+    .expect_err("a create block must not silently discard another top-level container");
+    assert!(error.to_string().contains("exactly one sign"), "{error}");
+}
+
 // ── donor 指名借入(P62 §7;提案 A)────────────────────────────────────────
 
 fn donor_language() -> LanguageDocument {

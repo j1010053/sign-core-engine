@@ -30,7 +30,7 @@ sign sing:
             case:
                 $self == [Ablauting]:
                     i => a / _ n g
-                else:
+                base:
                     /sing/
 "#;
 

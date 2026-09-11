@@ -34,6 +34,25 @@ sign y:
             category = noun
 "#;
 
+const PARADIGM_ROOT: &str = r#"
+paradigm PICK:
+    case [syn.choice]:
+        [left]: left()
+        base: right()
+
+sign left:
+    syn:
+        feature:
+            choice = enum(left, right)
+            choice = left
+
+sign right:
+    syn:
+        feature:
+            choice = enum(left, right)
+            choice = left | right
+"#;
+
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug)]
@@ -69,7 +88,8 @@ fn fixture() -> (EvolutionGraph, NodeId, NodeId) {
     graph.set_label(&root_id, Some("Proto".to_owned())).unwrap();
     let base = graph.snapshot(&root_id).unwrap().clone();
     let mut changeset = change_set_prelude(&base, &libraries, "store:child").unwrap();
-    changeset.push_str("\n    #0:\n        update sign(\"x\").feature[syn.category].value = verb\n");
+    changeset
+        .push_str("\n    #0:\n        update sign(\"x\").feature[syn.category].value = verb\n");
     let child_id = graph
         .commit(
             vec![Edge::trunk(root_id.clone(), changeset)],
@@ -182,6 +202,59 @@ fn shared_objects_round_trip_graph_and_hash_external_metadata() {
 }
 
 #[test]
+fn paradigm_objects_round_trip_source_and_stable_identity() {
+    let temp = TestDirectory::new("paradigm-roundtrip");
+    let store = GraphStore::init(&temp.0).unwrap();
+    let document = LanguageDocument::import_new_root(PARADIGM_ROOT, "store:paradigm").unwrap();
+    let expected_source = document.source().to_owned();
+    let expected_identities = document.manifest_json().unwrap();
+    let mut graph = EvolutionGraph::new(LibrarySpec::default());
+    let root_id = graph.add_root(document).unwrap();
+
+    store.save(&graph).unwrap();
+    let stored_manifest = manifest(&temp.0, &root_id);
+    assert_eq!(
+        stored_manifest["paradigms"].as_array().unwrap().len(),
+        1,
+        "a paradigm must be persisted as a named content-addressed object"
+    );
+    assert_eq!(stored_manifest["paradigms"][0]["name"], json!("PICK"));
+
+    let loaded = store.load(LibrarySpec::default()).unwrap();
+    let restored = loaded.snapshot(&root_id).unwrap();
+    assert_eq!(restored.source(), expected_source);
+    assert_eq!(restored.manifest_json().unwrap(), expected_identities);
+    assert!(restored.language().paradigm_named("PICK").is_some());
+    loaded.verify_all().unwrap();
+}
+
+#[test]
+fn snapshot_manifests_without_the_additive_paradigms_field_still_load() {
+    let temp = TestDirectory::new("pre-paradigm-manifest");
+    let store = GraphStore::init(&temp.0).unwrap();
+    let (graph, root_id, child_id) = fixture();
+    store.save(&graph).unwrap();
+
+    for id in [&root_id, &child_id] {
+        let path = temp.0.join("nodes").join(id.as_str()).join("manifest");
+        let mut stored: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        stored.as_object_mut().unwrap().remove("paradigms");
+        fs::write(path, serde_json::to_vec_pretty(&stored).unwrap()).unwrap();
+    }
+
+    let loaded = store.load(LibrarySpec::default()).unwrap();
+    assert_eq!(loaded.len(), graph.len());
+    assert_eq!(
+        loaded.snapshot(&root_id).unwrap().source(),
+        graph.snapshot(&root_id).unwrap().source()
+    );
+    assert_eq!(
+        loaded.snapshot(&child_id).unwrap().source(),
+        graph.snapshot(&child_id).unwrap().source()
+    );
+}
+
+#[test]
 fn corrupt_shared_object_is_rejected_before_graph_restore() {
     let temp = TestDirectory::new("corrupt-object");
     let store = GraphStore::init(&temp.0).unwrap();
@@ -274,7 +347,8 @@ fn multi_root_donor_merge_and_nativization_survive_persistence() {
     let base_a = graph.snapshot(&root_a).unwrap().clone();
     let mut donor_change = change_set_prelude(&base_a, &libraries, "store:borrow").unwrap();
     donor_change.push_str(&format!("    donor other {}\n", root_b.as_str()));
-    donor_change.push_str("\n    #0:\n        update sign(\"a\").feature[syn.category].value = verb\n");
+    donor_change
+        .push_str("\n    #0:\n        update sign(\"a\").feature[syn.category].value = verb\n");
     let borrowed = graph
         .commit(
             vec![Edge::trunk(root_a, donor_change)],
@@ -381,7 +455,11 @@ fn state_round_trips_and_stays_outside_the_hash() {
 
     // 且 save 可重跑(immutable 檔逐位元比對不得因 State 而失敗)
     store.save(&graph).unwrap();
-    assert_eq!(store.read_state(&root_id).unwrap(), state, "save 不覆寫 State");
+    assert_eq!(
+        store.read_state(&root_id).unwrap(),
+        state,
+        "save 不覆寫 State"
+    );
 }
 
 // ── 節點移除:save 是 append-only,但不得靜默 ────────────────────────────
@@ -456,7 +534,10 @@ fn remove_node_refuses_a_node_that_still_has_dependents() {
         ),
         "要同時指出被擋者與依賴者:{error}"
     );
-    assert!(temp.0.join("nodes").join(root_id.as_str()).exists(), "不得半刪");
+    assert!(
+        temp.0.join("nodes").join(root_id.as_str()).exists(),
+        "不得半刪"
+    );
 
     // 圖側同樣拒絕,且理由一致
     assert!(matches!(
@@ -479,7 +560,10 @@ fn remove_node_leaves_the_shared_object_store_intact() {
 
     // root 與 child 共用的 object(child 只改了 sign x,trait Affix 兩邊同源)
     let shared = named_object(&manifest(&temp.0, &child_id), "traits", "Affix");
-    assert_eq!(shared, named_object(&manifest(&temp.0, &root_id), "traits", "Affix"));
+    assert_eq!(
+        shared,
+        named_object(&manifest(&temp.0, &root_id), "traits", "Affix")
+    );
 
     graph.remove_node(&child_id).unwrap();
     store.remove_node(&child_id).unwrap();

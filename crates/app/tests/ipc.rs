@@ -417,6 +417,65 @@ fn session_with_source(temp: &Temp, source: &str) -> UiSession {
 }
 
 #[test]
+fn paradigm_is_a_named_editable_node_in_the_authoring_catalog() {
+    let temp = Temp::new("paradigm-authoring");
+    let source = r#"paradigm PICK:
+    case [syn.choice]:
+        [left]: left()
+        base: right()
+
+sign left:
+    syn:
+        feature:
+            choice = enum(left, right)
+            choice = left
+
+sign right:
+    syn:
+        feature:
+            choice = enum(left, right)
+            choice = left | right
+"#;
+    let mut session = session_with_source(&temp, source);
+    let catalog = session.authoring_catalog().expect("Paradigm catalog");
+    let paradigm = catalog
+        .nodes
+        .iter()
+        .find(|node| node.kind == "paradigm")
+        .expect("Paradigm node");
+
+    assert!(paradigm.path.contains("paradigm") && paradigm.path.contains("PICK"));
+    assert!(paradigm.movable);
+    assert!(paradigm.fields.iter().any(|field| field.name == "name"));
+    let moves = session
+        .authoring_move_options(&paradigm.selector, &catalog.revision)
+        .expect("Paradigm move options");
+    assert!(
+        moves.placements.is_empty(),
+        "top-level named collections are canonical by name, so reordering is a no-op"
+    );
+
+    let pending = session
+        .stage_structured_edit(&StructuredEditInput {
+            revision: catalog.revision.clone(),
+            edit: StructuredEdit::Update {
+                target: paradigm.selector.clone(),
+                field: "name".to_owned(),
+                value: "CHOOSE".to_owned(),
+            },
+        })
+        .expect("rename Paradigm through guided authoring");
+    assert_eq!(pending.diff.structural, 1);
+    assert!(pending.source.contains(".name = CHOOSE"));
+    let renamed = session.authoring_catalog().expect("renamed preview");
+    assert!(renamed.nodes.iter().any(|node| {
+        node.selector == paradigm.selector
+            && node.kind == "paradigm"
+            && node.path.contains("CHOOSE")
+    }));
+}
+
+#[test]
 fn a_rejected_direct_sound_change_does_not_leave_an_empty_working_copy() {
     let temp = Temp::new("sound-change-no-home");
     let mut session = UiSession::create(
@@ -498,7 +557,8 @@ fn structured_edit_wire_shape_deserializes_the_flattened_action_tag() {
 #[test]
 fn structured_first_stage_is_atomic_and_pending_preview_drives_the_next_stage() {
     let temp = Temp::new("structured-preview");
-    let mut session = session(&temp);
+    let source = SOURCE.replace("global trait Core:", "trait Core:");
+    let mut session = session_with_source(&temp, &source);
     let initial = session.authoring_catalog().expect("initial catalog");
     assert!(initial
         .traits
@@ -1116,7 +1176,9 @@ fn a_freshly_committed_unsaved_leaf_can_be_deleted() {
             revision: None,
         })
         .expect("stage");
-    let committed = session.commit(Some("temporary".to_owned())).expect("commit");
+    let committed = session
+        .commit(Some("temporary".to_owned()))
+        .expect("commit");
     assert!(session.summary().graph_dirty);
     assert_eq!(session.tree().nodes.len(), before + 1);
 
@@ -1150,9 +1212,14 @@ fn deleting_one_unsaved_leaf_keeps_dirty_when_an_earlier_commit_remains() {
 
     session.remove_active_leaf().expect("delete latest leaf");
     assert_eq!(session.tree().nodes.len(), before + 1);
-    assert!(session.summary().graph_dirty, "first commit is still memory-only");
+    assert!(
+        session.summary().graph_dirty,
+        "first commit is still memory-only"
+    );
 
-    session.remove_active_leaf().expect("delete remaining unsaved leaf");
+    session
+        .remove_active_leaf()
+        .expect("delete remaining unsaved leaf");
     assert_eq!(session.tree().nodes.len(), before);
     assert!(!session.summary().graph_dirty);
 }
@@ -1170,7 +1237,9 @@ fn deleting_a_persisted_leaf_still_removes_it_from_disk_immediately() {
             revision: None,
         })
         .expect("stage");
-    session.commit(Some("persisted".to_owned())).expect("commit");
+    session
+        .commit(Some("persisted".to_owned()))
+        .expect("commit");
     session.save_project().expect("persist leaf");
 
     session.remove_active_leaf().expect("delete persisted leaf");

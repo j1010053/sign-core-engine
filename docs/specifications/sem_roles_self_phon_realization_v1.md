@@ -162,7 +162,7 @@ sign EnglishCountNounForm:
             case:
                 $self.syn.number == plural:
                     /{$slot.stem}s/
-                else:
+                base:
                     /{$slot.stem}/
 ```
 
@@ -242,7 +242,7 @@ phon:
                 /her/
 ```
 
-語意上 `/she/` 就是那個 case 的 `else`——`construction.rs` 選不到分支時回
+語意上 `/she/` 就是那個 case 的 implicit `base`——`construction.rs` 選不到分支時回
 `token.phon_form()`，也就是 deep template。三個佐證：
 
 1. **default 已經是強制的**：construction 缺 phon template 直接報 `CONSTRUCTION_PHON_MISSING`。

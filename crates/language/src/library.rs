@@ -144,6 +144,7 @@ impl fmt::Display for PackageLayer {
 pub struct PackageCapabilities {
     pub traits: bool,
     pub signs: bool,
+    pub paradigms: bool,
     pub functions: bool,
     pub data: bool,
 }
@@ -155,6 +156,7 @@ impl PackageCapabilities {
             let target = match value.as_str() {
                 "traits" => &mut capabilities.traits,
                 "signs" => &mut capabilities.signs,
+                "paradigms" => &mut capabilities.paradigms,
                 "functions" => &mut capabilities.functions,
                 "data" => &mut capabilities.data,
                 _ => {
@@ -183,6 +185,9 @@ impl PackageCapabilities {
         }
         if self.signs {
             values.push("signs");
+        }
+        if self.paradigms {
+            values.push("paradigms");
         }
         if self.functions {
             values.push("functions");
@@ -293,6 +298,7 @@ impl PackageSpec {
 pub enum LibraryExportKind {
     Trait,
     Sign,
+    Paradigm,
     /// 歷時 function 層(Recipe/Goal;P48–P50)。住套件 `code/*.chg`。
     Function,
 }
@@ -302,6 +308,7 @@ impl LibraryExportKind {
         match value {
             "trait" => Some(Self::Trait),
             "sign" => Some(Self::Sign),
+            "paradigm" => Some(Self::Paradigm),
             "function" => Some(Self::Function),
             _ => None,
         }
@@ -614,6 +621,10 @@ pub enum LibraryLoadError {
     DuplicateTrait(String),
     #[error("combined library defines duplicate sign {0:?}")]
     DuplicateSign(String),
+    #[error("combined library defines duplicate paradigm {0:?}")]
+    DuplicateParadigm(String),
+    #[error("combined library defines both a sign and paradigm named {0:?}")]
+    CallableNameCollision(String),
 }
 
 impl LibraryLoadError {
@@ -643,6 +654,8 @@ impl LibraryLoadError {
             Self::UnknownAlias(_) => "LIBRARY_EXPORT_UNKNOWN",
             Self::DuplicateTrait(_) => "LIBRARY_TRAIT_DUPLICATE",
             Self::DuplicateSign(_) => "LIBRARY_SIGN_DUPLICATE",
+            Self::DuplicateParadigm(_) => "LIBRARY_PARADIGM_DUPLICATE",
+            Self::CallableNameCollision(_) => "LIBRARY_CALLABLE_NAME_COLLISION",
         }
     }
 }
@@ -1251,7 +1264,7 @@ fn parse_exports(
             return Err(LibraryLoadError::Exports {
                 package: id.to_string(),
                 line,
-                message: "export kind must be trait or sign".to_owned(),
+                message: "export kind must be trait, sign, paradigm, or function".to_owned(),
             });
         };
         if !fields[0].starts_with(&format!("{id}:")) || fields[0].contains(char::is_whitespace) {
@@ -1364,11 +1377,18 @@ fn validate_package_code(package: &LibraryPackage) -> Result<Language, LibraryLo
             message: "manifest does not grant the signs capability".to_owned(),
         });
     }
+    if !package.capabilities.paradigms && !language.paradigms.is_empty() {
+        return Err(LibraryLoadError::UnsupportedContent {
+            package: package.id.to_string(),
+            message: "manifest does not grant the paradigms capability".to_owned(),
+        });
+    }
     if package.layer == PackageLayer::Data
         && (!language.dsl_decls.is_empty()
             || !language.distribution.is_empty()
             || !language.traits.is_empty()
-            || !language.signs.is_empty())
+            || !language.signs.is_empty()
+            || !language.paradigms.is_empty())
     {
         return Err(LibraryLoadError::UnsupportedContent {
             package: package.id.to_string(),
@@ -1379,6 +1399,7 @@ fn validate_package_code(package: &LibraryPackage) -> Result<Language, LibraryLo
         if !language.dsl_decls.is_empty()
             || !language.distribution.is_empty()
             || !language.signs.is_empty()
+            || !language.paradigms.is_empty()
         {
             return Err(LibraryLoadError::UnsupportedContent {
                 package: package.id.to_string(),
@@ -1570,7 +1591,10 @@ fn load_package(source: OwnedPackageView<'_>) -> Result<LibraryPackage, LibraryL
     }
     let allow_empty_exports = schema >= 2
         && manifest.capabilities.is_some_and(|capabilities| {
-            !capabilities.traits && !capabilities.signs && !capabilities.functions
+            !capabilities.traits
+                && !capabilities.signs
+                && !capabilities.paradigms
+                && !capabilities.functions
         });
     let exports = parse_exports(&id, source.exports, allow_empty_exports)?;
     let tables = parse_tables(&id, source.tables, &data_paths)?;
@@ -1581,6 +1605,9 @@ fn load_package(source: OwnedPackageView<'_>) -> Result<LibraryPackage, LibraryL
         signs: exports
             .iter()
             .any(|export| export.kind == LibraryExportKind::Sign),
+        paradigms: exports
+            .iter()
+            .any(|export| export.kind == LibraryExportKind::Paradigm),
         functions: !function_paths.is_empty()
             || exports
                 .iter()
@@ -1643,6 +1670,7 @@ fn load_package(source: OwnedPackageView<'_>) -> Result<LibraryPackage, LibraryL
         let present = match export.kind {
             LibraryExportKind::Trait => language.trait_named(&export.alias).is_some(),
             LibraryExportKind::Sign => language.sign_named(&export.alias).is_some(),
+            LibraryExportKind::Paradigm => language.paradigm_named(&export.alias).is_some(),
             // function export 的存在性**由 changeset 端查驗**——`language` 不得
             // 解析 `.chg`(P20 依賴方向)。這裡只確認套件真的有帶 function 原始碼;
             // 名字對不對由 `changeset::function` 載入 function 表時報錯。
@@ -1660,6 +1688,7 @@ fn load_package(source: OwnedPackageView<'_>) -> Result<LibraryPackage, LibraryL
         let granted = match export.kind {
             LibraryExportKind::Trait => package.capabilities.traits,
             LibraryExportKind::Sign => package.capabilities.signs,
+            LibraryExportKind::Paradigm => package.capabilities.paradigms,
             LibraryExportKind::Function => package.capabilities.functions,
         };
         if !granted {
@@ -2129,6 +2158,7 @@ impl LibraryCatalog {
         let mut overlay = Language::new();
         let mut trait_names = BTreeSet::new();
         let mut sign_names = BTreeSet::new();
+        let mut paradigm_names = BTreeSet::new();
         let mut resolved = Vec::new();
         for id in &ordered {
             let package = self.package(id)?;
@@ -2141,6 +2171,19 @@ impl LibraryCatalog {
             for sign in &language.signs {
                 if !sign_names.insert(sign.name.clone()) {
                     return Err(LibraryLoadError::DuplicateSign(sign.name.clone()));
+                }
+                if paradigm_names.contains(&sign.name) {
+                    return Err(LibraryLoadError::CallableNameCollision(sign.name.clone()));
+                }
+            }
+            for paradigm in &language.paradigms {
+                if !paradigm_names.insert(paradigm.name.clone()) {
+                    return Err(LibraryLoadError::DuplicateParadigm(paradigm.name.clone()));
+                }
+                if sign_names.contains(&paradigm.name) {
+                    return Err(LibraryLoadError::CallableNameCollision(
+                        paradigm.name.clone(),
+                    ));
                 }
             }
             match package.layer {
@@ -2240,12 +2283,17 @@ mod tests {
         .is_err());
     }
 
-    /// P50 ②:`exports.tsv` 認得 `function` 這個 kind(歷時 function 層)。
+    /// `exports.tsv` keeps synchronic Paradigms distinct from Signs and also
+    /// recognizes the diachronic function layer.
     #[test]
     fn the_export_table_understands_functions() {
         assert_eq!(
             LibraryExportKind::parse("function"),
             Some(LibraryExportKind::Function)
+        );
+        assert_eq!(
+            LibraryExportKind::parse("paradigm"),
+            Some(LibraryExportKind::Paradigm)
         );
         assert_eq!(LibraryExportKind::parse("recipe"), None, "非關鍵字(P48)");
     }

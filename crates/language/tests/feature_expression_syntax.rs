@@ -19,7 +19,7 @@ sign s:
                 case:
                     $self.syn.trigger == on:
                         yes
-                    else:
+                    base:
                         no
 ";
 

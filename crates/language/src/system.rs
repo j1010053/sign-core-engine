@@ -15,8 +15,9 @@ use crate::sampling::{sample_weighted_index, WeightedSampleError};
 use crate::semantic_dto::{SemanticDocumentError, SemanticDocumentV1, SemanticNodeV1};
 use crate::synchronic::{self, RuleRecord, RuleStatus, SelfRead, SlotRead};
 use crate::{
-    CaseCondition, CaseSelection, Dim, Expression, Language, LanguageDocument, SignApplication,
-    SignArgumentValue, SignDef, SignId, SignItem, SignLifecycle, SignProvenance, TypedCase,
+    CaseCondition, CaseSelection, Dim, Expression, Language, LanguageDocument, ParadigmId,
+    SignApplication, SignArgument, SignArgumentValue, SignDef, SignId, SignItem, SignLifecycle,
+    SignProvenance, TypedCase,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
@@ -284,6 +285,17 @@ pub struct CaseRecord {
     pub status: CaseBranchStatus,
     pub source: SourceLocation,
     pub diagnostic_code: Option<&'static str>,
+    /// Present when this ordinary first-match record was produced by a named
+    /// horizontal Paradigm rather than a case owned by a Sign dimension.
+    pub paradigm: Option<ParadigmCaseRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParadigmCaseRecord {
+    pub paradigm_id: ParadigmId,
+    pub paradigm: String,
+    pub member_sign_id: SignId,
+    pub member: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -499,6 +511,35 @@ struct ItemContext<'a> {
     subject_features: &'a BTreeSet<(Dim, String)>,
 }
 
+/// Build the contract visible while validating a trait body.
+///
+/// A selected global trait is an implicit, lowest-priority template for every
+/// ordinary trait as well as every Sign.  Validation must therefore see its
+/// slots and schemas before it checks rules written on a more specific trait.
+/// Use the compile expansion view here (rather than ontology projection) so
+/// generic substitution and explicit `Name[n]` expansion keep the same
+/// semantics as the real compile pipeline.
+fn trait_validation_view(
+    language: &Language,
+    externals: &[&Language],
+    registry: &OntologyRegistry,
+    trait_name: &str,
+) -> SignDef {
+    let mut items = Vec::new();
+    if let Some(global) = registry
+        .global_trait_name()
+        .filter(|global| *global != trait_name)
+    {
+        items.extend(crate::compile::trait_view(language, externals, global).unwrap_or_default());
+    }
+    items.extend(crate::compile::trait_view(language, externals, trait_name).unwrap_or_default());
+    SignDef {
+        id: crate::SignId::synthetic(),
+        name: format!("{trait_name}#validation"),
+        items,
+    }
+}
+
 fn validate_defs_and_rules(
     language: &Language,
     externals: &[&Language],
@@ -671,12 +712,7 @@ fn validate_defs_and_rules(
         // [A] 3-2:trait 的視圖走**展開**,不走投影的內容那一半。展開會遞迴把
         // 祖先的內容拉進來,而且與真實編譯同一條路——驗證看到的不會與編譯產出分岔。
         // 展開失敗時退回空視圖:那個錯誤由編譯路徑自己報,這裡不重複也不假裝。
-        let effective = SignDef {
-            id: crate::SignId::synthetic(),
-            name: format!("{}#rule-validation", trait_def.name),
-            items: crate::compile::trait_view(language, externals, &trait_def.name)
-                .unwrap_or_default(),
-        };
+        let effective = trait_validation_view(language, externals, registry, &trait_def.name);
         // P71 增修 D:**trait 的 `$self` 靜態未知**,故與 filler 同樣用全域上界。
         // trait 是模板,合成後的 sign 帶什麼 feature 不由它決定:菱形繼承下
         // `Right` 的規則合法地 guard 在**兄弟** `Left` 宣告的 feature 上
@@ -787,9 +823,10 @@ fn validate_typed_schemas(
         if !registry.has(category) {
             return None;
         }
-        crate::compile::trait_view(language, externals, category)
-            .unwrap_or_default()
+        trait_validation_view(language, externals, registry, category)
+            .items
             .into_iter()
+            .rev()
             .find_map(|item| match item {
                 SignItem::FeatureDecl(declaration)
                     if declaration.dim == Dim::Syn && declaration.name == feature =>
@@ -945,13 +982,10 @@ fn validate_typed_schemas(
         .map(|sign| (sign.name.clone(), registry.effective_sign(sign)))
         .collect::<Vec<_>>();
     candidates.extend(language.traits.iter().map(|trait_def| {
-        let synthetic = SignDef {
-            id: crate::SignId::synthetic(),
-            name: format!("{}#schema", trait_def.name),
-            items: crate::compile::trait_view(language, externals, &trait_def.name)
-                .unwrap_or_default(),
-        };
-        (trait_def.name.clone(), synthetic)
+        (
+            trait_def.name.clone(),
+            trait_validation_view(language, externals, registry, &trait_def.name),
+        )
     }));
     let roots = candidates.clone();
     for (owner, effective) in roots {
@@ -1613,6 +1647,7 @@ fn validate_typed_schemas(
                         let template = match result {
                             Expression::PhonTemplate(template) => template,
                             Expression::PhonInterpolation(_) => continue,
+                            Expression::ImplicitBase => continue,
                             Expression::Case(nested) => {
                                 pending.extend(nested.branches.iter().map(|branch| &branch.result));
                                 continue;
@@ -1781,6 +1816,342 @@ fn validate_duplicate_signs(language: &Language, report: &mut ValidationReport) 
     }
 }
 
+fn residual_application_parameters(
+    language: &Language,
+    registry: &OntologyRegistry,
+    application: &SignApplication,
+) -> Option<Vec<crate::SignParameter>> {
+    let sign = language.sign_named(&application.callee)?;
+    let parameters = construction::parameters_of(&registry.effective_sign(sign));
+    let mut supplied = BTreeSet::new();
+    for argument in &application.arguments {
+        let name = match &argument.name {
+            Some(name) => name.as_str(),
+            None if parameters.len() == 1 => parameters[0].name.as_str(),
+            None => return None,
+        };
+        if !parameters.iter().any(|parameter| parameter.name == name)
+            || !supplied.insert(name.to_owned())
+        {
+            return None;
+        }
+    }
+    Some(
+        parameters
+            .into_iter()
+            .filter(|parameter| !supplied.contains(&parameter.name))
+            .collect(),
+    )
+}
+
+/// Public parameters of a Paradigm are the residual parameters shared by
+/// every possible member application. This makes argument checking stable
+/// before the runtime bundle is known and permits ordinary partial
+/// application after selection.
+fn paradigm_parameters(
+    language: &Language,
+    registry: &OntologyRegistry,
+    name: &str,
+) -> Option<Vec<crate::SignParameter>> {
+    let paradigm = language.paradigm_named(name)?;
+    let mut common: Option<Vec<crate::SignParameter>> = None;
+    for branch in &paradigm.selector.branches {
+        let Expression::SignApplication(application) = &branch.result else {
+            return None;
+        };
+        let residual = residual_application_parameters(language, registry, application)?;
+        if common
+            .as_ref()
+            .is_some_and(|expected| expected != &residual)
+        {
+            return None;
+        }
+        common.get_or_insert(residual);
+    }
+    common
+}
+
+fn validate_paradigms(
+    language: &Language,
+    registry: &OntologyRegistry,
+    report: &mut ValidationReport,
+) {
+    let mut names = BTreeSet::new();
+    for paradigm in &language.paradigms {
+        if !names.insert(&paradigm.name) {
+            report.push(Diagnostic::new(
+                Severity::Error,
+                "PARADIGM_DUPLICATE",
+                format!("duplicate paradigm {:?}", paradigm.name),
+            ));
+        }
+        if language.sign_named(&paradigm.name).is_some() {
+            report.push(Diagnostic::new(
+                Severity::Error,
+                "CALLABLE_NAME_COLLISION",
+                format!(
+                    "name {:?} denotes both a Sign and a Paradigm; `name(...)` would be ambiguous",
+                    paradigm.name
+                ),
+            ));
+        }
+
+        let selector = &paradigm.selector;
+        if selector.selection != CaseSelection::FirstMatch
+            || selector.scrutinee.is_some()
+            || selector.match_features.is_empty()
+            || selector.expected != crate::ExpressionType::SignContext
+        {
+            report.push(Diagnostic::new(
+                Severity::Error,
+                "PARADIGM_SELECTOR_INVALID",
+                format!(
+                    "paradigm {:?} must use one `case [feature, ...]:` selector",
+                    paradigm.name
+                ),
+            ));
+        }
+
+        let has_final_base = selector.branches.last().is_some_and(|branch| {
+            matches!(branch.condition, CaseCondition::Base)
+                && matches!(branch.result, Expression::SignApplication(_))
+        });
+        if !has_final_base {
+            report.push(Diagnostic::new(
+                Severity::Error,
+                "PARADIGM_BASE_REQUIRED",
+                format!(
+                    "paradigm {:?} requires a final non-empty `base: sign()` branch",
+                    paradigm.name
+                ),
+            ));
+        }
+
+        let mut feature_domains = BTreeMap::<String, Vec<String>>::new();
+        let mut prior_patterns = Vec::<Vec<Option<String>>>::new();
+        let mut common_parameters: Option<Vec<crate::SignParameter>> = None;
+        for branch in &selector.branches {
+            if !branch.belongs.is_empty() {
+                report.push(Diagnostic::new(
+                    Severity::Error,
+                    "PARADIGM_BELONGS_NOT_ALLOWED",
+                    format!(
+                        "paradigm {:?} is a horizontal selector and cannot own `belongs` links",
+                        paradigm.name
+                    ),
+                ));
+            }
+            let Expression::SignApplication(application) = &branch.result else {
+                report.push(
+                    Diagnostic::new(
+                        Severity::Error,
+                        "PARADIGM_RESULT_NOT_SIGN_APPLICATION",
+                        format!(
+                            "paradigm {:?} branch must return an explicit Sign application",
+                            paradigm.name
+                        ),
+                    )
+                    .with_sources(vec![DiagnosticSource {
+                        owner: paradigm.name.clone(),
+                        path: Some("paradigm.case".to_owned()),
+                        location: branch.source,
+                    }]),
+                );
+                continue;
+            };
+            let Some(member) = language.sign_named(&application.callee) else {
+                report.push(
+                    Diagnostic::new(
+                        Severity::Error,
+                        "PARADIGM_UNKNOWN_MEMBER_SIGN",
+                        format!(
+                            "paradigm {:?} selects unknown Sign {:?}; Paradigm members cannot be other Paradigms",
+                            paradigm.name, application.callee
+                        ),
+                    )
+                    .with_sources(vec![DiagnosticSource {
+                        owner: paradigm.name.clone(),
+                        path: Some("paradigm.case".to_owned()),
+                        location: application.source,
+                    }]),
+                );
+                continue;
+            };
+            if let Some(parameters) =
+                residual_application_parameters(language, registry, application)
+            {
+                if let Some(expected) = &common_parameters {
+                    if expected != &parameters {
+                        report.push(Diagnostic::new(
+                            Severity::Error,
+                            "PARADIGM_MEMBER_SIGNATURE_MISMATCH",
+                            format!(
+                                "paradigm {:?} member {:?} has residual parameters {:?}, expected {:?}",
+                                paradigm.name, application.callee, parameters, expected
+                            ),
+                        ));
+                    }
+                } else {
+                    common_parameters = Some(parameters);
+                }
+            } else {
+                report.push(Diagnostic::new(
+                    Severity::Error,
+                    "PARADIGM_MEMBER_ARGUMENT_INVALID",
+                    format!(
+                        "paradigm {:?} has invalid pre-applied arguments for member {:?}",
+                        paradigm.name, application.callee
+                    ),
+                ));
+            }
+
+            let effective = registry.effective_sign(member);
+            for feature in &selector.match_features {
+                let Some((dim_name, name)) = feature.split_once('.') else {
+                    report.push(Diagnostic::new(
+                        Severity::Error,
+                        "PARADIGM_FEATURE_PATH_INVALID",
+                        format!(
+                            "paradigm {:?} match feature {:?} must be `syn.name`, `sem.name`, or `prag.name`",
+                            paradigm.name, feature
+                        ),
+                    ));
+                    continue;
+                };
+                let Some(dim) = Dim::parse(dim_name).filter(|dim| *dim != Dim::Phon) else {
+                    report.push(Diagnostic::new(
+                        Severity::Error,
+                        "PARADIGM_FEATURE_DIMENSION_INVALID",
+                        format!(
+                            "paradigm {:?} cannot match feature {:?}; only syn/sem/prag typed features are selectable",
+                            paradigm.name, feature
+                        ),
+                    ));
+                    continue;
+                };
+                let declaration = effective.items.iter().rev().find_map(|item| match item {
+                    SignItem::FeatureDecl(declaration)
+                        if declaration.dim == dim && declaration.name == name =>
+                    {
+                        Some(declaration)
+                    }
+                    _ => None,
+                });
+                let Some(declaration) = declaration else {
+                    report.push(Diagnostic::new(
+                        Severity::Error,
+                        "PARADIGM_MEMBER_FEATURE_MISSING",
+                        format!(
+                            "paradigm {:?} member {:?} does not declare match feature {:?}",
+                            paradigm.name, application.callee, feature
+                        ),
+                    ));
+                    continue;
+                };
+                if let Some(expected) = feature_domains.get(feature) {
+                    if expected != &declaration.values {
+                        report.push(Diagnostic::new(
+                            Severity::Error,
+                            "PARADIGM_FEATURE_DOMAIN_MISMATCH",
+                            format!(
+                                "paradigm {:?} members disagree on domain of {:?}",
+                                paradigm.name, feature
+                            ),
+                        ));
+                    }
+                } else {
+                    feature_domains.insert(feature.clone(), declaration.values.clone());
+                }
+            }
+
+            if let CaseCondition::Bundle(pattern) = &branch.condition {
+                for (feature, expected_value) in selector.match_features.iter().zip(pattern) {
+                    let Some(expected_value) = expected_value else {
+                        continue;
+                    };
+                    let Some((dim_name, name)) = feature.split_once('.') else {
+                        continue;
+                    };
+                    let Some(dim) = Dim::parse(dim_name) else {
+                        continue;
+                    };
+                    let selected_values =
+                        effective.items.iter().rev().find_map(|item| match item {
+                            SignItem::FeatureValue(value)
+                                if value.dim == dim && value.name == name =>
+                            {
+                                Some(&value.values)
+                            }
+                            _ => None,
+                        });
+                    if let Some(values) = selected_values {
+                        if !values.contains(expected_value) {
+                            report.push(
+                                Diagnostic::new(
+                                    Severity::Error,
+                                    "PARADIGM_MEMBER_PATTERN_CONFLICT",
+                                    format!(
+                                        "paradigm {:?} row selects {:?} for {:?}, but member {:?} permits {:?}",
+                                        paradigm.name,
+                                        expected_value,
+                                        feature,
+                                        application.callee,
+                                        values
+                                    ),
+                                )
+                                .with_sources(vec![DiagnosticSource {
+                                    owner: paradigm.name.clone(),
+                                    path: Some("paradigm.case".to_owned()),
+                                    location: branch.source,
+                                }]),
+                            );
+                        }
+                    }
+                }
+                if prior_patterns.iter().any(|prior| {
+                    prior.len() == pattern.len()
+                        && prior
+                            .iter()
+                            .zip(pattern)
+                            .all(|(earlier, current)| earlier.is_none() || earlier == current)
+                }) {
+                    report.push(Diagnostic::new(
+                        Severity::Warning,
+                        "PARADIGM_BRANCH_SHADOWED",
+                        format!(
+                            "paradigm {:?} has a bundle row shadowed by an earlier row",
+                            paradigm.name
+                        ),
+                    ));
+                }
+                prior_patterns.push(pattern.clone());
+            }
+        }
+
+        for branch in &selector.branches {
+            let CaseCondition::Bundle(pattern) = &branch.condition else {
+                continue;
+            };
+            for (feature, value) in selector.match_features.iter().zip(pattern) {
+                let Some(value) = value else { continue };
+                if feature_domains
+                    .get(feature)
+                    .is_some_and(|domain| !domain.contains(value))
+                {
+                    report.push(Diagnostic::new(
+                        Severity::Error,
+                        "PARADIGM_VALUE_OUT_OF_DOMAIN",
+                        format!(
+                            "paradigm {:?} value {:?} is outside the domain of {:?}",
+                            paradigm.name, value, feature
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+}
+
 fn validate_fp_expressions(
     language: &Language,
     registry: &OntologyRegistry,
@@ -1829,6 +2200,7 @@ fn validate_fp_expressions(
             // Nested cases are visited by the enclosing validation queue, so
             // only inspect direct branch expressions here.
             Expression::Case(_) => {}
+            Expression::ImplicitBase => {}
             _ => {}
         }
     }
@@ -1841,7 +2213,8 @@ fn validate_fp_expressions(
             | (Expression::PhonInterpolation(_), crate::ExpressionType::PhonContext)
             | (Expression::PhonTemplate(_), crate::ExpressionType::PhonContext)
             | (Expression::EnumValue(_), crate::ExpressionType::Feature { .. })
-            | (Expression::Slot(_), crate::ExpressionType::Role { .. }) => true,
+            | (Expression::Slot(_), crate::ExpressionType::Role { .. })
+            | (Expression::ImplicitBase, _) => true,
             (Expression::DimFragment { dim: Dim::Syn, .. }, crate::ExpressionType::SynContext)
             | (Expression::DimFragment { dim: Dim::Sem, .. }, crate::ExpressionType::SemContext)
             | (
@@ -1925,6 +2298,16 @@ fn validate_fp_expressions(
         let local_parameters = construction::parameters_of(&effective);
         let local_slots = construction::slots_of(&effective);
         let local_features = visible_features(&effective);
+        let mut local_feature_domains = BTreeMap::<String, Vec<String>>::new();
+        for declaration in effective.items.iter().filter_map(|item| match item {
+            SignItem::FeatureDecl(declaration) => Some(declaration),
+            _ => None,
+        }) {
+            local_feature_domains.insert(
+                format!("{}.{}", declaration.dim.keyword(), declaration.name),
+                declaration.values.clone(),
+            );
+        }
         let mut cases = effective
             .items
             .iter()
@@ -1986,22 +2369,70 @@ fn validate_fp_expressions(
                     ),
                 ));
             }
-            let mut saw_else = false;
-            for branch in &case.branches {
-                if matches!(branch.condition, CaseCondition::Else) {
-                    if saw_else {
-                        report.push(Diagnostic::new(
-                            Severity::Error,
-                            "CASE_MULTIPLE_ELSE",
-                            format!("sign {:?} has more than one case else branch", local.name),
-                        ));
-                    }
-                    saw_else = true;
-                } else if saw_else {
+            if case.scrutinee.is_some() && !case.match_features.is_empty() {
+                report.push(Diagnostic::new(
+                    Severity::Error,
+                    "CASE_MULTIPLE_MATCH_INPUTS",
+                    format!(
+                        "sign {:?} case cannot combine a scrutinee with bundle-match features",
+                        local.name
+                    ),
+                ));
+            }
+            let mut seen_features = BTreeSet::new();
+            for feature in &case.match_features {
+                if !seen_features.insert(feature) {
                     report.push(Diagnostic::new(
                         Severity::Error,
-                        "CASE_BRANCH_AFTER_ELSE",
-                        format!("sign {:?} has a case branch after else", local.name),
+                        "CASE_BUNDLE_DUPLICATE_FEATURE",
+                        format!(
+                            "sign {:?} bundle match declares feature {feature:?} more than once",
+                            local.name
+                        ),
+                    ));
+                }
+                if !local_feature_domains.contains_key(feature) {
+                    report.push(Diagnostic::new(
+                        Severity::Error,
+                        "CASE_BUNDLE_UNKNOWN_FEATURE",
+                        format!(
+                            "sign {:?} bundle match reads undeclared typed feature {feature:?}",
+                            local.name
+                        ),
+                    ));
+                }
+            }
+            let mut saw_fallback = false;
+            let mut prior_bundle_patterns = Vec::<Vec<Option<String>>>::new();
+            for branch in &case.branches {
+                let is_fallback =
+                    matches!(branch.condition, CaseCondition::Base | CaseCondition::Else);
+                if is_fallback {
+                    if saw_fallback {
+                        report.push(Diagnostic::new(
+                            Severity::Error,
+                            match case.selection {
+                                CaseSelection::FirstMatch => "CASE_MULTIPLE_BASE",
+                                CaseSelection::Accumulate => "WHEN_MULTIPLE_ELSE",
+                            },
+                            format!(
+                                "sign {:?} has more than one {:?} fallback branch",
+                                local.name, case.selection
+                            ),
+                        ));
+                    }
+                    saw_fallback = true;
+                } else if saw_fallback {
+                    report.push(Diagnostic::new(
+                        Severity::Error,
+                        match case.selection {
+                            CaseSelection::FirstMatch => "CASE_BRANCH_AFTER_BASE",
+                            CaseSelection::Accumulate => "WHEN_BRANCH_AFTER_ELSE",
+                        },
+                        format!(
+                            "sign {:?} has a branch after its {:?} fallback",
+                            local.name, case.selection
+                        ),
                     ));
                 }
                 match &branch.condition {
@@ -2031,7 +2462,130 @@ fn validate_fp_expressions(
                             }
                         }
                     }
-                    CaseCondition::Equals(_) | CaseCondition::Else => {}
+                    CaseCondition::Bundle(values) => {
+                        if case.match_features.is_empty() {
+                            report.push(Diagnostic::new(
+                                Severity::Error,
+                                "CASE_BUNDLE_HEADER_MISSING",
+                                format!(
+                                    "sign {:?} has a bundle row without a bundle-match header",
+                                    local.name
+                                ),
+                            ));
+                        }
+                        if values.len() != case.match_features.len() {
+                            report.push(Diagnostic::new(
+                                Severity::Error,
+                                "CASE_BUNDLE_ARITY_MISMATCH",
+                                format!(
+                                    "sign {:?} bundle row has {} value(s), expected {}",
+                                    local.name,
+                                    values.len(),
+                                    case.match_features.len()
+                                ),
+                            ));
+                        }
+                        for (feature, value) in case.match_features.iter().zip(values) {
+                            let Some(value) = value else {
+                                continue;
+                            };
+                            if let Some(domain) = local_feature_domains.get(feature) {
+                                if !domain.contains(value) {
+                                    report.push(
+                                        Diagnostic::new(
+                                            Severity::Error,
+                                            "CASE_BUNDLE_VALUE_OUT_OF_DOMAIN",
+                                            format!(
+                                                "sign {:?} bundle row value {value:?} is outside {} = enum({})",
+                                                local.name,
+                                                feature,
+                                                domain.join(", ")
+                                            ),
+                                        )
+                                        .with_sources(vec![DiagnosticSource {
+                                            owner: local.name.clone(),
+                                            path: Some(site.to_owned()),
+                                            location: branch.source,
+                                        }]),
+                                    );
+                                }
+                            }
+                        }
+                        if case.selection == CaseSelection::FirstMatch
+                            && prior_bundle_patterns.iter().any(|prior| {
+                                prior.len() == values.len()
+                                    && prior.iter().zip(values).all(|(earlier, current)| {
+                                        earlier.is_none() || earlier == current
+                                    })
+                            })
+                        {
+                            report.push(
+                                Diagnostic::new(
+                                    Severity::Warning,
+                                    "CASE_BUNDLE_BRANCH_SHADOWED",
+                                    format!(
+                                        "sign {:?} has a bundle row shadowed by an earlier row",
+                                        local.name
+                                    ),
+                                )
+                                .with_sources(vec![
+                                    DiagnosticSource {
+                                        owner: local.name.clone(),
+                                        path: Some(site.to_owned()),
+                                        location: branch.source,
+                                    },
+                                ]),
+                            );
+                        }
+                        prior_bundle_patterns.push(values.clone());
+                    }
+                    CaseCondition::Base => {
+                        if case.selection != CaseSelection::FirstMatch {
+                            report.push(Diagnostic::new(
+                                Severity::Error,
+                                "WHEN_BASE_NOT_ALLOWED",
+                                format!("sign {:?} uses `base` in `when`", local.name),
+                            ));
+                        }
+                    }
+                    CaseCondition::Else => {
+                        if case.selection != CaseSelection::Accumulate {
+                            report.push(Diagnostic::new(
+                                Severity::Error,
+                                "CASE_ELSE_NOT_ALLOWED",
+                                format!("sign {:?} uses `else` in `case`", local.name),
+                            ));
+                        }
+                    }
+                    CaseCondition::Equals(_) => {}
+                }
+                if !case.match_features.is_empty()
+                    && matches!(
+                        branch.condition,
+                        CaseCondition::Guard(_) | CaseCondition::Equals(_)
+                    )
+                {
+                    report.push(Diagnostic::new(
+                        Severity::Error,
+                        "CASE_BUNDLE_ROW_REQUIRED",
+                        format!(
+                            "sign {:?} bundle match requires `[value, ...]` rows",
+                            local.name
+                        ),
+                    ));
+                }
+                if matches!(branch.result, Expression::ImplicitBase)
+                    && !(case.selection == CaseSelection::FirstMatch
+                        && matches!(branch.condition, CaseCondition::Base))
+                {
+                    report.push(Diagnostic::new(
+                        Severity::Error,
+                        "CASE_IMPLICIT_BASE_OUTSIDE_BASE_BRANCH",
+                        format!(
+                            "sign {:?} uses an empty result outside a `case` `base:` branch",
+                            local.name
+                        ),
+                    ));
                 }
                 if !matches!(case.expected, crate::ExpressionType::SignContext)
                     && !branch.belongs.is_empty()
@@ -2210,13 +2764,17 @@ fn validate_fp_expressions(
                         .entry(local.name.clone())
                         .or_default()
                         .push(call.callee.clone());
-                    let Some(callee) = language.sign_named(&call.callee) else {
+                    let parameters = if let Some(callee) = language.sign_named(&call.callee) {
+                        construction::parameters_of(&registry.effective_sign(callee))
+                    } else if language.paradigm_named(&call.callee).is_some() {
+                        paradigm_parameters(language, registry, &call.callee).unwrap_or_default()
+                    } else {
                         report.push(
                             Diagnostic::new(
                                 Severity::Error,
                                 "APPLICATION_UNKNOWN_SIGN",
                                 format!(
-                                    "sign {:?} calls unknown Sign function {:?}",
+                                    "sign {:?} calls unknown Sign or Paradigm function {:?}",
                                     local.name, call.callee
                                 ),
                             )
@@ -2228,7 +2786,6 @@ fn validate_fp_expressions(
                         );
                         continue;
                     };
-                    let parameters = construction::parameters_of(&registry.effective_sign(callee));
                     let mut supplied = BTreeSet::new();
                     for argument in &call.arguments {
                         if let SignArgumentValue::Slot(slot) = &argument.value {
@@ -2251,7 +2808,7 @@ fn validate_fp_expressions(
                                     Severity::Error,
                                     "APPLICATION_POSITIONAL_ARITY",
                                     format!(
-                                        "Sign function {:?} has {} parameters; positional shorthand is invalid",
+                                        "callable {:?} has {} parameters; positional shorthand is invalid",
                                         call.callee,
                                         parameters.len()
                                     ),
@@ -2264,19 +2821,13 @@ fn validate_fp_expressions(
                                 report.push(Diagnostic::new(
                                     Severity::Error,
                                     "APPLICATION_UNKNOWN_PARAMETER",
-                                    format!(
-                                        "Sign function {:?} has no parameter {name:?}",
-                                        call.callee
-                                    ),
+                                    format!("callable {:?} has no parameter {name:?}", call.callee),
                                 ));
                             } else if !supplied.insert(name.to_owned()) {
                                 report.push(Diagnostic::new(
                                     Severity::Error,
                                     "APPLICATION_DUPLICATE_PARAMETER",
-                                    format!(
-                                        "Sign function {:?} receives {name:?} twice",
-                                        call.callee
-                                    ),
+                                    format!("callable {:?} receives {name:?} twice", call.callee),
                                 ));
                             }
                         }
@@ -2286,6 +2837,23 @@ fn validate_fp_expressions(
                     cases.push((nested.as_ref(), site_type.clone(), site));
                 }
             }
+        }
+    }
+
+    // Paradigm membership is a horizontal callable edge. Include it in the
+    // same cycle graph as Sign applications so `A -> P -> A` cannot recurse
+    // merely because one hop crosses entity kinds.
+    for paradigm in &language.paradigms {
+        for branch in &paradigm.selector.branches {
+            let Expression::SignApplication(application) = &branch.result else {
+                continue;
+            };
+            let mut member_calls = Vec::new();
+            application_and_nested(application, &mut member_calls);
+            calls
+                .entry(paradigm.name.clone())
+                .or_default()
+                .extend(member_calls.into_iter().map(|call| call.callee.clone()));
         }
     }
 
@@ -2442,19 +3010,75 @@ fn validate_constructions_and_local_phon(
                 ));
             }
             for operation in declared_mapping.ops() {
-                let SlotMapOp::AutoFill { slot, filler } = operation else {
-                    continue;
-                };
-                let Some(filler_sign) = language.sign_named(filler) else {
-                    report.push(Diagnostic::new(
-                        Severity::Error,
-                        "SLOT_MAP_UNKNOWN_FILLER",
-                        format!(
-                            "construction {:?} auto-fills {slot:?} with unknown sign {filler:?}",
-                            effective.name
-                        ),
-                    ));
-                    continue;
+                let (slot, filler_name, candidates, residual) = match operation {
+                    SlotMapOp::AutoFill { slot, filler } => {
+                        let Some(filler_sign) = language.sign_named(filler) else {
+                            report.push(Diagnostic::new(
+                                Severity::Error,
+                                "SLOT_MAP_UNKNOWN_FILLER",
+                                format!(
+                                    "construction {:?} auto-fills {slot:?} with unknown sign {filler:?}",
+                                    effective.name
+                                ),
+                            ));
+                            continue;
+                        };
+                        (slot, filler.as_str(), vec![filler_sign], Vec::new())
+                    }
+                    SlotMapOp::AutoFillCall { slot, filler } => {
+                        let (candidates, parameters) = if let Some(sign) =
+                            language.sign_named(&filler.callee)
+                        {
+                            (
+                                vec![sign],
+                                construction::parameters_of(&registry.effective_sign(sign)),
+                            )
+                        } else if let Some(paradigm) = language.paradigm_named(&filler.callee) {
+                            let candidates = paradigm
+                                .selector
+                                .branches
+                                .iter()
+                                .filter_map(|branch| match &branch.result {
+                                    Expression::SignApplication(application) => {
+                                        language.sign_named(&application.callee)
+                                    }
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>();
+                            (
+                                candidates,
+                                paradigm_parameters(language, registry, &filler.callee)
+                                    .unwrap_or_default(),
+                            )
+                        } else {
+                            report.push(Diagnostic::new(
+                                    Severity::Error,
+                                    "SLOT_MAP_UNKNOWN_CALLABLE",
+                                    format!(
+                                        "construction {:?} auto-fills {slot:?} with unknown callable {:?}",
+                                        effective.name, filler.callee
+                                    ),
+                                ));
+                            continue;
+                        };
+                        let mut supplied = BTreeSet::new();
+                        for argument in &filler.arguments {
+                            let name = match &argument.name {
+                                Some(name) => Some(name.as_str()),
+                                None if parameters.len() == 1 => Some(parameters[0].name.as_str()),
+                                None => None,
+                            };
+                            if let Some(name) = name {
+                                supplied.insert(name.to_owned());
+                            }
+                        }
+                        let residual = parameters
+                            .into_iter()
+                            .filter(|parameter| !supplied.contains(&parameter.name))
+                            .collect::<Vec<_>>();
+                        (slot, filler.callee.as_str(), candidates, residual)
+                    }
+                    _ => continue,
                 };
                 let Some(constraint) = slots
                     .iter()
@@ -2463,18 +3087,31 @@ fn validate_constructions_and_local_phon(
                 else {
                     continue;
                 };
-                let effective_filler = registry.effective_sign(filler_sign);
-                let categories = registry.sign_categories(&effective_filler);
-                if !constraint.is_satisfied_by(&categories, registry) {
+                if residual.iter().any(|parameter| !parameter.optional) {
                     report.push(Diagnostic::new(
                         Severity::Error,
-                        "SLOT_MAP_FILLER_CATEGORY",
+                        "SLOT_MAP_AUTOFILL_UNSATURATED",
                         format!(
-                            "construction {:?} slot {slot:?} requires [{}], but auto-fill {filler:?} has {categories:?}",
-                            effective.name,
-                            constraint.display_name()
+                            "construction {:?} auto-fill callable {filler_name:?} leaves required parameters",
+                            effective.name
                         ),
                     ));
+                }
+                for filler_sign in candidates {
+                    let effective_filler = registry.effective_sign(filler_sign);
+                    let categories = registry.sign_categories(&effective_filler);
+                    if !constraint.is_satisfied_by(&categories, registry) {
+                        report.push(Diagnostic::new(
+                            Severity::Error,
+                            "SLOT_MAP_FILLER_CATEGORY",
+                            format!(
+                                "construction {:?} slot {slot:?} requires [{}], but auto-fill member {:?} has {categories:?}",
+                                effective.name,
+                                constraint.display_name(),
+                                filler_sign.name
+                            ),
+                        ));
+                    }
                 }
             }
             let slot_names: Vec<_> = slots.iter().map(|slot| slot.name.as_str()).collect();
@@ -2743,6 +3380,7 @@ fn validate_source_language(
     validate_defs_and_rules(&expanded, &[std], &registry, &mut report);
     validate_typed_schemas(std, &[], &registry, &mut report);
     validate_typed_schemas(&expanded, &[std], &registry, &mut report);
+    validate_paradigms(&expanded, &registry, &mut report);
     validate_fp_expressions(&expanded, &registry, &mut report);
     report.extend(crate::ontology::type_param_bound_diagnostics(
         &[std, &expanded],
@@ -2872,7 +3510,7 @@ pub fn check_document_with_packages(
 /// 這是個約定,不是機制。唯一的旁證是 compile 的 **dump golden**(每 pass 一份)
 /// ——編譯語意一變它們就會 churn,審查時看得到。若某次改動讓那些 golden 動了
 /// 而此處沒動,那就是漏了。
-pub const COMPILER_SEMANTICS_VERSION: &str = "conlang-compile/1";
+pub const COMPILER_SEMANTICS_VERSION: &str = "conlang-compile/4";
 
 /// Exact owned entry point requested by P38–P44. Use `compile_system_ref` when
 /// the caller wants to retain its original `Language` without cloning first.
@@ -2995,6 +3633,18 @@ impl CompiledSystem {
 
     pub fn effective_language(&self) -> &Language {
         &self.effective_language
+    }
+
+    /// Public callable interface shared by direct Sign and Paradigm
+    /// applications. A Paradigm exposes the residual parameter list common to
+    /// every possible member, so callers can validate/author arguments before
+    /// the selector has observed a runtime feature bundle.
+    pub fn callable_parameters(&self, name: &str) -> Option<Vec<crate::SignParameter>> {
+        if let Some(sign) = self.effective_language.sign_named(name) {
+            let effective = self.ontology.effective_sign(sign);
+            return Some(construction::parameters_of(&effective));
+        }
+        paradigm_parameters(&self.effective_language, &self.ontology, name)
     }
 
     pub fn libraries(&self) -> &[LibraryId] {
@@ -3230,7 +3880,31 @@ impl CompiledSystem {
         condition: &CaseCondition,
     ) -> Result<bool, SystemError> {
         match condition {
-            CaseCondition::Else => Ok(true),
+            CaseCondition::Base if case.selection == CaseSelection::FirstMatch => Ok(true),
+            CaseCondition::Else if case.selection == CaseSelection::Accumulate => Ok(true),
+            CaseCondition::Base | CaseCondition::Else => {
+                Err(SystemError::InvalidSignExpression(format!(
+                    "{:?} uses the wrong fallback condition {condition:?}",
+                    case.selection
+                )))
+            }
+            CaseCondition::Bundle(pattern) => {
+                if pattern.len() != case.match_features.len() || case.match_features.is_empty() {
+                    return Err(SystemError::InvalidSignExpression(
+                        "bundle match row/header arity mismatch".to_owned(),
+                    ));
+                }
+                for (path, expected) in case.match_features.iter().zip(pattern) {
+                    let Some(expected) = expected else {
+                        continue;
+                    };
+                    match Self::value_set_from_value(value, path) {
+                        Some(values) if values.len() == 1 && &values[0] == expected => {}
+                        Some(_) | None => return Ok(false),
+                    }
+                }
+                Ok(true)
+            }
             CaseCondition::Guard(guard) => self.case_guard_matches(value, guard),
             CaseCondition::Equals(expected) => self.case_equals_matches(
                 value,
@@ -3336,11 +4010,13 @@ impl CompiledSystem {
                     status: CaseBranchStatus::Unmatched,
                     source: branch.source,
                     diagnostic_code: None,
+                    paradigm: None,
                 });
                 continue;
             }
             let value = match &branch.result {
                 Expression::EnumValue(value) => Some(value.clone()),
+                Expression::ImplicitBase => base.clone(),
                 Expression::Case(nested) => self.evaluate_feature_case(
                     current,
                     nested,
@@ -3373,6 +4049,7 @@ impl CompiledSystem {
                 status: CaseBranchStatus::Matched,
                 source: branch.source,
                 diagnostic_code: None,
+                paradigm: None,
             });
             return Ok(value);
         }
@@ -3571,6 +4248,20 @@ impl CompiledSystem {
             cycle.push(application.callee.clone());
             return Err(SystemError::SignApplicationCycle(cycle));
         }
+        if let Some(paradigm) = self
+            .effective_language
+            .paradigm_named(&application.callee)
+            .cloned()
+        {
+            return self.apply_paradigm_application(
+                current,
+                &paradigm,
+                application,
+                stack,
+                rules,
+                cases,
+            );
+        }
         let local = self
             .effective_language
             .sign_named(&application.callee)
@@ -3648,6 +4339,35 @@ impl CompiledSystem {
             bindings.push((name, value));
         }
 
+        // A nullary Sign application is identity-preserving: it evaluates the
+        // stored Sign and returns that same SignId. It is a real callable even
+        // though the legacy construction layer correctly says it has no
+        // slots. This is the V3 meaning of `be()`.
+        if parameters.is_empty() {
+            let (evaluation, local_cases) =
+                self.evaluate_source_sign_with_context(local, &DerivationContext::new())?;
+            cases.extend(local_cases);
+            let expressions = evaluation
+                .sign
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    SignItem::SignExpression(expression) => Some(expression.expression.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let mut value = SignValue::Stored(evaluation);
+            for expression in expressions {
+                let Expression::Case(case) = expression else {
+                    return Err(SystemError::InvalidSignExpression(
+                        "Sign body expression must return Sign".to_owned(),
+                    ));
+                };
+                value = self.evaluate_sign_case(value, &case, cases, &next_stack, rules)?;
+            }
+            return Ok(value);
+        }
+
         let committed = bindings
             .into_iter()
             .filter_map(|(name, value)| value.map(|value| (name, value)))
@@ -3670,6 +4390,173 @@ impl CompiledSystem {
         self.evaluate_applied_sign(token, &next_stack, rules, cases)
     }
 
+    fn apply_paradigm_application(
+        &self,
+        current: &SignValue,
+        paradigm: &crate::ParadigmDef,
+        application: &SignApplication,
+        stack: &[String],
+        rules: &mut Vec<UnitRuleRecord>,
+        cases: &mut Vec<CaseRecord>,
+    ) -> Result<SignValue, SystemError> {
+        let parameters =
+            paradigm_parameters(&self.effective_language, &self.ontology, &paradigm.name)
+                .ok_or_else(|| {
+                    SystemError::InvalidSignExpression(format!(
+                        "paradigm {:?} has no coherent callable interface",
+                        paradigm.name
+                    ))
+                })?;
+        let mut supplied = BTreeSet::new();
+        let mut forwarded = Vec::with_capacity(application.arguments.len());
+        for argument in &application.arguments {
+            let name = match &argument.name {
+                Some(name) => name.clone(),
+                None if parameters.len() == 1 => parameters[0].name.clone(),
+                None => {
+                    return Err(SystemError::InvalidSignExpression(format!(
+                        "positional shorthand for paradigm {:?} requires exactly one residual slot",
+                        paradigm.name
+                    )))
+                }
+            };
+            if !parameters.iter().any(|parameter| parameter.name == name) {
+                return Err(SystemError::InvalidSignExpression(format!(
+                    "unknown argument {name:?} for paradigm {:?}",
+                    paradigm.name
+                )));
+            }
+            if !supplied.insert(name.clone()) {
+                return Err(SystemError::InvalidSignExpression(format!(
+                    "argument {name:?} is supplied more than once"
+                )));
+            }
+            forwarded.push(SignArgument {
+                name: Some(name),
+                value: argument.value.clone(),
+            });
+        }
+
+        let mut next_stack = stack.to_vec();
+        next_stack.push(paradigm.name.clone());
+        for (index, branch) in paradigm.selector.branches.iter().enumerate() {
+            let Expression::SignApplication(member_application) = &branch.result else {
+                return Err(SystemError::InvalidSignExpression(format!(
+                    "paradigm {:?} branch does not return a Sign application",
+                    paradigm.name
+                )));
+            };
+            let member = self
+                .effective_language
+                .sign_named(&member_application.callee)
+                .ok_or_else(|| SystemError::UnknownSign(member_application.callee.clone()))?;
+            let trace = ParadigmCaseRecord {
+                paradigm_id: paradigm.id.clone(),
+                paradigm: paradigm.name.clone(),
+                member_sign_id: member.id.clone(),
+                member: member.name.clone(),
+            };
+            if !self.case_condition_matches(current, &paradigm.selector, &branch.condition)? {
+                cases.push(CaseRecord {
+                    selection: CaseSelection::FirstMatch,
+                    branch: index,
+                    status: CaseBranchStatus::Unmatched,
+                    source: branch.source,
+                    diagnostic_code: None,
+                    paradigm: Some(trace),
+                });
+                continue;
+            }
+
+            // The branch may pre-apply part of the member. Paradigm arguments
+            // fill the shared residual interface and are appended only after
+            // selection, so partial application retains the chosen Sign's
+            // identity and residual constraints.
+            let mut selected = member_application.clone();
+            selected.arguments.extend(forwarded.iter().cloned());
+            cases.push(CaseRecord {
+                selection: CaseSelection::FirstMatch,
+                branch: index,
+                status: CaseBranchStatus::Matched,
+                source: branch.source,
+                diagnostic_code: None,
+                paradigm: Some(trace),
+            });
+            // A selected branch is committed. Any error in its Sign
+            // application is fatal and never causes fallback to a later row.
+            return self.apply_sign_application(current, &selected, &next_stack, rules, cases);
+        }
+        Err(SystemError::InvalidSignExpression(format!(
+            "paradigm {:?} selected no branch (a final base is required)",
+            paradigm.name
+        )))
+    }
+
+    fn resolve_deferred_autofills(
+        &self,
+        token: DerivedToken,
+        stack: &[String],
+        rules: &mut Vec<UnitRuleRecord>,
+        cases: &mut Vec<CaseRecord>,
+    ) -> Result<DerivedToken, SystemError> {
+        let effective = self.ontology.effective_sign(token.source_sign());
+        let bound = token
+            .bound_fillers()
+            .iter()
+            .map(|(slot, _)| slot.as_str())
+            .collect::<BTreeSet<_>>();
+        let pending = construction::slot_map_of(&effective)
+            .ops()
+            .iter()
+            .filter_map(|operation| match operation {
+                SlotMapOp::AutoFillCall { slot, filler } if !bound.contains(slot.as_str()) => {
+                    Some((slot.clone(), filler.clone()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if pending.is_empty() {
+            return Ok(token);
+        }
+
+        // Compute the consumer's Syn -> Sem -> Prag rules once as a probe
+        // before selecting any filler. The probe trace is intentionally not
+        // committed: after all fillers are chosen we rebuild and run the
+        // ordinary pipeline once. This lets rules such as
+        // `person => $slot.subject.syn.person` feed a Paradigm without letting
+        // an earlier autofill leak into selection of a later one.
+        let (probe_token, _, _) = self.run_token_rules(token.clone())?;
+        let probe = SignValue::Applied(probe_token);
+        let mut additions = Vec::with_capacity(pending.len());
+        for (slot, application) in pending {
+            let value = self.apply_sign_application(&probe, &application, stack, rules, cases)?;
+            if value.has_free_variables() {
+                return Err(SystemError::InvalidSignExpression(format!(
+                    "autofill {slot:?} selected an unsaturated Sign with residual parameters {:?}",
+                    value.residual_parameters()
+                )));
+            }
+            additions.push((slot, self.bound_filler_from_value(&value)?));
+        }
+
+        let mut committed = token.bound_fillers().to_vec();
+        committed.extend(additions);
+        let mut rebuilt = construction::resume_with(
+            &self.effective_language,
+            &self.ontology,
+            &token.construction,
+            &committed,
+            &[],
+            token.invocation_mapping(),
+        )?;
+        let mut context = DerivationContext::new();
+        for ((dim, name), value) in token.context_features() {
+            context = context.feature(*dim, name.clone(), value.clone());
+        }
+        rebuilt = self.apply_context(rebuilt, &context)?;
+        Ok(rebuilt)
+    }
+
     fn evaluate_applied_sign(
         &self,
         token: DerivedToken,
@@ -3677,6 +4564,7 @@ impl CompiledSystem {
         rules: &mut Vec<UnitRuleRecord>,
         cases: &mut Vec<CaseRecord>,
     ) -> Result<SignValue, SystemError> {
+        let token = self.resolve_deferred_autofills(token, stack, rules, cases)?;
         let expressions = token
             .rule_sign
             .items
@@ -3907,6 +4795,7 @@ impl CompiledSystem {
                         status: CaseBranchStatus::Unmatched,
                         source: branch.source,
                         diagnostic_code: None,
+                        paradigm: None,
                     }
                 }));
                 return Ok(current);
@@ -3938,6 +4827,7 @@ impl CompiledSystem {
                         },
                         source: branch.source,
                         diagnostic_code: None,
+                        paradigm: None,
                     }),
             );
             records.extend(staged_records);
@@ -3954,6 +4844,7 @@ impl CompiledSystem {
                     status: CaseBranchStatus::Unmatched,
                     source: branch.source,
                     diagnostic_code: None,
+                    paradigm: None,
                 });
                 continue;
             }
@@ -3965,6 +4856,7 @@ impl CompiledSystem {
                     self.apply_sign_fragment(current.clone(), items, records, stack, rules)
                 }
                 Expression::SelfSign => Ok(current.clone()),
+                Expression::ImplicitBase => Ok(current.clone()),
                 Expression::Case(nested) => {
                     self.evaluate_sign_case(current.clone(), nested, records, stack, rules)
                 }
@@ -3974,13 +4866,20 @@ impl CompiledSystem {
             };
             let result = match result {
                 Ok(value) => value,
-                Err(error) if is_case_blocking_constraint(&error) => {
+                Err(error)
+                    if is_case_blocking_constraint(&error)
+                        && matches!(
+                            &branch.condition,
+                            CaseCondition::Guard(_) | CaseCondition::Equals(_)
+                        ) =>
+                {
                     records.push(CaseRecord {
                         selection: case.selection,
                         branch: index,
                         status: CaseBranchStatus::MoreSpecificBlocked,
                         source: branch.source,
                         diagnostic_code: Some("CASE_MORE_SPECIFIC_BLOCKED"),
+                        paradigm: None,
                     });
                     continue;
                 }
@@ -3994,6 +4893,7 @@ impl CompiledSystem {
                 status: CaseBranchStatus::Matched,
                 source: branch.source,
                 diagnostic_code: None,
+                paradigm: None,
             });
             return Ok(result);
         }
@@ -4034,6 +4934,116 @@ impl CompiledSystem {
             };
             value = self.evaluate_sign_case(value, &case, &mut cases, &stack, &mut rules)?;
         }
+        Ok(SignExpressionEvaluation { value, cases })
+    }
+
+    /// Evaluate one explicit callable application against an existing Sign
+    /// value. This is the programmatic counterpart of writing `NAME(...)` in
+    /// a Sign-valued expression; `NAME` may resolve to either a Sign or a
+    /// Paradigm, and `$self`/`$slot` arguments observe `current`.
+    pub fn evaluate_application(
+        &self,
+        current: &SignValue,
+        application: &SignApplication,
+    ) -> Result<SignExpressionEvaluation, SystemError> {
+        let mut rules = Vec::new();
+        let mut cases = Vec::new();
+        let value =
+            self.apply_sign_application(current, application, &[], &mut rules, &mut cases)?;
+        Ok(SignExpressionEvaluation { value, cases })
+    }
+
+    /// Evaluate a named V3 Paradigm against an explicit frozen feature
+    /// bundle. The returned value is always the selected member Sign (and
+    /// therefore exposes that member's [`SignId`]), never a synthetic Sign
+    /// standing for the Paradigm.
+    pub fn evaluate_paradigm(
+        &self,
+        name: &str,
+        context: &DerivationContext,
+    ) -> Result<SignExpressionEvaluation, SystemError> {
+        let paradigm = self
+            .effective_language
+            .paradigm_named(name)
+            .ok_or_else(|| {
+                SystemError::InvalidSignExpression(format!("unknown paradigm {name:?}"))
+            })?
+            .clone();
+        let mut items = Vec::new();
+        for path in &paradigm.selector.match_features {
+            let (dim_name, feature) = path.split_once('.').ok_or_else(|| {
+                SystemError::InvalidSignExpression(format!(
+                    "invalid paradigm match feature {path:?}"
+                ))
+            })?;
+            let dim = Dim::parse(dim_name).ok_or_else(|| {
+                SystemError::InvalidSignExpression(format!(
+                    "invalid paradigm feature dimension {dim_name:?}"
+                ))
+            })?;
+            let declaration = paradigm
+                .selector
+                .branches
+                .iter()
+                .find_map(|branch| match &branch.result {
+                    Expression::SignApplication(application) => self
+                        .effective_language
+                        .sign_named(&application.callee)
+                        .map(|sign| self.ontology.effective_sign(sign))
+                        .and_then(|sign| {
+                            sign.items.into_iter().rev().find_map(|item| match item {
+                                SignItem::FeatureDecl(declaration)
+                                    if declaration.dim == dim && declaration.name == feature =>
+                                {
+                                    Some(declaration)
+                                }
+                                _ => None,
+                            })
+                        }),
+                    _ => None,
+                })
+                .ok_or_else(|| SystemError::UndeclaredDerivationFeature {
+                    dim,
+                    name: feature.to_owned(),
+                })?;
+            if let Some(value) = context.features().get(&(dim, feature.to_owned())) {
+                if !declaration.values.contains(value) {
+                    return Err(SystemError::DerivationFeatureOutOfDomain {
+                        dim,
+                        name: feature.to_owned(),
+                        value: value.clone(),
+                        domain: declaration.values.join(", "),
+                    });
+                }
+                items.push(SignItem::FeatureValue(crate::FeatureValue {
+                    dim,
+                    name: feature.to_owned(),
+                    values: vec![value.clone()],
+                    source: SourceLocation::unknown(),
+                }));
+            }
+            items.push(SignItem::FeatureDecl(declaration));
+        }
+        let probe = SignDef {
+            id: SignId::synthetic(),
+            name: format!("$paradigm_probe.{name}"),
+            items,
+        };
+        let current = SignValue::Stored(SignEvaluation {
+            sign: probe.clone(),
+            records: Vec::new(),
+            source_sign: probe,
+            context: context.clone(),
+        });
+        let application = SignApplication {
+            callee: name.to_owned(),
+            arguments: Vec::new(),
+            source: SourceLocation::unknown(),
+        };
+        let mut rules = Vec::new();
+        let mut cases = Vec::new();
+        let value =
+            self.apply_sign_application(&current, &application, &[], &mut rules, &mut cases)?;
         Ok(SignExpressionEvaluation { value, cases })
     }
 
@@ -4306,6 +5316,7 @@ impl CompiledSystem {
                 },
                 source: record.source,
                 diagnostic_code: record.diagnostic_code,
+                paradigm: None,
             })
             .collect();
         Ok((token, trace, cases))
@@ -4454,11 +5465,13 @@ impl CompiledSystem {
                     status: CaseBranchStatus::Unmatched,
                     source: branch.source,
                     diagnostic_code: None,
+                    paradigm: None,
                 });
                 continue;
             }
             let input = match &branch.result {
                 Expression::PhonTemplate(template) => token.expand_phon_template(template)?,
+                Expression::ImplicitBase => default.to_owned(),
                 Expression::PhonInterpolation(application) => {
                     // `$self` inside its own phon projection denotes the
                     // finalized deep Sign, not a recursive realization call.
@@ -4530,6 +5543,7 @@ impl CompiledSystem {
                 status: CaseBranchStatus::Matched,
                 source: branch.source,
                 diagnostic_code: inert_rules.then_some("REALIZATION_RULES_INERT"),
+                paradigm: None,
             });
             return Ok((input, Some(index), branch.source));
         }
@@ -4872,6 +5886,7 @@ impl CompiledSystem {
                 },
                 source: record.source,
                 diagnostic_code: record.diagnostic_code,
+                paradigm: None,
             })
             .collect::<Vec<_>>();
         let stack = vec![construction.to_owned()];
@@ -4911,6 +5926,7 @@ impl CompiledSystem {
                     },
                     source: record.source,
                     diagnostic_code: record.diagnostic_code,
+                    paradigm: None,
                 }),
         );
         occurrences.extend(final_occurrences);

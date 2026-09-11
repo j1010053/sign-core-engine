@@ -1,6 +1,6 @@
 //! canonical printer(P21 + I22):`Language → text`,**確定性** colon+縮排 形式。
 //!
-//! 區段序固定:dsl 域 → distribution → global trait → trait → sign
+//! 區段序固定:dsl 域 → distribution → global trait → trait → paradigm → sign
 //! (具名容器按名排序,I15-d)。容器 body **依維度分組**(I22):belongs → `Name[n]`
 //! → 頂層 Def → 維度區塊(固定序 syn/phon/sem/prag);`syn:` 內 `slots:` 先於 Def;
 //! 維度內 slot/Def/Rule 保插入序(有序語意)。縮排 4 空格/層。
@@ -116,6 +116,10 @@ fn push_slot_map(out: &mut String, operation: &SlotMapOp) {
         SlotMapOp::Preserve { slot } => format!("map {slot} preserve"),
         SlotMapOp::Rename { slot, to } => format!("map {slot} rename {to}"),
         SlotMapOp::AutoFill { slot, filler } => format!("map {slot} autofill {filler}"),
+        SlotMapOp::AutoFillCall { slot, filler } => format!(
+            "map {slot} autofill {}",
+            expression_source(&Expression::SignApplication(filler.clone()))
+        ),
         SlotMapOp::Internalize { slot } => format!("map {slot} internalize"),
         SlotMapOp::Optional { slot, optional } => format!("map {slot} optional {optional}"),
     };
@@ -171,11 +175,37 @@ fn expression_source(expression: &Expression) -> String {
         Expression::Slot(slot) => {
             crate::reference::render_interpolation(&crate::reference::Subject::Slot(slot.clone()))
         }
+        Expression::ImplicitBase => "<implicit-base>".to_owned(),
         // Valid nested cases are emitted structurally by `push_case`.  This
         // marker is only reachable for an invalid programmatic AST (for
         // example, a case embedded inside a scalar projection), which the
         // validator rejects without panicking.
         Expression::Case(_) => "<invalid-nested-case-position>".to_owned(),
+    }
+}
+
+/// Canonical source spelling for a callable Sign/Paradigm application.
+/// Query and authoring consumers use this instead of maintaining a second
+/// renderer which could drift from `.lang` syntax.
+pub fn format_sign_application(application: &crate::SignApplication) -> String {
+    expression_source(&Expression::SignApplication(application.clone()))
+}
+
+/// Canonical editable spelling of a case-branch condition.
+pub fn format_case_condition(condition: &CaseCondition) -> String {
+    match condition {
+        CaseCondition::Equals(value) => format!("== {value}"),
+        CaseCondition::Guard(guard) => guard.clone(),
+        CaseCondition::Bundle(values) => format!(
+            "[{}]",
+            values
+                .iter()
+                .map(|value| value.as_deref().unwrap_or("_"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        CaseCondition::Base => "base".to_owned(),
+        CaseCondition::Else => "else".to_owned(),
     }
 }
 
@@ -189,25 +219,45 @@ fn push_case(out: &mut String, indent: &str, case: &TypedCase) {
         .as_ref()
         .map(|name| format!(" @name {name}"))
         .unwrap_or_default();
-    match &case.scrutinee {
-        Some(scrutinee) => out.push_str(&format!("{indent}{keyword} {scrutinee}{case_label}:\n")),
-        None => out.push_str(&format!("{indent}{keyword}{case_label}:\n")),
+    if !case.match_features.is_empty() {
+        out.push_str(&format!(
+            "{indent}{keyword} [{}]{case_label}:\n",
+            case.match_features.join(", ")
+        ));
+    } else {
+        match &case.scrutinee {
+            Some(scrutinee) => {
+                out.push_str(&format!("{indent}{keyword} {scrutinee}{case_label}:\n"))
+            }
+            None => out.push_str(&format!("{indent}{keyword}{case_label}:\n")),
+        }
     }
     let branch_indent = format!("{indent}    ");
     let result_indent = format!("{branch_indent}    ");
     for branch in &case.branches {
-        let condition = match &branch.condition {
-            CaseCondition::Equals(value) => format!("== {value}"),
-            CaseCondition::Guard(guard) => guard.clone(),
-            CaseCondition::Else => "else".to_owned(),
-        };
+        let condition = format_case_condition(&branch.condition);
         let branch_label = branch
             .name
             .as_ref()
             .map(|name| format!(" @name {name}"))
             .unwrap_or_default();
-        out.push_str(&format!("{branch_indent}{condition}{branch_label}:\n"));
+        if matches!(&branch.result, Expression::ImplicitBase) {
+            out.push_str(&format!("{branch_indent}{condition}{branch_label}:\n"));
+        } else if !case.match_features.is_empty()
+            && !matches!(
+                &branch.result,
+                Expression::Case(_) | Expression::SignFragment(_) | Expression::DimFragment { .. }
+            )
+        {
+            out.push_str(&format!(
+                "{branch_indent}{condition}{branch_label}: {}\n",
+                expression_source(&branch.result)
+            ));
+        } else {
+            out.push_str(&format!("{branch_indent}{condition}{branch_label}:\n"));
+        }
         match &branch.result {
+            Expression::ImplicitBase => {}
             Expression::Case(nested) => push_case(out, &result_indent, nested),
             Expression::SignFragment(items) => {
                 let mut fragment = String::new();
@@ -238,7 +288,10 @@ fn push_case(out: &mut String, indent: &str, case: &TypedCase) {
                     out.push('\n');
                 }
             }
-            result => out.push_str(&format!("{result_indent}{}\n", expression_source(result))),
+            result if case.match_features.is_empty() => {
+                out.push_str(&format!("{result_indent}{}\n", expression_source(result)))
+            }
+            _ => {}
         }
         for category in &branch.belongs {
             out.push_str(&format!("{result_indent}belongs {category}\n"));
@@ -632,6 +685,13 @@ pub fn print(l: &Language) -> String {
     for t in traits.iter().filter(|t| !t.global) {
         let mut s = String::new();
         push_trait(&mut s, t);
+        sections.push(s);
+    }
+    let mut paradigms: Vec<_> = l.paradigms.iter().collect();
+    paradigms.sort_by(|a, b| a.name.cmp(&b.name));
+    for paradigm in paradigms {
+        let mut s = format!("paradigm {}:\n", paradigm.name);
+        push_case(&mut s, "    ", &paradigm.selector);
         sections.push(s);
     }
     let mut signs: Vec<_> = l.signs.iter().collect();

@@ -2,7 +2,8 @@
 //! Language parser(步驟 9 + I22 語法重設計):`.lang` 原文 → [`Language`]。
 //!
 //! **colon + 縮排**風格(貼合 tshiatun/Lexurgy;取代 `{ }`)。統一 body 語法
-//! (I22):`sign`/`trait`/`global trait` 三種容器頭 `Name:` 後縮排 body,body 語法
+//! (I22/V3):`sign`/`trait`/`global trait`/`paradigm` 容器頭 `Name:` 後縮排 body；
+//! trait/sign 共用 body 語法，Paradigm 則固定使用 bundle case。
 //! **trait 與 sign 完全相同**——
 //! - `belongs X`(分類,維度中立單一樹,P38 v0.2);
 //! - `Name[n]`(macro 引用,P5/P27);`==`(block 邊界);
@@ -63,7 +64,7 @@ fn indent_of(raw: &str) -> usize {
 /// name 部分可能帶角括號(P76 泛型 trait);呼叫端負責用
 /// [`split_type_params`] 拆出 base name 與參數列表。
 fn container_head(text: &str) -> Option<(&'static str, &str)> {
-    for kw in ["global trait", "marker trait", "trait", "sign"] {
+    for kw in ["global trait", "marker trait", "trait", "paradigm", "sign"] {
         if let Some(rest) = text.strip_prefix(kw) {
             if let Some(name) = rest.strip_suffix(':') {
                 let name = name.trim();
@@ -278,6 +279,48 @@ fn parse_sign_application(source: &str, line: usize) -> Result<SignApplication, 
     })
 }
 
+/// Parse one standalone callable application using the same grammar as a
+/// `.lang` Sign-valued expression. Changeset and other authoring surfaces use
+/// this entry point so nested/named argument syntax has one parser.
+pub fn parse_sign_application_source(source: &str) -> Result<SignApplication, ParseError> {
+    parse_sign_application(source.trim(), 0)
+}
+
+/// Parse the editable surface of one case-branch condition. Bundle arity is
+/// checked again against its owning case during document validation.
+pub fn parse_case_condition_source(source: &str) -> Result<CaseCondition, ParseError> {
+    let source = source.trim();
+    if source == "base" {
+        return Ok(CaseCondition::Base);
+    }
+    if source == "else" {
+        return Ok(CaseCondition::Else);
+    }
+    if source.starts_with('[') {
+        let inner = source
+            .strip_prefix('[')
+            .and_then(|value| value.strip_suffix(']'))
+            .ok_or_else(|| err(0, "bundle condition must be `[value, ...]`"))?;
+        let arity = if inner.trim().is_empty() {
+            0
+        } else {
+            inner.split(',').count()
+        };
+        return parse_bundle_match_values(source, arity, 0).map(CaseCondition::Bundle);
+    }
+    if let Some(value) = source.strip_prefix("==") {
+        let value = value.trim();
+        if value.is_empty() {
+            return Err(err(0, "case equality condition requires a value"));
+        }
+        return Ok(CaseCondition::Equals(value.to_owned()));
+    }
+    if source.is_empty() {
+        return Err(err(0, "case condition cannot be empty"));
+    }
+    Ok(CaseCondition::Guard(source.to_owned()))
+}
+
 fn parse_expression(
     source: &str,
     expected: &ExpressionType,
@@ -346,6 +389,91 @@ fn is_context_head(source: &str) -> bool {
     source == "case:"
         || source == "when:"
         || ((source.starts_with("case ") || source.starts_with("when ")) && source.ends_with(':'))
+}
+
+fn parse_bundle_match_features(source: &str, line: usize) -> Result<Vec<String>, ParseError> {
+    let Some(inner) = source
+        .trim()
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+    else {
+        return Err(err(
+            line,
+            "bundle match header must be `[dim.feature, ...]`",
+        ));
+    };
+    let raw = split_arguments(inner, line)?;
+    if raw.is_empty() {
+        return Err(err(line, "bundle match must declare at least one feature"));
+    }
+    let mut features = Vec::with_capacity(raw.len());
+    for feature in raw {
+        let Some((dimension, name)) = feature.split_once('.') else {
+            return Err(err(
+                line,
+                format!("bundle match feature {feature:?} must be `dim.feature`"),
+            ));
+        };
+        let Some(dimension) = Dim::parse(dimension) else {
+            return Err(err(
+                line,
+                format!("bundle match feature {feature:?} has an unknown dimension"),
+            ));
+        };
+        if !ident_ok(name) || name.contains('.') {
+            return Err(err(
+                line,
+                format!("bundle match feature {feature:?} must name one typed feature"),
+            ));
+        }
+        let normalized = format!("{}.{name}", dimension.keyword());
+        if features.contains(&normalized) {
+            return Err(err(
+                line,
+                format!("bundle match declares {normalized:?} more than once"),
+            ));
+        }
+        features.push(normalized);
+    }
+    Ok(features)
+}
+
+fn parse_bundle_match_values(
+    source: &str,
+    arity: usize,
+    line: usize,
+) -> Result<Vec<Option<String>>, ParseError> {
+    let Some(inner) = source
+        .trim()
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+    else {
+        return Err(err(line, "bundle match branch must be `[value, _, ...]:`"));
+    };
+    let raw = split_arguments(inner, line)?;
+    if raw.len() != arity {
+        return Err(err(
+            line,
+            format!(
+                "bundle match branch has {} value(s), but its header declares {arity} feature(s)",
+                raw.len()
+            ),
+        ));
+    }
+    raw.into_iter()
+        .map(|value| {
+            if value == "_" {
+                Ok(None)
+            } else if ident_ok(value) {
+                Ok(Some(value.to_owned()))
+            } else {
+                Err(err(
+                    line,
+                    format!("bundle match value {value:?} must be an enum value or `_`"),
+                ))
+            }
+        })
+        .collect()
 }
 
 /// `when:`(`CaseSelection::Accumulate`)可否出現在此 context。
@@ -438,6 +566,11 @@ fn parse_typed_case(
     };
     let (scrutinee, case_name) = split_name_suffix(scrutinee);
     let case_name = validate_label(case_name, head.no)?;
+    let match_features = if scrutinee.trim().starts_with('[') {
+        parse_bundle_match_features(scrutinee, head.no)?
+    } else {
+        Vec::new()
+    };
     // `case <slot>.phon:` 已移除(2026-08-17)。它的 `.phon` 不讀音——執行期比的是
     // filler 的**範疇**,`.phon` 只是個字面標記,故名實不符;而且整個 case 共用一個
     // scrutinee,強迫所有分支討論同一個槽。guard 分支 `$slot.<name> == [Category]:`
@@ -445,21 +578,24 @@ fn parse_typed_case(
     //
     // **拒絕而非忽略**:比照舊 `schema conlang.lang/v2` 標頭的處置——留著一個
     // 名實不符的形式,作者會以為它在讀音韻。本專案未發布,無既有檔案需相容。
-    if let Some((slot, "phon")) = scrutinee
-        .trim()
-        .strip_prefix("$self.")
-        .unwrap_or(scrutinee.trim())
-        .split_once('.')
-    {
-        return Err(err(
-            head.no,
-            format!(
-                "`case {slot}.phon:` was removed — it tested the filler's category, not its \
-                 phonology. Use guard branches instead: `$slot.{slot} == [Category]:`"
-            ),
-        ));
+    if match_features.is_empty() {
+        if let Some((slot, "phon")) = scrutinee
+            .trim()
+            .strip_prefix("$self.")
+            .unwrap_or(scrutinee.trim())
+            .split_once('.')
+        {
+            return Err(err(
+                head.no,
+                format!(
+                    "`case {slot}.phon:` was removed — it tested the filler's category, not its \
+                     phonology. Use guard branches instead: `$slot.{slot} == [Category]:`"
+                ),
+            ));
+        }
     }
-    let scrutinee = (!scrutinee.is_empty()).then(|| scrutinee.to_owned());
+    let scrutinee =
+        (match_features.is_empty() && !scrutinee.is_empty()).then(|| scrutinee.to_owned());
     let mut index = start + 1;
     while index < body.len() && body[index].text.is_empty() {
         index += 1;
@@ -469,7 +605,7 @@ fn parse_typed_case(
     }
     let branch_indent = body[index].indent;
     let mut branches = Vec::new();
-    let mut saw_else = false;
+    let mut saw_fallback = false;
     while index < body.len() && body[index].indent > head.indent {
         if body[index].text.is_empty() {
             index += 1;
@@ -479,39 +615,89 @@ fn parse_typed_case(
         if branch.indent != branch_indent {
             return Err(err(branch.no, "case branch has inconsistent indentation"));
         }
-        let Some(label) = branch.text.strip_suffix(':') else {
-            return Err(err(branch.no, "case branch header must end with `:`"));
+        let Some((label, inline_result)) = branch.text.split_once(':') else {
+            return Err(err(branch.no, "case branch header must contain `:`"));
         };
         let (label, branch_name) = split_name_suffix(label);
         let branch_name = validate_label(branch_name, branch.no)?;
-        if saw_else && !matches!(label, "else" | "Else") {
-            return Err(err(branch.no, "case branch cannot follow `else`"));
+        let is_base = matches!(label, "base" | "Base");
+        let is_else = matches!(label, "else" | "Else");
+        if saw_fallback && !(is_base || is_else) {
+            return Err(err(
+                branch.no,
+                match selection {
+                    CaseSelection::FirstMatch => "case branch cannot follow `base`",
+                    CaseSelection::Accumulate => "when branch cannot follow `else`",
+                },
+            ));
         }
-        let condition = if matches!(label, "else" | "Else") {
-            if saw_else {
-                return Err(err(branch.no, "case may contain only one `else` branch"));
+        let condition = if is_base || is_else {
+            match (selection, is_base, is_else) {
+                (CaseSelection::FirstMatch, false, true) => {
+                    return Err(err(
+                        branch.no,
+                        "`case` uses `base:`, not `else:`; `else:` belongs to `when`",
+                    ));
+                }
+                (CaseSelection::Accumulate, true, false) => {
+                    return Err(err(
+                        branch.no,
+                        "`when` uses `else:`, not `base:`; `base:` belongs to `case`",
+                    ));
+                }
+                _ => {}
             }
-            saw_else = true;
-            CaseCondition::Else
+            if saw_fallback {
+                return Err(err(
+                    branch.no,
+                    match selection {
+                        CaseSelection::FirstMatch => "case may contain only one `base` branch",
+                        CaseSelection::Accumulate => "when may contain only one `else` branch",
+                    },
+                ));
+            }
+            saw_fallback = true;
+            match selection {
+                CaseSelection::FirstMatch => CaseCondition::Base,
+                CaseSelection::Accumulate => CaseCondition::Else,
+            }
+        } else if !match_features.is_empty() {
+            CaseCondition::Bundle(parse_bundle_match_values(
+                label,
+                match_features.len(),
+                branch.no,
+            )?)
         } else if scrutinee.is_some() {
             let Some(value) = label.strip_prefix("==") else {
                 return Err(err(
                     branch.no,
-                    "scrutinee case branch must be `== VALUE:` or `else:`",
+                    match selection {
+                        CaseSelection::FirstMatch => {
+                            "scrutinee case branch must be `== VALUE:` or `base:`"
+                        }
+                        CaseSelection::Accumulate => {
+                            "scrutinee when branch must be `== VALUE:` or `else:`"
+                        }
+                    },
                 ));
             };
             CaseCondition::Equals(value.trim().to_owned())
         } else {
             CaseCondition::Guard(label.to_owned())
         };
+        let inline_result = inline_result.trim();
         index += 1;
         while index < body.len() && body[index].text.is_empty() {
             index += 1;
         }
-        if index >= body.len() || body[index].indent <= branch_indent {
+        let has_nested_result = index < body.len() && body[index].indent > branch_indent;
+        if inline_result.is_empty()
+            && !has_nested_result
+            && !matches!(condition, CaseCondition::Base)
+        {
             return Err(err(branch.no, "case branch requires a result expression"));
         }
-        let result_line = &body[index];
+        let result_line = has_nested_result.then(|| &body[index]);
         let branch_body_start = index;
         let mut branch_body_end = index;
         while branch_body_end < body.len() && body[branch_body_end].indent > branch_indent {
@@ -533,10 +719,12 @@ fn parse_typed_case(
         // **但只統一模板**。`PhonInterpolation` / `Projection` 帶著結構化的
         // `SignApplication`(遞迴套用另一個構式要用),壓成 phon 區塊的 Def 字串會
         // 讓那個結構消失。它們沒有「模板 + 規則」的形狀,也就沒有上述塌陷問題。
-        let phon_structured = if matches!(expected, ExpressionType::PhonContext)
+        let phon_structured = if inline_result.is_empty()
+            && matches!(expected, ExpressionType::PhonContext)
             && selection == CaseSelection::FirstMatch
             && branch_body_lines == 1
         {
+            let result_line = result_line.expect("one nested line was counted");
             match parse_expression(&result_line.text, &expected, result_line.no) {
                 Ok(Expression::PhonTemplate(_)) => None,
                 Ok(structured) => Some(structured),
@@ -555,17 +743,35 @@ fn parse_typed_case(
             None
         };
         let phon_rule_body = matches!(expected, ExpressionType::PhonContext);
-        let scalar_result = if selection == CaseSelection::FirstMatch && !phon_rule_body {
+        let scalar_result = if !inline_result.is_empty() {
+            if selection == CaseSelection::Accumulate {
+                return Err(err(
+                    branch.no,
+                    "`when` branches return context fragments and cannot use an inline result",
+                ));
+            }
+            Some(parse_expression(inline_result, &expected, branch.no)?)
+        } else if has_nested_result && selection == CaseSelection::FirstMatch && !phon_rule_body {
+            let result_line = result_line.expect("non-base branch has a nested result");
             parse_expression(&result_line.text, &expected, result_line.no).ok()
         } else {
             phon_structured
         };
-        let result = if is_context_head(&result_line.text) {
+        let result = if inline_result.is_empty()
+            && !has_nested_result
+            && matches!(condition, CaseCondition::Base)
+        {
+            Expression::ImplicitBase
+        } else if inline_result.is_empty()
+            && is_context_head(&result_line.expect("nested result").text)
+        {
             let (nested, next) = parse_typed_case(lang, body, index, expected.clone())?;
             index = next;
             Expression::Case(Box::new(nested))
         } else if let Some(result) = scalar_result {
-            index += 1;
+            if inline_result.is_empty() {
+                index += 1;
+            }
             result
         } else if matches!(expected, ExpressionType::SignContext) {
             let blocks = parse_body(lang, &body[branch_body_start..branch_body_end])?;
@@ -575,7 +781,7 @@ fn parse_typed_case(
                 .collect::<Vec<_>>();
             if items.is_empty() {
                 return Err(err(
-                    result_line.no,
+                    result_line.expect("fragment has a nested line").no,
                     "SignContext fragment must contain at least one Sign item",
                 ));
             }
@@ -585,7 +791,7 @@ fn parse_typed_case(
             let items = parse_dim_fragment(lang, &body[branch_body_start..branch_body_end], dim)?;
             if items.is_empty() {
                 return Err(err(
-                    result_line.no,
+                    result_line.expect("fragment has a nested line").no,
                     format!("{expected:?} fragment must contain at least one item"),
                 ));
             }
@@ -593,7 +799,7 @@ fn parse_typed_case(
             Expression::DimFragment { dim, items }
         } else {
             return Err(err(
-                result_line.no,
+                result_line.expect("invalid branch has a nested line").no,
                 format!("case branch does not contain an expression accepted by <{expected:?}>"),
             ));
         };
@@ -632,6 +838,7 @@ fn parse_typed_case(
             selection,
             expected,
             scrutinee,
+            match_features,
             name: case_name,
             branches,
             source: SourceLocation::line(head.no),
@@ -797,23 +1004,33 @@ fn parse_slot_feature_binding(
 
 /// 平坦的 construction slot mapping：`map <slot> <operation> [argument]`。
 fn parse_slot_map(l: &str, line: usize) -> Result<Option<SlotMapOp>, ParseError> {
-    let mut words = l.split_whitespace();
-    if words.next() != Some("map") {
+    fn take_word(value: &str) -> Option<(&str, &str)> {
+        let value = value.trim_start();
+        if value.is_empty() {
+            return None;
+        }
+        let end = value.find(char::is_whitespace).unwrap_or(value.len());
+        Some((&value[..end], &value[end..]))
+    }
+
+    let Some((keyword, rest)) = take_word(l) else {
+        return Ok(None);
+    };
+    if keyword != "map" {
         return Ok(None);
     }
-    let Some(slot) = words.next() else {
+    let Some((slot, rest)) = take_word(rest) else {
         return Err(err(line, "slot mapping must name a slot"));
     };
-    let Some(operation) = words.next() else {
+    let Some((operation, rest)) = take_word(rest) else {
         return Err(err(line, "slot mapping must name an operation"));
     };
     if !ident_ok(slot) {
         return Err(err(line, "slot mapping slot must be a single identifier"));
     }
-    let argument = words.next();
-    if words.next().is_some() {
-        return Err(err(line, "slot mapping has too many arguments"));
-    }
+    // Keep the complete remainder for callable autofill. Sign applications may
+    // contain whitespace after commas (`FORM(left: $slot.x, right: y())`).
+    let argument = (!rest.trim().is_empty()).then(|| rest.trim());
     let operation = match (operation, argument) {
         ("preserve", None) => SlotMapOp::Preserve {
             slot: slot.to_owned(),
@@ -825,6 +1042,10 @@ fn parse_slot_map(l: &str, line: usize) -> Result<Option<SlotMapOp>, ParseError>
         ("autofill", Some(filler)) if ident_ok(filler) => SlotMapOp::AutoFill {
             slot: slot.to_owned(),
             filler: filler.to_owned(),
+        },
+        ("autofill", Some(filler)) if filler.contains('(') => SlotMapOp::AutoFillCall {
+            slot: slot.to_owned(),
+            filler: parse_sign_application(filler, line)?,
         },
         ("internalize", None) => SlotMapOp::Internalize {
             slot: slot.to_owned(),
@@ -840,7 +1061,7 @@ fn parse_slot_map(l: &str, line: usize) -> Result<Option<SlotMapOp>, ParseError>
         _ => {
             return Err(err(
                 line,
-                "slot mapping must be `map SLOT preserve|internalize`, `map SLOT rename|autofill NAME`, or `map SLOT optional true|false`",
+                "slot mapping must be `map SLOT preserve|internalize`, `map SLOT rename NAME`, `map SLOT autofill NAME|CALL()`, or `map SLOT optional true|false`",
             ));
         }
     };
@@ -2054,16 +2275,71 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
                 });
                 i += 1;
             }
-            let blocks = parse_body(&mut lang, &body)?;
             match kw {
+                "paradigm" => {
+                    if name_raw.contains('<') {
+                        return Err(err(header_line, "paradigms cannot have type parameters"));
+                    }
+                    let Some(first) = body.first() else {
+                        return Err(err(
+                            header_line,
+                            "paradigm requires one bundle-matching `case`",
+                        ));
+                    };
+                    if !first.text.starts_with("case") {
+                        return Err(err(
+                            first.no,
+                            "paradigm body must be one first-match `case [feature, ...]:`",
+                        ));
+                    }
+                    let (selector, next) =
+                        parse_typed_case(&mut lang, &body, 0, ExpressionType::SignContext)?;
+                    if next != body.len() {
+                        return Err(err(
+                            body[next].no,
+                            "paradigm may contain only its selector case",
+                        ));
+                    }
+                    if selector.selection != CaseSelection::FirstMatch
+                        || selector.match_features.is_empty()
+                        || selector.scrutinee.is_some()
+                    {
+                        return Err(err(
+                            selector.source.line,
+                            "paradigm selector must be `case [feature, ...]:`",
+                        ));
+                    }
+                    let Some(base) = selector.branches.last() else {
+                        return Err(err(header_line, "paradigm selector requires branches"));
+                    };
+                    if !matches!(base.condition, CaseCondition::Base) {
+                        return Err(err(
+                            header_line,
+                            "paradigm requires a final non-empty `base:` branch",
+                        ));
+                    }
+                    for branch in &selector.branches {
+                        if !branch.belongs.is_empty()
+                            || !matches!(branch.result, Expression::SignApplication(_))
+                        {
+                            return Err(err(
+                                branch.source.line,
+                                "paradigm branches must return an explicit Sign application such as `be()`",
+                            ));
+                        }
+                    }
+                    lang.add_paradigm(name_raw.to_owned(), selector);
+                }
                 "sign" => {
                     if name_raw.contains('<') {
                         return Err(err(header_line, "signs cannot have type parameters"));
                     }
+                    let blocks = parse_body(&mut lang, &body)?;
                     let items: Vec<SignItem> = blocks.into_iter().flat_map(|b| b.items).collect();
                     lang.add_sign(name_raw.to_owned(), items);
                 }
                 _ => {
+                    let blocks = parse_body(&mut lang, &body)?;
                     let (base_name, type_params) = split_type_params(name_raw, header_line)?;
                     lang.add_trait(TraitDef {
                         name: base_name.to_owned(),

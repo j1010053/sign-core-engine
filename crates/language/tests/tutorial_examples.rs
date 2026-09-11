@@ -36,6 +36,48 @@ fn documented_complete_grammar_is_the_compiled_fixture() {
 }
 
 #[test]
+fn documented_bundle_match_is_executable() {
+    let language = Language::parse(&tagged_lang_example("bundle-match")).unwrap();
+    let system = compile_system(language).unwrap();
+    let context = DerivationContext::new()
+        .feature(Dim::Syn, "tense", "present")
+        .feature(Dim::Syn, "person", "third")
+        .feature(Dim::Syn, "number", "singular");
+    let evaluated = system
+        .evaluate_sign_with_context("TutorialCopulaChoice", &context)
+        .unwrap();
+    assert_eq!(
+        evaluated
+            .sign
+            .project(Dim::Syn, &system.ontology)
+            .get("syn.form"),
+        Some("is")
+    );
+}
+
+#[test]
+fn documented_paradigm_autofill_selects_a_real_member_sign() {
+    let language = Language::parse(&tagged_lang_example("paradigm-deferred-autofill")).unwrap();
+    let expected = language.sign_named("is").unwrap().id.clone();
+    let system = compile_system(language).unwrap();
+    let derivation = system
+        .derive(
+            "TutorialCopularClause",
+            &[SlotFiller::sign("subject", "TutorialThirdSubject")],
+            &SlotMap::identity(),
+        )
+        .unwrap();
+    assert_eq!(derivation.surface, "subject is");
+    assert!(derivation.cases.iter().any(|record| {
+        record.status == conlang_language::system::CaseBranchStatus::Matched
+            && record
+                .paradigm
+                .as_ref()
+                .is_some_and(|trace| trace.member == "is" && trace.member_sign_id == expected)
+    }));
+}
+
+#[test]
 fn documented_parameter_scope_and_narrower_bound_are_valid() {
     let language = Language::parse(&tagged_lang_example("parameterized-trait-scope")).unwrap();
     let report = check_language(&language);

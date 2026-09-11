@@ -1,6 +1,6 @@
 //! conlang-language — 共時語言知識檔(2.0 步驟 8)。
 //!
-//! **Language = 語言知識的唯一存放處**(P8):Global / Trait / Sign 三容器 +
+//! **Language = 語言知識的唯一存放處**(P8):Global / Trait / Paradigm / Sign 容器 +
 //! Definition(`=`)與 Rule(`=>`)兩種語句(P9)。本 crate 提供:
 //! - 五組 AST 節點(修補05 §10.3):①定義 ②規則(帶 RuleId)③容器 ④Ref ⑤分佈;
 //! - **canonical empty root**(P28):`Language::new()` 永遠存在,四原語有處掛靠;
@@ -596,7 +596,51 @@ pub enum Expression {
     EnumValue(String),
     SelfSign,
     Slot(String),
+    /// An empty `base:` branch.  The enclosing expression context supplies
+    /// the value: the current Sign, feature value, role binding, or phon
+    /// template.  This is only valid as the result of a first-match
+    /// [`CaseCondition::Base`] branch.
+    ImplicitBase,
     Case(Box<TypedCase>),
+}
+
+/// Stable identity of a horizontal Paradigm selector.
+///
+/// A Paradigm is not a Sign: evaluating it returns one of its member Signs,
+/// whose [`SignId`] remains the identity of the returned value.  Keeping a
+/// separate ID makes a horizontal-link edit observable even when two members
+/// happen to realize to the same surface form.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ParadigmId(pub NodeId);
+
+impl ParadigmId {
+    pub fn local(ordinal: u64) -> ParadigmId {
+        ParadigmId(NodeId::new(IdentityNamespace::Ephemeral, ordinal))
+    }
+
+    pub fn document(namespace: impl Into<String>, ordinal: u64) -> ParadigmId {
+        ParadigmId(NodeId::new(
+            IdentityNamespace::Document(namespace.into()),
+            ordinal,
+        ))
+    }
+
+    pub fn package(namespace: impl Into<String>, ordinal: u64) -> ParadigmId {
+        ParadigmId(NodeId::new(
+            IdentityNamespace::Library(namespace.into()),
+            ordinal,
+        ))
+    }
+
+    pub fn node_id(&self) -> &NodeId {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ParadigmId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -606,6 +650,14 @@ pub enum CaseCondition {
     /// Guard-form `case:` branch.  The existing guard evaluator supplies the
     /// Matched / Unmatched / Error trichotomy.
     Guard(String),
+    /// A positional row in a bundle match. `None` is the `_` wildcard; the
+    /// value at each position is typed by [`TypedCase::match_features`].
+    Bundle(Vec<Option<String>>),
+    /// The fallback branch of `case:`.  Unlike `when:`'s `else`, an empty
+    /// branch may return the context's implicit base value.
+    Base,
+    /// The fallback branch of `when:`.  It runs only when no ordinary branch
+    /// matched the frozen input snapshot.
     Else,
 }
 
@@ -633,10 +685,44 @@ pub struct TypedCase {
     pub selection: CaseSelection,
     pub expected: ExpressionType,
     pub scrutinee: Option<String>,
+    /// Ordered typed-feature projection declared by
+    /// `case [syn.tense, ...]:` / `when [...]`.  Bundle branch values are
+    /// positional at the surface but lower to path/value predicates.
+    pub match_features: Vec<String>,
     /// 可選標籤(P 系列取徑 B):`@name <label>` → keyed 定址 `case["label"]`。
     pub name: Option<String>,
     pub branches: Vec<CaseBranch>,
     pub source: SourceLocation,
+}
+
+/// A named, callable horizontal relation between complementary Signs.
+///
+/// The selector deliberately reuses the ordinary first-match case IR.  V3
+/// validation narrows it to bundle matching with a final, non-empty `base:`
+/// whose branch results are Sign applications.  The Paradigm itself never
+/// becomes the returned Sign and therefore carries no Sign dimensions,
+/// slots, or trait memberships of its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParadigmDef {
+    pub id: ParadigmId,
+    pub name: String,
+    pub selector: TypedCase,
+}
+
+impl ParadigmDef {
+    /// Semantic content equality for diff/merge consumers.
+    ///
+    /// `TypedCase` and its applications carry source locations, while the
+    /// Paradigm's stable ID is identity rather than content.  Canonical source
+    /// prints neither, so comparing one-item fragments avoids treating an
+    /// unrelated line-number shift as a Paradigm edit.
+    pub fn content_eq(&self, other: &ParadigmDef) -> bool {
+        let mut left = Language::new();
+        left.paradigms.push(self.clone());
+        let mut right = Language::new();
+        right.paradigms.push(other.clone());
+        left.dump() == right.dump()
+    }
 }
 
 /// V2 Sign-body expression.  Its enclosing Sign is the implicit/default
@@ -972,11 +1058,31 @@ impl SlotConstraint {
 /// 共用的單一資料型別；操作在消耗任何 filler 前整批驗證、原子套用。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlotMapOp {
-    Preserve { slot: String },
-    Rename { slot: String, to: String },
-    AutoFill { slot: String, filler: String },
-    Internalize { slot: String },
-    Optional { slot: String, optional: bool },
+    Preserve {
+        slot: String,
+    },
+    Rename {
+        slot: String,
+        to: String,
+    },
+    /// Legacy eager stored-Sign filler. Kept source-compatible.
+    AutoFill {
+        slot: String,
+        filler: String,
+    },
+    /// V3 context-sensitive filler. Resolution is deferred until the
+    /// construction's frozen syn/sem/prag context is available.
+    AutoFillCall {
+        slot: String,
+        filler: SignApplication,
+    },
+    Internalize {
+        slot: String,
+    },
+    Optional {
+        slot: String,
+        optional: bool,
+    },
 }
 
 /// Sign:真正的語言單位(phon=UR / sem / syn / prag 稀疏,以 Def 承載)。
@@ -1049,9 +1155,12 @@ pub struct Language {
     pub traits: Vec<TraitDef>,
     /// ③ sign 容器(印出時按名排序)。
     pub signs: Vec<SignDef>,
+    /// V3 paradigm 容器：具名、可呼叫的水平 Sign 選擇關係。
+    pub paradigms: Vec<ParadigmDef>,
     rule_namespace: RuleNamespace,
     next_rule: u32,
     next_sign: u32,
+    next_paradigm: u32,
 }
 
 impl std::fmt::Debug for Language {
@@ -1062,9 +1171,11 @@ impl std::fmt::Debug for Language {
             .field("distribution", &self.distribution)
             .field("traits", &self.traits)
             .field("signs", &self.signs)
+            .field("paradigms", &self.paradigms)
             .field("rule_namespace", &self.rule_namespace)
             .field("next_rule", &self.next_rule)
             .field("next_sign", &self.next_sign)
+            .field("next_paradigm", &self.next_paradigm)
             .finish()
     }
 }
@@ -1129,6 +1240,11 @@ impl Language {
                 }
             }
         }
+        if let RuleNamespace::Package(package) = &namespace {
+            for paradigm in &mut self.paradigms {
+                paradigm.id = ParadigmId::package(package.clone(), paradigm.id.0.ordinal);
+            }
+        }
         self.rule_namespace = namespace;
     }
 
@@ -1142,12 +1258,21 @@ impl Language {
         for sign in other.signs.drain(..) {
             self.signs.push(sign);
         }
+        self.paradigms.append(&mut other.paradigms);
     }
 
     /// 決定性 SignId 配發(P26)。
     pub fn fresh_sign_id(&mut self) -> SignId {
         let id = SignId::local(self.next_sign.into());
         self.next_sign += 1;
+        id
+    }
+
+    /// Deterministic ParadigmId allocation. Paradigm IDs live in their own
+    /// typed namespace just like Sign IDs; they never alias a returned Sign.
+    pub fn fresh_paradigm_id(&mut self) -> ParadigmId {
+        let id = ParadigmId::local(self.next_paradigm.into());
+        self.next_paradigm += 1;
         id
     }
 
@@ -1194,6 +1319,16 @@ impl Language {
         self.traits.push(t);
     }
 
+    pub fn add_paradigm(&mut self, name: impl Into<String>, selector: TypedCase) -> ParadigmId {
+        let id = self.fresh_paradigm_id();
+        self.paradigms.push(ParadigmDef {
+            id: id.clone(),
+            name: name.into(),
+            selector,
+        });
+        id
+    }
+
     /// IR dump = canonical form(P21)。
     pub fn dump(&self) -> String {
         printer::print(self)
@@ -1204,6 +1339,9 @@ impl Language {
     }
     pub fn sign_named(&self, name: &str) -> Option<&SignDef> {
         self.signs.iter().find(|s| s.name == name)
+    }
+    pub fn paradigm_named(&self, name: &str) -> Option<&ParadigmDef> {
+        self.paradigms.iter().find(|paradigm| paradigm.name == name)
     }
 }
 

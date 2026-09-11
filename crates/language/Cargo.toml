@@ -2,7 +2,7 @@
 name = "conlang-language"
 version = "0.1.0"
 edition = "2021"
-description = "Language: the synchronic knowledge file (Global/Trait/Sign) with canonical printer (2.0 step 8)"
+description = "Language: the synchronic knowledge file (Global/Trait/Paradigm/Sign) with canonical printer"
 
 [dependencies]
 # P20 依賴方向:language → dsl(→ core);禁反向。

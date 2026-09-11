@@ -132,7 +132,9 @@ fn packages_exports_and_combined_ontology_are_deterministic() {
         .flat_map(|package| package.exports.iter())
         .map(|export| export.alias.as_str())
         .collect();
-    // Step 17 adds the Future and Perfect Goal exports to the prior 134.
+    // Step 17 adds the Future and Perfect Goal exports. V3 Paradigms use the
+    // package-level export catalog and deliberately do not enter this legacy
+    // trait-only stdlib registry.
     assert_eq!(stable_ids.len(), 136);
     assert_eq!(aliases.len(), 136);
 

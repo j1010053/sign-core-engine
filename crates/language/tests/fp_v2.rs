@@ -32,7 +32,7 @@ sign en_3sg:
             case:
                 $slot.stem == [SibilantFinal]:
                     /{$slot.stem}+es/
-                else:
+                base:
                     /{$slot.stem}+s/
 
 sign walk:
@@ -89,7 +89,7 @@ sign en_3sg:
             case stem.phon:
                 == SibilantFinal:
                     /{stem}+es/
-                else:
+                base:
                     /{stem}+s/
 "#;
     let error = Language::parse(source).expect_err("`case <slot>.phon:` must be rejected");
@@ -220,7 +220,7 @@ sign walk:
         .sign
         .items
         .iter()
-        .any(|item| matches!(item, SignItem::TraitMount { name: name, kind: conlang_language::TraitMountKind::Declaration, .. } if name == "FragmentThirdSingular")));
+        .any(|item| matches!(item, SignItem::TraitMount { name, kind: conlang_language::TraitMountKind::Declaration, .. } if name == "FragmentThirdSingular")));
     assert!(stored.sign.items.iter().any(|item| {
         matches!(item, SignItem::FeatureValue(value)
             if value.dim == Dim::Syn
@@ -256,7 +256,7 @@ sign walk:
         .sign
         .items
         .iter()
-        .any(|item| matches!(item, SignItem::TraitMount { name: name, kind: conlang_language::TraitMountKind::Declaration, .. } if name == "FragmentThirdSingular")));
+        .any(|item| matches!(item, SignItem::TraitMount { name, kind: conlang_language::TraitMountKind::Declaration, .. } if name == "FragmentThirdSingular")));
 }
 
 #[test]
@@ -460,7 +460,7 @@ sign word:
         /word/
         realization:
             case:
-                else:
+                base:
                     SuffixFragment
 "#,
     )
@@ -483,7 +483,7 @@ fn sign_context_fragment_is_checked_as_a_typed_sign_body() {
     phon:
         /x/
     case:
-        else:
+        base:
             syn:
                 feature:
                     mode = outside
@@ -506,13 +506,13 @@ fn sign_context_fragment_is_checked_as_a_typed_sign_body() {
     phon:
         /x/
     case:
-        else:
+        base:
             syn:
                 feature:
                     mode = enum(a, b)
                     mode = a
             case:
-                else:
+                base:
                     syn:
                         feature:
                             mode = b
@@ -809,7 +809,7 @@ sign seed:
     phon:
         /S/
     case:
-        else:
+        base:
             Pair(left = Inner(), right = Inner())
 "#,
     )
@@ -1044,7 +1044,7 @@ sign root:
     phon:
         /r/
     case:
-        else:
+        base:
             Wrapper(value = Missing({$self}))
 "#,
     )
@@ -1065,7 +1065,7 @@ sign root:
     phon:
         /{$slot.value}/
     case:
-        else:
+        base:
             B({$self})
 
 sign B:
@@ -1075,7 +1075,7 @@ sign B:
     phon:
         /{$slot.value}/
     case:
-        else:
+        base:
             A({$self})
 "#,
     )
@@ -1136,7 +1136,7 @@ sign Chooser:
                 case:
                     $self.syn.number == plural:
                         unbounded
-                    else:
+                    base:
                         bounded
         roles:
             agent [ChoiceEntity]
@@ -1144,7 +1144,7 @@ sign Chooser:
                 case:
                     $self.syn.selection == first:
                         {$slot.first}
-                    else:
+                    base:
                         {$slot.second}
     phon:
         /{$slot.first} {$slot.second}/
@@ -1324,7 +1324,7 @@ sign Invalid:
             value = enum(one, two)
             value =
                 case:
-                    else:
+                    base:
                         Helper()
     phon:
         /x/
@@ -1393,9 +1393,9 @@ fn nested_case_leaves_are_statically_type_checked() {
                 case:
                     $self.syn.trigger == on:
                         case:
-                            else:
+                            base:
                                 outside_domain
-                    else:
+                    base:
                         no
     phon:
         /x/
@@ -1447,9 +1447,9 @@ sign NestedChoice:
                         case:
                             $self.syn.trigger == on:
                                 yes
-                            else:
+                            base:
                                 no
-                    else:
+                    base:
                         no
         roles:
             agent [NestedEntity]
@@ -1457,9 +1457,9 @@ sign NestedChoice:
                 case:
                     $self.syn.trigger == on:
                         case:
-                            else:
+                            base:
                                 {$slot.value}
-                    else:
+                    base:
                         {$slot.value}
     phon:
         /{$slot.value}/
@@ -1469,9 +1469,9 @@ sign NestedChoice:
                     case:
                         $self.syn.trigger == on:
                             /x {$slot.value}/
-                        else:
+                        base:
                             /never/
-                else:
+                base:
                     /{$slot.value}/
 "#,
     )
@@ -1540,9 +1540,9 @@ sign Root:
     phon:
         /{$slot.value}/
     case:
-        else:
+        base:
             case:
-                else:
+                base:
                     Wrapper({$self})
 "#,
     )
@@ -1585,7 +1585,7 @@ sign marked:
                 case:
                     $self.syn.trigger == on:
                         yes
-                    else:
+                    base:
                         no
     phon:
         /m/
@@ -1667,7 +1667,7 @@ sign stored_root:
     phon:
         /s/
     case:
-        else:
+        base:
             $self
             belongs EnrichedContract
 
@@ -1676,7 +1676,7 @@ sign root:
     phon:
         /s/
     case:
-        else:
+        base:
             Wrapper({$self})
             belongs EnrichedContract
 "#,

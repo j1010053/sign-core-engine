@@ -58,7 +58,7 @@ sign TutorialNP:
             case:
                 $self.syn.number == plural:
                     /{$slot.stem}s/
-                else:
+                base:
                     /{$slot.stem}/
 
 sign TutorialClause:

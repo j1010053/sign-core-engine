@@ -30,6 +30,7 @@
 //! |---|---|---|
 //! | `signs` | 穩定 id | **逐項** |
 //! | `traits` | 穩定 id(向 identity manifest 取) | **逐項** |
+//! | `paradigms` | 穩定 id | **逐項** |
 //! | `distribution` | 鍵字串 | **逐項** |
 //! | `dsl_decls` | 無——不透明 verbatim(I15-a),看不進內容 | 整塊 |
 //!
@@ -47,7 +48,7 @@
 
 use conlang_language::{
     AddressSegment, IdentityAllocatorV2, IdentityError, IdentityNamespace, Language,
-    LanguageDocument, NodeAddress, NodeEntryV1, NodeId, SignDef, TraitDef,
+    LanguageDocument, NodeAddress, NodeEntryV1, NodeId, ParadigmDef, SignDef, TraitDef,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -57,13 +58,14 @@ use std::collections::{BTreeMap, BTreeSet};
 pub enum MergeCollection {
     Signs,
     Traits,
+    Paradigms,
     Distribution,
 }
 
 /// 逐項合併的對齊鍵。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MergeKey {
-    /// `signs` / `traits`:穩定 id(docs/06 §6.1)。
+    /// `signs` / `traits` / `paradigms`:穩定 id(docs/06 §6.1)。
     Node(NodeId),
     /// `distribution`:鍵字串本身就是身分。
     Name(String),
@@ -114,6 +116,12 @@ pub enum MergeConflict {
         name: String,
         keys: Vec<MergeKey>,
     },
+    /// Sign 與 Paradigm 共用 callable 名稱空間；兩個不同 kind 也不可同名。
+    CallableNameCollision {
+        name: String,
+        sign: MergeKey,
+        paradigm: MergeKey,
+    },
     /// 無對齊鍵的區段各方改成不同值。
     Block(MergeBlock),
 }
@@ -126,6 +134,9 @@ pub enum MergeError {
     /// trait 在 identity manifest 裡沒有對應條目 ⇒ 沒有對齊鍵。
     #[error("MERGE_UNIDENTIFIED_TRAIT: trait {name:?} has no identity entry")]
     UnidentifiedTrait { name: String },
+    /// paradigm id 必須是文件穩定 id，不能拿 parser-local ordinal 跨文件對齊。
+    #[error("MERGE_UNSTABLE_PARADIGM_ID: paradigm {name:?} has a non-document id {id}")]
+    UnstableParadigmId { name: String, id: NodeId },
     /// 至少要兩個 parent 才叫合併。
     #[error("MERGE_TOO_FEW_PARENTS: merging needs at least two parents")]
     TooFewParents,
@@ -150,9 +161,10 @@ pub enum MergeError {
 /// 不存在「先建起來之後再解」的中間狀態)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergePlan {
-    /// 三個逐項區段各自的取值,依鍵排序,故計畫是決定性的(P26)。
+    /// 四個逐項區段各自的取值,依鍵排序,故計畫是決定性的(P26)。
     pub signs: Vec<Pick>,
     pub traits: Vec<Pick>,
+    pub paradigms: Vec<Pick>,
     pub distribution: Vec<Pick>,
     /// 無鍵區段取自哪一方(`None` = 沿用基準);有衝突時該項不出現。
     pub blocks: Vec<(MergeBlock, Option<usize>)>,
@@ -219,6 +231,53 @@ pub fn plan_merge(
         MergeKey::Node,
     ));
 
+    // ── paradigms(逐項,以獨立的穩定 ParadigmId 對齊)──
+    let base_paradigms = base.map(paradigms_by_id).transpose()?.unwrap_or_default();
+    let side_paradigms = sides
+        .iter()
+        .map(|document| paradigms_by_id(document))
+        .collect::<Result<Vec<_>, _>>()?;
+    let merged = merge_keyed(&base_paradigms, &side_paradigms, |a, b| a.content_eq(b));
+    let paradigms = label(
+        MergeCollection::Paradigms,
+        merged,
+        &mut conflicts,
+        MergeKey::Node,
+    );
+    conflicts.extend(name_collisions(
+        MergeCollection::Paradigms,
+        &paradigms,
+        &base_paradigms,
+        &side_paradigms,
+        |item: &&ParadigmDef| item.name.as_str(),
+        MergeKey::Node,
+    ));
+
+    // Sign 與 Paradigm 都能以 `name(...)` 呼叫，故跨 collection 也必須唯一。
+    let sign_names = selected_names(
+        &signs,
+        &base_signs,
+        &side_signs,
+        |item: &&SignDef| item.name.as_str(),
+        MergeKey::Node,
+    );
+    let paradigm_names = selected_names(
+        &paradigms,
+        &base_paradigms,
+        &side_paradigms,
+        |item: &&ParadigmDef| item.name.as_str(),
+        MergeKey::Node,
+    );
+    for (name, sign) in sign_names {
+        if let Some(paradigm) = paradigm_names.get(&name) {
+            conflicts.push(MergeConflict::CallableNameCollision {
+                name,
+                sign,
+                paradigm: paradigm.clone(),
+            });
+        }
+    }
+
     // ── distribution(逐項;鍵字串即身分,故不可能有「不同鍵同名」)──
     let base_distribution = base.map(distribution_by_key).unwrap_or_default();
     let side_distribution: Vec<_> = sides.iter().map(|d| distribution_by_key(d)).collect();
@@ -246,6 +305,7 @@ pub fn plan_merge(
     Ok(MergePlan {
         signs,
         traits,
+        paradigms,
         distribution,
         blocks,
         conflicts,
@@ -332,6 +392,14 @@ pub fn materialize(
         origins.traits.insert(item.name.clone(), pick.from);
         language.traits.push(item.clone());
     }
+    for pick in &plan.paradigms {
+        let source = source_of(base, sides, pick.from)?;
+        let paradigm = paradigms_by_id(source)?
+            .remove(node_key(&pick.key)?)
+            .ok_or_else(|| MergeError::SourceMissing(format!("paradigm {:?}", pick.key)))?;
+        origins.paradigms.insert(paradigm.name.clone(), pick.from);
+        language.paradigms.push(paradigm.clone());
+    }
     for pick in &plan.signs {
         let source = source_of(base, sides, pick.from)?;
         let sign = signs_by_id(source)?
@@ -417,6 +485,7 @@ pub fn materialize(
 struct Origins {
     signs: BTreeMap<String, Option<usize>>,
     traits: BTreeMap<String, Option<usize>>,
+    paradigms: BTreeMap<String, Option<usize>>,
     distribution: BTreeMap<String, Option<usize>>,
 }
 
@@ -471,6 +540,25 @@ fn inherited_id(
                 .position(|item| &item.name == name)
                 .ok_or_else(|| MergeError::SourceMissing(format!("trait {name:?}")))?;
             (from, AddressSegment::Traits(position))
+        }
+        AddressSegment::Paradigms(index) => {
+            let name = &merged
+                .paradigms
+                .get(*index)
+                .ok_or_else(|| MergeError::UnexpectedAddress(address.clone()))?
+                .name;
+            let from = *origins
+                .paradigms
+                .get(name)
+                .ok_or_else(|| MergeError::SourceMissing(format!("paradigm {name:?}")))?;
+            let source = source_of(base, sides, from)?;
+            let position = source
+                .language()
+                .paradigms
+                .iter()
+                .position(|item| &item.name == name)
+                .ok_or_else(|| MergeError::SourceMissing(format!("paradigm {name:?}")))?;
+            (from, AddressSegment::Paradigms(position))
         }
         AddressSegment::Distribution(index) => {
             let key = &merged
@@ -544,7 +632,7 @@ fn node_key(key: &MergeKey) -> Result<&NodeId, MergeError> {
 
 /// 一次逐項合併的**原始結果**(還沒貼上區段標籤)。
 ///
-/// 泛型函式刻意不碰 `MergeConflict`——那樣它才能同時服務三個區段;貼標籤由 `label` 做。
+/// 泛型函式刻意不碰 `MergeConflict`——那樣它才能同時服務四個區段;貼標籤由 `label` 做。
 struct KeyedMerge<K> {
     picks: Vec<(K, Option<usize>)>,
     content: Vec<(K, Vec<usize>)>,
@@ -552,7 +640,7 @@ struct KeyedMerge<K> {
     collisions: Vec<(K, Vec<usize>)>,
 }
 
-/// **逐項三態規則**——signs / traits / distribution 共用這一段。
+/// **逐項三態規則**——signs / traits / paradigms / distribution 共用這一段。
 ///
 /// 它不需要知道自己在合併什麼,只需要:每個項目有個**鍵**,兩個項目能比**相等**。
 /// 寫三份幾乎一樣的程式會走鐘(補一個角落只改到其中一份),故泛型化。
@@ -728,6 +816,33 @@ fn name_collisions<K: Ord + Clone, V>(
         .collect()
 }
 
+/// 取得一個乾淨 pick 集合最終會佔用的名稱，供跨 collection namespace 檢查。
+fn selected_names<K: Ord + Clone, V>(
+    picks: &[Pick],
+    base: &BTreeMap<K, V>,
+    sides: &[BTreeMap<K, V>],
+    name_of: impl Fn(&V) -> &str,
+    into_key: impl Fn(K) -> MergeKey,
+) -> BTreeMap<String, MergeKey> {
+    let keys: BTreeSet<&K> = base
+        .keys()
+        .chain(sides.iter().flat_map(|map| map.keys()))
+        .collect();
+    let mut names = BTreeMap::new();
+    for key in keys {
+        let candidate = into_key(key.clone());
+        let Some(pick) = picks.iter().find(|pick| pick.key == candidate) else {
+            continue;
+        };
+        let value = match pick.from {
+            Some(index) => &sides[index][key],
+            None => &base[key],
+        };
+        names.insert(name_of(value).to_owned(), candidate);
+    }
+    names
+}
+
 /// `SignId` → sign。**id 必須在文件命名空間裡**——`Ephemeral` 的 id 只在單一
 /// `Language` 內有意義,跨文件拿它對齊會把不相干的 sign 湊成一對。故硬錯,不略過。
 fn signs_by_id(document: &LanguageDocument) -> Result<BTreeMap<NodeId, &SignDef>, MergeError> {
@@ -756,6 +871,23 @@ fn traits_by_id(document: &LanguageDocument) -> Result<BTreeMap<NodeId, &TraitDe
                     name: item.name.clone(),
                 })?;
         map.insert(reference.id, item);
+    }
+    Ok(map)
+}
+
+/// `ParadigmId` → paradigm。和 Sign 一樣，parser-local id 不可跨文件對齊。
+fn paradigms_by_id(
+    document: &LanguageDocument,
+) -> Result<BTreeMap<NodeId, &ParadigmDef>, MergeError> {
+    let mut map = BTreeMap::new();
+    for paradigm in &document.language().paradigms {
+        if !matches!(paradigm.id.0.namespace, IdentityNamespace::Document(_)) {
+            return Err(MergeError::UnstableParadigmId {
+                name: paradigm.name.clone(),
+                id: paradigm.id.0.clone(),
+            });
+        }
+        map.insert(paradigm.id.0.clone(), paradigm);
     }
     Ok(map)
 }

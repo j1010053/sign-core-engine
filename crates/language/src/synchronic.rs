@@ -1447,7 +1447,26 @@ pub(crate) fn run_sign_feature_expressions(
         let mut selected = None;
         for branch in &case.branches {
             let matched = match &branch.condition {
-                CaseCondition::Else => true,
+                CaseCondition::Base => true,
+                CaseCondition::Else => {
+                    return Err("CASE_ELSE_NOT_ALLOWED: `case` uses `base`, not `else`".to_owned())
+                }
+                CaseCondition::Bundle(pattern) => {
+                    if pattern.len() != case.match_features.len() || case.match_features.is_empty()
+                    {
+                        return Err(
+                            "CASE_BUNDLE_ARITY_MISMATCH: bundle row/header mismatch".to_owned()
+                        );
+                    }
+                    case.match_features
+                        .iter()
+                        .zip(pattern)
+                        .all(|(path, expected)| {
+                            expected.as_deref().is_none_or(|expected| {
+                                scalar(&current, path, registry).as_deref() == Some(expected)
+                            })
+                        })
+                }
                 CaseCondition::Guard(guard) => {
                     let (status, _, _, error) = evaluate_sign_guard(&current, guard, registry);
                     match status {
@@ -1469,6 +1488,9 @@ pub(crate) fn run_sign_feature_expressions(
             };
             if !matched {
                 continue;
+            }
+            if matches!(&branch.result, Expression::ImplicitBase) {
+                break;
             }
             let Expression::EnumValue(value) = &branch.result else {
                 return Err(format!(

@@ -37,7 +37,7 @@ use crate::{
 };
 use conlang_language::{
     AddressSegment, CaseBranch, Expression, IdentityError, NodeEntryV1, NodeId, NodeKind, NodeRef,
-    PhonBlock, Realization, Rule, SignApplication, SignArgumentValue, SignItem, TypedCase,
+    PhonBlock, Rule, SignApplication, SignArgumentValue, SignItem, TypedCase,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -82,6 +82,7 @@ fn capability(kind: NodeKind) -> ReconstructCapability {
         NodeKind::DslDeclaration
         | NodeKind::Distribution
         | NodeKind::Trait
+        | NodeKind::Paradigm
         | NodeKind::Sign
         | NodeKind::TraitUse
         | NodeKind::Belongs
@@ -411,6 +412,7 @@ fn sequence_key(document: &LanguageDocument, entry: &NodeEntryV1) -> Option<Sequ
         // argument positions are intentionally not Move sequences.
         AddressSegment::Distribution(_)
         | AddressSegment::Traits(_)
+        | AddressSegment::Paradigms(_)
         | AddressSegment::Signs(_)
         | AddressSegment::CaseExpression
         | AddressSegment::CaseResult
@@ -709,10 +711,7 @@ fn shallow_state_updates(
         }
         (ShallowNode::Case(old), ShallowNode::Case(new)) => Ok(case_updates(old, new)),
         (ShallowNode::CaseBranch(old), ShallowNode::CaseBranch(new)) => {
-            Ok((!case_branch_shallow_eq(old, new))
-                .then(|| NodeUpdate::CaseBranch(new.clone()))
-                .into_iter()
-                .collect())
+            Ok(case_branch_updates(old, new))
         }
         (ShallowNode::Application(old), ShallowNode::Application(new)) => {
             Ok(application_updates(old, new))
@@ -802,32 +801,49 @@ fn expression_shell_eq(before: &Expression, after: &Expression) -> bool {
         | (Expression::EnumValue(old), Expression::EnumValue(new))
         | (Expression::Slot(old), Expression::Slot(new)) => old == new,
         (Expression::SelfSign, Expression::SelfSign) => true,
+        (Expression::ImplicitBase, Expression::ImplicitBase) => true,
         _ => false,
     }
 }
 
 fn case_updates(before: &TypedCase, after: &TypedCase) -> Vec<NodeUpdate> {
-    if before.selection == after.selection
-        && before.expected == after.expected
-        && before.scrutinee == after.scrutinee
-        && before.name == after.name
+    let mut updates = Vec::new();
+    if before.selection != after.selection {
+        updates.push(NodeUpdate::CaseSelection(after.selection));
+    }
+    if before.match_features != after.match_features {
+        updates.push(NodeUpdate::CaseMatchFeatures(after.match_features.clone()));
+    }
+    // `expected`, `scrutinee`, and `name` do not currently have independent
+    // source-edit surfaces. Preserve the typed whole-header update for those
+    // structural changes; ordinary selection/bundle edits remain dumpable.
+    if before.expected != after.expected
+        || before.scrutinee != after.scrutinee
+        || before.name != after.name
     {
-        Vec::new()
-    } else {
-        vec![NodeUpdate::CaseHeader {
+        updates.push(NodeUpdate::CaseHeader {
             selection: after.selection,
             expected: after.expected.clone(),
             scrutinee: after.scrutinee.clone(),
+            match_features: after.match_features.clone(),
             name: after.name.clone(),
-        }]
+        });
     }
+    updates
 }
 
-fn case_branch_shallow_eq(before: &CaseBranch, after: &CaseBranch) -> bool {
-    before.condition == after.condition
-        && before.belongs == after.belongs
+fn case_branch_updates(before: &CaseBranch, after: &CaseBranch) -> Vec<NodeUpdate> {
+    if before.belongs == after.belongs
         && before.name == after.name
         && expression_shell_eq(&before.result, &after.result)
+    {
+        (before.condition != after.condition)
+            .then(|| NodeUpdate::CaseCondition(after.condition.clone()))
+            .into_iter()
+            .collect()
+    } else {
+        vec![NodeUpdate::CaseBranch(after.clone())]
+    }
 }
 
 fn application_updates(before: &SignApplication, after: &SignApplication) -> Vec<NodeUpdate> {
@@ -915,6 +931,11 @@ fn shallow_updates(
                 updates.push(NodeUpdate::Rename(new.name.clone()));
             }
         }
+        (DetachedNode::Paradigm(old), DetachedNode::Paradigm(new)) => {
+            if old.name != new.name {
+                updates.push(NodeUpdate::Rename(new.name.clone()));
+            }
+        }
         // Block 只有 items,items 各自有 entry ⇒ 淺層無欄位可改。
         (DetachedNode::Block(_), DetachedNode::Block(_)) => {}
         (DetachedNode::Item(old), DetachedNode::Item(new)) => {
@@ -939,9 +960,7 @@ fn shallow_updates(
             updates.extend(phon_block_updates(old, new)?);
         }
         (DetachedNode::CaseBranch(old), DetachedNode::CaseBranch(new)) => {
-            if old != new {
-                updates.push(NodeUpdate::CaseBranch(new.clone()));
-            }
+            updates.extend(case_branch_updates(old, new));
         }
         // 只有**種類對不上**或真的沒實作才走到這裡。
         //

@@ -288,7 +288,7 @@ fn a_trait_may_guard_on_a_sibling_traits_feature() {
 /// `CASE_INVALID_GUARD`),是另一個語法位置的同一個讀取通道。
 #[test]
 fn typed_case_branch_guards_are_checked() {
-    let bogus = "Symbol x\nSymbol y\n\ntrait T:\n    syn:\n        feature:\n            n = enum(a, b)\n\nsign s:\n    belongs T\n    phon:\n        /x/\n        realization:\n            case:\n                $self.syn.bogus == a:\n                    /x/\n                else:\n                    /y/\n";
+    let bogus = "Symbol x\nSymbol y\n\ntrait T:\n    syn:\n        feature:\n            n = enum(a, b)\n\nsign s:\n    belongs T\n    phon:\n        /x/\n        realization:\n            case:\n                $self.syn.bogus == a:\n                    /x/\n                base:\n                    /y/\n";
     let found = errors(bogus);
     let (_, message) = found
         .iter()

@@ -219,7 +219,7 @@ surface 是衍生結果，不回寫成另一個 construction sign。
 
 - meaning/function 改變而形成另一個已固化構式；
 - valence／semantic roles 改變且不是同一構式的可預測環境實現；
-- suppletion 由獨立 lexical sign 填充 paradigm slot；
+- suppletion 由 V3 Paradigm 選取獨立 lexical Sign；Paradigm 是水平關係，不是 construction slot；
 - constructionalization 建立新的 network node。
 
 單純 surface string、allomorph 或規則分支不同，不足以建立新 construction sign。

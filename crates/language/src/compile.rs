@@ -37,6 +37,10 @@ pub enum CompileError {
     DuplicateTrait(String),
     #[error("duplicate sign name {0:?}")]
     DuplicateSign(String),
+    #[error(
+        "multiple global traits {names:?}; exactly one may be active (mark the selected one `global trait` and declare the others as ordinary `trait`)"
+    )]
+    MultipleGlobalTraits { names: Vec<String> },
     #[error("trait expansion cycle in {sign:?}: {path}")]
     TraitExpansionCycle { sign: String, path: String },
     #[error("sign {sign:?}: `belongs {name}` provides {given} type argument(s) but trait {name} expects {expected}")]
@@ -72,6 +76,23 @@ fn check_names(l: &Language) -> Result<(), CompileError> {
         if !seen.insert(&s.name) {
             return Err(CompileError::DuplicateSign(s.name.clone()));
         }
+    }
+    check_global_trait_selection(l)
+}
+
+/// V3 invariant shared by the full pipeline and the public low-level codegen
+/// phase.  Keeping it here prevents callers with a programmatically-built
+/// Ordered Language from silently concatenating several automatic templates.
+pub(crate) fn check_global_trait_selection(l: &Language) -> Result<(), CompileError> {
+    let mut globals = l
+        .traits
+        .iter()
+        .filter(|def| def.global)
+        .map(|def| def.name.clone())
+        .collect::<Vec<_>>();
+    if globals.len() > 1 {
+        globals.sort();
+        return Err(CompileError::MultipleGlobalTraits { names: globals });
     }
     Ok(())
 }

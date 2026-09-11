@@ -101,7 +101,12 @@ impl Call<'_> {
         })?;
         let language =
             Language::parse(block).map_err(|error| ReplayError::Parse(error.to_string()))?;
-        if language.signs.len() != 1 || !language.traits.is_empty() {
+        if language.signs.len() != 1
+            || !language.traits.is_empty()
+            || !language.paradigms.is_empty()
+            || !language.dsl_decls.is_empty()
+            || !language.distribution.is_empty()
+        {
             return Err(ReplayError::Parse(format!(
                 "{}(…): block must contain exactly one sign",
                 self.name

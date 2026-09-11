@@ -1354,6 +1354,17 @@ impl GraphStore {
             });
         }
 
+        let mut paradigms = Vec::with_capacity(language.paradigms.len());
+        for paradigm in &language.paradigms {
+            let mut fragment = Language::new();
+            fragment.paradigms.push(paradigm.clone());
+            paradigms.push(NamedObject {
+                name: paradigm.name.clone(),
+                object: self.put_object(fragment.dump().as_bytes())?,
+            });
+        }
+        paradigms.sort_by(|left, right| left.name.cmp(&right.name));
+
         let mut signs = Vec::with_capacity(language.signs.len());
         for sign in &language.signs {
             let mut fragment = Language::new();
@@ -1373,6 +1384,7 @@ impl GraphStore {
             identity_sha256: sha256_hex(identities_source.as_bytes()),
             globals,
             traits,
+            paradigms,
             signs,
             identities,
             nativization: nativization.into(),
@@ -1411,6 +1423,12 @@ impl GraphStore {
             let fragment = String::from_utf8(self.get_object(&item.object)?)
                 .map_err(|error| StoreError::Format(error.to_string()))?;
             validate_named_fragment(&fragment, &item.name, NamedKind::Trait)?;
+            sections.push(fragment);
+        }
+        for item in &manifest.paradigms {
+            let fragment = String::from_utf8(self.get_object(&item.object)?)
+                .map_err(|error| StoreError::Format(error.to_string()))?;
+            validate_named_fragment(&fragment, &item.name, NamedKind::Paradigm)?;
             sections.push(fragment);
         }
         for item in &manifest.signs {
@@ -1526,6 +1544,8 @@ struct SnapshotManifest {
     identity_sha256: String,
     globals: String,
     traits: Vec<NamedObject>,
+    #[serde(default)]
+    paradigms: Vec<NamedObject>,
     signs: Vec<NamedObject>,
     identities: String,
     nativization: StoredNativization,
@@ -1580,6 +1600,7 @@ struct StoredEdge {
 #[derive(Debug, Clone, Copy)]
 enum NamedKind {
     Trait,
+    Paradigm,
     Sign,
 }
 
@@ -1590,10 +1611,25 @@ fn validate_named_fragment(
 ) -> Result<(), StoreError> {
     let parsed = Language::parse(source).map_err(|error| StoreError::Format(error.to_string()))?;
     let actual = match kind {
-        NamedKind::Trait if parsed.traits.len() == 1 && parsed.signs.is_empty() => {
+        NamedKind::Trait
+            if parsed.traits.len() == 1
+                && parsed.paradigms.is_empty()
+                && parsed.signs.is_empty() =>
+        {
             Some(parsed.traits[0].name.as_str())
         }
-        NamedKind::Sign if parsed.signs.len() == 1 && parsed.traits.is_empty() => {
+        NamedKind::Paradigm
+            if parsed.paradigms.len() == 1
+                && parsed.traits.is_empty()
+                && parsed.signs.is_empty() =>
+        {
+            Some(parsed.paradigms[0].name.as_str())
+        }
+        NamedKind::Sign
+            if parsed.signs.len() == 1
+                && parsed.traits.is_empty()
+                && parsed.paradigms.is_empty() =>
+        {
             Some(parsed.signs[0].name.as_str())
         }
         _ => None,

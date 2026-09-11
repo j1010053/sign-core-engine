@@ -707,6 +707,7 @@ struct MappedSlot {
     internal: Slot,
     external: Option<String>,
     autofill: Option<String>,
+    deferred_autofill: bool,
 }
 
 fn validate_slot_map(slots: &[Slot], mapping: &SlotMap) -> Result<Vec<MappedSlot>, CxgError> {
@@ -719,6 +720,7 @@ fn validate_slot_map(slots: &[Slot], mapping: &SlotMap) -> Result<Vec<MappedSlot
             external: Some(internal.name.clone()),
             internal,
             autofill: None,
+            deferred_autofill: false,
         })
         .collect();
     let mut seen = BTreeSet::new();
@@ -727,6 +729,7 @@ fn validate_slot_map(slots: &[Slot], mapping: &SlotMap) -> Result<Vec<MappedSlot
             SlotMapOp::Preserve { slot } => (slot, "exposure"),
             SlotMapOp::Rename { slot, .. } => (slot, "exposure"),
             SlotMapOp::AutoFill { slot, .. } => (slot, "autofill"),
+            SlotMapOp::AutoFillCall { slot, .. } => (slot, "autofill"),
             SlotMapOp::Internalize { slot } => (slot, "exposure"),
             SlotMapOp::Optional { slot, .. } => (slot, "optional"),
         };
@@ -751,6 +754,7 @@ fn validate_slot_map(slots: &[Slot], mapping: &SlotMap) -> Result<Vec<MappedSlot
                 target.external = Some(to.clone());
             }
             SlotMapOp::AutoFill { filler, .. } => target.autofill = Some(filler.clone()),
+            SlotMapOp::AutoFillCall { .. } => target.deferred_autofill = true,
             SlotMapOp::Internalize { .. } => target.external = None,
             SlotMapOp::Optional { optional, .. } => target.internal.optional = *optional,
         }
@@ -762,7 +766,11 @@ fn validate_slot_map(slots: &[Slot], mapping: &SlotMap) -> Result<Vec<MappedSlot
                 return Err(CxgError::SlotMapNameCollision(name.clone()));
             }
         }
-        if slot.external.is_none() && slot.autofill.is_none() && !slot.internal.optional {
+        if slot.external.is_none()
+            && slot.autofill.is_none()
+            && !slot.deferred_autofill
+            && !slot.internal.optional
+        {
             return Err(CxgError::InternalRequiredUnfilled(
                 slot.internal.name.clone(),
             ));
@@ -1216,7 +1224,28 @@ fn token_case_condition_matches(
     reg: &OntologyRegistry,
 ) -> Result<bool, TokenExpressionError> {
     match condition {
-        CaseCondition::Else => Ok(true),
+        CaseCondition::Base if case.selection == crate::CaseSelection::FirstMatch => Ok(true),
+        CaseCondition::Else if case.selection == crate::CaseSelection::Accumulate => Ok(true),
+        CaseCondition::Base | CaseCondition::Else => Err(TokenExpressionError::Invalid(format!(
+            "{:?} uses the wrong fallback condition {condition:?}",
+            case.selection
+        ))),
+        CaseCondition::Bundle(pattern) => {
+            if pattern.len() != case.match_features.len() || case.match_features.is_empty() {
+                return Err(TokenExpressionError::Invalid(
+                    "bundle match row/header arity mismatch".to_owned(),
+                ));
+            }
+            Ok(case
+                .match_features
+                .iter()
+                .zip(pattern)
+                .all(|(path, expected)| {
+                    expected
+                        .as_deref()
+                        .is_none_or(|expected| token_scalar(token, path) == Some(expected))
+                }))
+        }
         CaseCondition::Guard(guard) => {
             for conjunct in guard.split("&&").map(str::trim) {
                 let (status, _, _, error) = synchronic::evaluate_token_guard(token, conjunct, reg);
@@ -1288,6 +1317,7 @@ fn evaluate_token_feature_case(
         }
         let value = match &branch.result {
             Expression::EnumValue(value) => Some(value.clone()),
+            Expression::ImplicitBase => base.clone(),
             Expression::Case(nested) => evaluate_token_feature_case(
                 token,
                 nested,
@@ -1418,6 +1448,7 @@ fn evaluate_token_role_case(
             continue;
         }
         let selected = match &branch.result {
+            Expression::ImplicitBase => base.clone(),
             Expression::Slot(slot) => {
                 let Some(filler) = token
                     .fillers
@@ -1788,7 +1819,24 @@ fn realize_stored_filler(
                 let case = &realization.expression;
                 for branch in &case.branches {
                     let matched = match &branch.condition {
-                        crate::CaseCondition::Else => true,
+                        crate::CaseCondition::Base => true,
+                        crate::CaseCondition::Else => {
+                            return Err(CxgError::FillerRealizationGuard {
+                                filler: material.name.clone(),
+                                message: "`case` realization uses `base`, not `else`".to_owned(),
+                            });
+                        }
+                        crate::CaseCondition::Bundle(pattern) => {
+                            pattern.len() == case.match_features.len()
+                                && !case.match_features.is_empty()
+                                && case.match_features.iter().zip(pattern).all(
+                                    |(path, expected)| {
+                                        expected.as_deref().is_none_or(|expected| {
+                                            token_scalar(token, path) == Some(expected)
+                                        })
+                                    },
+                                )
+                        }
                         crate::CaseCondition::Guard(guard) => {
                             let mut matched = true;
                             for conjunct in guard.split("&&").map(str::trim) {
@@ -1832,6 +1880,7 @@ fn realize_stored_filler(
                         }
                         match branch.result.phon_base_template() {
                             Some(template) => selected = Some(template.to_owned()),
+                            None if matches!(&branch.result, Expression::ImplicitBase) => {}
                             None => {
                                 return Err(CxgError::FillerRealizationGuard {
                                     filler: material.name.clone(),
@@ -1891,7 +1940,38 @@ fn realize_stored_filler(
         let case = &realization.expression;
         for branch in &case.branches {
             let matched = match &branch.condition {
-                crate::CaseCondition::Else => true,
+                crate::CaseCondition::Base => true,
+                crate::CaseCondition::Else => {
+                    return Err(CxgError::FillerRealizationGuard {
+                        filler: material.name.clone(),
+                        message: "`case` realization uses `base`, not `else`".to_owned(),
+                    });
+                }
+                crate::CaseCondition::Bundle(pattern) => {
+                    pattern.len() == case.match_features.len()
+                        && !case.match_features.is_empty()
+                        && case
+                            .match_features
+                            .iter()
+                            .zip(pattern)
+                            .all(|(path, expected)| {
+                                expected.as_deref().is_none_or(|expected| {
+                                    let path = path.strip_prefix("$self.").unwrap_or(path);
+                                    let Some((dimension, _)) = path.split_once('.') else {
+                                        return false;
+                                    };
+                                    let Some(dimension) = Dim::parse(dimension) else {
+                                        return false;
+                                    };
+                                    sign.project(dimension, reg)
+                                        .defs
+                                        .iter()
+                                        .rev()
+                                        .find(|(candidate, _)| candidate == path)
+                                        .is_some_and(|(_, value)| value == expected)
+                                })
+                            })
+                }
                 crate::CaseCondition::Guard(guard) => {
                     let mut matched = true;
                     for conjunct in guard.split("&&").map(str::trim) {
@@ -1919,6 +1999,7 @@ fn realize_stored_filler(
             };
             if matched {
                 match &branch.result {
+                    crate::Expression::ImplicitBase => {}
                     crate::Expression::PhonTemplate(template) => selected = Some(template.as_str()),
                     // P93:分支存成 phon fragment(模板 + 若干規則)。這條路徑是
                     // **已存 sign 當 filler** 時的自我實現,拿不到 phon program,

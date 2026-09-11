@@ -312,10 +312,13 @@ fn emit_rule_mapped(
 /// ④Ordered → Compiled Grammar + Compiled Sign。
 ///
 /// phon 側收錄:dsl 域宣告(verbatim,含 Spell-out/Parse 塊——dsl 要求宣告
-/// 先於規則,verbatim 區恰在最前)+ **global trait 的規則**(canonical 名稱序,
-/// 塊內書寫序 = ④ 的 stage dispatch 結果)。global trait 的 Def 與 sign 局部
+/// 先於規則,verbatim 區恰在最前)+ **唯一 global trait 的規則**(塊內書寫序 =
+/// ④ 的 stage dispatch 結果)。global trait 的 Def 與 sign 局部
 /// 規則**不進** phon 側(前者非 phon 概念、後者屬臨時 Word 建構,皆步驟 12+)。
-pub fn codegen(ordered: &Language) -> Result<(CompiledGrammar, Vec<CompiledSign>), CodegenError> {
+fn codegen_with_global_items(
+    ordered: &Language,
+    global_items: &[SignItem],
+) -> Result<(CompiledGrammar, Vec<CompiledSign>), CodegenError> {
     let mut src = String::new();
     for line in &ordered.dsl_decls {
         src.push_str(line);
@@ -324,19 +327,19 @@ pub fn codegen(ordered: &Language) -> Result<(CompiledGrammar, Vec<CompiledSign>
     if !src.is_empty() {
         src.push('\n');
     }
-    let mut globals: Vec<_> = ordered.traits.iter().filter(|t| t.global).collect();
-    globals.sort_by(|a, b| a.name.cmp(&b.name)); // canonical 序(printer 同序,決定性)
     let mut n = 1u32;
     let mut source_map = Vec::new();
-    for t in globals {
-        for b in &t.blocks {
-            for item in &b.items {
-                // phon 側只收 phon 規則(P44 維度隔離;syn/sem/prag 規則求值於 Sign,12d)
-                if let SignItem::Rule(r) = item {
-                    if r.dim == crate::Dim::Phon {
-                        emit_rule_mapped(&mut src, &mut n, r, &mut source_map)?;
-                    }
-                }
+    let mut seen_global_rules = std::collections::BTreeSet::new();
+    for item in global_items {
+        // phon 側只收 phon 規則(P44 維度隔離;syn/sem/prag 規則求值於 Sign,12d)
+        if let SignItem::Rule(r) = item {
+            // During the belongs/mount migration the same inherited rule can
+            // be present through both `belongs Parent` projection and an
+            // explicit `Parent` expansion point.  It is still one rule
+            // entity, so emit its stable RuleId once rather than applying the
+            // same sound change twice.
+            if r.dim == crate::Dim::Phon && seen_global_rules.insert(r.id.clone()) {
+                emit_rule_mapped(&mut src, &mut n, r, &mut source_map)?;
             }
         }
     }
@@ -432,6 +435,47 @@ pub fn codegen(ordered: &Language) -> Result<(CompiledGrammar, Vec<CompiledSign>
     ))
 }
 
+fn ordered_global_items(
+    source: &Language,
+    externals: &[&Language],
+) -> Result<Vec<SignItem>, CodegenError> {
+    let Some(global) = source.traits.iter().find(|trait_def| trait_def.global) else {
+        return Ok(Vec::new());
+    };
+    let view = compile::trait_view(source, externals, &global.name)?;
+    let mut staging = Language::new();
+    let mut expanded = global.clone();
+    expanded.blocks = vec![crate::Block { items: view }];
+    staging.traits.push(expanded);
+    let ordered = compile::order_stages(&staging);
+    Ok(ordered.traits[0].blocks[0].items.clone())
+}
+
+pub fn codegen(ordered: &Language) -> Result<(CompiledGrammar, Vec<CompiledSign>), CodegenError> {
+    compile::check_global_trait_selection(ordered)?;
+    let global_items = match ordered_global_items(ordered, &[]) {
+        Ok(items) => items,
+        // `codegen(Ordered Language)` intentionally has no external package
+        // argument.  Before V3 it could still emit a global trait that had an
+        // explicit external mount (the mount itself was ignored here).  Keep
+        // that low-level compatibility instead of turning the same Ordered
+        // Language into a new hard error; `compile_full_with` remains the
+        // complete path and expands external ancestors with its resolver
+        // snapshot.
+        Err(CodegenError::Compile(CompileError::UnknownTrait { .. })) => ordered
+            .traits
+            .iter()
+            .find(|trait_def| trait_def.global)
+            .into_iter()
+            .flat_map(|trait_def| &trait_def.blocks)
+            .flat_map(|block| &block.items)
+            .cloned()
+            .collect(),
+        Err(error) => return Err(error),
+    };
+    codegen_with_global_items(ordered, &global_items)
+}
+
 /// ①–⑤ 一步到位(compile 管線 + codegen)。
 pub fn compile_full(source: &Language) -> Result<Artifacts, CodegenError> {
     compile_full_with(source, &[])
@@ -443,7 +487,12 @@ pub fn compile_full_with(
     externals: &[&Language],
 ) -> Result<Artifacts, CodegenError> {
     let pipeline = compile::compile_with(source, externals)?;
-    let (grammar, signs) = codegen(&pipeline.ordered)?;
+    // A global trait is a template inheritance root, not merely a bag of
+    // directly declared rules.  Expand its complete trait view and then run
+    // the ordinary stage-ordering pass before emitting global phonology.
+    // This also keeps generic/macro expansion identical to Sign compilation.
+    let global_items = ordered_global_items(source, externals)?;
+    let (grammar, signs) = codegen_with_global_items(&pipeline.ordered, &global_items)?;
     Ok(Artifacts {
         pipeline,
         grammar,

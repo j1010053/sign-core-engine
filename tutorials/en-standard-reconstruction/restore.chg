@@ -211,6 +211,16 @@ changeset evo:en-standard-restore:
                 belongs GB262_Absent
                 belongs GB322_Absent
                 belongs GB522_Absent
+        insert into node(language, @evo:en-standard:0) at end:
+            paradigm EnglishBE:
+                case [syn.finite_form]:
+                    [third_singular]: is()
+                    base: be()
+        insert into node(language, @evo:en-standard:0) at end:
+            paradigm EnglishDO:
+                case [syn.finite_form]:
+                    [third_singular]: does()
+                    base: do()
         insert sign under node(language, @evo:en-standard:0) at end:
             sign EnglishAttributiveNP:
                 belongs EnglishConstruction
@@ -235,13 +245,8 @@ changeset evo:en-standard-restore:
                         person => $slot.subject.syn.person @stage word
                         finite_form => third_singular / $slot.subject == [EnglishThirdSingular] @stage word
                             else finite_form => base
+                    map copula autofill EnglishBE()
                 phon:
-                    realization:
-                        case:
-                            $self.syn.finite_form == third_singular:
-                                /{$slot.subject} is {$slot.predicate}/
-                            else:
-                                /{$slot.subject} {$slot.copula} {$slot.predicate}/
                     /{$slot.subject} {$slot.copula} {$slot.predicate}/
                 prag:
                     clause-type = declarative
@@ -259,7 +264,7 @@ changeset evo:en-standard-restore:
                         case:
                             $self.syn.number == plural:
                                 /{$slot.stem}s/
-                            else:
+                            base:
                                 /{$slot.stem}/
                     /{$slot.stem}/
                 sem:
@@ -298,13 +303,8 @@ changeset evo:en-standard-restore:
                         person => $slot.subject.syn.person @stage word
                         finite_form => third_singular / $slot.subject == [EnglishThirdSingular] @stage word
                             else finite_form => base
+                    map auxiliary autofill EnglishDO()
                 phon:
-                    realization:
-                        case:
-                            $self.syn.finite_form == third_singular:
-                                /{$slot.subject} does {$slot.negator} {$slot.predicate}/
-                            else:
-                                /{$slot.subject} {$slot.auxiliary} {$slot.negator} {$slot.predicate}/
                     /{$slot.subject} {$slot.auxiliary} {$slot.negator} {$slot.predicate}/
                 prag:
                     clause-type = declarative
@@ -345,7 +345,7 @@ changeset evo:en-standard-restore:
                         case:
                             $self.syn.finite_form == third_singular:
                                 /{$slot.subject} {$slot.predicate}s/
-                            else:
+                            base:
                                 /{$slot.subject} {$slot.predicate}/
                     /{$slot.subject} {$slot.predicate}/
                 prag:
@@ -363,13 +363,8 @@ changeset evo:en-standard-restore:
                         person => $slot.patient.syn.person @stage word
                         finite_form => third_singular / $slot.patient == [EnglishThirdSingular] @stage word
                             else finite_form => base
+                    map auxiliary autofill EnglishBE()
                 phon:
-                    realization:
-                        case:
-                            $self.syn.finite_form == third_singular:
-                                /{$slot.patient} is {$slot.predicate} by {$slot.agent}/
-                            else:
-                                /{$slot.patient} {$slot.auxiliary} {$slot.predicate} by {$slot.agent}/
                     /{$slot.patient} {$slot.auxiliary} {$slot.predicate} by {$slot.agent}/
                 prag:
                     perspective = patient-prominent
@@ -404,13 +399,8 @@ changeset evo:en-standard-restore:
                         person => $slot.subject.syn.person @stage word
                         finite_form => third_singular / $slot.subject == [EnglishThirdSingular] @stage word
                             else finite_form => base
+                    map auxiliary autofill EnglishDO()
                 phon:
-                    realization:
-                        case:
-                            $self.syn.finite_form == third_singular:
-                                /does {$slot.subject} {$slot.clause}/
-                            else:
-                                /{$slot.auxiliary} {$slot.subject} {$slot.clause}/
                     /{$slot.auxiliary} {$slot.subject} {$slot.clause}/
         insert sign under node(language, @evo:en-standard:0) at end:
             sign EnglishPossessiveNP:
@@ -451,7 +441,7 @@ changeset evo:en-standard-restore:
                         case:
                             $self.syn.finite_form == third_singular:
                                 /{$slot.subject} {$slot.predicate}s {$slot.object}/
-                            else:
+                            base:
                                 /{$slot.subject} {$slot.predicate} {$slot.object}/
                     /{$slot.subject} {$slot.predicate} {$slot.object}/
                 prag:
@@ -469,6 +459,10 @@ changeset evo:en-standard-restore:
             sign be:
                 belongs EnglishCopula
                 belongs EnglishCopulaFrame
+                syn:
+                    feature:
+                        finite_form = enum(base, third_singular)
+                        finite_form = base
                 phon:
                     /be/
         insert sign under node(language, @evo:en-standard:0) at end:
@@ -489,8 +483,22 @@ changeset evo:en-standard-restore:
             sign do:
                 belongs EnglishAuxiliary
                 belongs EnglishDoSupportFrame
+                syn:
+                    feature:
+                        finite_form = enum(base, third_singular)
+                        finite_form = base
                 phon:
                     /do/
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign does:
+                belongs EnglishAuxiliary
+                belongs EnglishDoSupportFrame
+                syn:
+                    feature:
+                        finite_form = enum(base, third_singular)
+                        finite_form = third_singular
+                phon:
+                    /does/
         insert sign under node(language, @evo:en-standard:0) at end:
             sign dog:
                 belongs Noun
@@ -513,6 +521,16 @@ changeset evo:en-standard-restore:
                 belongs EnglishInRelation
                 phon:
                     /in/
+        insert sign under node(language, @evo:en-standard:0) at end:
+            sign is:
+                belongs EnglishCopula
+                belongs EnglishCopulaFrame
+                syn:
+                    feature:
+                        finite_form = enum(base, third_singular)
+                        finite_form = third_singular
+                phon:
+                    /is/
         insert sign under node(language, @evo:en-standard:0) at end:
             sign john:
                 belongs Noun

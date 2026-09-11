@@ -71,8 +71,9 @@ phon input 時才拒絕尚未填入的自由變數。
 `case<TContext>` 是 expression，context type 由位置決定。它描述「該位置允許合併的
 fragment」，不要求每個 branch 都重新回傳所在層的完整值。context type 是引擎封閉列舉：
 `SignContext`、`PhonContext`、宣告過 enum 的 Feature context，以及 Role context；`.lang`
-不能註冊新的 context type。無匹配且沒有 `else` 時，使用 case 外的 default：
-Sign body 保留 `$self`，phon realization 保留 deep template。
+不能註冊新的 context type。無匹配且沒有 `base` 時，使用 case 外的 default；明寫空白
+`base:` 也代表同一個 implicit base：Sign body 保留目前 Sign、feature 保留既有值、role
+保留既有 binding，phon realization 保留 deep template。`else` 只屬於 `when`。
 
 ```lang
 sign en_3sg:
@@ -86,7 +87,7 @@ sign en_3sg:
             case:
                 $slot.stem == [SibilantFinal]:
                     /{$slot.stem}+es/
-                else:
+                base:
                     /{$slot.stem}+s/
 ```
 
@@ -148,7 +149,10 @@ phon:
                 /{en_3sg({$self}).phon.ret}/
 ```
 
-branch 依來源序求值。Unmatched 繼續；硬 category/constraint blocking 記錄 `CASE_MORE_SPECIFIC_BLOCKED` 後繼續；Error 立即停止，不能落入 `else`。`Else:` 可讀，canonical 一律輸出 `else:`。
+branch 依來源序求值。Unmatched 繼續；既有 guard／equals 分支的硬 category/constraint
+blocking 記錄 `CASE_MORE_SPECIFIC_BLOCKED` 後繼續；Error 立即停止，不能落入 `base`。
+V3 bundle 列一旦匹配，結果 blocking 亦為 Error，不繼續其他列。`Base:` 可讀，
+canonical 一律輸出 `base:`；`when` 的 fallback 則仍為 `else:`。
 
 branch 結果也可再是相容 context type 的 `case`；parser／printer、validator、runtime、
 identity sidecar 與 Primitive Edit 都遞迴處理。巢狀 branch 的 enum domain、guard path、

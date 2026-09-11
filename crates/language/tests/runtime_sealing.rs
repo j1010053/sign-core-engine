@@ -27,14 +27,14 @@ sign AliasSource:
     phon:
         /{$slot.original}/
     case:
-        else:
+        base:
             RenameTarget(renamed: {$slot.original})
 
 sign seed:
     phon:
         /s/
     case:
-        else:
+        base:
             AliasSource()
 "#,
     )
@@ -110,7 +110,7 @@ sign Outer:
     phon:
         /{$slot.head}{$slot.tail}{$slot.auto}/
     case:
-        else:
+        base:
             Wrapper(value: {$slot.head}, helper: {$slot.auto})
 "#,
     )
@@ -319,7 +319,7 @@ sign Current:
     case:
         $self == [CaseBearer]:
             NeedsMarked(target: {$self})
-        else:
+        base:
             $self
 "#,
     )
@@ -369,7 +369,7 @@ sign seed:
     phon:
         /s/
     case:
-        else:
+        base:
             Wrapper({$self})
 "#,
     )
@@ -429,7 +429,7 @@ sign seed:
     phon:
         /s/
     case:
-        else:
+        base:
             Wrapper({$self})
 "#,
     )

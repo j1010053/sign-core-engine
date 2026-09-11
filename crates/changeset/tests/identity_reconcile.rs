@@ -121,6 +121,56 @@ sign root:
 }
 
 #[test]
+fn renaming_a_paradigm_in_expert_source_preserves_its_entire_identity_subtree() {
+    let source = r#"paradigm PICK:
+    case [syn.choice]:
+        [left]: left()
+        base: right()
+
+sign left:
+    syn:
+        feature:
+            choice = enum(left, right)
+            choice = left
+
+sign right:
+    syn:
+        feature:
+            choice = enum(left, right)
+            choice = left | right
+"#;
+    let before = LanguageDocument::import_new_root(source, "evo:reconcile-paradigm").unwrap();
+    let paradigm_id = before.ref_for_paradigm("PICK").unwrap().id;
+    let edited = before
+        .source()
+        .replace("paradigm PICK:", "paradigm CHOOSE:");
+
+    let (reconciled, report) = reconcile_edited_source(
+        &before,
+        &edited,
+        "evo:reconcile-paradigm-edit",
+        &ReconcileHints::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        reconciled.ref_for_paradigm("CHOOSE").unwrap().id,
+        paradigm_id
+    );
+    assert!(
+        report.inserted.is_empty(),
+        "all descendants are provably the same"
+    );
+    assert!(
+        report.deleted.is_empty(),
+        "rename must not sever the old subtree"
+    );
+
+    let replayed = replay(&before, &reconciled, "evo:reconcile-paradigm-edit");
+    assert_eq!(replayed.source(), reconciled.source());
+    assert_eq!(replayed.identities(), reconciled.identities());
+}
+
+#[test]
 fn identical_siblings_are_ambiguous_until_every_pair_is_hinted() {
     let source = r#"
 trait A:

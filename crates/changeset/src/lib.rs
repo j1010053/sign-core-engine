@@ -31,7 +31,7 @@ use conlang_language::{
     BinaryConstraint, Block, CaseBranch, CompileSystemError, CompiledSystem, Def, DerivationKind,
     Diagnostic, Dim, Expression, FeatureDecl, FeatureValue, IdentityError, IdentityManifestV2,
     Language, LanguageDocument, LibraryCatalog, LibraryId, LibrarySpec, NodeAddress, NodeEntryV1,
-    NodeId, NodeKind, NodeRef, PhonBlock, Realization, ResolvedPackages, RoleBinding, RoleDecl,
+    NodeId, NodeKind, NodeRef, ParadigmDef, PhonBlock, ResolvedPackages, RoleBinding, RoleDecl,
     Rule, SenseTransparency, Severity, SignApplication, SignArgumentValue, SignDef, SignItem, Slot,
     SlotConstraint, SlotFeatureBinding, SlotMapOp, Stage, TraitDef, TraitTypeParam, TypedCase,
     ValidationReport,
@@ -54,6 +54,7 @@ pub enum DetachedNode {
         value: String,
     },
     Trait(TraitDef),
+    Paradigm(ParadigmDef),
     Sign(SignDef),
     Block(Block),
     Item(SignItem),
@@ -72,6 +73,7 @@ impl DetachedNode {
             DetachedNode::DslDeclaration(_) => NodeKind::DslDeclaration,
             DetachedNode::Distribution { .. } => NodeKind::Distribution,
             DetachedNode::Trait(_) => NodeKind::Trait,
+            DetachedNode::Paradigm(_) => NodeKind::Paradigm,
             DetachedNode::Sign(_) => NodeKind::Sign,
             DetachedNode::Block(_) => NodeKind::Block,
             DetachedNode::Item(item) => item_kind(item),
@@ -130,15 +132,18 @@ pub enum NodeUpdate {
     RoleDeclaration(RoleDecl),
     RoleBinding(RoleBinding),
     CaseSelection(conlang_language::CaseSelection),
+    CaseMatchFeatures(Vec<String>),
     /// The addressable, non-child fields of a typed case. Branches retain
     /// their own stable identities and are reconciled independently.
     CaseHeader {
         selection: conlang_language::CaseSelection,
         expected: conlang_language::ExpressionType,
         scrutinee: Option<String>,
+        match_features: Vec<String>,
         name: Option<String>,
     },
     CaseBranch(CaseBranch),
+    CaseCondition(conlang_language::CaseCondition),
     SignApplication(SignApplication),
     /// Root expression wrapper/owner metadata (`FeatureExpression`,
     /// `RoleExpression`, `Projection`, interpolation vs application). This is
@@ -257,7 +262,7 @@ fn sibling_ranks(
             // Distribution, Trait, and Sign order is a canonical-printing
             // concern, not a semantic Move. A rename/key update may change
             // their rendered order while every node retains the same parent.
-            if matches!(tag, 2..=4) {
+            if matches!(tag, 2..=4 | 17) {
                 continue;
             }
             sequences
@@ -295,6 +300,7 @@ fn sequence_tag(address: &NodeAddress) -> u8 {
         Some(AddressSegment::PhonLeaf(_)) => 14,
         Some(AddressSegment::PhonThen(_)) => 15,
         Some(AddressSegment::PhonElse(_)) => 16,
+        Some(AddressSegment::Paradigms(_)) => 17,
     }
 }
 
@@ -512,6 +518,7 @@ enum ListKey {
     Dsl,
     Distribution,
     Traits,
+    Paradigms,
     Signs,
     Blocks,
     Items,
@@ -528,6 +535,7 @@ fn segment(key: ListKey, index: usize) -> AddressSegment {
         ListKey::Dsl => AddressSegment::DslDeclarations(index),
         ListKey::Distribution => AddressSegment::Distribution(index),
         ListKey::Traits => AddressSegment::Traits(index),
+        ListKey::Paradigms => AddressSegment::Paradigms(index),
         ListKey::Signs => AddressSegment::Signs(index),
         ListKey::Blocks => AddressSegment::Blocks(index),
         ListKey::Items => AddressSegment::Items(index),
@@ -545,6 +553,7 @@ fn segment_index(value: &AddressSegment, key: ListKey) -> Option<usize> {
         (ListKey::Dsl, AddressSegment::DslDeclarations(index))
         | (ListKey::Distribution, AddressSegment::Distribution(index))
         | (ListKey::Traits, AddressSegment::Traits(index))
+        | (ListKey::Paradigms, AddressSegment::Paradigms(index))
         | (ListKey::Signs, AddressSegment::Signs(index))
         | (ListKey::Blocks, AddressSegment::Blocks(index))
         | (ListKey::Items, AddressSegment::Items(index))
@@ -685,6 +694,9 @@ fn insertion_site(
             (ListKey::Distribution, language.distribution.len(), None)
         }
         (NodeKind::Language, NodeKind::Trait) => (ListKey::Traits, language.traits.len(), None),
+        (NodeKind::Language, NodeKind::Paradigm) => {
+            (ListKey::Paradigms, language.paradigms.len(), None)
+        }
         (NodeKind::Language, NodeKind::Sign) => (ListKey::Signs, language.signs.len(), None),
         (NodeKind::Trait, NodeKind::Block) => {
             let trait_def = trait_at(language, &parent.address)?;
@@ -754,7 +766,7 @@ fn insertion_site(
     };
     if matches!(
         key,
-        ListKey::Traits | ListKey::Signs | ListKey::Distribution
+        ListKey::Traits | ListKey::Paradigms | ListKey::Signs | ListKey::Distribution
     ) {
         if !matches!(anchor, Anchor::End) {
             return Err(EditError::AnchorInvalid(
@@ -780,6 +792,11 @@ fn canonical_unordered_index(language: &Language, key: ListKey, subtree: &Detach
             .iter()
             .position(|item| item.name > value.name)
             .unwrap_or(language.signs.len()),
+        (ListKey::Paradigms, DetachedNode::Paradigm(value)) => language
+            .paradigms
+            .iter()
+            .position(|item| item.name > value.name)
+            .unwrap_or(language.paradigms.len()),
         (ListKey::Distribution, DetachedNode::Distribution { key, value }) => language
             .distribution
             .iter()
@@ -868,6 +885,10 @@ fn insert_payload(
         }
         DetachedNode::Trait(value) if parent.kind == NodeKind::Language => {
             language.traits.insert(index, value)
+        }
+        DetachedNode::Paradigm(mut value) if parent.kind == NodeKind::Language => {
+            value.id = language.fresh_paradigm_id();
+            language.paradigms.insert(index, value)
         }
         DetachedNode::Sign(mut value) if parent.kind == NodeKind::Language => {
             value.id = language.fresh_sign_id();
@@ -998,6 +1019,9 @@ fn child_addresses(
                 children.push(address.child(AddressSegment::Blocks(index)));
             }
         }
+        NodeKind::Paradigm => {
+            children.push(address.child(AddressSegment::CaseExpression));
+        }
         NodeKind::Sign | NodeKind::Block => {
             let entry = NodeEntryV1 {
                 id: NodeId::new(conlang_language::IdentityNamespace::Synthetic, 0),
@@ -1089,6 +1113,9 @@ fn delete_payload(language: &mut Language, node: &NodeEntryV1) -> Result<(), Edi
         }
         [AddressSegment::Traits(index)] => {
             language.traits.remove(*index);
+        }
+        [AddressSegment::Paradigms(index)] => {
+            language.paradigms.remove(*index);
         }
         [AddressSegment::Signs(index)] => {
             language.signs.remove(*index);
@@ -1191,7 +1218,7 @@ fn update(
     sync_identity_descendants(&language, &mut manifest, &node)?;
     if matches!(
         node.kind,
-        NodeKind::Sign | NodeKind::Trait | NodeKind::Distribution
+        NodeKind::Sign | NodeKind::Trait | NodeKind::Paradigm | NodeKind::Distribution
     ) {
         reorder_named_container(&mut language, &mut manifest, &node)?;
     } else if let Some(old_group) = old_group {
@@ -1475,8 +1502,11 @@ fn update_payload(
             Ok(None)
         }
         (NodeKind::SlotMap, NodeUpdate::SlotMap(value)) => {
-            let field = matches!(value, SlotMapOp::AutoFill { .. })
-                .then_some("slot_map.autofill".to_owned());
+            let field = matches!(
+                value,
+                SlotMapOp::AutoFill { .. } | SlotMapOp::AutoFillCall { .. }
+            )
+            .then_some("slot_map.autofill".to_owned());
             *item_at_address_mut(language, &node.address)? = SignItem::SlotMap(value);
             Ok(field)
         }
@@ -1489,7 +1519,19 @@ fn update_payload(
             Ok(None)
         }
         (NodeKind::Case, NodeUpdate::CaseSelection(value)) => {
-            case_at_mut(language, &node.address)?.selection = value;
+            set_case_selection(case_at_mut(language, &node.address)?, value)?;
+            Ok(None)
+        }
+        (NodeKind::Case, NodeUpdate::CaseMatchFeatures(value)) => {
+            case_at_mut(language, &node.address)?.match_features = value;
+            Ok(None)
+        }
+        (NodeKind::Paradigm, NodeUpdate::Rename(name)) => {
+            let [AddressSegment::Paradigms(index)] = node.address.0.as_slice() else {
+                return Err(field_mismatch(node, "paradigm"));
+            };
+            let old = std::mem::replace(&mut language.paradigms[*index].name, name.clone());
+            rewrite_sign_refs(language, &old, &name);
             Ok(None)
         }
         (
@@ -1498,19 +1540,25 @@ fn update_payload(
                 selection,
                 expected,
                 scrutinee,
+                match_features,
                 name,
             },
         ) => {
             let case = case_at_mut(language, &node.address)?;
-            case.selection = selection;
+            set_case_selection(case, selection)?;
             case.expected = expected;
             case.scrutinee = scrutinee;
+            case.match_features = match_features;
             case.name = name;
             Ok(None)
         }
         (NodeKind::CaseBranch, NodeUpdate::CaseBranch(value)) => {
             *case_branch_at_mut(language, &node.address)? = value;
             Ok(Some("case.references".to_owned()))
+        }
+        (NodeKind::CaseBranch, NodeUpdate::CaseCondition(value)) => {
+            case_branch_at_mut(language, &node.address)?.condition = value;
+            Ok(None)
         }
         (NodeKind::Application, NodeUpdate::SignApplication(value)) => {
             *application_at_mut(language, &node.address)? = value;
@@ -1561,6 +1609,46 @@ fn update_payload(
     }
 }
 
+/// Keep the typed fallback condition coupled to its selection keyword.
+///
+/// A selection-only edit is an identity-preserving header edit, so its
+/// existing fallback branch must become `base`/`else` with the header rather
+/// than leaving an AST that cannot be printed and parsed canonically.
+fn set_case_selection(
+    case: &mut conlang_language::TypedCase,
+    selection: conlang_language::CaseSelection,
+) -> Result<(), EditError> {
+    if case.selection == selection {
+        return Ok(());
+    }
+    if selection == conlang_language::CaseSelection::Accumulate
+        && case.branches.iter().any(|branch| {
+            matches!(branch.condition, conlang_language::CaseCondition::Base)
+                && matches!(branch.result, Expression::ImplicitBase)
+        })
+    {
+        return Err(EditError::FieldMismatch(
+            "cannot change `case` to `when` while `base:` is empty; give the fallback a context fragment or remove it first"
+                .to_owned(),
+        ));
+    }
+    for branch in &mut case.branches {
+        branch.condition = match (&branch.condition, selection) {
+            (
+                conlang_language::CaseCondition::Else,
+                conlang_language::CaseSelection::FirstMatch,
+            ) => conlang_language::CaseCondition::Base,
+            (
+                conlang_language::CaseCondition::Base,
+                conlang_language::CaseSelection::Accumulate,
+            ) => conlang_language::CaseCondition::Else,
+            (condition, _) => condition.clone(),
+        };
+    }
+    case.selection = selection;
+    Ok(())
+}
+
 fn trait_global_marker_conflict(name: &str) -> EditError {
     let mut report = ValidationReport::new();
     report.push(Diagnostic::new(
@@ -1603,6 +1691,16 @@ fn reorder_named_container(
                 .unwrap_or(language.signs.len());
             language.signs.insert(new_index, value);
             (ListKey::Signs, *index, new_index)
+        }
+        [AddressSegment::Paradigms(index)] => {
+            let value = language.paradigms.remove(*index);
+            let new_index = language
+                .paradigms
+                .iter()
+                .position(|item| item.name > value.name)
+                .unwrap_or(language.paradigms.len());
+            language.paradigms.insert(new_index, value);
+            (ListKey::Paradigms, *index, new_index)
         }
         [AddressSegment::Traits(index)] => {
             let value = language.traits.remove(*index);
@@ -1736,6 +1834,9 @@ fn detached_at(language: &Language, node: &NodeEntryV1) -> Result<DetachedNode, 
             language.dsl_decls[*index].clone(),
         )),
         [AddressSegment::Traits(index)] => Ok(DetachedNode::Trait(language.traits[*index].clone())),
+        [AddressSegment::Paradigms(index)] => {
+            Ok(DetachedNode::Paradigm(language.paradigms[*index].clone()))
+        }
         [AddressSegment::Signs(index)] => Ok(DetachedNode::Sign(language.signs[*index].clone())),
         [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block)] => Ok(
             DetachedNode::Block(language.traits[*trait_index].blocks[*block].clone()),
@@ -1823,6 +1924,10 @@ fn insert_payload_preserving_runtime(
             language.signs.insert(index, value);
             Ok(())
         }
+        DetachedNode::Paradigm(value) if parent.kind == NodeKind::Language => {
+            language.paradigms.insert(index, value);
+            Ok(())
+        }
         DetachedNode::Item(value)
             if matches!(
                 parent.kind,
@@ -1842,6 +1947,7 @@ fn address_list_position(address: &NodeAddress) -> Result<(ListKey, usize), Edit
         AddressSegment::DslDeclarations(index) => (ListKey::Dsl, *index),
         AddressSegment::Distribution(index) => (ListKey::Distribution, *index),
         AddressSegment::Traits(index) => (ListKey::Traits, *index),
+        AddressSegment::Paradigms(index) => (ListKey::Paradigms, *index),
         AddressSegment::Signs(index) => (ListKey::Signs, *index),
         AddressSegment::Blocks(index) => (ListKey::Blocks, *index),
         AddressSegment::Items(index) => (ListKey::Items, *index),
@@ -1921,6 +2027,7 @@ enum Selector {
     Language,
     Sign(String),
     Trait(String),
+    Paradigm(String),
     Path(String),
 }
 
@@ -2302,6 +2409,7 @@ fn parse_kind(value: &str) -> Result<NodeKind, ReplayError> {
         "dsl_declaration" => Ok(NodeKind::DslDeclaration),
         "distribution" => Ok(NodeKind::Distribution),
         "trait" => Ok(NodeKind::Trait),
+        "paradigm" => Ok(NodeKind::Paradigm),
         "sign" => Ok(NodeKind::Sign),
         "block" => Ok(NodeKind::Block),
         "trait_use" => Ok(NodeKind::TraitUse),
@@ -2353,6 +2461,7 @@ fn kind_keyword(kind: NodeKind) -> &'static str {
         NodeKind::DslDeclaration => "dsl_declaration",
         NodeKind::Distribution => "distribution",
         NodeKind::Trait => "trait",
+        NodeKind::Paradigm => "paradigm",
         NodeKind::Sign => "sign",
         NodeKind::Block => "block",
         NodeKind::TraitUse => "trait_use",
@@ -2386,6 +2495,7 @@ fn parse_selector(value: &str) -> Result<Selector, ReplayError> {
     if value.starts_with("language.")
         || ((value.starts_with("sign(\"")
             || value.starts_with("trait(\"")
+            || value.starts_with("paradigm(\"")
             || value.starts_with("node("))
             && value.contains(")."))
     {
@@ -2397,6 +2507,7 @@ fn parse_selector(value: &str) -> Result<Selector, ReplayError> {
     for (prefix, make) in [
         ("sign(\"", Selector::Sign as fn(String) -> Selector),
         ("trait(\"", Selector::Trait as fn(String) -> Selector),
+        ("paradigm(\"", Selector::Paradigm as fn(String) -> Selector),
     ] {
         if let Some(rest) = value.strip_prefix(prefix) {
             let name = rest
@@ -2437,6 +2548,7 @@ fn dump_selector(selector: &Selector) -> String {
         Selector::Language => "language".to_owned(),
         Selector::Sign(name) => format!("sign(\"{name}\")"),
         Selector::Trait(name) => format!("trait(\"{name}\")"),
+        Selector::Paradigm(name) => format!("paradigm(\"{name}\")"),
         Selector::Path(value) => value.clone(),
     }
 }
@@ -3038,6 +3150,9 @@ fn resolve_selector(
         Selector::Trait(name) => document
             .ref_for_trait(name)
             .ok_or_else(|| ReplayError::Selector(format!("unknown trait {name:?}")))?,
+        Selector::Paradigm(name) => document
+            .ref_for_paradigm(name)
+            .ok_or_else(|| ReplayError::Selector(format!("unknown paradigm {name:?}")))?,
         Selector::Path(value) => return resolve_authoring_path(value, document),
     };
     document
@@ -3330,7 +3445,19 @@ fn resolve_anchor(
 
 fn update_for(reference: &NodeRef, field: &str, value: &str) -> Result<NodeUpdate, ReplayError> {
     match (reference.expected, field) {
-        (NodeKind::Sign | NodeKind::Trait, "name") => Ok(NodeUpdate::Rename(value.to_owned())),
+        (NodeKind::Sign | NodeKind::Trait | NodeKind::Paradigm, "name") => {
+            Ok(NodeUpdate::Rename(value.to_owned()))
+        }
+        (NodeKind::Application, "application") => {
+            conlang_language::parser::parse_sign_application_source(value)
+                .map(NodeUpdate::SignApplication)
+                .map_err(|error| ReplayError::Parse(format!("invalid Sign application: {error}")))
+        }
+        (NodeKind::CaseBranch, "condition") => {
+            conlang_language::parser::parse_case_condition_source(value)
+                .map(NodeUpdate::CaseCondition)
+                .map_err(|error| ReplayError::Parse(format!("invalid case condition: {error}")))
+        }
         (NodeKind::Definition, "path") => Ok(NodeUpdate::DefinitionPath(value.to_owned())),
         (NodeKind::Definition, "value") => Ok(NodeUpdate::DefinitionValue(value.to_owned())),
         (NodeKind::FeatureValue, "value") => Ok(NodeUpdate::FeatureAssignment(value.to_owned())),
@@ -3353,6 +3480,13 @@ fn update_for(reference: &NodeRef, field: &str, value: &str) -> Result<NodeUpdat
                 "case selection must be `case` or `when`, got {value:?}"
             ))),
         },
+        (NodeKind::Case, "match_features") => {
+            Ok(NodeUpdate::CaseMatchFeatures(if value.trim().is_empty() {
+                Vec::new()
+            } else {
+                value.split(',').map(str::trim).map(str::to_owned).collect()
+            }))
+        }
         (NodeKind::Trait, "global") => Ok(NodeUpdate::TraitGlobal(parse_bool(value)?)),
         (NodeKind::Trait, "marker") => Ok(NodeUpdate::TraitMarker(parse_bool(value)?)),
         (NodeKind::Trait, "type_params") => {
@@ -3492,6 +3626,7 @@ fn parse_insert_block(block: &str) -> Result<Vec<DetachedNode>, ReplayError> {
             })
             && language.distribution.is_empty()
             && language.traits.is_empty()
+            && language.paradigms.is_empty()
             && language.signs.is_empty();
         if !only_symbol_or_class {
             return Err(ReplayError::Parse(
@@ -3507,16 +3642,40 @@ fn parse_insert_block(block: &str) -> Result<Vec<DetachedNode>, ReplayError> {
     }
     if head.starts_with("trait ") || head.starts_with("global trait ") {
         let language = parse_lang(block)?;
-        if language.traits.len() != 1 || !language.signs.is_empty() {
+        if language.traits.len() != 1
+            || !language.paradigms.is_empty()
+            || !language.signs.is_empty()
+            || !language.dsl_decls.is_empty()
+            || !language.distribution.is_empty()
+        {
             return Err(ReplayError::Parse(
                 "insert block must contain exactly one trait".to_owned(),
             ));
         }
         return Ok(vec![DetachedNode::Trait(language.traits[0].clone())]);
     }
+    if head.starts_with("paradigm ") {
+        let language = parse_lang(block)?;
+        if language.paradigms.len() != 1
+            || !language.traits.is_empty()
+            || !language.signs.is_empty()
+            || !language.dsl_decls.is_empty()
+            || !language.distribution.is_empty()
+        {
+            return Err(ReplayError::Parse(
+                "insert block must contain exactly one paradigm".to_owned(),
+            ));
+        }
+        return Ok(vec![DetachedNode::Paradigm(language.paradigms[0].clone())]);
+    }
     if head.starts_with("sign ") {
         let language = parse_lang(block)?;
-        if language.signs.len() != 1 || !language.traits.is_empty() {
+        if language.signs.len() != 1
+            || !language.traits.is_empty()
+            || !language.paradigms.is_empty()
+            || !language.dsl_decls.is_empty()
+            || !language.distribution.is_empty()
+        {
             return Err(ReplayError::Parse(
                 "insert block must contain exactly one sign".to_owned(),
             ));
@@ -3746,6 +3905,9 @@ fn parse_case_branch_block(
         conlang_language::CaseSelection::Accumulate => "when",
     };
     let header = match &case.scrutinee {
+        _ if !case.match_features.is_empty() => {
+            format!("    {keyword} [{}]:", case.match_features.join(", "))
+        }
         Some(scrutinee) => format!("    {keyword} {scrutinee}:"),
         None => format!("    {keyword}:"),
     };
@@ -3787,10 +3949,22 @@ fn parse_case_branch_block(
 /// [`parse_case_branch_block`]): print it inside a synthetic `SignContext` case
 /// and strip the `sign …:` + `case:` headers.
 fn render_case_branch_block(branch: &CaseBranch) -> String {
+    let selection = if matches!(branch.condition, conlang_language::CaseCondition::Else) {
+        conlang_language::CaseSelection::Accumulate
+    } else {
+        conlang_language::CaseSelection::FirstMatch
+    };
+    let match_features = match &branch.condition {
+        conlang_language::CaseCondition::Bundle(values) => (0..values.len())
+            .map(|index| format!("syn.__chg_bundle_{index}"))
+            .collect(),
+        _ => Vec::new(),
+    };
     let case = conlang_language::TypedCase {
-        selection: conlang_language::CaseSelection::FirstMatch,
+        selection,
         expected: conlang_language::ExpressionType::SignContext,
         scrutinee: None,
+        match_features,
         name: None,
         branches: vec![branch.clone()],
         source: conlang_language::SourceLocation::unknown(),
@@ -3867,7 +4041,12 @@ fn resolve_operation(
         } => {
             let language = Language::parse(source)
                 .map_err(|error| ReplayError::Parse(format!("insert .lang: {error}")))?;
-            if !language.traits.is_empty() || language.signs.len() != 1 {
+            if language.signs.len() != 1
+                || !language.traits.is_empty()
+                || !language.paradigms.is_empty()
+                || !language.dsl_decls.is_empty()
+                || !language.distribution.is_empty()
+            {
                 return Err(ReplayError::Parse(
                     "insert sign fragment must contain exactly one sign".to_owned(),
                 ));
@@ -4054,8 +4233,10 @@ fn update_kind_name(change: &NodeUpdate) -> &'static str {
         NodeUpdate::RoleDeclaration(_) => "RoleDeclaration",
         NodeUpdate::RoleBinding(_) => "RoleBinding",
         NodeUpdate::CaseSelection(_) => "CaseSelection",
+        NodeUpdate::CaseMatchFeatures(_) => "CaseMatchFeatures",
         NodeUpdate::CaseHeader { .. } => "CaseHeader",
         NodeUpdate::CaseBranch(_) => "CaseBranch",
+        NodeUpdate::CaseCondition(_) => "CaseCondition",
         NodeUpdate::SignApplication(_) => "SignApplication",
         NodeUpdate::ExpressionItem(_) => "ExpressionItem",
         NodeUpdate::PhonBlockRoot(_) => "PhonBlockRoot",
@@ -4079,6 +4260,15 @@ fn dump_update(change: &NodeUpdate) -> Option<(&'static str, String)> {
                 conlang_language::CaseSelection::Accumulate => "when",
             }
             .to_owned(),
+        )),
+        NodeUpdate::CaseMatchFeatures(value) => Some(("match_features", value.join(", "))),
+        NodeUpdate::CaseCondition(value) => Some((
+            "condition",
+            conlang_language::printer::format_case_condition(value),
+        )),
+        NodeUpdate::SignApplication(value) => Some((
+            "application",
+            conlang_language::printer::format_sign_application(value),
         )),
         NodeUpdate::TraitGlobal(value) => Some(("global", value.to_string())),
         NodeUpdate::TraitMarker(value) => Some(("marker", value.to_string())),
@@ -4116,7 +4306,6 @@ fn dump_update(change: &NodeUpdate) -> Option<(&'static str, String)> {
         | NodeUpdate::RoleBinding(_)
         | NodeUpdate::CaseHeader { .. }
         | NodeUpdate::CaseBranch(_)
-        | NodeUpdate::SignApplication(_)
         | NodeUpdate::ExpressionItem(_)
         | NodeUpdate::Constraint(_) => None,
     }
@@ -4239,6 +4428,24 @@ impl ResolvedChangeSet {
                         ));
                         let mut fragment = Language::new();
                         fragment.traits.push(trait_def.clone());
+                        for line in fragment.dump().lines() {
+                            output.push_str("            ");
+                            output.push_str(line);
+                            output.push('\n');
+                        }
+                    }
+                    PrimitiveEdit::Insert {
+                        parent,
+                        anchor,
+                        subtree: DetachedNode::Paradigm(paradigm),
+                    } => {
+                        output.push_str(&format!(
+                            "        insert into {} at {}:\n",
+                            dump_node(parent),
+                            dump_anchor(anchor)
+                        ));
+                        let mut fragment = Language::new();
+                        fragment.paradigms.push(paradigm.clone());
                         for line in fragment.dump().lines() {
                             output.push_str("            ");
                             output.push_str(line);
@@ -4914,6 +5121,14 @@ fn kind_at(language: &Language, address: &NodeAddress) -> Option<NodeKind> {
             Some(NodeKind::Distribution)
         }
         [AddressSegment::Traits(index)] if *index < language.traits.len() => Some(NodeKind::Trait),
+        [AddressSegment::Paradigms(index)] if *index < language.paradigms.len() => {
+            Some(NodeKind::Paradigm)
+        }
+        [AddressSegment::Paradigms(index), AddressSegment::CaseExpression]
+            if *index < language.paradigms.len() =>
+        {
+            Some(NodeKind::Case)
+        }
         [AddressSegment::Signs(index)] if *index < language.signs.len() => Some(NodeKind::Sign),
         [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block)]
             if language
@@ -4993,6 +5208,11 @@ fn case_at<'a>(
     language: &'a Language,
     address: &NodeAddress,
 ) -> Option<&'a conlang_language::TypedCase> {
+    if let [AddressSegment::Paradigms(index), AddressSegment::CaseExpression, tail @ ..] =
+        address.0.as_slice()
+    {
+        return case_at_tail(&language.paradigms.get(*index)?.selector, tail);
+    }
     let (item_address, tail) = split_item_address(address)?;
     let item = item_at_address(language, &item_address)?;
     let (case, tail) = root_case(item, tail)?;
@@ -5003,6 +5223,17 @@ fn case_at_mut<'a>(
     language: &'a mut Language,
     address: &NodeAddress,
 ) -> Result<&'a mut TypedCase, EditError> {
+    if let [AddressSegment::Paradigms(index), AddressSegment::CaseExpression, tail @ ..] =
+        address.0.as_slice()
+    {
+        let selector = &mut language
+            .paradigms
+            .get_mut(*index)
+            .ok_or_else(|| EditError::FieldMismatch("paradigm address is stale".to_owned()))?
+            .selector;
+        return case_at_tail_mut(selector, tail)
+            .ok_or_else(|| EditError::FieldMismatch("case address is stale".to_owned()));
+    }
     let (item_address, tail) = split_item_address(address)
         .ok_or_else(|| EditError::FieldMismatch("expected case address".to_owned()))?;
     let item = item_at_address_mut(language, &item_address)?;
@@ -5047,6 +5278,18 @@ fn application_at<'a>(
     language: &'a Language,
     address: &NodeAddress,
 ) -> Result<&'a SignApplication, EditError> {
+    if let [AddressSegment::Paradigms(index), AddressSegment::CaseExpression, tail @ ..] =
+        address.0.as_slice()
+    {
+        let selector = &language
+            .paradigms
+            .get(*index)
+            .ok_or_else(|| EditError::FieldMismatch("paradigm address is stale".to_owned()))?
+            .selector;
+        return application_at_case_tail(selector, tail).ok_or_else(|| {
+            EditError::FieldMismatch("paradigm application address is stale".to_owned())
+        });
+    }
     let (item_address, tail) = split_item_address(address)
         .ok_or_else(|| EditError::FieldMismatch("expected application address".to_owned()))?;
     let item = item_at_address(language, &item_address)
@@ -5064,6 +5307,18 @@ fn application_at_mut<'a>(
     language: &'a mut Language,
     address: &NodeAddress,
 ) -> Result<&'a mut SignApplication, EditError> {
+    if let [AddressSegment::Paradigms(index), AddressSegment::CaseExpression, tail @ ..] =
+        address.0.as_slice()
+    {
+        let selector = &mut language
+            .paradigms
+            .get_mut(*index)
+            .ok_or_else(|| EditError::FieldMismatch("paradigm address is stale".to_owned()))?
+            .selector;
+        return application_at_case_tail_mut(selector, tail).ok_or_else(|| {
+            EditError::FieldMismatch("paradigm application address is stale".to_owned())
+        });
+    }
     let (item_address, tail) = split_item_address(address)
         .ok_or_else(|| EditError::FieldMismatch("expected application address".to_owned()))?;
     let item = item_at_address_mut(language, &item_address)?;
@@ -6127,7 +6382,10 @@ fn rewrite_local_slot_refs_in_expression(expression: &mut Expression, old: &str,
         }
         Expression::Slot(slot) if slot == old => *slot = new.to_owned(),
         Expression::Case(case) => rewrite_local_slot_refs_in_case(case, old, new),
-        Expression::EnumValue(_) | Expression::SelfSign | Expression::Slot(_) => {}
+        Expression::EnumValue(_)
+        | Expression::SelfSign
+        | Expression::Slot(_)
+        | Expression::ImplicitBase => {}
     }
 }
 
@@ -6211,7 +6469,8 @@ fn rewrite_application_parameters_in_expression(
         Expression::PhonTemplate(_)
         | Expression::EnumValue(_)
         | Expression::SelfSign
-        | Expression::Slot(_) => {}
+        | Expression::Slot(_)
+        | Expression::ImplicitBase => {}
     }
 }
 
@@ -6244,6 +6503,9 @@ fn rewrite_sign_refs(language: &mut Language, old: &str, new: &str) {
             rewrite_sign_refs_in_items(&mut block.items, old, new);
         }
     }
+    for paradigm in &mut language.paradigms {
+        rewrite_sign_refs_in_case(&mut paradigm.selector, old, new);
+    }
 }
 
 fn rewrite_sign_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
@@ -6251,6 +6513,9 @@ fn rewrite_sign_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
         match item {
             SignItem::SlotMap(SlotMapOp::AutoFill { filler, .. }) if filler == old => {
                 *filler = new.to_owned()
+            }
+            SignItem::SlotMap(SlotMapOp::AutoFillCall { filler, .. }) => {
+                rewrite_sign_refs_in_application(filler, old, new)
             }
             SignItem::Def(def) if def.path == "origin" && def.value == format!("sign({old})") => {
                 def.value = format!("sign({new})")
@@ -6322,7 +6587,7 @@ fn rewrite_trait_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
                 ..
             }
             | SignItem::TraitMount {
-                name: name,
+                name,
                 kind: conlang_language::TraitMountKind::Declaration,
                 ..
             } if name == old => *name = new.to_owned(),
@@ -6382,7 +6647,10 @@ fn rewrite_trait_refs_in_case(case: &mut TypedCase, old: &str, new: &str) {
             {
                 *category = new.to_owned();
             }
-            conlang_language::CaseCondition::Equals(_) | conlang_language::CaseCondition::Else => {}
+            conlang_language::CaseCondition::Equals(_)
+            | conlang_language::CaseCondition::Bundle(_)
+            | conlang_language::CaseCondition::Base
+            | conlang_language::CaseCondition::Else => {}
         }
         for belongs in &mut branch.belongs {
             if belongs == old {
@@ -6474,6 +6742,9 @@ fn debug_value(language: &Language, entry: &NodeEntryV1) -> String {
             let value = &language.traits[*index];
             format!("Trait(name={:?},global={})", value.name, value.global)
         }
+        [AddressSegment::Paradigms(index)] => {
+            format!("Paradigm(name={:?})", language.paradigms[*index].name)
+        }
         [AddressSegment::Signs(index)] => {
             format!("Sign(name={:?})", language.signs[*index].name)
         }
@@ -6553,8 +6824,8 @@ fn constraint_value(constraint: &BinaryConstraint) -> String {
 
 fn case_header_value(case: &TypedCase) -> String {
     format!(
-        "Case(selection={:?},expected={:?},scrutinee={:?})",
-        case.selection, case.expected, case.scrutinee
+        "Case(selection={:?},expected={:?},scrutinee={:?},match_features={:?})",
+        case.selection, case.expected, case.scrutinee, case.match_features
     )
 }
 
@@ -6616,6 +6887,7 @@ fn expression_value(expression: &Expression) -> String {
         Expression::EnumValue(value) => format!("EnumValue({value:?})"),
         Expression::SelfSign => "$self".to_owned(),
         Expression::Slot(value) => format!("slot({value:?})"),
+        Expression::ImplicitBase => "ImplicitBase".to_owned(),
         Expression::Case(case) => case_header_value(case),
     }
 }

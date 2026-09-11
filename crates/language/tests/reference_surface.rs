@@ -52,14 +52,14 @@ fn compiles(phon_tail: &str, sign_tail: &str) -> Result<(), String> {
 /// scrutinee + `== VALUE` 一律是**純量**比對(範疇比對走 guard 形)。
 fn realization(scrutinee: &str) -> String {
     format!(
-        "        realization:\n            case {scrutinee}:\n                == singular:\n                    /{{$slot.head}}/\n                else:\n                    /{{$slot.head}}{{$slot.tail}}/\n"
+        "        realization:\n            case {scrutinee}:\n                == singular:\n                    /{{$slot.head}}/\n                base:\n                    /{{$slot.head}}{{$slot.tail}}/\n"
     )
 }
 
 /// 範疇比對的正解:guard 形 case,`[Trait]` 是既有的範疇記法。
 fn category_realization(guard: &str) -> String {
     format!(
-        "        realization:\n            case:\n                {guard}:\n                    /{{$slot.head}}/\n                else:\n                    /{{$slot.head}}{{$slot.tail}}/\n"
+        "        realization:\n            case:\n                {guard}:\n                    /{{$slot.head}}/\n                base:\n                    /{{$slot.head}}{{$slot.tail}}/\n"
     )
 }
 
@@ -132,7 +132,7 @@ fn a_slot_scrutinee_may_read_a_scalar_field_not_only_phon() {
     // 直接組一份 construction:讀 filler 的 syn.number 決定自己的 outcome。
     let source = source.replace(
         "            outcome =\n",
-        "            outcome =\n                case $slot.head.syn.number:\n                    == singular:\n                        hit\n                    else:\n                        miss\n",
+        "            outcome =\n                case $slot.head.syn.number:\n                    == singular:\n                        hit\n                    base:\n                        miss\n",
     );
     let language = Language::parse(&source).expect("parse");
     compile_system(language).expect("`$slot.NAME.syn.FIELD` 應為合法 scrutinee");
@@ -254,7 +254,7 @@ sign word:
     phon:
         /a/
     case:
-        else:
+        base:
             wrapper({$self})
 "#;
     let language = Language::parse(source).expect("parse");
@@ -280,7 +280,7 @@ sign word:
         senses:
             core = W
     case:
-        else:
+        base:
             word({$self})
 "#;
     let language = Language::parse(source).expect("parse");

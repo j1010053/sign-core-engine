@@ -198,7 +198,9 @@ Language {
             ],
         },
     ],
+    paradigms: [],
     rule_namespace: Local,
     next_rule: 3,
     next_sign: 1,
+    next_paradigm: 0,
 }

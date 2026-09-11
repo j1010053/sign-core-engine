@@ -25,7 +25,7 @@
 use conlang_changeset::reconstruct::reconstruct;
 use conlang_changeset::{
     apply_edit, change_set_prelude, ChangeInterpreter, NodeUpdate, PrimitiveEdit, ReplayError,
-    ResolvedChangeSet, ResolvedStatement, UnresolvedChangeSet,
+    ResolvedStatement, UnresolvedChangeSet,
 };
 use conlang_language::{LanguageDocument, LibrarySpec, NodeKind, NodeRef};
 
@@ -73,6 +73,7 @@ fn kind_keyword_round_trips_for_every_node_kind() {
         NodeKind::DslDeclaration,
         NodeKind::Distribution,
         NodeKind::Trait,
+        NodeKind::Paradigm,
         NodeKind::Sign,
         NodeKind::Block,
         NodeKind::TraitUse,

@@ -407,7 +407,7 @@ sign root:
     phon:
         /r/
     case:
-        else:
+        base:
             wrap(value: wrap(value: {$self}))
             belongs Marked
 "#;
@@ -505,12 +505,12 @@ sign root:
         case_edits.as_slice(),
         [PrimitiveEdit::Update {
             node,
-            change: NodeUpdate::CaseHeader { .. },
+            change: NodeUpdate::CaseSelection(_),
         }] if node == &case
     ));
 
     let branch_before = LanguageDocument::import_new_root(
-        "trait A:\ntrait B:\n\nsign root:\n    phon:\n        /r/\n    case:\n        else:\n            $self\n            belongs A\n",
+        "trait A:\ntrait B:\n\nsign root:\n    phon:\n        /r/\n    case:\n        base:\n            $self\n            belongs A\n",
         "evo:expression-branch",
     )
     .unwrap();
@@ -555,6 +555,218 @@ sign root:
 }
 
 #[test]
+fn bundle_match_header_reconstructs_without_replacing_case_or_branch_identities() {
+    let before = LanguageDocument::import_new_root(
+        r#"sign root:
+    syn:
+        feature:
+            left = enum(on, off)
+            left = on
+            right = enum(on, off)
+            right = off
+            result = enum(base, selected)
+            result = base
+    phon:
+        /r/
+    case [syn.left]:
+        [on]:
+            syn:
+                feature:
+                    result = selected
+        base:
+"#,
+        "evo:bundle-header",
+    )
+    .unwrap();
+    let root = before.ref_for_sign("root").unwrap();
+    let case_ref = children(&before, &root, NodeKind::Case)[0].clone();
+    let branch_refs = children(&before, &case_ref, NodeKind::CaseBranch);
+    let after = apply_edit(
+        &before,
+        PrimitiveEdit::Update {
+            node: case_ref.clone(),
+            change: NodeUpdate::CaseMatchFeatures(vec!["syn.right".to_owned()]),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap()
+    .document;
+
+    assert!(after.source().contains("case [syn.right]:"));
+    assert_eq!(after.resolve_node(&case_ref).unwrap().node.id, case_ref.id);
+    for branch in &branch_refs {
+        assert_eq!(after.resolve_node(branch).unwrap().node.id, branch.id);
+    }
+
+    let edits = reconstruct_and_replay(&before, &after);
+    assert!(matches!(
+        edits.as_slice(),
+        [PrimitiveEdit::Update {
+            node,
+            change: NodeUpdate::CaseMatchFeatures(match_features),
+        }] if node == &case_ref && match_features == &["syn.right".to_owned()]
+    ));
+
+    let spec = LibrarySpec::default();
+    let mut source = change_set_prelude(&before, &spec, "evo:bundle-persist").unwrap();
+    source.push_str(&format!(
+        "\n    #0:\n        update node(case, @{}).match_features = \"syn.right\"\n",
+        case_ref.id
+    ));
+    let resolved = UnresolvedChangeSet::parse(&source)
+        .unwrap()
+        .resolve(&before, &spec)
+        .unwrap();
+    let dump = resolved.dump().expect("bundle header update dumps");
+    let reparsed = UnresolvedChangeSet::parse(&dump)
+        .unwrap()
+        .resolve(&before, &spec)
+        .unwrap();
+    assert_eq!(reparsed.dump().unwrap(), dump);
+    let replayed = ChangeInterpreter::new(before, spec, "evo:bundle-persist")
+        .unwrap()
+        .run(&reparsed)
+        .unwrap()
+        .document;
+    assert_eq!(replayed.source(), after.source());
+}
+
+#[test]
+fn paradigm_member_link_reconstructs_on_the_application_identity() {
+    let before = LanguageDocument::import_new_root(
+        r#"paradigm BE:
+    case [syn.person]:
+        [third]: is()
+        base: be()
+
+sign be:
+    syn:
+        feature:
+            person = enum(first, third)
+            person = first | third
+
+sign is:
+    syn:
+        feature:
+            person = enum(first, third)
+            person = third
+"#,
+        "evo:paradigm-link",
+    )
+    .unwrap();
+    let paradigm = before.ref_for_paradigm("BE").unwrap();
+    let case = children(&before, &paradigm, NodeKind::Case)[0].clone();
+    let branches = children(&before, &case, NodeKind::CaseBranch);
+    let application = children(&before, &branches[0], NodeKind::Application)[0].clone();
+    let mut replacement = match &before.language().paradigms[0].selector.branches[0].result {
+        Expression::SignApplication(application) => application.clone(),
+        other => panic!("expected member application, got {other:?}"),
+    };
+    replacement.callee = "be".to_owned();
+    let after = apply_edit(
+        &before,
+        PrimitiveEdit::Update {
+            node: application.clone(),
+            change: NodeUpdate::SignApplication(replacement),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap()
+    .document;
+    assert_eq!(after.resolve_node(&paradigm).unwrap().node, paradigm);
+    assert_eq!(after.resolve_node(&case).unwrap().node, case);
+    assert_eq!(after.resolve_node(&application).unwrap().node, application);
+
+    let edits = reconstruct(&before, &after).expect("reconstruct paradigm link");
+    assert!(matches!(
+        edits.as_slice(),
+        [PrimitiveEdit::Update {
+            node,
+            change: NodeUpdate::SignApplication(value),
+        }] if node == &application && value.callee == "be"
+    ));
+    let mut replayed = before;
+    for edit in edits {
+        replayed = apply_edit(&replayed, edit, &LibrarySpec::default())
+            .expect("replay paradigm link")
+            .document;
+    }
+    assert_eq!(replayed.source(), after.source());
+    assert_eq!(replayed.identities(), after.identities());
+
+    let spec = LibrarySpec::default();
+    let condition_after = apply_edit(
+        &replayed,
+        PrimitiveEdit::Update {
+            node: branches[0].clone(),
+            change: NodeUpdate::CaseCondition(conlang_language::CaseCondition::Bundle(vec![Some(
+                "first".to_owned(),
+            )])),
+        },
+        &spec,
+    )
+    .unwrap()
+    .document;
+    let condition_edits = reconstruct(&replayed, &condition_after).unwrap();
+    assert!(
+        matches!(
+            condition_edits.as_slice(),
+            [PrimitiveEdit::Update {
+                node,
+                change: NodeUpdate::CaseCondition(_),
+            }] if node == &branches[0]
+        ),
+        "{condition_edits:#?}"
+    );
+    let mut condition_source =
+        change_set_prelude(&replayed, &spec, "evo:paradigm-condition").unwrap();
+    condition_source.push_str(&format!(
+        "\n    #0:\n        update node(case_branch, @{}).condition = \"[first]\"\n",
+        branches[0].id
+    ));
+    let condition_change = UnresolvedChangeSet::parse(&condition_source)
+        .unwrap()
+        .resolve(&replayed, &spec)
+        .unwrap();
+    let condition_dump = condition_change.dump().expect("bundle row condition dumps");
+    let condition_round = UnresolvedChangeSet::parse(&condition_dump)
+        .unwrap()
+        .resolve(&replayed, &spec)
+        .unwrap();
+    assert_eq!(condition_round.dump().unwrap(), condition_dump);
+    let condition_replayed =
+        ChangeInterpreter::new(replayed.clone(), spec.clone(), "evo:paradigm-condition")
+            .unwrap()
+            .run(&condition_round)
+            .unwrap()
+            .document;
+    assert_eq!(condition_replayed.source(), condition_after.source());
+
+    let mut source = change_set_prelude(&replayed, &spec, "evo:paradigm-persist").unwrap();
+    source.push_str(&format!(
+        "\n    #0:\n        update node(application, @{}).application = \"is()\"\n",
+        application.id
+    ));
+    let persisted = UnresolvedChangeSet::parse(&source)
+        .unwrap()
+        .resolve(&replayed, &spec)
+        .unwrap();
+    let dump = persisted.dump().expect("application update must persist");
+    assert!(dump.contains(".application = \"is()\""));
+    let reparsed = UnresolvedChangeSet::parse(&dump)
+        .unwrap()
+        .resolve(&replayed, &spec)
+        .unwrap();
+    assert_eq!(reparsed.dump().unwrap(), dump);
+    let restored = ChangeInterpreter::new(replayed, spec, "evo:paradigm-persist")
+        .unwrap()
+        .run(&reparsed)
+        .unwrap()
+        .document;
+    assert!(restored.source().contains("[third]: is()"));
+}
+
+#[test]
 fn same_parent_case_branch_rotation_uses_one_lcs_move() {
     let source = r#"
 trait A:
@@ -568,7 +780,7 @@ sign root:
             $self
         $self == [B]:
             $self
-        else:
+        base:
             $self
 "#;
     let before = LanguageDocument::import_new_root(source, "evo:reorder-case").unwrap();

@@ -245,7 +245,8 @@ anchor 和 validation result。這是資訊流 B「每步 trace + 前後狀態 d
 
 此契約描述當代標準英語參考庫的最小 nominative/accusative 模型。它不是完整英語
 格系統：不在此加入 possessive/genitive、wh-case、介詞支配、case stacking、格位
-競爭、一般 paradigm engine 或新的 `.lang` 關鍵字。
+競爭；本節原始範圍也不含一般 paradigm engine。後續 V3 已另行加入 `paradigm`
+關鍵字，但不改變這裡的 occurrence-local case 契約。
 
 `case` 是 Nominal **occurrence** 的 typed `syn.feature`，不是詞彙 Noun sign 永久
 擁有的一個會被句子改寫的值。類別仍由 `belongs` 表示，不能用 `syn.class` 代替。
@@ -338,8 +339,9 @@ surface realization。
   會互相改寫的 lexical signs；
 - surface 選擇後仍要先產生純 `RealizedPhonInput`，再交給 Tshiatūn；surface 不保存
   到 Language，也不生成「這次是 object 的 she/her」新 source sign；
-- 尚未有通用 paradigm/allomorph relation type 前，不把明列詞形誤稱為完整可生成的
-  英語屈折系統。
+- V3 已有通用 Paradigm relation，但本節的 `she`／`her` 仍刻意維持單一 Sign 內的
+  occurrence-conditioned allomorph；只有具獨立 lexical identity 的補充形才拆成
+  Paradigm 成員 Sign。
 
 ### 5.6 source immutability 與錯誤界線
 
@@ -418,8 +420,8 @@ dirty/lazy compile、serialized ChangeSet 與 deterministic replay 均已完成�
 
 Atomic Rewrite、Recipe、Goal、Weight DB、Evolution node、State 與抽樣都建立在上述
 source interface 之上。sense/derivation-edge、完整 component graph、entrenchment
-動力學、通用 morphology/paradigm 與外部 SemanticBackend 只在各自的 Atomic Rewrite
-需要時再擴充，不先偷渡進 Primitive 層。
+動力學、進階 morphology 與外部 SemanticBackend 只在各自的 Atomic Rewrite 需要時再
+擴充，不先偷渡進 Primitive 層；共時 V3 Paradigm 已獨立落地，不由 Primitive 層定義。
 
 ---
 

@@ -37,7 +37,7 @@
 //! 同一個精神:先定形狀與接口,度量之後換。
 
 use crate::{def_dimension, LanguageDocument};
-use conlang_language::{Dim, NodeId, SignDef, SignItem};
+use conlang_language::{Dim, NodeId, ParadigmDef, SignDef, SignItem};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// 一個葉節點的**四個原始計數**(裁定 ②)。
@@ -201,6 +201,10 @@ impl DimensionDiff {
 pub struct StructuralDiff {
     /// **sign 上宣告**的無維項目(`belongs` / trait 引用 / 無維 Def / 約束)。
     pub signs: DiffCounts,
+    /// 具名水平關係，依 `ParadigmId` 對齊。Paradigm 不屬任何單一維度，
+    /// 但它改變 context bundle 到 Sign 的選擇關係，因此必須是可觀察的
+    /// structural event，而不能被偽裝成某個成員 Sign 的內容變動。
+    pub paradigms: DiffCounts,
     /// **trait 上宣告**的無維項目——最重要的是 **trait 之間的 `belongs` 邊**。
     ///
     /// §0 的第二個例子就住在這裡:`trait Noun` 加一行 `belongs Animate`,
@@ -214,7 +218,9 @@ pub struct StructuralDiff {
 
 impl StructuralDiff {
     pub fn is_identical(&self) -> bool {
-        self.signs.is_identical() && self.trait_content.is_identical()
+        self.signs.is_identical()
+            && self.paradigms.is_identical()
+            && self.trait_content.is_identical()
     }
 }
 
@@ -278,6 +284,21 @@ impl DiffVector {
     pub fn died_signs(&self) -> usize {
         self.phon.signs.only_before
     }
+
+    /// 兩邊都有、依穩定 `ParadigmId` 對齊的水平關係數。
+    pub fn aligned_paradigms(&self) -> usize {
+        self.structural.paradigms.both
+    }
+
+    /// 只在 `after` 存在的 Paradigm 數。
+    pub fn born_paradigms(&self) -> usize {
+        self.structural.paradigms.only_after
+    }
+
+    /// 只在 `before` 存在的 Paradigm 數。
+    pub fn died_paradigms(&self) -> usize {
+        self.structural.paradigms.only_before
+    }
 }
 
 /// 算兩份文件的分層差異向量。
@@ -312,6 +333,7 @@ pub fn diff_vector(before: &LanguageDocument, after: &LanguageDocument) -> DiffV
         }
     }
     let born = new.keys().filter(|id| !old.contains_key(*id)).count();
+    let paradigms = paradigm_counts(before, after);
 
     // sign 集合的對齊結果對五個 leaf 都一樣(見 `DiffVector::aligned_signs`)
     // ——只有 `changed` 因維而異。集中在這裡組裝,duplication 就是 derived 的,
@@ -355,9 +377,38 @@ pub fn diff_vector(before: &LanguageDocument, after: &LanguageDocument) -> DiffV
         },
         structural: StructuralDiff {
             signs: sign_leaf(changed[4]),
+            paradigms,
             trait_content: structural_content,
         },
     }
+}
+
+/// Paradigm 是獨立的具名水平關係，以自己的穩定 ID 對齊；其內容比較忽略
+/// ID 與 source location，見 [`ParadigmDef::content_eq`]。
+fn paradigm_counts(before: &LanguageDocument, after: &LanguageDocument) -> DiffCounts {
+    let old = paradigms_by_id(before);
+    let new = paradigms_by_id(after);
+    let mut counts = DiffCounts::default();
+    for (id, paradigm) in &old {
+        match new.get(id) {
+            Some(other) => {
+                counts.both += 1;
+                counts.changed += usize::from(!paradigm.content_eq(other));
+            }
+            None => counts.only_before += 1,
+        }
+    }
+    counts.only_after = new.keys().filter(|id| !old.contains_key(*id)).count();
+    counts
+}
+
+fn paradigms_by_id(document: &LanguageDocument) -> BTreeMap<&NodeId, &ParadigmDef> {
+    document
+        .language()
+        .paradigms
+        .iter()
+        .map(|paradigm| (&paradigm.id.0, paradigm))
+        .collect()
 }
 
 /// 一份文件裡每個 sign 的 **`belongs` 閉包**(裁定丙的 reach 就靠它)。

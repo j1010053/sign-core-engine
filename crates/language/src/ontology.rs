@@ -142,6 +142,9 @@ fn flatten_values(acc: BTreeMap<String, (usize, SignItem)>) -> Vec<SignItem> {
 #[derive(Debug, Clone, Default)]
 pub struct OntologyRegistry {
     tree: BTreeMap<String, OntoNode>,
+    /// The one V3 automatic template.  `None` means that the language chose no
+    /// global trait (or that validation found an ambiguous invalid source).
+    global: Option<String>,
     /// 名字 → **匯出它但未被載入**的 package(R13)。
     ///
     /// 只在「名字查無」時才用得上,故凡命中必然是尚未宣告的套件。空的時候
@@ -155,7 +158,7 @@ fn trait_belongs(t: &TraitDef) -> Vec<String> {
     for b in &t.blocks {
         for it in &b.items {
             if let SignItem::TraitMount {
-                name: name,
+                name,
                 kind: crate::TraitMountKind::Declaration,
                 ..
             } = it
@@ -269,7 +272,7 @@ pub(crate) fn belongs_reference_diagnostics(langs: &[&Language]) -> Vec<Diagnost
             .iter()
             .filter_map(|item| match item {
                 SignItem::TraitMount {
-                    name: name,
+                    name,
                     kind: crate::TraitMountKind::Declaration,
                     ..
                 } => Some(name.as_str()),
@@ -349,6 +352,27 @@ pub(crate) fn belongs_reference_diagnostics(langs: &[&Language]) -> Vec<Diagnost
 
 fn block_shape_diagnostics(langs: &[&Language]) -> Vec<Diagnostic> {
     let mut out = Vec::new();
+    let mut globals = langs
+        .iter()
+        .flat_map(|lang| lang.traits.iter())
+        .filter(|def| def.global)
+        .map(|def| def.name.clone())
+        .collect::<Vec<_>>();
+    if globals.len() > 1 {
+        globals.sort();
+        out.push(Diagnostic::new(
+            Severity::Error,
+            "GLOBAL_TRAIT_SELECTION_REQUIRED",
+            format!(
+                "同一份有效語言只能有一個 global trait，目前有 {}；請只把選中的一個宣告為 `global trait`，其餘改為普通 `trait`",
+                globals
+                    .iter()
+                    .map(|name| format!("{name:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ));
+    }
     for lang in langs {
         for def in &lang.traits {
             if def.global && def.marker {
@@ -447,6 +471,16 @@ impl OntologyRegistry {
     pub fn build(langs: &[&Language]) -> (OntologyRegistry, Vec<OntologyDiag>) {
         let mut reg = OntologyRegistry::default();
         let mut diags = Vec::new();
+
+        let globals = langs
+            .iter()
+            .flat_map(|language| language.traits.iter())
+            .filter(|trait_def| trait_def.global)
+            .map(|trait_def| trait_def.name.clone())
+            .collect::<Vec<_>>();
+        if globals.len() == 1 {
+            reg.global = globals.into_iter().next();
+        }
 
         for lang in langs {
             for t in &lang.traits {
@@ -594,22 +628,29 @@ impl OntologyRegistry {
         self.tree.get(name)
     }
 
+    /// The explicitly selected automatic trait, if this language has one.
+    pub fn global_trait_name(&self) -> Option<&str> {
+        self.global.as_deref()
+    }
+
+    fn inheritance_roots(&self, sign: &SignDef) -> Vec<String> {
+        let mut roots = Vec::new();
+        if let Some(global) = self.global.as_ref().filter(|name| self.has(name)) {
+            roots.push(global.clone());
+        }
+        roots.extend(
+            self.direct_mounts(sign)
+                .into_iter()
+                .filter(|name| Some(name.as_str()) != self.global.as_deref()),
+        );
+        roots
+    }
+
     /// Low-to-high inheritance precedence for one sign. Far ancestors are
     /// applied before near ancestors; at equal distance, later source
     /// `belongs` paths apply later. Diamond nodes occur exactly once.
     pub fn inheritance_order(&self, sign: &SignDef) -> Vec<TraitProvenance> {
-        let roots: Vec<String> = sign
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                SignItem::TraitMount {
-                    name: name,
-                    kind: crate::TraitMountKind::Declaration,
-                    ..
-                } if self.has(name) => Some(name.clone()),
-                _ => None,
-            })
-            .collect();
+        let roots = self.inheritance_roots(sign);
         let mut queue = VecDeque::new();
         let mut best: BTreeMap<String, (usize, usize)> = BTreeMap::new();
         let mut sequence = 0usize;
@@ -678,11 +719,35 @@ impl OntologyRegistry {
         let mut memo = BTreeMap::new();
         let mut acc = BTreeMap::new();
         let mut counter = 0usize;
-        for mount in self.direct_mounts(sign) {
+        // The global package is the lowest-priority default.  Explicit trait
+        // packages still union with one another, but their resolved value for
+        // a coordinate replaces the global default instead of becoming an
+        // artificial undecided set with it.
+        if let Some(global) = self.global.as_ref().filter(|name| self.has(name)) {
+            let mut stack = BTreeSet::new();
+            for item in self.resolve_node_values(global, &mut memo, &mut stack) {
+                merge_value(&mut acc, &mut counter, item, false);
+            }
+        }
+        let mut explicit = BTreeMap::new();
+        let mut explicit_counter = 0usize;
+        for mount in self
+            .direct_mounts(sign)
+            .into_iter()
+            .filter(|name| Some(name.as_str()) != self.global.as_deref())
+        {
             let mut stack = BTreeSet::new();
             for item in self.resolve_node_values(&mount, &mut memo, &mut stack) {
-                merge_value(&mut acc, &mut counter, item, true);
+                merge_value(&mut explicit, &mut explicit_counter, item, true);
             }
+        }
+        for item in flatten_values(explicit) {
+            // `explicit` has already resolved sibling disagreement.  At this
+            // outer layer it is one specific package and therefore overrides
+            // the global default.
+            let key = value_key(&item);
+            acc.remove(&key);
+            merge_value(&mut acc, &mut counter, item, false);
         }
         flatten_values(acc)
     }
@@ -765,8 +830,14 @@ impl OntologyRegistry {
         let mut inherited_realizations = Vec::new();
         let mut inherited_expressions = Vec::new();
         let mut inherited_constraints = Vec::new();
+        let automatic_global_phon = self
+            .global
+            .as_deref()
+            .map(|global| self.closure(global).into_iter().collect::<BTreeSet<_>>())
+            .unwrap_or_default();
         for source in self.inheritance_order(sign) {
             if let Some(node) = self.node(&source.trait_name) {
+                let automatic_global_phon = automatic_global_phon.contains(&source.trait_name);
                 for item in &node.items {
                     match item {
                         // Def/FeatureValue 已由 `inherited_values` 逐包解析,這裡不再收。
@@ -776,7 +847,13 @@ impl OntologyRegistry {
                         SignItem::SlotFeatureBinding(binding) => {
                             inherited_slot_features.push(binding.clone())
                         }
+                        // Automatic phon rules already run once in Compiled
+                        // Grammar.  Keeping them in each effective Sign would
+                        // run the same sound change again as local cophonology.
+                        SignItem::Rule(rule) if automatic_global_phon && rule.dim == Dim::Phon => {}
                         SignItem::Rule(rule) => inherited_rules.push(SignItem::Rule(rule.clone())),
+                        SignItem::FeatureRule(rule)
+                            if automatic_global_phon && rule.dim == Dim::Phon => {}
                         SignItem::FeatureRule(rule) => {
                             inherited_rules.push(SignItem::FeatureRule(rule.clone()))
                         }
@@ -1490,6 +1567,13 @@ impl OntologyRegistry {
                             out.push(c);
                         }
                     }
+                }
+            }
+        }
+        if let Some(global) = self.global.as_ref().filter(|name| self.has(name)) {
+            for category in self.closure(global) {
+                if seen.insert(category.clone()) {
+                    out.push(category);
                 }
             }
         }

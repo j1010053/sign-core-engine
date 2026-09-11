@@ -1,8 +1,11 @@
-# `case`、`when` 與 Context Fragment（V2）
+# `case`、`when`、bundle match 與 Context Fragment（V3 第一階段）
 
-> 本檔規範**共時側**（`.lang`）。歷時 function 層（`code/*.chg` 的 body）沿用同一組
-> 關鍵字，其規範見 `function分支語意與選擇層_v1.0.md`（P69）；兩側的逐條對齊表在
-> 該檔 §3.4。歷時側另有 `choose:`（列舉候選、不執行），共時側無對應物。
+> 檔名保留 `v2` 以免既有連結失效；本檔內容已更新為 V3 的第一階段契約。
+
+> 本檔規範**共時側**（`.lang`）。歷時 function 層（`code/*.chg` 的 body）本階段
+> 尚未遷移，仍使用它既有的 `case`／`when`／`else` 契約；其規範見
+> `function分支語意與選擇層_v1.0.md`（P69）§3.4。歷時側另有 `choose:`
+> （列舉候選、不執行），共時側無對應物。
 
 ## 封閉的 Context 型別
 
@@ -21,7 +24,8 @@ Syn／Sem／Prag fragment。
 ## `case:`：first matching
 
 `case:` 依來源序評估，第一個 Matched branch 的結果經 context 對應的 merge 路徑合併後
-即停止。Unmatched 才繼續；Error 立即中止且不進 `else`。
+即停止。Unmatched 才繼續；Error 立即中止且不進 `base`。`case` 的 fallback
+關鍵字是 `base`，不接受 `else`。
 
 ```lang
 syn:
@@ -29,10 +33,40 @@ syn:
         $self.syn.number == singular:
             feature:
                 exponence = suffix
-        else:
+        base:
             feature:
                 exponence = zero
 ```
+
+`base` 可直接帶純量結果，也可留白。空白 `base:` 回傳該 context 的既有基底：
+Sign 保留目前 Sign、feature 保留目前值、role 保留目前 binding、phon 保留深層模板。
+
+## Bundle match：先宣告欄位，再寫值列
+
+`case [dim.feature, ...]:` 與 `when [dim.feature, ...]:` 先宣告有序的 typed-feature
+投影。每個普通 branch 寫一列同欄數的值；`_` 表示該欄不參與這一列的判定：
+
+```lang
+case [syn.tense, syn.person, syn.number]:
+    [present, first, singular]: am()
+    [present, third, singular]: is()
+    [present, _, _]: are()
+    base: be()
+```
+
+- 每列的所有非 `_` 欄位是 AND；context 的其他欄位不影響匹配。
+- 值的 enum domain 由同位置的 feature 推導，因此列中不用重寫完整路徑。
+- 欄位必須是目前 effective Sign 已宣告的 typed feature；重複欄位、欄數不符、
+  未知欄位與值域外的值都是編譯錯誤。
+- 缺失或尚未決定的欄位不匹配常量；`_` 不讀該欄。
+- `case` 仍是來源序 first-match。較早列涵蓋較晚列時，編譯器發出
+  `CASE_BUNDLE_BRANCH_SHADOWED` warning。
+- bundle 列一旦匹配，才執行該列結果；結果失敗是 Error，不會再嘗試下一列或
+  `base`。
+
+上例若位於 `paradigm BE:`，結果使用統一的 SignApplication 拼法；零參 `be()` 回傳
+同一個 stored Sign 與 SignId。Paradigm 的完整契約、partial application、deferred
+autofill 與消費者介面見 `Paradigm與SignApplication_V3.md`。
 
 ## `when:`：frozen matching、ordered merge
 
@@ -43,7 +77,7 @@ syn:
 3. 任一 guard 為 Error 時，在 merge 前中止，沒有 branch、fragment 或 trace 被部分提交。
 4. 全部 guard 結果確定後，才把所有 Matched fragment 按來源序合併；同 path 衝突沿用
    trait merge 的 stable later-wins。
-5. `else` 只在沒有任何普通 branch Matched 時命中。
+5. `else` 只在沒有任何普通 branch Matched 時命中。`when` 不接受 `base`。
 
 > **guard 讀得到的東西一律以 `feature:` 為正解**(P71,見
 > `Def路徑封閉清單與feature分工_v1.0.md`)。裸 `<dim>.<field>` 的欄位名打錯**曾是靜默
@@ -104,3 +138,6 @@ Edit／`.chg` 可用 typed `selection = case|when` 更新 Case；Update 保留 C
 | 任一 guard Error 時在 merge 前原子中止 | `fp_v2::when_guard_error_aborts_before_any_fragment_commit` |
 | 維度 fragment stable identity round-trip | `identity_sidecar::dimension_when_fragment_items_round_trip_with_stable_identity` |
 | `case`／`when` typed Update 保留 Case ID | `primitive_edits::case_selection_is_a_typed_identity_preserving_update` |
+| bundle parse／canonical／first-match／`_`／空白 base | `bundle_match::bundle_case_round_trips_and_uses_first_match_wildcards_and_empty_base` |
+| bundle 欄數、欄位與 enum domain 負例 | `bundle_match::bundle_header_rows_are_shape_checked_by_the_parser`、`bundle_match::bundle_fields_and_values_are_checked_against_typed_feature_domains` |
+| `when` bundle frozen matching 與 `else` | `bundle_match::when_bundle_matching_reads_one_frozen_snapshot_and_else_is_fallback_only` |

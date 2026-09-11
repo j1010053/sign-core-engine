@@ -435,6 +435,7 @@ fn source_kind(kind: NodeKind) -> &'static str {
         NodeKind::DslDeclaration => "dsl_declaration",
         NodeKind::Distribution => "distribution",
         NodeKind::Trait => "trait",
+        NodeKind::Paradigm => "paradigm",
         NodeKind::Sign => "sign",
         NodeKind::Block => "block",
         NodeKind::TraitUse => "trait_use",
@@ -475,6 +476,10 @@ fn path_component(snapshot: &NodeSnapshot) -> String {
             .next()
             .unwrap_or(&snapshot.value)
             .replace("Trait(name=", "trait ")
+            .replace(')', ""),
+        NodeKind::Paradigm => snapshot
+            .value
+            .replace("Paradigm(name=", "paradigm ")
             .replace(')', ""),
         _ => format!("{} · {}", source_kind(snapshot.kind), snapshot.value),
     }
@@ -546,7 +551,9 @@ fn update_fields(kind: NodeKind, categories: &[AuthoringChoiceV1]) -> Vec<Author
         ]
     };
     match kind {
-        NodeKind::Sign => vec![field("name", "Name", "text", Vec::new())],
+        NodeKind::Sign | NodeKind::Paradigm => {
+            vec![field("name", "Name", "text", Vec::new())]
+        }
         NodeKind::Trait => vec![
             field("name", "Name", "text", Vec::new()),
             field("global", "Global", "boolean", boolean()),
@@ -575,12 +582,17 @@ fn update_fields(kind: NodeKind, categories: &[AuthoringChoiceV1]) -> Vec<Author
             field("optional", "Optional", "boolean", boolean()),
         ],
         NodeKind::Belongs => vec![field("target", "Trait", "choice", categories.to_vec())],
-        NodeKind::Case => vec![field(
-            "selection",
-            "Selection",
-            "choice",
-            vec![choice("case", "First match"), choice("when", "Accumulate")],
-        )],
+        NodeKind::Case => vec![
+            field(
+                "selection",
+                "Selection",
+                "choice",
+                vec![choice("case", "First match"), choice("when", "Accumulate")],
+            ),
+            field("match_features", "Match features", "text", Vec::new()),
+        ],
+        NodeKind::Application => vec![field("application", "Application", "text", Vec::new())],
+        NodeKind::CaseBranch => vec![field("condition", "Condition", "text", Vec::new())],
         NodeKind::Sense => vec![field("gloss", "Gloss", "text", Vec::new())],
         NodeKind::SenseEdge => vec![
             field(
@@ -627,6 +639,7 @@ fn structurally_movable(snapshot: &NodeSnapshot) -> bool {
             AddressSegment::DslDeclarations(_)
                 | AddressSegment::Distribution(_)
                 | AddressSegment::Traits(_)
+                | AddressSegment::Paradigms(_)
                 | AddressSegment::Signs(_)
                 | AddressSegment::Blocks(_)
                 | AddressSegment::Items(_)
@@ -665,9 +678,11 @@ fn is_body_item(kind: NodeKind) -> bool {
 
 fn parent_accepts_move(child: NodeKind, parent: NodeKind) -> bool {
     match child {
-        NodeKind::DslDeclaration | NodeKind::Distribution | NodeKind::Trait | NodeKind::Sign => {
-            parent == NodeKind::Language
-        }
+        NodeKind::DslDeclaration
+        | NodeKind::Distribution
+        | NodeKind::Trait
+        | NodeKind::Paradigm
+        | NodeKind::Sign => parent == NodeKind::Language,
         NodeKind::Block => parent == NodeKind::Trait,
         kind if is_body_item(kind) => {
             matches!(

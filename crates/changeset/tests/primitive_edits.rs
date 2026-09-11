@@ -97,7 +97,7 @@ sign atom:
         $self == [Other]:
             outer(wrap({$self}))
             belongs Alternate
-        else:
+        base:
             alt({$self})
 
 sign sequence:
@@ -152,7 +152,7 @@ sign root:
     phon:
         /r/
     case:
-        else:
+        base:
             belongs PrimitiveFragmentMark
             sem:
                 time.past = one
@@ -425,7 +425,7 @@ fn updating_one_parent_preserves_other_inheritance_links() {
         .iter()
         .filter_map(|item| match item {
             SignItem::TraitMount {
-                name: name,
+                name,
                 kind: conlang_language::TraitMountKind::Declaration,
                 ..
             } => Some(name.as_str()),
@@ -562,7 +562,7 @@ fn stable_anchor_survives_prior_insert_and_delete() {
         .iter()
         .filter_map(|item| match item {
             SignItem::TraitMount {
-                name: name,
+                name,
                 kind: conlang_language::TraitMountKind::Declaration,
                 ..
             } => Some(name.as_str()),
@@ -700,7 +700,9 @@ fn v2_typed_updates_preserve_case_application_and_constraint_identity() {
 #[test]
 fn case_selection_is_a_typed_identity_preserving_update() {
     let before = LanguageDocument::import_new_root(
-        r#"sign root:
+        r#"trait Default:
+
+sign root:
     syn:
         feature:
             trigger = enum(on, off)
@@ -714,12 +716,15 @@ fn case_selection_is_a_typed_identity_preserving_update() {
             syn:
                 feature:
                     result = selected
+        base:
+            belongs Default
 "#,
         "evo:case-selection",
     )
     .unwrap();
     let sign = before.ref_for_sign("root").unwrap();
     let case = child(&before, &sign, NodeKind::Case, 0);
+    let fallback = child(&before, &case, NodeKind::CaseBranch, 1);
     let updated = apply_edit(
         &before,
         PrimitiveEdit::Update {
@@ -733,10 +738,53 @@ fn case_selection_is_a_typed_identity_preserving_update() {
         updated.document.resolve_node(&case).unwrap().node.id,
         case.id
     );
+    assert_eq!(
+        updated.document.resolve_node(&fallback).unwrap().node.id,
+        fallback.id
+    );
     assert!(updated.document.source().contains("    when:"));
+    assert!(updated.document.source().contains("        else:"));
+    let reparsed =
+        LanguageDocument::import_new_root(&updated.document.source(), "evo:case-selection-reparse")
+            .unwrap();
+    assert_eq!(reparsed.source(), updated.document.source());
     assert!(updated.record.diff.entries.iter().any(
         |entry| matches!(entry, LanguageDiffEntry::Updated { after, .. } if after.id == case.id)
     ));
+}
+
+#[test]
+fn case_selection_rejects_an_empty_base_that_when_cannot_represent() {
+    let before = LanguageDocument::import_new_root(
+        r#"sign root:
+    syn:
+        feature:
+            trigger = enum(on, off)
+            trigger = on
+    phon:
+        /x/
+    case:
+        base:
+"#,
+        "evo:empty-case-selection",
+    )
+    .unwrap();
+    let sign = before.ref_for_sign("root").unwrap();
+    let case = child(&before, &sign, NodeKind::Case, 0);
+    let source = before.source();
+
+    let error = apply_edit(
+        &before,
+        PrimitiveEdit::Update {
+            node: case,
+            change: NodeUpdate::CaseSelection(CaseSelection::Accumulate),
+        },
+        &LibrarySpec::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, EditError::FieldMismatch(_)), "{error:?}");
+    assert_eq!(before.source(), source);
 }
 
 #[test]
@@ -1059,7 +1107,7 @@ sign root:
         /r/
         realization:
             case:
-                else:
+                base:
                     /{wrap({$self}).phon.ret}/
 "#,
         "evo:projection-diff",
@@ -1127,7 +1175,7 @@ sign target:
     case:
         $slot.subject == [LocalEntity]:
             wrap({$slot.subject})
-        else:
+        base:
             $self
 
 sign caller:
@@ -1135,7 +1183,7 @@ sign caller:
     phon:
         /caller/
     case:
-        else:
+        base:
             target(subject: {$self})
 "#,
         "evo:slot-rename",
@@ -1309,7 +1357,7 @@ sign atom:
                     wrap({$self})
                 $self == [Atom]:
                     wrap({$self})
-        else:
+        base:
             $self
 "#,
         "evo:nested-case",

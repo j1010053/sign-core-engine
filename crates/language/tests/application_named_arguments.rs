@@ -13,7 +13,7 @@ fn source(application: &str) -> String {
         "Symbol a\n\n\
          trait LocalNoun:\n\n\
          sign host:\n    belongs LocalNoun\n    syn:\n        slots:\n            head [LocalNoun]\n    phon:\n        /a/\n\n\
-         sign user:\n    belongs LocalNoun\n    phon:\n        /a/\n        realization:\n            case:\n                else:\n                    /{{{application}.phon.ret}}/\n"
+         sign user:\n    belongs LocalNoun\n    phon:\n        /a/\n        realization:\n            case:\n                base:\n                    /{{{application}.phon.ret}}/\n"
     )
 }
 

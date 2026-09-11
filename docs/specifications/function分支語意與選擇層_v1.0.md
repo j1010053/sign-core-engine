@@ -153,15 +153,17 @@ parser 分得出 `else X` 與裸 `X`,但兩者都記成 `guard: None` 且**都�
 | 寫法 | 條件 | 對應 `.lang` |
 |---|---|---|
 | `<call> / <guard>` | `Guard(g)` | `CaseCondition::Guard` |
-| `else <call>` | `Else` → **`!any_matched`** | `CaseCondition::Else` |
+| `else <call>` | `Else` → **`!any_matched`** | `when` 的 `CaseCondition::Else`；`case` 對應 `CaseCondition::Base` |
 | 裸 `<call>` | `Always` → 恆成立,且**計入 `any_matched`** | (無,見 §3.3) |
 
-`case:` 的行為**零改變**:取第一個成立者,走到 `else` 時前面必然都沒成立,`!any_matched`
-恆為真,與 `.lang` 的 `Else => Ok(true)` 自然一致。實際改掉的只有 `when:`/`choose:`。
+function `case:` 的行為**零改變**:取第一個成立者，走到 function 自己的 `else` 時前面
+必然都沒成立，`!any_matched` 恆為真。共時 `.lang` V3 把同一位置改拼為 `base:`；本歷時
+function 語法尚未隨之遷移。實際改掉的只有 `when:`/`choose:`。
 
 ### 3.3 誠實標記:`Always` 是推導,不是規格
 
-`.lang` 沒有「裸分支」——它的 `CaseCondition` 只有 `Equals`/`Guard`/`Else`。
+`.lang` 沒有「裸分支」——它的 `CaseCondition` 是 `Equals`／`Guard`／`Bundle`，另依
+selection 使用 `Base` 或 `Else` fallback。
 function 層保留裸呼叫的理由是**結構差異而非語意分歧**:
 
 - `.lang` 的 `when:` 區塊住在更大的 sign body 裡,無條件的項目寫在**區塊外**就好;
@@ -175,7 +177,7 @@ doc comment;若擁有者認為應改為「強制寫 `else` 或 guard」,是可�
 
 ## 3.4 比對與執行分期(frozen matching)
 
-《`case`、`when` 與 Context Fragment(V2)》§`when:` 第 2 條:
+《`case`、`when`、bundle match 與 Context Fragment（V3 第一階段）》§`when:` 第 2 條:
 
 > 所有非 `else` guard 都**只讀同一份 snapshot**;先前命中的 fragment 對後續 guard
 > 不可見。

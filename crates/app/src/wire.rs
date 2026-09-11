@@ -289,7 +289,8 @@ pub struct DiffSummaryV1 {
 /// ——欄位由整數變成物件。那個破壞性變更連同 `UI_SCHEMA_V1` → v2 一起做
 /// (見《分層差異向量 v0.2 裁定》§5、§6 第 5 步),不在形狀重構這一刀裡。
 ///
-/// 於是此處把 leaf 的 `changed` 攤平回舊欄位:**送出去的數字一個都沒變**。
+/// 於是此處把 leaf 的事件數攤平回舊欄位；V3 Paradigm 仍落在既有
+/// `structural` 整數，不增加 wire 欄位或改 schema。
 impl From<conlang_changeset::diff::DiffVector> for DiffSummaryV1 {
     fn from(value: conlang_changeset::diff::DiffVector) -> Self {
         Self {
@@ -300,7 +301,10 @@ impl From<conlang_changeset::diff::DiffVector> for DiffSummaryV1 {
             syn: value.syn.signs.changed,
             sem: value.sem.signs.changed,
             prag: value.prag.signs.changed,
-            structural: value.structural.signs.changed,
+            structural: value.structural.signs.changed
+                + value.structural.paradigms.changed
+                + value.structural.paradigms.only_before
+                + value.structural.paradigms.only_after,
         }
     }
 }

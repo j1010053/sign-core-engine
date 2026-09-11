@@ -101,7 +101,7 @@ fn a_rule_only_branch_without_any_base_is_an_error() {
 \x20   phon:\n\
 \x20       realization:\n\
 \x20           case:\n\
-\x20               else:\n\
+\x20               base:\n\
 \x20                   i => a\n"
     );
     assert!(
@@ -121,7 +121,7 @@ fn a_rule_only_branch_with_a_deep_template_is_fine() {
 \x20       /sing/\n\
 \x20       realization:\n\
 \x20           case:\n\
-\x20               else:\n\
+\x20               base:\n\
 \x20                   i => a / _ n g\n"
     );
     assert!(

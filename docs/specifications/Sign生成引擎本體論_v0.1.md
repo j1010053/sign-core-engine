@@ -2,6 +2,10 @@
 
 C(07)定了「底層只有 sign」;本檔定「sign 如何被生成、儲存、引用、組合」,以**可直接落成 Rust 型別**為目標。經 18 案架構折磨測試(§10)驗證:0 案破壞設計理念。
 
+> **V3 修訂（2026-09-06）**：`paradigm` 已從 construction slot 拆成有穩定
+> `ParadigmId` 的具名水平關係；它只選擇並回傳真正的成員 Sign，不是 Sign 的別名或
+> 第五種語言單位。完整語法與執行契約見 `Paradigm與SignApplication_V3.md`。
+
 > 梯次:【M】MVP /【M+】後 /【A/B驅動】待案例 /【N】v-next。
 > 上游:C(07,sign 四維)、M0 repr(interning/快照/單一資訊源/無 petgraph)。
 > **先引擎、後投影**:本檔只定引擎(sign 的生成與結構);辭典/語意場/覆蓋率是其產物的唯讀投影(§9),不反向定義引擎。
@@ -120,7 +124,7 @@ Need ──▶ Generator(唯讀:讀 Need+Store)──▶ Vec<Proposal> ──▶
 | **origin**(來源) | 鏈 | `Sign.origin` | 借詞、逆構詞 |
 | **derivation**(sense→sense) | 網絡 | `Sense.derivations` | 隱喻固化(7) |
 | **slot-fill**(填槽) | 組合時暫態 | `Token.fillers`(不進 store) | 組合造詞 |
-| **paradigm**(範式) | 表 | construction sign 的 slots + `Sign.origin` 標 suppletive | go/went(14) |
+| **paradigm**(範式) | 有序 first-match 表 | `ParadigmDef` 的 bundle case → `SignApplication` | go/went(14) |
 
 ```rust
 struct Component { child: SignId, role: Role,
@@ -128,7 +132,9 @@ struct Component { child: SignId, role: Role,
                    fusion: bool }                 // true=多成分不可線性切分(portmanteau,Case 15)
 ```
 
-- **paradigm**:範式是 construction sign(範式模板)+ 其填充 sign。**suppletion** = 範式某槽由獨立 sign 填充,`provenance: Suppletive` + 化石標記(不由共時規則推導),不經構詞(Case 14)。
+- **paradigm**：範式是具名水平關係，不等於任何成員 Sign。每個分支顯式呼叫成員
+  `sign(...)`，末尾非空 `base` 保證全域可選；求值保留被選成員的 SignId。
+  **suppletion** = Paradigm 選到不由共時規則推導的獨立 stored Sign(Case 14)。
 - **不變量**(仿 M0 `check_word`,回報為分級資料非 panic):component DAG 無環、origin 鏈無環——`check_store()`。
 
 ## 5. 組合層級:兩種「構詞」必須分清【M 骨架 / A/B驅動 細節】
@@ -211,7 +217,7 @@ Token(組合暫態,不進 store)
 | 11 | thief 擋 stealer | ✅ | blocking=委派 Strategy(§3) |
 | 12 | 河:20 候選 | ⚠️ | Proposal 帶評分,排序在提議側(§3) |
 | 13 | 手/臂 colexification 分裂 | ✅ | =Case 1 同構(§2) |
-| 14 | go/went suppletion | ⚠️ | paradigm 槽 + Suppletive 化石(§4) |
+| 14 | go/went suppletion | ✅ | V3 Paradigm 選獨立 stored Sign(§4) |
 | 15 | au=à+le portmanteau | ⚠️ | component fusion 標記(§4) |
 | 16 | sheep 零標記 | ✅ | Ø 已對齊 Leipzig(§2/C) |
 | 17 | k-t-b 非串接 | ⚠️ | phon 維 tier 聯結,非 component(§5) |

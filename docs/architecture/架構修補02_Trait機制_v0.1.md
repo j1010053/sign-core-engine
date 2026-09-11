@@ -55,7 +55,11 @@ sign {
 global trait <名稱>  ← 所有 sign 預設自動引用、自動展開
 ```
 - Global = 預設自動引用的 trait,**無特殊本體**,只是 priority 最低的普通 trait。
-- Grammar Store 的全域音系規則 = 一組 global trait。這統一了修補 01 的 Grammar Store 和本修補的 trait——Grammar Store = 所有 global/trait 的規則按 priority+order 解析後的合成規則系統。
+- Grammar Store 的全域音系規則由 global trait 提供。原提案曾允許一組 global traits；
+  V3 已收斂為有效語言至多一個，選擇由 `global trait` 宣告本身顯式完成。
+- 自動引用涵蓋 slot、schema、值與 syn/sem/prag 行為；普通 trait 驗證也以 global
+  契約為基底。global 的整條祖先鏈會展開，但其中 phon 規則只進 Grammar Store 一次，
+  不留在 effective Sign 內重複執行。
 
 ---
 
@@ -145,7 +149,9 @@ individual sign(高優先、窄範圍)
 - §3 Builder:compile 步驟在 Builder adopt 後執行(展開 trait → 最終 sign)。
 
 ### 架構修補 01
-- Grammar Store 定義補充:Grammar Store = 所有 global trait 的 phon 規則,按 priority+order 解析後的合成規則系統(非獨立本體,是 global trait 的計算結果)。
+- Grammar Store 定義補充:Grammar Store = global trait 的 phon 規則系統(非獨立本體,是
+  global trait 的計算結果)。**V3 修訂：有效語言至多選一個 global trait**；只有選中的
+  宣告使用 `global trait`，其餘模板維持普通 `trait`，多個 global 不再合併而是 CE。
 - 三個搬遷宏對應:Phonologization = 音變進 global trait(AddRule);Morphologization = global trait 規則下移進構式 trait(Fossilize 的一種);Lexicalization = trait 規則展平進 sign(Fossilize 到底)。
 
 ---

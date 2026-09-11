@@ -188,21 +188,38 @@ fn standard_english_profile_pins_the_25_official_rows() {
 }
 
 #[test]
-fn regular_english_count_inflection_is_one_deep_realization_and_seen_is_lexicalized() {
+fn productive_inflection_stays_deep_while_suppletive_forms_are_paradigm_members() {
     let system = compile_with_libraries(Language::new(), english_spec()).unwrap();
     let deep = system
         .effective_language()
         .sign_named("EnglishCountNounForm")
         .expect("the one deep count-noun sign");
-    for removed_surface_sign in ["dogs", "runs", "sees", "is", "does"] {
+    for removed_surface_sign in ["dogs", "runs", "sees"] {
         assert!(
             system
                 .effective_language()
                 .sign_named(removed_surface_sign)
                 .is_none(),
-            "{removed_surface_sign} must be selected by realization, not stored as a sibling sign"
+            "{removed_surface_sign} must be generated, not stored as a sibling sign"
         );
     }
+    for suppletive_member in ["is", "does"] {
+        assert!(
+            system
+                .effective_language()
+                .sign_named(suppletive_member)
+                .is_some(),
+            "{suppletive_member} is a stored Sign selected by a Paradigm"
+        );
+    }
+    assert!(system
+        .effective_language()
+        .paradigm_named("EnglishBE")
+        .is_some());
+    assert!(system
+        .effective_language()
+        .paradigm_named("EnglishDO")
+        .is_some());
     assert_eq!(
         system
             .effective_language()
@@ -467,14 +484,13 @@ fn twelve_english_constructions_execute_through_the_public_runtime() {
         ),
         (
             "EnglishCopularPredication",
-            &[("subject", "john"), ("copula", "be"), ("predicate", "big")],
+            &[("subject", "john"), ("predicate", "big")],
             "john is big",
         ),
         (
             "EnglishDoNegation",
             &[
                 ("subject", "john"),
-                ("auxiliary", "do"),
                 ("negator", "not"),
                 ("predicate", "run"),
             ],
@@ -482,14 +498,13 @@ fn twelve_english_constructions_execute_through_the_public_runtime() {
         ),
         (
             "EnglishPolarQuestion",
-            &[("auxiliary", "do"), ("subject", "john"), ("clause", "run")],
+            &[("subject", "john"), ("clause", "run")],
             "does john run",
         ),
         (
             "EnglishPeriphrasticPassive",
             &[
                 ("patient", "mary"),
-                ("auxiliary", "be"),
                 ("predicate", "seen"),
                 ("agent", "john"),
             ],
@@ -534,12 +549,16 @@ fn twelve_english_constructions_execute_through_the_public_runtime() {
             "{construction}: every semantic role resolves to filler meaning"
         );
         assert_eq!(first.token.provenance.construction, *construction);
-        assert_eq!(first.token.provenance.fillers.len(), raw_fillers.len());
+        assert_eq!(
+            first.token.provenance.fillers.len(),
+            first.token.fillers.len(),
+            "{construction}: deferred Paradigm fillers are observable in provenance"
+        );
         assert!(first
             .rules
             .iter()
             .all(|record| record.record.source_package.is_some()));
-        assert_eq!(first.token.fillers.len(), raw_fillers.len());
+        assert!(first.token.fillers.len() >= raw_fillers.len());
         assert!(first.token.is_saturated());
 
         let expected_prag = match *construction {

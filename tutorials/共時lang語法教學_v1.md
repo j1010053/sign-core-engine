@@ -68,7 +68,7 @@ sign TutorialClause:
         /{$slot.subject} {$slot.object}/
 ```
 
-RHS 也可讀 `$slot.predicate.syn.assigned_case`。同批 RHS 全部讀 frozen probe，不受書寫順序影響；完整驗證後才原子提交。stored sign 從 effective base、derived token 從 `DeepTokenState` 重跑 Syn→Sem→Prag，再重選 filler realization。`SlotMap` 是 Rust API 的 preserve／rename／autofill／internalize／optional 操作，目前不新增 `.lang` 表面語法。
+RHS 也可讀 `$slot.predicate.syn.assigned_case`。同批 RHS 全部讀 frozen probe，不受書寫順序影響；完整驗證後才原子提交。stored sign 從 effective base、derived token 從 `DeepTokenState` 重跑 Syn→Sem→Prag，再重選 filler realization。`SlotMap` 的 preserve／rename／autofill／internalize／optional 同時有 Rust API 與平坦 `.lang` 表面，例如 `map head rename nucleus`、`map head optional false`；V3 的 `autofill` 另可接受 `Paradigm()` 這類 callable application。
 
 ## 4. semantic frame 與 recursive roles
 
@@ -218,6 +218,16 @@ trait Outer<T>:
 `global trait` 也不能有 type parameter。`marker` 與 `global` 互斥，同一個 trait
 不能同時具有兩種旗標，違反時是 `TRAIT_GLOBAL_MARKER_CONFLICT`。
 
+`global trait` 是唯一會自動套用的模板，一份有效語言最多只能選一個。選擇是顯式的：
+把要自動套用者寫成 `global trait`，其他可選模板仍寫成普通 `trait`，再由個別 Sign
+以 `belongs`／mount 使用。若兩個宣告都寫成 `global trait`，不是依名稱或書寫順序猜測，
+而是回報 `GLOBAL_TRAIT_SELECTION_REQUIRED`；不需要全域模板時則可以完全不宣告。
+自動套用不只指音變：global 裡的 slot、feature／role 宣告、預設值與
+syn／sem／prag 規則都會進每個 Sign 的有效內容，因此普通 trait 的規則也能直接讀取
+global 宣告的 slot 或寫入其 feature。值衝突時是 global < 個別 `belongs` trait < Sign
+本地值。global 及其祖先的 phon 規則則集中進全域 grammar 一次，不會再對每個 Sign
+當局部音系重跑。
+
 ## 6. `$slot`／`$self`、Then 與 Else
 
 規則左側永遠寫目前維度；RHS 與 guard 才能唯讀 `$self` 或 frozen `$slot`。`Else` 是 first-match fallback，各分支看同一輸入；`Then` 是 sequential feeding，後一步看得到前一步已提交的值。平坦規則不可混用兩者，也不支援巢狀 Then／Else。
@@ -231,14 +241,178 @@ sign TutorialRule:
 
 identity 轉換仍算 Matched，因此會阻擋 Else。未知 trait、畸形 path、`unify` 衝突等是 Error，不可偷走 fallback；Unmatched 才會試下一個 Else。`RuleRecord` 保存 RuleId、stage、dimension、branch、source line、`$self`／`$slot` reads 與 package provenance。
 
-V2 expression 另有 `case:` 與 `when:`。`case:` 只取第一個 Matched fragment；`when:`
+V3 expression 另有 `case:` 與 `when:`。`case:` 只取第一個 Matched fragment，fallback
+拼作 `base:`；`when:`
 則累加所有 Matched fragment。要注意 `when` 不是 sequential feeding：它先凍結合併前的
 Sign，所有 guard 都只讀這份 snapshot，之後才把命中的匿名 fragment 按來源序合併。
 因此前一支新增的 feature 不會使後一支 guard 改為 Matched。`when` 可位於 Sign、
 `syn:`、`sem:`、`prag:` context；phon／feature scalar／role scalar 的選擇仍使用 `case:`。
+`when` 的 fallback 仍拼作 `else:`。兩者的 fallback 都必須放最後；只有 `case` 的
+`base:` 可以留白，表示沿用目前 context 的基底。
+
+多個 branch 都檢查同一組 feature 時，可在 `case [dim.feature, ...]:` 先宣告欄位，
+列中只寫值。`_` 不檢查該欄；其他欄位全部以 AND 匹配，仍依來源序 first-match：
+
+<!-- conlang-test: bundle-match -->
+```lang
+sign TutorialCopulaChoice:
+    syn:
+        feature:
+            tense = enum(present, past)
+            person = enum(first, second, third)
+            number = enum(singular, plural)
+            form = enum(am, is, are, be)
+            form = be
+            form =
+                case [syn.tense, syn.person, syn.number]:
+                    [present, first, singular]: am
+                    [present, third, singular]: is
+                    [present, _, _]: are
+                    base:
+    phon:
+        /be/
+```
+
+欄位須為 effective Sign 已宣告的 typed feature；欄數不符、未知欄位與 enum 值域外
+的值都會報錯。缺失或未決定的值不匹配常量；`_` 則完全不讀該欄。
 完整範例見 `docs/specifications/case_when與context_fragment_v2.md`。
 
-## 7. 一個 deep sign，多個 surface realization
+## 7. SignApplication 與 Paradigm
+
+### 7.1 Sign 是可 partial apply 的函式值
+
+每個 Sign 都可用 `name(...)` 引用，slot 就是它的參數。應用不複製 stored Sign，也不
+產生新的 SignId：
+
+```lang
+atom()                              /* 沒有必填 slot：回傳 atom 自身 */
+wrapper()                           /* 尚缺必填 value：回傳 partial wrapper */
+wrapper(value: {$slot.item})        /* 具名綁定，推薦寫法 */
+wrapper({$slot.item})               /* 只有一個參數時的位置 shorthand */
+outer(value: wrapper(value: $self)) /* 參數可以是 $self、slot 或巢狀 application */
+```
+
+多參數一律具名；參數名必須對應 callable 的 residual slot。partial value 可繼續傳遞或由
+Rust `apply_arguments` 續填，但需要完整 Sign 的 consumer 會拒絕尚有必填 residual slot
+的結果。這使「引用同一個 Sign」和「以某組 filler 具體化該 Sign」保持同一身分鏈。
+
+### 7.2 Paradigm：依 bundle 選一個真正的 Sign
+
+Paradigm 是水平連結，不是 Sign 的別名。它有自己的 ParadigmId，但執行結果保留被選
+成員的 SignId。分支必須是顯式 `name(...)`，最後一定要有非空 `base`：
+
+<!-- conlang-test: paradigm-deferred-autofill -->
+```lang
+Symbol a
+Symbol b
+Symbol c
+Symbol e
+Symbol i
+Symbol j
+Symbol m
+Symbol r
+Symbol s
+Symbol t
+Symbol u
+Class vowel {a, e, i, u}
+
+marker trait TutorialCopula:
+
+paradigm TutorialBE:
+    case [syn.tense, syn.person, syn.number]:
+        [present, first, singular]: am()
+        [present, third, singular]: is()
+        [present, _, _]: are()
+        base: be()
+
+sign am:
+    belongs TutorialCopula
+    syn:
+        feature:
+            tense = enum(present, past)
+            tense = present
+            person = enum(first, second, third)
+            person = first
+            number = enum(singular, plural)
+            number = singular
+    phon:
+        /am/
+
+sign are:
+    belongs TutorialCopula
+    syn:
+        feature:
+            tense = enum(present, past)
+            tense = present
+            person = enum(first, second, third)
+            person = first | second | third
+            number = enum(singular, plural)
+            number = singular | plural
+    phon:
+        /are/
+
+sign be:
+    belongs TutorialCopula
+    syn:
+        feature:
+            tense = enum(present, past)
+            tense = present | past
+            person = enum(first, second, third)
+            person = first | second | third
+            number = enum(singular, plural)
+            number = singular | plural
+    phon:
+        /be/
+
+sign is:
+    belongs TutorialCopula
+    syn:
+        feature:
+            tense = enum(present, past)
+            tense = present
+            person = enum(first, second, third)
+            person = third
+            number = enum(singular, plural)
+            number = singular
+    phon:
+        /is/
+
+sign TutorialThirdSubject:
+    syn:
+        feature:
+            person = enum(first, second, third)
+            person = third
+            number = enum(singular, plural)
+            number = singular
+    phon:
+        /subject/
+
+sign TutorialCopularClause:
+    syn:
+        slots:
+            subject [*]
+            copula [TutorialCopula]
+        map copula autofill TutorialBE()
+        feature:
+            tense = enum(present, past)
+            tense = present
+            person = enum(first, second, third)
+            person => $slot.subject.syn.person
+            number = enum(singular, plural)
+            number => $slot.subject.syn.number
+    phon:
+        /{$slot.subject} {$slot.copula}/
+```
+
+`autofill TutorialBE()` 會等 consumer 從 `subject` 算完 person／number，再用同一份 frozen
+bundle 選 `is()`；所以結果是 `subject is`。若明確提供 `copula` slot，顯式 filler 會覆蓋
+autofill。各成員若有相同 slot 介面，`TutorialBE()` 也可先回傳 partial member，再由
+外層以 `TutorialBE(value: {$slot.value})` 轉送參數。
+
+完整本體、錯誤契約、Rust／Query 消費者與 `.chg` 欄位見
+`docs/specifications/Paradigm與SignApplication_V3.md`。
+
+## 8. 一個 deep sign，多個 surface realization
 
 `phon:` 的 `/.../` 是 deep/default template；`realization:` 依 finalized token 第一匹配選完整模板。選定後展開 `{$slot.NAME}`，確認只剩純 phon 字串，才交給 Tshiatūn 音變。詞界由 phon phrase 保存，`surface_phrase` 最後映射成空格；surface 永不寫回 sign。
 
@@ -254,13 +428,13 @@ sign TutorialNP:
             case:
                 $self.syn.number == plural:
                     /{$slot.stem}s/
-                else:
+                base:
                     /{$slot.stem}/
 ```
 
 Rust 端以 `DerivationContext::new().feature(Dim::Syn, "number", "plural")` 約束同一個 `TutorialNP` deep SignId。這是 occurrence constraint，不是 priority override；與固定值或規則結果衝突時在 phon 前失敗。
 
-## 8. 可執行完整範例
+## 9. 可執行完整範例
 
 以下區塊也是 integration fixture；測試會抽取、parse、compile、先 derive plural NP，再把該 derived token 放入 clause，由 outer `slot_features` 注入 nominative 並從 deep baseline 重跑。結果同時檢查 surface、四維 token、recursive roles、occurrence trace 與兩次執行決定性。
 
@@ -326,7 +500,7 @@ sign TutorialNP:
             case:
                 $self.syn.number == plural:
                     /{$slot.stem}s/
-                else:
+                base:
                     /{$slot.stem}/
 
 sign TutorialClause:
@@ -345,11 +519,11 @@ sign TutorialClause:
         /{$slot.subject} {$slot.predicate}/
 ```
 
-## 9. library、export 與 caller override
+## 10. library、export 與 caller override
 
-`compile_system` 自動載入 enabled std；`compile_with_libraries` 明選一個 natural package與 embedded plugins。`std/cxg` 提供 form–meaning schema、slots 與 rules；Grambank 保存 `0/1/?` 類型觀察；`natural:en-standard` 提供具體 English signs。package 的 `exports.tsv` 以 `stable_id<TAB>trait|sign<TAB>alias` 公開，rule ID 使用 `std:*`、`natural:*`、`plugin:*` namespace。effective language 依 dependency→std→natural→plugin→caller 疊加；`language()` 仍是 caller source，`effective_language()` 才供 runtime。
+`compile_system` 自動載入 enabled std；`compile_with_libraries` 明選一個 natural package與 embedded plugins。`std/cxg` 提供 form–meaning schema、slots 與 rules；Grambank 保存 `0/1/?` 類型觀察；`natural:en-standard` 提供具體 English signs 與 Paradigms。package 的 `exports.tsv` 以 `stable_id<TAB>trait|paradigm|sign<TAB>alias` 公開，rule ID 使用 `std:*`、`natural:*`、`plugin:*` namespace。effective language 依 dependency→std→natural→plugin→caller 疊加；`language()` 仍是 caller source，`effective_language()` 才供 runtime。
 
-## 10. Rust 任務流程
+## 11. Rust 任務流程
 
 ```rust
 let language = Language::parse(source)?;
@@ -372,7 +546,7 @@ let clause = system.derive(
 
 讀取 `SystemDerivation::{surface,token,rules,occurrences,realization,phon_steps,diagnostics}`；`OccurrenceRecord` 分開保存 probe 與 committed RuleRecords、constraints、是否重跑及 filler realization。
 
-## 11. diagnostics、Semantic JSON 與 `.lang`／`.chg` 邊界
+## 12. diagnostics、Semantic JSON 與 `.lang`／`.chg` 邊界
 
 `.lang` 保存可編譯的共時來源；`<name>.lang.ids.json` v2 保存 stable NodeId。`.chg` 只對 caller `LanguageDocument` 執行 Insert／Delete／Update／Move，不改 effective libraries、CompiledSystem、DerivedToken 或 surface。ChangeSet resolve 後 selector 固化為 `node(kind,@namespace:ordinal)`，每個 statement 原子 commit；compile 是 dirty revision 的 lazy cache。
 
@@ -399,6 +573,6 @@ let clause = system.derive(
 
 ## 附錄 B：可編輯 Node 與不入 `.lang` 的資料
 
-stable identity sidecar 為 Language root、inventory／distribution entry、Trait、Sign、Block、所有 SignItem、Rule／Then／Else branch 與 realization branch 保存 `NodeId`。`SignId`、`RuleId` 是 typed wrapper；rename 保 ID，Move 保整棵子樹 ID，Delete＋Insert 必換 ID。
+stable identity sidecar 為 Language root、inventory／distribution entry、Trait、Paradigm、Sign、Block、所有 SignItem、Case／CaseBranch／Application、Rule／Then／Else branch 與 realization branch 保存 `NodeId`。`ParadigmId`、`SignId`、`RuleId` 是 typed wrapper；rename 保 ID，Move 保整棵子樹 ID，Delete＋Insert 必換 ID。
 
 `.lang` 不保存一次使用事件的 DerivationContext、FillerSnapshot、DerivedToken、OccurrenceRecord、surface、attestation、ChangeSet、History State、prompt/model/provider。Semantic JSON 是可驗證的 detached DTO；`.chg` 是 caller source edit；兩者都不是 `.lang` 新關鍵字。

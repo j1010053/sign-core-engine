@@ -50,7 +50,7 @@ sign sing:\n\
 \x20               $self == [TestAblaut]:\n\
 \x20                   /singer/\n\
 \x20                   i => a / _ n g\n\
-\x20               else:\n\
+\x20               base:\n\
 \x20                   /sing/\n"
     );
     let language = Language::parse(&source).expect("parses");
@@ -84,7 +84,7 @@ sign sing:\n\
 \x20       /sing/\n\
 \x20       realization:\n\
 \x20           case:\n\
-\x20               else:\n\
+\x20               base:\n\
 \x20                   /sang/\n"
     );
     let language = Language::parse(&source).expect("parses");
@@ -113,7 +113,7 @@ sign sing:\n\
 \x20       /sing/\n\
 \x20       realization:\n\
 \x20           when:\n\
-\x20               else:\n\
+\x20               base:\n\
 \x20                   /sang/\n"
     );
     // 擋在 realization parser(它只收 `case:`),比 `is_fragment_context` 更前面。
@@ -173,7 +173,7 @@ sign PastForm:
             case:
                 $slot.stem == [TestAblaut]:
                     i => a / _ n g
-                else:
+                base:
                     /{$slot.stem}ed/
 "#;
 
@@ -199,7 +199,7 @@ fn a_rule_only_branch_transforms_the_deep_form() {
 
 /// 對照組:同一個構式,非 ablaut 詞幹落到 else 的模板分支。
 #[test]
-fn the_else_branch_still_builds_from_a_template() {
+fn the_base_branch_still_builds_from_a_template() {
     assert_eq!(past_of("sin"), "sined");
 }
 

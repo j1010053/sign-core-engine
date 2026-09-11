@@ -145,14 +145,14 @@ catalog:case:Nominative	trait	Nominative
 catalog:case:Accusative	trait	Accusative
 ```
 
-`kind` 是 `trait`、`sign` 或 `function`。每一列都必須同時滿足：stable ID 前綴正確、
+`kind` 是 `trait`、`paradigm`、`sign` 或 `function`。每一列都必須同時滿足：stable ID 前綴正確、
 alias 對應內容確實存在、manifest capability 授權該 kind。
 
 ### 3.2 layers
 
 | layer | 進入選取結果的位置 | 內容限制 |
 |---|---|---|
-| `reference` | `LibrarySelection.standard` | `.lang` 只能提供非-global trait declarations，不可提供 signs、DSL declarations 或 distribution |
+| `reference` | `LibrarySelection.standard` | `.lang` 只能提供非-global trait declarations，不可提供 paradigms、signs、DSL declarations 或 distribution |
 | `overlay` | `LibrarySelection.overlay` | 可提供具體語言／理論 overlay；仍受 capabilities 約束 |
 | `data` | 不把 `.lang` nodes 合併進語言 | 不得有 language declarations；可承載 data 與 functions |
 
@@ -164,13 +164,17 @@ alias 對應內容確實存在、manifest capability 授權該 kind。
 schema 2 的 capabilities 是獨立 flags：
 
 ```text
-traits, signs, functions, data
+traits, paradigms, signs, functions, data
 ```
 
-capability 是授權，不是單純描述。package 提供未授權的 trait/sign、function file、
+capability 是授權，不是單純描述。package 提供未授權的 trait/paradigm/sign、function file、
 data file 或 export 時，load 立即失敗。只宣告 `data` 的 data-layer package 可以沒有
-`exports.tsv` 內容；只要 capabilities 含 `traits`、`signs` 或 `functions`，export table
+`exports.tsv` 內容；只要 capabilities 含 `traits`、`paradigms`、`signs` 或 `functions`，export table
 就不能以「data-only 零 exports」規則略過。
+
+選中的整組 package 共享 callable namespace：不同 package 不可提供同名 Paradigm，
+Sign 與 Paradigm 也不可跨 kind 同名；兩者都會讓 `name(...)` 無法唯一解析，因此在
+組合 Language 前即硬錯。
 
 ## 4. 離線解析與 source precedence
 

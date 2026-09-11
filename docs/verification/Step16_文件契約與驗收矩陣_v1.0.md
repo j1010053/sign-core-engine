@@ -13,8 +13,9 @@ Step 16 接通下列路徑：
 2. EvolutionGraph 的節點保存 immutable snapshot，主幹 edge 保存 `.chg`；commit 時
    replay 一次，讀節點狀態為 O(1)，`verify` 可重算內容 id 與 replay 不變式。
 3. rebase 只依 `ReplayError` 型別化變體分類，不比對錯誤訊息。
-4. 多 parent 先做 3-way merge，再套主幹 changeset。`signs`／`traits`／
-   `distribution` 逐項合併；`dsl_decls` 整塊比較；衝突即不建節點。
+4. 多 parent 先做 3-way merge，再套主幹 changeset。`signs`／`traits`／`paradigms`／
+   `distribution` 逐項合併；`dsl_decls` 整塊比較；同 kind 撞名、Sign–Paradigm callable
+   撞名或內容衝突時都不建節點。
 5. `.chg` prelude 可宣告 `donor <alias> <node-id>`；`DonorSpec` 注入內容並限制可見
    範圍，`adopt` 於 resolve 階段降階為自足的 Insert 原語。
 6. 同一血脈的 before／after 文件可由 `reconstruct` 還原 Update／Move／Insert／Delete，
@@ -29,9 +30,10 @@ Step 16 接通下列路徑：
     必須產生 Update，結構容器或廢止種類必須明確拒絕，不可靜默回空。
 11. phon authoring 可用 `.phon_block:` block update 將 flat rule 顯式轉成 structured，
     並從 `.chg` source 插入 leaf／Then／Else／propagate sub-block。
-12. P60/P64 由獨立 host crate 實作：snapshot 拆成 canonical global／trait／sign 與
+12. P60/P64 由獨立 host crate 實作：snapshot 拆成 canonical global／trait／paradigm／sign 與
     identity 物件，changeset 亦依內容雜湊共用；node folder 保存 manifest／edges，
-    annotation／config 位於 node-v2 雜湊外。load 後必重跑 node-v2 與 replay/fsck。
+    annotation／config 位於 node-v2 雜湊外。`paradigms` 是舊 v1 manifest 可缺省的增量欄位；
+    load 後必重跑 node-v2 與 replay/fsck。
 
 Step 17 才負責 Recipe／Goal runtime；Step 16 不以 function 定義或展開接點冒充上層
 runtime 已完成。
@@ -60,10 +62,11 @@ nativization <canonical value>
 
 | 類別 | 現行行為 |
 |---|---|
-| Language 一級資料 | DSL declaration、distribution、trait／sign rename |
+| Language 一級資料 | DSL declaration、distribution、trait／paradigm／sign rename |
 | Sign／trait item | belongs、trait use、def、rule／feature rule、sense／edge、slot、feature、role、slot map、constraint |
 | 有序子節點 | rule then／else branch、case branch、phon statement |
 | Expression／realization | Case header（selection／expected／scrutinee／name）、CaseBranch、SignApplication、projection/interpolation owner、Realization |
+| V3 水平關係 | Paradigm subtree 生滅、bundle 欄位、row condition、member Application 與 stable identity |
 | Structured phon | leaf body → `RuleBranchBody`；block wrapper → `Propagate(bool)`；rule root → `PhonBlockRoot`；statement/block insert/delete/move |
 | 同父重排 | items／branches／phon elements 等有序 logical sequence 以 deterministic LCS + stable anchor 還原 |
 | 生滅 | 只為最上層新增／刪除各發一筆，子樹隨 payload／父節點處理 |
@@ -73,7 +76,7 @@ Flat rule → structured root 與 structured root kind 替換可由 `PhonBlockRo
 structured → flat、巢狀 `PhonBlockNode` 在同一 stable id 下改變 Leaf／Then／Else 種類仍
 明確拒絕。`Propagate` 是透明 wrapper，不占 address segment，切換時子 statement id 不變。
 Application arguments 是 expression 的固定位置，不冒充可 Move 的序列；canonical-unordered
-Sign／Trait／Distribution 與 singleton 亦不進同父 LCS。
+Sign／Trait／Paradigm／Distribution 與 singleton 亦不進同父 LCS。
 
 ## 4. 主引擎 ↔ Tshiatūn 契約
 
@@ -111,13 +114,13 @@ Tshiatūn 的 grouped-block parser、workbench codegen、propagate 組合均已�
 | state → primitives → state | `reconstruct_roundtrip` | unsupported node／phon shape 必須報錯 |
 | node-v2 決定性 | `evolution_replay` | corrupt id、snapshot／identity mismatch |
 | typed rebase | `evolution_replay` | conflict／broken input／environment 分型 |
-| 全 parent merge | `merge_plan` + EvolutionGraph commit | LCA 不唯一、雙邊異值、id／name collision |
+| 全 parent merge | `merge_plan` + EvolutionGraph commit | LCA 不唯一、雙邊異值、id／同 kind name／Sign–Paradigm callable collision |
 | donor／adopt | `donor_declaration`、`atomic_rewrite*` | 未宣告、未 materialize、越界 donor |
-| identity reconciliation | `identity_reconcile` | identical siblings／全改名內容須 hint；exact open 不放寬 |
+| identity reconciliation | `identity_reconcile` | Paradigm rename 保留整棵子樹；identical siblings／全改名內容須 hint；exact open 不放寬 |
 | expression + reorder reconstruct | `reconstruct_roundtrip` | capability unsupported／fixed-position arguments |
 | phon authoring | `phon_authoring` | flat insert 不偷 bootstrap、leading boundary root 拒絕 |
 | structured phon | `phon_grouped_codegen`、`phon_propagate*`、Tshiatūn `block_ir` | 未閉 brace、同層 mixed block、leading propagate |
-| P60/P64 persistence | `conlang-persistence/store_roundtrip` | object corruption、immutable manifest、path traversal；config 不得改 state |
+| P60/P64 persistence | `conlang-persistence/store_roundtrip` | Paradigm object＋舊 manifest；object corruption、immutable manifest、path traversal；config 不得改 state |
 | workspace 相容性 | `cargo test --workspace` | formatter／clippy／submodule targeted tests |
 
 建議封板指令：

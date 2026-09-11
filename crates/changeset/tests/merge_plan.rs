@@ -16,8 +16,31 @@ use conlang_language::{LanguageDocument, LibrarySpec, NodeId};
 const ROOT: &str = "sign x:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n\n\
                     sign y:\n    syn:\n        feature:\n            category = enum(noun, verb, adj, aux, bound, case, conjunct, inner, lexical, new, particle)\n            category = noun\n";
 
+const PARADIGM_ROOT: &str = r#"paradigm PICK:
+    case [syn.choice]:
+        [left]: left()
+        base: right()
+
+sign left:
+    syn:
+        feature:
+            choice = enum(left, right)
+            choice = left
+
+sign right:
+    syn:
+        feature:
+            choice = enum(left, right)
+            choice = left | right
+"#;
+
 fn root() -> LanguageDocument {
     LanguageDocument::import_new_root(ROOT, "evo:root").expect("root parses")
+}
+
+fn paradigm_root() -> LanguageDocument {
+    LanguageDocument::import_new_root(PARADIGM_ROOT, "evo:paradigm-root")
+        .expect("paradigm root parses")
 }
 
 /// 對 `base` 套一份 changeset,得到一個**保留穩定 id** 的後代文件。
@@ -534,6 +557,82 @@ fn a_conflict_is_labelled_with_the_collection_it_came_from() {
         "不得誤標成 Signs:{:?}",
         plan.conflicts
     );
+}
+
+#[test]
+fn a_paradigm_change_on_one_side_is_merged_by_stable_identity() {
+    let base = paradigm_root();
+    let inherited = base.ref_for_paradigm("PICK").unwrap().id;
+    let a = apply(
+        &base,
+        "evo:paradigm-a",
+        "\n    #0:\n        update paradigm(\"PICK\").name = CHOOSE\n",
+    );
+    let b = apply(
+        &base,
+        "evo:paradigm-b",
+        "\n    #0:\n        insert into language at end:\n            trait AddedOnB:\n",
+    );
+
+    let plan = plan_merge(Some(&base), &[&a, &b]).expect("plan");
+    assert!(plan.is_clean(), "{:?}", plan.conflicts);
+    assert!(plan
+        .paradigms
+        .iter()
+        .any(|pick| { pick.key == MergeKey::Node(inherited.clone()) && pick.from == Some(0) }));
+
+    let merged = materialize(&plan, Some(&base), &[&a, &b], "evo:paradigm-merged")
+        .expect("materialize paradigm");
+    assert_eq!(
+        merged.ref_for_paradigm("CHOOSE").unwrap().id,
+        inherited,
+        "the Paradigm and its identity must survive the merge"
+    );
+    assert!(merged.ref_for_trait("AddedOnB").is_some());
+}
+
+#[test]
+fn divergent_edits_to_one_paradigm_are_a_paradigm_content_conflict() {
+    let base = paradigm_root();
+    let key = MergeKey::Node(base.ref_for_paradigm("PICK").unwrap().id);
+    let a = apply(
+        &base,
+        "evo:paradigm-left",
+        "\n    #0:\n        update paradigm(\"PICK\").name = LEFT_PICK\n",
+    );
+    let b = apply(
+        &base,
+        "evo:paradigm-right",
+        "\n    #0:\n        update paradigm(\"PICK\").name = RIGHT_PICK\n",
+    );
+
+    let plan = plan_merge(Some(&base), &[&a, &b]).expect("plan");
+    assert!(plan.conflicts.contains(&MergeConflict::Content {
+        collection: MergeCollection::Paradigms,
+        key,
+        sides: vec![0, 1],
+    }));
+}
+
+#[test]
+fn merging_a_sign_and_paradigm_into_the_same_callable_name_is_rejected() {
+    let base = paradigm_root();
+    let a = apply(
+        &base,
+        "evo:callable-paradigm",
+        "\n    #0:\n        update paradigm(\"PICK\").name = CHOOSE\n",
+    );
+    let b = apply(
+        &base,
+        "evo:callable-sign",
+        "\n    #0:\n        clone sign(\"right\") as CHOOSE\n",
+    );
+
+    let plan = plan_merge(Some(&base), &[&a, &b]).expect("plan");
+    assert!(plan.conflicts.iter().any(|conflict| matches!(
+        conflict,
+        MergeConflict::CallableNameCollision { name, .. } if name == "CHOOSE"
+    )));
 }
 
 // ── 物化(⑤b)──────────────────────────────────────────────────────────────

@@ -61,6 +61,7 @@ pub enum NodeKind {
     DslDeclaration,
     Distribution,
     Trait,
+    Paradigm,
     Sign,
     Block,
     TraitUse,
@@ -136,6 +137,9 @@ pub enum EditableField {
     SenseEdgeKind,
     SenseEdgeTransparency,
     CaseSelection,
+    CaseMatchFeatures,
+    CaseCondition,
+    Application,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,6 +171,7 @@ pub enum AddressSegment {
     DslDeclarations(usize),
     Distribution(usize),
     Traits(usize),
+    Paradigms(usize),
     Signs(usize),
     Blocks(usize),
     Items(usize),
@@ -528,6 +533,16 @@ impl LanguageDocument {
             .map(|entry| NodeRef::new(entry.id.clone(), NodeKind::Trait))
     }
 
+    pub fn ref_for_paradigm(&self, name: &str) -> Option<NodeRef> {
+        let index = self
+            .language
+            .paradigms
+            .iter()
+            .position(|item| item.name == name)?;
+        self.node_at(&NodeAddress(vec![AddressSegment::Paradigms(index)]))
+            .map(|entry| NodeRef::new(entry.id.clone(), NodeKind::Paradigm))
+    }
+
     /// Controlled bridge for the edit crate.  Reconstitution validates every
     /// address/kind binding and refreshes reference bindings and source hash.
     #[doc(hidden)]
@@ -659,6 +674,29 @@ fn canonicalize_named_containers(language: &mut Language, identities: &mut Ident
         language.signs = sign_order.iter().map(|index| old[*index].clone()).collect();
     }
 
+    let mut paradigm_order = (0..language.paradigms.len()).collect::<Vec<_>>();
+    paradigm_order.sort_by(|left_index, right_index| {
+        let left = &language.paradigms[*left_index];
+        let right = &language.paradigms[*right_index];
+        (&left.name, *left_index).cmp(&(&right.name, *right_index))
+    });
+    let mut paradigm_new_index = vec![0; paradigm_order.len()];
+    for (new_index, old_index) in paradigm_order.iter().copied().enumerate() {
+        paradigm_new_index[old_index] = new_index;
+    }
+    if paradigm_order
+        .iter()
+        .copied()
+        .enumerate()
+        .any(|(new, old)| new != old)
+    {
+        let old = language.paradigms.clone();
+        language.paradigms = paradigm_order
+            .iter()
+            .map(|index| old[*index].clone())
+            .collect();
+    }
+
     for entry in &mut identities.nodes {
         let Some(first) = entry.address.0.first_mut() else {
             continue;
@@ -670,6 +708,9 @@ fn canonicalize_named_containers(language: &mut Language, identities: &mut Ident
             AddressSegment::Traits(index) if *index < trait_new_index.len() => {
                 *index = trait_new_index[*index];
             }
+            AddressSegment::Paradigms(index) if *index < paradigm_new_index.len() => {
+                *index = paradigm_new_index[*index];
+            }
             AddressSegment::Signs(index) if *index < sign_new_index.len() => {
                 *index = sign_new_index[*index];
             }
@@ -680,7 +721,9 @@ fn canonicalize_named_containers(language: &mut Language, identities: &mut Ident
 
 fn editable_field(kind: NodeKind, name: &str) -> Option<EditableField> {
     match (kind, name) {
-        (NodeKind::Trait | NodeKind::Sign, "name") => Some(EditableField::Name),
+        (NodeKind::Trait | NodeKind::Paradigm | NodeKind::Sign, "name") => {
+            Some(EditableField::Name)
+        }
         (NodeKind::Trait, "global") => Some(EditableField::Global),
         (NodeKind::Trait, "marker") => Some(EditableField::Marker),
         (NodeKind::Trait, "type_params") => Some(EditableField::TypeParams),
@@ -715,6 +758,9 @@ fn editable_field(kind: NodeKind, name: &str) -> Option<EditableField> {
         (NodeKind::RoleDeclaration, "constraint") => Some(EditableField::RoleConstraint),
         (NodeKind::RoleBinding, "slot") => Some(EditableField::RoleSlot),
         (NodeKind::Case, "selection") => Some(EditableField::CaseSelection),
+        (NodeKind::Case, "match_features") => Some(EditableField::CaseMatchFeatures),
+        (NodeKind::CaseBranch, "condition") => Some(EditableField::CaseCondition),
+        (NodeKind::Application, "application") => Some(EditableField::Application),
         _ => None,
     }
 }
@@ -1189,6 +1235,40 @@ fn enumerate_nodes(language: &Language, namespace: &str, next: &mut u64) -> Vec<
             }
         }
     }
+    for (paradigm_index, paradigm) in language.paradigms.iter().enumerate() {
+        let paradigm_address = NodeAddress(vec![AddressSegment::Paradigms(paradigm_index)]);
+        let paradigm_id = push_entry(
+            &mut entries,
+            namespace,
+            next,
+            NodeKind::Paradigm,
+            Some(root.clone()),
+            paradigm_address.clone(),
+        );
+        let case_address = paradigm_address.child(AddressSegment::CaseExpression);
+        let case_id = push_entry(
+            &mut entries,
+            namespace,
+            next,
+            NodeKind::Case,
+            Some(paradigm_id),
+            case_address.clone(),
+        );
+        // Reuse the same recursive case/application enumerator as Sign-owned
+        // expressions. The temporary wrapper is not itself a node.
+        let expression = SignItem::SignExpression(crate::SignExpression {
+            expression: crate::Expression::Case(Box::new(paradigm.selector.clone())),
+            source: paradigm.selector.source,
+        });
+        enumerate_item_children(
+            &expression,
+            &case_address,
+            &case_id,
+            namespace,
+            next,
+            &mut entries,
+        );
+    }
     for (sign_index, sign) in language.signs.iter().enumerate() {
         let sign_address = NodeAddress(vec![AddressSegment::Signs(sign_index)]);
         let sign_id = push_entry(
@@ -1337,6 +1417,12 @@ fn bind_runtime_ids(language: &mut Language, nodes: &[NodeEntryV1]) -> Result<()
                 })?;
                 sign.id = SignId::document(namespace, entry.id.ordinal);
             }
+            [AddressSegment::Paradigms(index)] if entry.kind == NodeKind::Paradigm => {
+                let paradigm = language.paradigms.get_mut(*index).ok_or_else(|| {
+                    IdentityError::ShapeMismatch("paradigm address is out of bounds".to_owned())
+                })?;
+                paradigm.id = crate::ParadigmId::document(namespace, entry.id.ordinal);
+            }
             _ if matches!(entry.kind, NodeKind::Rule | NodeKind::FeatureRule) => bind_rule(
                 item_at_mut(language, &entry.address),
                 namespace,
@@ -1367,9 +1453,14 @@ fn bind_rule(
 fn node_ids_by_name(
     language: &Language,
     entries: &[NodeEntryV1],
-) -> (BTreeMap<String, NodeId>, BTreeMap<String, NodeId>) {
+) -> (
+    BTreeMap<String, NodeId>,
+    BTreeMap<String, NodeId>,
+    BTreeMap<String, NodeId>,
+) {
     let mut traits = BTreeMap::new();
     let mut signs = BTreeMap::new();
+    let mut paradigms = BTreeMap::new();
     for entry in entries {
         match entry.address.0.as_slice() {
             [AddressSegment::Traits(index)] if entry.kind == NodeKind::Trait => {
@@ -1382,10 +1473,15 @@ fn node_ids_by_name(
                     signs.insert(sign.name.clone(), entry.id.clone());
                 }
             }
+            [AddressSegment::Paradigms(index)] if entry.kind == NodeKind::Paradigm => {
+                if let Some(paradigm) = language.paradigms.get(*index) {
+                    paradigms.insert(paradigm.name.clone(), entry.id.clone());
+                }
+            }
             _ => {}
         }
     }
-    (traits, signs)
+    (traits, signs, paradigms)
 }
 
 fn reference_target(
@@ -1401,6 +1497,30 @@ fn reference_target(
             spelling: spelling.to_owned(),
             expected,
         },
+    }
+}
+
+fn callable_reference_target(
+    spelling: &str,
+    signs: &BTreeMap<String, NodeId>,
+    paradigms: &BTreeMap<String, NodeId>,
+) -> RefTargetV1 {
+    if let Some(id) = signs.get(spelling) {
+        RefTargetV1::Local {
+            target: NodeRef::new(id.clone(), NodeKind::Sign),
+        }
+    } else if let Some(id) = paradigms.get(spelling) {
+        RefTargetV1::Local {
+            target: NodeRef::new(id.clone(), NodeKind::Paradigm),
+        }
+    } else {
+        // External packages historically exported applications as Signs.
+        // Keep that expectation for an unresolved spelling; a resolved local
+        // Paradigm is always bound with its precise kind above.
+        RefTargetV1::External {
+            spelling: spelling.to_owned(),
+            expected: NodeKind::Sign,
+        }
     }
 }
 
@@ -1607,12 +1727,13 @@ fn collect_application_refs(
     owner: &NodeId,
     entries: &[NodeEntryV1],
     signs: &BTreeMap<String, NodeId>,
+    paradigms: &BTreeMap<String, NodeId>,
     refs: &mut Vec<RefBindingV1>,
 ) {
     refs.push(RefBindingV1 {
         owner: owner.clone(),
         field: "application.callee".to_owned(),
-        target: reference_target(&application.callee, NodeKind::Sign, signs),
+        target: callable_reference_target(&application.callee, signs, paradigms),
     });
     for (index, argument) in application.arguments.iter().enumerate() {
         let crate::SignArgumentValue::Application(nested) = &argument.value else {
@@ -1628,6 +1749,7 @@ fn collect_application_refs(
             &nested_entry.id,
             entries,
             signs,
+            paradigms,
             refs,
         );
     }
@@ -1640,6 +1762,7 @@ fn collect_expression_refs(
     entries: &[NodeEntryV1],
     traits: &BTreeMap<String, NodeId>,
     signs: &BTreeMap<String, NodeId>,
+    paradigms: &BTreeMap<String, NodeId>,
     refs: &mut Vec<RefBindingV1>,
 ) {
     match expression {
@@ -1649,15 +1772,23 @@ fn collect_expression_refs(
                 entry_at(entries, address, NodeKind::Application).map(|entry| entry.id.clone())
             });
             if let Some(owner) = owner {
-                collect_application_refs(application, address, &owner, entries, signs, refs);
+                collect_application_refs(
+                    application,
+                    address,
+                    &owner,
+                    entries,
+                    signs,
+                    paradigms,
+                    refs,
+                );
             }
         }
-        crate::Expression::Projection { value, .. } => {
-            collect_expression_refs(value, address, root_owner, entries, traits, signs, refs)
-        }
-        crate::Expression::Case(case) => {
-            collect_case_refs(case, address, root_owner, entries, traits, signs, refs)
-        }
+        crate::Expression::Projection { value, .. } => collect_expression_refs(
+            value, address, root_owner, entries, traits, signs, paradigms, refs,
+        ),
+        crate::Expression::Case(case) => collect_case_refs(
+            case, address, root_owner, entries, traits, signs, paradigms, refs,
+        ),
         _ => {}
     }
 }
@@ -1669,6 +1800,7 @@ fn collect_case_refs(
     entries: &[NodeEntryV1],
     traits: &BTreeMap<String, NodeId>,
     signs: &BTreeMap<String, NodeId>,
+    paradigms: &BTreeMap<String, NodeId>,
     refs: &mut Vec<RefBindingV1>,
 ) {
     if root_owner.is_none() && entry_at(entries, address, NodeKind::Case).is_none() {
@@ -1709,7 +1841,10 @@ fn collect_case_refs(
                     target: reference_target(category, NodeKind::Trait, traits),
                 });
             }
-            crate::CaseCondition::Equals(_) | crate::CaseCondition::Else => {}
+            crate::CaseCondition::Equals(_)
+            | crate::CaseCondition::Bundle(_)
+            | crate::CaseCondition::Base
+            | crate::CaseCondition::Else => {}
         }
         collect_expression_refs(
             &branch.result,
@@ -1718,6 +1853,7 @@ fn collect_case_refs(
             entries,
             traits,
             signs,
+            paradigms,
             refs,
         );
     }
@@ -1754,7 +1890,7 @@ fn guard_category_references(source: &str) -> Vec<(usize, String)> {
 }
 
 fn collect_refs(language: &Language, entries: &[NodeEntryV1]) -> Vec<RefBindingV1> {
-    let (traits, signs) = node_ids_by_name(language, entries);
+    let (traits, signs, paradigms) = node_ids_by_name(language, entries);
     let mut refs = Vec::new();
     for entry in entries {
         let Some(item) = item_at(language, &entry.address) else {
@@ -1770,7 +1906,7 @@ fn collect_refs(language: &Language, entries: &[NodeEntryV1]) -> Vec<RefBindingV
                 reference_target(name, NodeKind::Trait, &traits),
             )),
             SignItem::TraitMount {
-                name: name,
+                name,
                 kind: crate::TraitMountKind::Declaration,
                 ..
             } => Some((
@@ -1787,6 +1923,10 @@ fn collect_refs(language: &Language, entries: &[NodeEntryV1]) -> Vec<RefBindingV
             SignItem::SlotMap(crate::SlotMapOp::AutoFill { filler, .. }) => Some((
                 "slot_map.autofill".to_owned(),
                 reference_target(filler, NodeKind::Sign, &signs),
+            )),
+            SignItem::SlotMap(crate::SlotMapOp::AutoFillCall { filler, .. }) => Some((
+                "slot_map.autofill".to_owned(),
+                callable_reference_target(&filler.callee, &signs, &paradigms),
             )),
             // `[*]` 不指名 trait,無引用可綁。
             SignItem::RoleDecl(role) => role.constraint.category().map(|category| {
@@ -1820,6 +1960,7 @@ fn collect_refs(language: &Language, entries: &[NodeEntryV1]) -> Vec<RefBindingV
                 entries,
                 &traits,
                 &signs,
+                &paradigms,
                 &mut refs,
             ),
             SignItem::FeatureExpression(expression) => collect_expression_refs(
@@ -1829,6 +1970,7 @@ fn collect_refs(language: &Language, entries: &[NodeEntryV1]) -> Vec<RefBindingV
                 entries,
                 &traits,
                 &signs,
+                &paradigms,
                 &mut refs,
             ),
             SignItem::RoleExpression(expression) => collect_expression_refs(
@@ -1838,6 +1980,7 @@ fn collect_refs(language: &Language, entries: &[NodeEntryV1]) -> Vec<RefBindingV
                 entries,
                 &traits,
                 &signs,
+                &paradigms,
                 &mut refs,
             ),
             SignItem::Realization(Realization { expression: case }) => collect_case_refs(
@@ -1847,10 +1990,28 @@ fn collect_refs(language: &Language, entries: &[NodeEntryV1]) -> Vec<RefBindingV
                 entries,
                 &traits,
                 &signs,
+                &paradigms,
                 &mut refs,
             ),
             _ => {}
         }
+    }
+    for (index, paradigm) in language.paradigms.iter().enumerate() {
+        let case_address = NodeAddress(vec![
+            AddressSegment::Paradigms(index),
+            AddressSegment::CaseExpression,
+        ]);
+        let case_owner = entry_at(entries, &case_address, NodeKind::Case).map(|entry| &entry.id);
+        collect_case_refs(
+            &paradigm.selector,
+            &case_address,
+            case_owner,
+            entries,
+            &traits,
+            &signs,
+            &paradigms,
+            &mut refs,
+        );
     }
     refs.sort_by(|left, right| (&left.owner, &left.field).cmp(&(&right.owner, &right.field)));
     refs
@@ -1956,7 +2117,7 @@ mod tests {
     phon:
         /r/
     case:
-        else:
+        base:
             $self
 "#,
         )
@@ -1989,9 +2150,10 @@ mod tests {
             selection: crate::CaseSelection::FirstMatch,
             expected: crate::ExpressionType::SignContext,
             scrutinee: None,
+            match_features: vec![],
             name: None,
             branches: vec![crate::CaseBranch {
-                condition: crate::CaseCondition::Else,
+                condition: crate::CaseCondition::Base,
                 result: crate::Expression::Projection {
                     value: Box::new(crate::Expression::SignApplication(outer)),
                     dimension: crate::SignProjection::Syn,

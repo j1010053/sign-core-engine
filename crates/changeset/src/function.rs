@@ -1003,7 +1003,7 @@ fn validate_constraint(
     if !definition.items.iter().any(|item| {
         matches!(
             item,
-            SignItem::TraitMount { name: name, kind: conlang_language::TraitMountKind::Declaration, .. }
+            SignItem::TraitMount { name, kind: conlang_language::TraitMountKind::Declaration, .. }
                 if name == constraint || system.ontology.category_is_a(name, constraint)
         )
     }) {

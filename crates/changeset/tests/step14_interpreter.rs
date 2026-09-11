@@ -73,6 +73,34 @@ fn authoring_selectors_resolve_to_stable_ids_and_replay_is_deterministic() {
 }
 
 #[test]
+fn legacy_insert_sign_rejects_an_extra_paradigm_in_its_fragment() {
+    let base = base();
+    let spec = LibrarySpec::default();
+    let mut source = change_set_prelude(&base, &spec, "evo:exactly-one").unwrap();
+    source.push_str(
+        r#"
+    statement 0:
+        insert sign under language at end:
+            sign cat:
+                belongs LocalNoun
+                phon:
+                    /cat/
+
+            paradigm Hidden:
+                case [syn.choice]:
+                    [picked]: cat()
+                    base: cat()
+"#,
+    );
+
+    let error = UnresolvedChangeSet::parse(&source)
+        .unwrap()
+        .resolve(&base, &spec)
+        .expect_err("legacy insert must not silently discard another top-level container");
+    assert!(error.to_string().contains("exactly one sign"), "{error}");
+}
+
+#[test]
 fn lazy_compile_reuses_cache_and_successful_commit_invalidates_it() {
     let base = base();
     let spec = LibrarySpec::default();
