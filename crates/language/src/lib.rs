@@ -23,6 +23,9 @@
 #![forbid(unsafe_code)]
 #![deny(missing_debug_implementations)]
 
+mod body;
+mod case_eval;
+pub use body::{ScopedBody, TraitBlocks};
 pub mod codegen;
 pub mod compile;
 pub mod construction;
@@ -31,18 +34,22 @@ pub mod identity;
 pub mod library;
 pub mod metadata;
 pub mod ontology;
+mod package_scope;
 pub mod parser;
 pub mod patch;
 pub mod path;
+mod phon_rules;
 pub mod printer;
 pub mod projection;
 pub mod reference;
 pub mod sampling;
 pub mod sem;
 pub mod semantic_dto;
+mod specialization;
 pub mod stdlib;
 pub mod synchronic;
 pub mod system;
+pub mod type_ref;
 pub mod word;
 
 pub use construction::{OccurrenceCaseRecord, OccurrenceCaseStatus, OccurrenceRecord};
@@ -206,6 +213,9 @@ impl RuleId {
             IdentityNamespace::Ephemeral | IdentityNamespace::Synthetic => RuleNamespace::Local,
             IdentityNamespace::Document(namespace) => RuleNamespace::Document(namespace.clone()),
             IdentityNamespace::Library(namespace) => RuleNamespace::Package(namespace.clone()),
+            IdentityNamespace::Instantiation { source, .. } => {
+                RuleId((**source).clone()).namespace()
+            }
         }
     }
 
@@ -223,7 +233,8 @@ impl std::fmt::Display for RuleId {
         self.0.fmt(formatter)
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct SignId(pub NodeId);
 
 impl SignId {
@@ -704,6 +715,8 @@ pub struct TypedCase {
 /// slots, or trait memberships of its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParadigmDef {
+    /// Explicit package interface; private declarations remain package-local.
+    pub exported: bool,
     pub id: ParadigmId,
     pub name: String,
     pub selector: TypedCase,
@@ -853,13 +866,15 @@ pub struct TraitTypeParam {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraitDef {
+    pub body: ScopedBody<TraitBlocks>,
+    /// Explicit package interface; private declarations remain package-local.
+    pub exported: bool,
     pub name: String,
     pub global: bool,
     /// **純分類節點**(`marker trait`):承諾永不帶內容。見型別說明。
     pub marker: bool,
     /// P76:型別參數列表。空 = 非泛型(今天的行為)。
     pub type_params: Vec<TraitTypeParam>,
-    pub blocks: Vec<Block>,
 }
 
 impl SignItem {
@@ -1023,6 +1038,7 @@ impl From<&Slot> for SignParameter {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SlotConstraint {
+    /// A trait category or a nominal Sign instance type, resolved at compile time.
     Category(String),
     AnySign,
 }
@@ -1035,17 +1051,28 @@ impl SlotConstraint {
         }
     }
 
-    /// filler 的範疇集合是否獲授權。`[*]` 一律通過;具名約束委派
-    /// [`crate::ontology::OntologyRegistry::categories_satisfy`]——**slot 與 role
-    /// 共用同一判定**,不再各寫一套。
+    /// Category-only matching for callers without construction identity.
+    /// Such a caller cannot prove a nominal Sign constraint.
     pub fn is_satisfied_by(
         &self,
         categories: &[String],
         registry: &crate::ontology::OntologyRegistry,
     ) -> bool {
+        self.is_satisfied_by_instance(categories, None, registry)
+    }
+
+    /// Slots, roles and guards use the same identity-aware type predicate.
+    pub fn is_satisfied_by_instance(
+        &self,
+        categories: &[String],
+        construction: Option<&SignId>,
+        registry: &crate::ontology::OntologyRegistry,
+    ) -> bool {
         match self {
             SlotConstraint::AnySign => true,
-            SlotConstraint::Category(required) => registry.categories_satisfy(categories, required),
+            SlotConstraint::Category(required) => {
+                registry.type_satisfies(categories, construction, required)
+            }
         }
     }
 
@@ -1088,15 +1115,20 @@ pub enum SlotMapOp {
 /// Sign:真正的語言單位(phon=UR / sem / syn / prag 稀疏,以 Def 承載)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignDef {
+    pub body: ScopedBody<Block>,
+    /// Explicit package interface; private declarations remain package-local.
+    pub exported: bool,
     pub id: SignId,
     pub name: String,
-    pub items: Vec<SignItem>,
 }
 
 impl SignDef {
     /// 內容相等:**忽略 `SourceLocation`**。見 [`SignItem::without_source_location`]。
     pub fn content_eq(&self, other: &SignDef) -> bool {
-        self.name == other.name && items_content_eq(&self.items, &other.items)
+        self.exported == other.exported
+            && self.name == other.name
+            && self.members.dump() == other.members.dump()
+            && items_content_eq(&self.items, &other.items)
     }
 
     /// **底層形 UR**(P1):`phon:` 區塊的 `/…/`,已去界定斜線與前後空白。
@@ -1121,6 +1153,8 @@ impl TraitDef {
     /// 內容相等:**忽略 `SourceLocation`**。見 [`SignItem::without_source_location`]。
     pub fn content_eq(&self, other: &TraitDef) -> bool {
         self.name == other.name
+            && self.exported == other.exported
+            && self.members.dump() == other.members.dump()
             && self.global == other.global
             && self.marker == other.marker
             && self.type_params == other.type_params
@@ -1181,6 +1215,59 @@ impl std::fmt::Debug for Language {
 }
 
 impl Language {
+    /// Rewrite declaration references before a structural rename; preserves lexical parameter binding.
+    pub fn rename_declaration_references(
+        &mut self,
+        address: &NodeAddress,
+        new_name: &str,
+    ) -> Result<(), String> {
+        specialization::rename_references(self, address, new_name)
+    }
+
+    /// Resolve a source address into the lexical declaration collection it belongs to.
+    /// Nested collections reuse Traits/Signs/Paradigms segments; no synthetic source root is created.
+    pub fn scope_at_address<'a, 'b>(
+        &'a self,
+        address: &'b [AddressSegment],
+    ) -> Option<(&'a Language, &'b [AddressSegment])> {
+        match address {
+            [owner @ (AddressSegment::Traits(_) | AddressSegment::Signs(_)), rest @ ..]
+                if matches!(
+                    rest.first(),
+                    Some(
+                        AddressSegment::Traits(_)
+                            | AddressSegment::Signs(_)
+                            | AddressSegment::Paradigms(_)
+                    )
+                ) =>
+            {
+                self.members_at(owner)?.scope_at_address(rest)
+            }
+            _ => Some((self, address)),
+        }
+    }
+
+    pub fn scope_at_address_mut<'a, 'b>(
+        &'a mut self,
+        address: &'b [AddressSegment],
+    ) -> Option<(&'a mut Language, &'b [AddressSegment])> {
+        match address {
+            [owner @ (AddressSegment::Traits(_) | AddressSegment::Signs(_)), rest @ ..]
+                if matches!(
+                    rest.first(),
+                    Some(
+                        AddressSegment::Traits(_)
+                            | AddressSegment::Signs(_)
+                            | AddressSegment::Paradigms(_)
+                    )
+                ) =>
+            {
+                self.members_at_mut(owner)?.scope_at_address_mut(rest)
+            }
+            _ => Some((self, address)),
+        }
+    }
+
     /// canonical empty Language(P28)。
     pub fn new() -> Language {
         Language::default()
@@ -1219,6 +1306,9 @@ impl Language {
             }
         }
 
+        for (_, members) in self.member_scopes_mut() {
+            members.bind_rule_namespace(namespace.clone());
+        }
         for trait_def in &mut self.traits {
             for block in &mut trait_def.blocks {
                 bind_items(&mut block.items, &namespace);
@@ -1308,9 +1398,10 @@ impl Language {
     pub fn add_sign(&mut self, name: impl Into<String>, items: Vec<SignItem>) -> SignId {
         let id = self.fresh_sign_id();
         self.signs.push(SignDef {
+            exported: false,
             id: id.clone(),
             name: name.into(),
-            items,
+            body: (items).into(),
         });
         id
     }
@@ -1322,6 +1413,7 @@ impl Language {
     pub fn add_paradigm(&mut self, name: impl Into<String>, selector: TypedCase) -> ParadigmId {
         let id = self.fresh_paradigm_id();
         self.paradigms.push(ParadigmDef {
+            exported: false,
             id: id.clone(),
             name: name.into(),
             selector,
@@ -1334,14 +1426,78 @@ impl Language {
         printer::print(self)
     }
 
+    /// Source declarations with lexical paths; compiled instances are not source nodes.
+    pub fn traits_recursive(&self) -> Vec<(String, &TraitDef)> {
+        let mut result = self
+            .traits
+            .iter()
+            .map(|v| (v.name.clone(), v))
+            .collect::<Vec<_>>();
+        for (_, name, members) in self.member_scopes() {
+            result.extend(
+                members
+                    .traits_recursive()
+                    .into_iter()
+                    .map(|(child, value)| (format!("{name}.{child}"), value)),
+            );
+        }
+        result
+    }
+    pub fn signs_recursive(&self) -> Vec<(String, &SignDef)> {
+        let mut result = self
+            .signs
+            .iter()
+            .map(|v| (v.name.clone(), v))
+            .collect::<Vec<_>>();
+        for (_, name, members) in self.member_scopes() {
+            result.extend(
+                members
+                    .signs_recursive()
+                    .into_iter()
+                    .map(|(child, value)| (format!("{name}.{child}"), value)),
+            );
+        }
+        result
+    }
+    pub fn paradigms_recursive(&self) -> Vec<(String, &ParadigmDef)> {
+        let mut result = self
+            .paradigms
+            .iter()
+            .map(|v| (v.name.clone(), v))
+            .collect::<Vec<_>>();
+        for (_, name, members) in self.member_scopes() {
+            result.extend(
+                members
+                    .paradigms_recursive()
+                    .into_iter()
+                    .map(|(child, value)| (format!("{name}.{child}"), value)),
+            );
+        }
+        result
+    }
     pub fn trait_named(&self, name: &str) -> Option<&TraitDef> {
-        self.traits.iter().find(|t| t.name == name)
+        self.traits.iter().find(|v| v.name == name).or_else(|| {
+            self.member_scopes().find_map(|(_, owner, members)| {
+                name.strip_prefix(&format!("{owner}."))
+                    .and_then(|name| members.trait_named(name))
+            })
+        })
     }
     pub fn sign_named(&self, name: &str) -> Option<&SignDef> {
-        self.signs.iter().find(|s| s.name == name)
+        self.signs.iter().find(|v| v.name == name).or_else(|| {
+            self.member_scopes().find_map(|(_, owner, members)| {
+                name.strip_prefix(&format!("{owner}."))
+                    .and_then(|name| members.sign_named(name))
+            })
+        })
     }
     pub fn paradigm_named(&self, name: &str) -> Option<&ParadigmDef> {
-        self.paradigms.iter().find(|paradigm| paradigm.name == name)
+        self.paradigms.iter().find(|v| v.name == name).or_else(|| {
+            self.member_scopes().find_map(|(_, owner, members)| {
+                name.strip_prefix(&format!("{owner}."))
+                    .and_then(|name| members.paradigm_named(name))
+            })
+        })
     }
 }
 

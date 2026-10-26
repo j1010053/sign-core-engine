@@ -26,7 +26,7 @@ code = ["code/ontology.lang"]
         .to_owned(),
         exports: "stable_id\tkind\talias\ncatalog:evolution-probe:Marker\ttrait\tEvolutionExternalMarker\n"
             .to_owned(),
-        code: format!("trait EvolutionExternalMarker:\n{extra_code}"),
+        code: format!("export trait EvolutionExternalMarker:\n{extra_code}"),
         source: PackageSource::Injected("evolution-v2-test".to_owned()),
         ..PackageSources::default()
     }

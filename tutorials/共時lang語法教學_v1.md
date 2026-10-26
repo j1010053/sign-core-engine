@@ -214,8 +214,9 @@ trait Outer<T>:
     Inner
 ```
 
-`marker trait` 是「永遠沒有內容」的分類契約，所以不能有 type parameter；
-`global trait` 也不能有 type parameter。`marker` 與 `global` 互斥，同一個 trait
+`marker trait` 是沒有內容的分類契約，現在可以帶型別參數，例如 `marker trait Bar<T>:`；
+具體類型會保留實參身分。巢狀宣告與傳遞見 [XP 範例](nested-types/README.md) 和 [I32](../docs/implementation/nested-types-and-specialization.md)。
+`global trait` 不能有 type parameter。`marker` 與 `global` 互斥，同一個 trait
 不能同時具有兩種旗標，違反時是 `TRAIT_GLOBAL_MARKER_CONFLICT`。
 
 `global trait` 是唯一會自動套用的模板，一份有效語言最多只能選一個。選擇是顯式的：
@@ -521,7 +522,13 @@ sign TutorialClause:
 
 ## 10. library、export 與 caller override
 
-`compile_system` 自動載入 enabled std；`compile_with_libraries` 明選一個 natural package與 embedded plugins。`std/cxg` 提供 form–meaning schema、slots 與 rules；Grambank 保存 `0/1/?` 類型觀察；`natural:en-standard` 提供具體 English signs 與 Paradigms。package 的 `exports.tsv` 以 `stable_id<TAB>trait|paradigm|sign<TAB>alias` 公開，rule ID 使用 `std:*`、`natural:*`、`plugin:*` namespace。effective language 依 dependency→std→natural→plugin→caller 疊加；`language()` 仍是 caller source，`effective_language()` 才供 runtime。
+`compile_system` 自動載入 enabled std；`compile_with_libraries` 明選一個 natural package 與 embedded plugins。v2 專案則先解析 `project.toml`，將同一份 `ResolvedPackages` 傳給 `compile_document_with_packages`。`std/cxg` 提供 form–meaning schema、slots 與 rules；Grambank 保存 `0/1/?` 類型觀察；`natural:en-standard` 提供具體 English signs 與 Paradigms。
+
+套件中的 trait、paradigm、sign 必須在宣告最前面加 `export`，外部才能直接引用或覆寫，例如 `export trait Noun:`。schema 2 的 `exports.tsv` 是選用的穩定 ID 表，不能替沒有 `export` 的定義開放權限。套件內部仍能使用自己的私有定義。
+
+以 [English 套件教學](package-exports/README.md)的最小套件為例，專案可在 `[packages.aliases]` 設定 `English = "natural:english"`，然後以 `English.Noun`、`English.cat()` 引用其公開定義。同名匯出無法唯一解析時，裸名會報錯。在本地宣告 `trait English.Noun:` 會整個替換此專案使用的公開定義，未寫出的舊內容不會自動保留；原套件檔案不會被修改。
+
+rule ID 繼續使用套件 namespace。`language()` 保存 caller source，`effective_language()` 則是供 runtime 使用、已解析作用域的完整語法，包含公開定義所需的私有實作。
 
 ## 11. Rust 任務流程
 

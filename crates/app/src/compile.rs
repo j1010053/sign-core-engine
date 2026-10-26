@@ -51,6 +51,7 @@ pub struct CompileKey {
     pub document: ContentDigest,
     pub identities: String,
     pub library_lock: String,
+    pub package_aliases: Option<String>,
     /// Complete resolver-visible export index. Unselected packages can still
     /// affect dependency diagnostics and the compiled ontology registry.
     pub available_exports: String,
@@ -73,6 +74,7 @@ impl CompileKey {
             identities: identity_manifest_digest(document)
                 .map_err(|error| CompileServiceError::Digest(error.to_string()))?,
             library_lock: library_lock_digest_with_packages(&packages),
+            package_aliases: packages.alias_digest(),
             available_exports: export_index_digest(packages.available_exports()),
             semantics: COMPILER_SEMANTICS_VERSION.to_owned(),
         })
@@ -93,6 +95,7 @@ impl CompileKey {
             identities: identity_manifest_digest(document)
                 .map_err(|error| CompileServiceError::Digest(error.to_string()))?,
             library_lock: packages.lock_digest(),
+            package_aliases: packages.alias_digest(),
             available_exports: export_index_digest(packages.available_exports()),
             semantics: COMPILER_SEMANTICS_VERSION.to_owned(),
         })

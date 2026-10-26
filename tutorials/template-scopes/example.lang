@@ -1,0 +1,58 @@
+/* Scoped declarations are shared by Signs and their templates. */
+Symbol a
+Symbol b
+Symbol u
+Class vowel {a, u}
+Class consonant {b}
+
+marker trait N:
+marker trait V:
+
+export trait Phrase<T>:
+    sign private-head:
+        syn:
+            slots:
+                head [T]
+        phon:
+            /{$slot.head}/
+
+    export sign head:
+        syn:
+            slots:
+                head [T]
+        sem:
+            roles:
+                head [T]
+                head = {$slot.head}
+        phon:
+            /{$slot.head}/
+
+sign NP:
+    belongs Phrase<N>
+    syn:
+        slots:
+            body [*]
+        map body autofill private-head(head: noun())
+    phon:
+        /{$slot.body}/
+
+sign Container:
+    sign inner:
+        phon:
+            /ba/
+    syn:
+        slots:
+            body [*]
+        map body autofill inner()
+    phon:
+        /{$slot.body}/
+
+sign noun:
+    belongs N
+    phon:
+        /a/
+
+sign verb:
+    belongs V
+    phon:
+        /u/

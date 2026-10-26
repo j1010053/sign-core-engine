@@ -1,7 +1,5 @@
 use conlang_language::construction::{FillerProvenance, SlotFiller, SlotMap};
-use conlang_language::{
-    compile_system, CaseBranchStatus, DerivationContext, Dim, Language, SignValue, SystemError,
-};
+use conlang_language::{compile_system, DerivationContext, Dim, Language, SignValue, SystemError};
 
 #[test]
 fn applied_residual_slot_keeps_its_name_when_passed_to_a_nested_application() {
@@ -281,7 +279,7 @@ sign FixedOff:
 }
 
 #[test]
-fn hard_occurrence_constraint_blocks_only_the_specific_case_branch() {
+fn matched_case_constraint_failure_is_fatal_instead_of_trying_base() {
     let language = Language::parse(
         r#"Symbol x
 Class vowel {x}
@@ -325,23 +323,16 @@ sign Current:
     )
     .unwrap();
     let system = compile_system(language).unwrap();
-    let derivation = system
+    let error = system
         .derive(
             "Current",
             &[SlotFiller::sign("value", "x")],
             &SlotMap::identity(),
         )
-        .unwrap();
-    assert_eq!(derivation.surface, "x");
-    assert_eq!(derivation.token.construction, "Current");
-    assert!(derivation.cases.iter().any(|record| {
-        record.status == CaseBranchStatus::MoreSpecificBlocked
-            && record.diagnostic_code == Some("CASE_MORE_SPECIFIC_BLOCKED")
-    }));
-    assert!(derivation
-        .cases
-        .iter()
-        .any(|record| record.status == CaseBranchStatus::Matched));
+        .unwrap_err();
+    assert!(matches!(error, SystemError::Construction(
+        conlang_language::construction::CxgError::SlotFeatureConflict { slot, feature, .. }
+    ) if slot == "target" && feature == "case"));
 }
 
 #[test]

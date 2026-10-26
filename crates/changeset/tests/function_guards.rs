@@ -67,6 +67,7 @@ fn base() -> LanguageDocument {
 fn synthetic(functions: &'static str, exported: &[&str]) -> LibraryPackage {
     let id = LibraryId::new(LibraryKind::Plugin, "guards");
     LibraryPackage {
+        aliases: Default::default(),
         name: id.name.clone(),
         rule_namespace: id.to_string(),
         version: "test".to_owned(),

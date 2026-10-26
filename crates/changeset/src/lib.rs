@@ -89,6 +89,7 @@ impl DetachedNode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::large_enum_variant)]
 pub enum NodeUpdate {
+    Exported(bool),
     Rename(String),
     TraitGlobal(bool),
     TraitMarker(bool),
@@ -698,6 +699,21 @@ fn insertion_site(
             (ListKey::Paradigms, language.paradigms.len(), None)
         }
         (NodeKind::Language, NodeKind::Sign) => (ListKey::Signs, language.signs.len(), None),
+        (NodeKind::Trait | NodeKind::Sign, NodeKind::Trait) => (
+            ListKey::Traits,
+            members_at(language, &parent.address)?.traits.len(),
+            None,
+        ),
+        (NodeKind::Trait | NodeKind::Sign, NodeKind::Sign) => (
+            ListKey::Signs,
+            members_at(language, &parent.address)?.signs.len(),
+            None,
+        ),
+        (NodeKind::Trait | NodeKind::Sign, NodeKind::Paradigm) => (
+            ListKey::Paradigms,
+            members_at(language, &parent.address)?.paradigms.len(),
+            None,
+        ),
         (NodeKind::Trait, NodeKind::Block) => {
             let trait_def = trait_at(language, &parent.address)?;
             (ListKey::Blocks, trait_def.blocks.len(), None)
@@ -773,7 +789,15 @@ fn insertion_site(
                 "canonical unordered collections accept only End".to_owned(),
             ));
         }
-        let index = canonical_unordered_index(language, key, subtree);
+        let index = canonical_unordered_index(
+            if matches!(parent.kind, NodeKind::Trait | NodeKind::Sign) {
+                members_at(language, &parent.address)?
+            } else {
+                language
+            },
+            key,
+            subtree,
+        );
         return Ok((key, index, parent.address.child(segment(key, index))));
     }
     let index = anchor_index(language, manifest, parent, key, length, group, anchor)?;
@@ -876,6 +900,23 @@ fn insert_payload(
     index: usize,
     subtree: DetachedNode,
 ) -> Result<(), EditError> {
+    if matches!(parent.kind, NodeKind::Trait | NodeKind::Sign)
+        && matches!(
+            subtree,
+            DetachedNode::Trait(_) | DetachedNode::Sign(_) | DetachedNode::Paradigm(_)
+        )
+    {
+        let mut local_parent = parent.clone();
+        local_parent.kind = NodeKind::Language;
+        local_parent.address = NodeAddress::root();
+        return insert_payload(
+            members_at_mut(language, &parent.address)?,
+            &local_parent,
+            index,
+            subtree,
+        );
+    }
+
     match subtree {
         DetachedNode::DslDeclaration(value) if parent.kind == NodeKind::Language => {
             language.dsl_decls.insert(index, value)
@@ -1013,9 +1054,22 @@ fn child_addresses(
     kind: NodeKind,
 ) -> Result<Vec<NodeAddress>, EditError> {
     let mut children = Vec::new();
+    if matches!(kind, NodeKind::Trait | NodeKind::Sign) {
+        let members = members_at(language, address)?;
+        for index in 0..members.traits.len() {
+            children.push(address.child(AddressSegment::Traits(index)));
+        }
+        for index in 0..members.signs.len() {
+            children.push(address.child(AddressSegment::Signs(index)));
+        }
+        for index in 0..members.paradigms.len() {
+            children.push(address.child(AddressSegment::Paradigms(index)));
+        }
+    }
     match kind {
         NodeKind::Trait => {
-            for index in 0..trait_at(language, address)?.blocks.len() {
+            let value = trait_at(language, address)?;
+            for index in 0..value.blocks.len() {
                 children.push(address.child(AddressSegment::Blocks(index)));
             }
         }
@@ -1104,6 +1158,13 @@ fn delete(source: LanguageDocument, node_ref: &NodeRef) -> Result<LanguageDocume
 }
 
 fn delete_payload(language: &mut Language, node: &NodeEntryV1) -> Result<(), EditError> {
+    let (language, local_address) = language
+        .scope_at_address_mut(&node.address.0)
+        .ok_or_else(|| EditError::FieldMismatch("invalid lexical scope".into()))?;
+    let mut local_node = node.clone();
+    local_node.address = NodeAddress(local_address.to_vec());
+    let node = &local_node;
+
     match node.address.0.as_slice() {
         [AddressSegment::DslDeclarations(index)] => {
             language.dsl_decls.remove(*index);
@@ -1305,7 +1366,35 @@ fn update_payload(
     node: &NodeEntryV1,
     change: NodeUpdate,
 ) -> Result<Option<String>, EditError> {
+    if let NodeUpdate::Rename(name) = &change {
+        language
+            .rename_declaration_references(&node.address, name)
+            .map_err(EditError::FieldMismatch)?;
+    }
+
+    let (language, local_address) = language
+        .scope_at_address_mut(&node.address.0)
+        .ok_or_else(|| EditError::FieldMismatch("invalid lexical scope".into()))?;
+    let mut local_node = node.clone();
+    local_node.address = NodeAddress(local_address.to_vec());
+    let node = &local_node;
+
     match (&node.kind, change) {
+        (NodeKind::Trait, NodeUpdate::Exported(value)) => {
+            trait_at_mut(language, &node.address)?.exported = value;
+            Ok(None)
+        }
+        (NodeKind::Sign, NodeUpdate::Exported(value)) => {
+            sign_at_mut(language, &node.address)?.exported = value;
+            Ok(None)
+        }
+        (NodeKind::Paradigm, NodeUpdate::Exported(value)) => {
+            let [AddressSegment::Paradigms(index)] = node.address.0.as_slice() else {
+                return Err(field_mismatch(node, "paradigm"));
+            };
+            language.paradigms[*index].exported = value;
+            Ok(None)
+        }
         (NodeKind::Sign, NodeUpdate::Rename(name)) => {
             let sign = sign_at_mut(language, &node.address)?;
             let old = std::mem::replace(&mut sign.name, name.clone());
@@ -1314,8 +1403,7 @@ fn update_payload(
         }
         (NodeKind::Trait, NodeUpdate::Rename(name)) => {
             let trait_def = trait_at_mut(language, &node.address)?;
-            let old = std::mem::replace(&mut trait_def.name, name.clone());
-            rewrite_trait_refs(language, &old, &name);
+            trait_def.name = name;
             Ok(None)
         }
         (NodeKind::Trait, NodeUpdate::TraitGlobal(value)) => {
@@ -1459,10 +1547,11 @@ fn update_payload(
             Ok(None)
         }
         (NodeKind::TraitUse, NodeUpdate::TraitUse { name, block }) => {
+            let (name, args) = parse_belongs_target(&name);
             *item_at_address_mut(language, &node.address)? = SignItem::TraitMount {
                 name,
                 kind: conlang_language::TraitMountKind::from_block(block),
-                args: vec![],
+                args,
             };
             Ok(Some("trait_use.name".to_owned()))
         }
@@ -1671,6 +1760,14 @@ fn reorder_named_container(
     manifest: &mut IdentityManifestV2,
     node: &NodeEntryV1,
 ) -> Result<(), EditError> {
+    let parent_address = node.address.parent().unwrap_or_default();
+    let (language, local_address) = language
+        .scope_at_address_mut(&node.address.0)
+        .ok_or_else(|| EditError::FieldMismatch("invalid lexical scope".into()))?;
+    let mut local_node = node.clone();
+    local_node.address = NodeAddress(local_address.to_vec());
+    let node = &local_node;
+
     let (key, old_index, new_index) = match node.address.0.as_slice() {
         [AddressSegment::Distribution(index)] => {
             let value = language.distribution.remove(*index);
@@ -1718,7 +1815,7 @@ fn reorder_named_container(
     if old_index == new_index {
         return Ok(());
     }
-    move_manifest_prefix(manifest, &NodeAddress::root(), key, old_index, new_index);
+    move_manifest_prefix(manifest, &parent_address, key, old_index, new_index);
     Ok(())
 }
 
@@ -1829,6 +1926,13 @@ fn move_node(
 }
 
 fn detached_at(language: &Language, node: &NodeEntryV1) -> Result<DetachedNode, EditError> {
+    let (language, local_address) = language
+        .scope_at_address(&node.address.0)
+        .ok_or_else(|| EditError::FieldMismatch("invalid lexical scope".into()))?;
+    let mut local_node = node.clone();
+    local_node.address = NodeAddress(local_address.to_vec());
+    let node = &local_node;
+
     match node.address.0.as_slice() {
         [AddressSegment::DslDeclarations(index)] => Ok(DetachedNode::DslDeclaration(
             language.dsl_decls[*index].clone(),
@@ -1919,6 +2023,23 @@ fn insert_payload_preserving_runtime(
     index: usize,
     subtree: DetachedNode,
 ) -> Result<(), EditError> {
+    if matches!(parent.kind, NodeKind::Trait | NodeKind::Sign)
+        && matches!(
+            subtree,
+            DetachedNode::Trait(_) | DetachedNode::Sign(_) | DetachedNode::Paradigm(_)
+        )
+    {
+        let mut local_parent = parent.clone();
+        local_parent.kind = NodeKind::Language;
+        local_parent.address = NodeAddress::root();
+        return insert_payload_preserving_runtime(
+            members_at_mut(language, &parent.address)?,
+            &local_parent,
+            index,
+            subtree,
+        );
+    }
+
     match subtree {
         DetachedNode::Sign(value) if parent.kind == NodeKind::Language => {
             language.signs.insert(index, value);
@@ -2169,6 +2290,8 @@ pub struct UnresolvedChangeSet {
     pub base_source: String,
     pub base_identities: String,
     pub libraries: Vec<LibraryLock>,
+    /// Locked project qualifier bindings; absent for the default empty map.
+    pub package_aliases: Option<String>,
     /// **本 changeset 讀得到哪些別的語言**(P62 `ContactInjection` 的宣告面)。
     pub donors: Vec<DonorRef>,
     pub statements: Vec<UnresolvedStatement>,
@@ -2286,6 +2409,8 @@ pub struct ResolvedChangeSet {
     pub base_source: String,
     pub base_identities: String,
     pub libraries: Vec<LibraryLock>,
+    /// Locked project qualifier bindings; absent for the default empty map.
+    pub package_aliases: Option<String>,
     /// 承 `UnresolvedChangeSet`:donor 是 prelude 的**外部依賴宣告**(與 library lock
     /// 同類),不是操作,故不影響步驟 14「`ResolvedChangeSet` 只含四原語」的封板契約。
     pub donors: Vec<DonorRef>,
@@ -2792,6 +2917,7 @@ impl UnresolvedChangeSet {
         let mut base_source = None;
         let mut base_identities = None;
         let mut libraries = Vec::new();
+        let mut package_aliases = None;
         let mut donors: Vec<DonorRef> = Vec::new();
         let mut statements = Vec::new();
         let mut index = 1;
@@ -2808,6 +2934,15 @@ impl UnresolvedChangeSet {
                 base_source = Some(strip_digest(value));
             } else if let Some(value) = line.strip_prefix("base_identities = ") {
                 base_identities = Some(strip_digest(value));
+            } else if let Some(value) = line.strip_prefix("package_aliases = ") {
+                if package_aliases.is_some() {
+                    return Err(ReplayError::Parse("duplicate package_aliases lock".into()));
+                }
+                let digest = strip_digest(value);
+                if digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err(ReplayError::Parse("invalid package_aliases digest".into()));
+                }
+                package_aliases = Some(digest);
             } else if let Some(value) = line.strip_prefix("library ") {
                 let (package_version, digest) = value
                     .split_once(' ')
@@ -2906,6 +3041,7 @@ impl UnresolvedChangeSet {
             base_identities: base_identities
                 .ok_or_else(|| ReplayError::Parse("missing base_identities".to_owned()))?,
             libraries,
+            package_aliases,
             donors,
             statements,
         })
@@ -3017,6 +3153,7 @@ impl UnresolvedChangeSet {
             &self.base_source,
             &self.base_identities,
             &self.libraries,
+            self.package_aliases.as_deref(),
         )?;
         // 別名 → 內容。宣告(別名 → node-id)在 prelude,內容(node-id → 文件)由參數
         // 注入;這裡把兩張表接起來,展開層就只認別名。
@@ -3027,7 +3164,7 @@ impl UnresolvedChangeSet {
                 .expect("donor content is verified above");
             scope.insert(donor.alias.as_str(), document);
         }
-        let functions = function::load_functions_from_resolved(packages)?;
+        let functions = crate::function::load_functions_from_resolved(packages)?;
         let mut working = base.fork(self.namespace.clone())?;
         let mut resolved = Vec::new();
         let mut calls = Vec::new();
@@ -3047,7 +3184,7 @@ impl UnresolvedChangeSet {
                     {
                         if functions.contains(name) {
                             if block.is_some() {
-                                return Err(function::FunctionError::UnexpectedBlock {
+                                return Err(crate::function::FunctionError::UnexpectedBlock {
                                     name: name.clone(),
                                 }
                                 .into());
@@ -3059,28 +3196,30 @@ impl UnresolvedChangeSet {
                             // 就會叫人去解一個「換什麼 base 都解不掉」的衝突。
                             if matches!(
                                 functions.get(name).map(|definition| &definition.body),
-                                Ok(function::FunctionBody::Choose(_))
+                                Ok(crate::function::FunctionBody::Choose(_))
                             ) {
-                                return Err(function::FunctionError::CandidatesRequireSelection {
-                                    function: name.clone(),
-                                }
-                                .into());
+                                return Err(
+                                    crate::function::FunctionError::CandidatesRequireSelection {
+                                        function: name.clone(),
+                                    }
+                                    .into(),
+                                );
                             }
-                            let invocation = function::FunctionCall {
+                            let invocation = crate::function::FunctionCall {
                                 name: name.clone(),
                                 positional: positional.clone(),
                                 named: named.clone(),
                             };
-                            return match function::evaluate_function_with_packages(
+                            return match crate::function::evaluate_function_with_packages(
                                 &functions,
                                 &invocation,
                                 &working,
                                 packages,
                             )? {
-                                function::FunctionEvaluation::Executed(execution) => {
+                                crate::function::FunctionEvaluation::Executed(execution) => {
                                     Ok((execution.edits, execution.trace))
                                 }
-                                function::FunctionEvaluation::Candidates(_) => {
+                                crate::function::FunctionEvaluation::Candidates(_) => {
                                     unreachable!("`choose:` 已在上面攔下")
                                 }
                             };
@@ -3130,6 +3269,7 @@ impl UnresolvedChangeSet {
             base_source: self.base_source.clone(),
             base_identities: self.base_identities.clone(),
             libraries: self.libraries.clone(),
+            package_aliases: self.package_aliases.clone(),
             donors: self.donors.clone(),
             statements: resolved,
             calls,
@@ -3445,6 +3585,9 @@ fn resolve_anchor(
 
 fn update_for(reference: &NodeRef, field: &str, value: &str) -> Result<NodeUpdate, ReplayError> {
     match (reference.expected, field) {
+        (NodeKind::Sign | NodeKind::Trait | NodeKind::Paradigm, "exported") => {
+            Ok(NodeUpdate::Exported(parse_bool(value)?))
+        }
         (NodeKind::Sign | NodeKind::Trait | NodeKind::Paradigm, "name") => {
             Ok(NodeUpdate::Rename(value.to_owned()))
         }
@@ -3640,7 +3783,11 @@ fn parse_insert_block(block: &str) -> Result<Vec<DetachedNode>, ReplayError> {
             .map(DetachedNode::DslDeclaration)
             .collect());
     }
-    if head.starts_with("trait ") || head.starts_with("global trait ") {
+    let head = head.strip_prefix("export ").unwrap_or(head);
+    if head.starts_with("trait ")
+        || head.starts_with("global trait ")
+        || head.starts_with("marker trait ")
+    {
         let language = parse_lang(block)?;
         if language.traits.len() != 1
             || !language.paradigms.is_empty()
@@ -3827,25 +3974,30 @@ fn render_phon_root_block(block: &PhonBlock) -> Option<String> {
     }
     let mut fragment = Language::new();
     fragment.traits.push(TraitDef {
+        exported: false,
         name: FRAGMENT_PHON_TRAIT.to_owned(),
         global: true,
         marker: false,
         type_params: vec![],
-        blocks: vec![Block {
-            items: vec![SignItem::Rule(Rule {
-                id: conlang_language::RuleId::local(0),
-                name: Some(FRAGMENT_PHON_RULE.to_owned()),
-                phon_block: Some(block.clone()),
-                propagate: false,
-                body: String::new(),
-                stage: Stage::Word,
-                dim: Dim::Phon,
-                else_chain: Vec::new(),
-                then_chain: Vec::new(),
-                source: conlang_language::SourceLocation::unknown(),
-                branch_sources: Vec::new(),
-            })],
-        }],
+        body: (
+            vec![Block {
+                items: vec![SignItem::Rule(Rule {
+                    id: conlang_language::RuleId::local(0),
+                    name: Some(FRAGMENT_PHON_RULE.to_owned()),
+                    phon_block: Some(block.clone()),
+                    propagate: false,
+                    body: String::new(),
+                    stage: Stage::Word,
+                    dim: Dim::Phon,
+                    else_chain: Vec::new(),
+                    then_chain: Vec::new(),
+                    source: conlang_language::SourceLocation::unknown(),
+                    branch_sources: Vec::new(),
+                })],
+            }],
+            conlang_language::Language::new(),
+        )
+            .into(),
     });
     Some(
         fragment
@@ -3874,9 +4026,10 @@ fn render_phon_element_block(block: &PhonBlock) -> Option<String> {
 fn render_item_block(item: &SignItem) -> String {
     let mut fragment = Language::new();
     fragment.signs.push(SignDef {
+        exported: false,
         id: conlang_language::SignId::synthetic(),
         name: FRAGMENT_SIGN.to_owned(),
-        items: vec![item.clone()],
+        body: (vec![item.clone()]).into(),
     });
     let dumped = fragment.dump();
     dumped
@@ -3971,12 +4124,14 @@ fn render_case_branch_block(branch: &CaseBranch) -> String {
     };
     let mut fragment = Language::new();
     fragment.signs.push(SignDef {
+        exported: false,
         id: conlang_language::SignId::synthetic(),
         name: FRAGMENT_SIGN.to_owned(),
-        items: vec![SignItem::SignExpression(conlang_language::SignExpression {
+        body: (vec![SignItem::SignExpression(conlang_language::SignExpression {
             expression: Expression::Case(Box::new(case)),
             source: conlang_language::SourceLocation::unknown(),
-        })],
+        })])
+        .into(),
     });
     fragment
         .dump()
@@ -4203,6 +4358,7 @@ fn dump_value(value: &str) -> String {
 /// `NodeUpdate` 的變體名,只給 [`DumpError`] 報訊息用。
 fn update_kind_name(change: &NodeUpdate) -> &'static str {
     match change {
+        NodeUpdate::Exported(_) => "Exported",
         NodeUpdate::Rename(_) => "Rename",
         NodeUpdate::TraitGlobal(_) => "TraitGlobal",
         NodeUpdate::TraitMarker(_) => "TraitMarker",
@@ -4246,6 +4402,7 @@ fn update_kind_name(change: &NodeUpdate) -> &'static str {
 
 fn dump_update(change: &NodeUpdate) -> Option<(&'static str, String)> {
     match change {
+        NodeUpdate::Exported(value) => Some(("exported", value.to_string())),
         NodeUpdate::Rename(value) => Some(("name", value.clone())),
         NodeUpdate::DefinitionPath(value) => Some(("path", value.clone())),
         NodeUpdate::DefinitionValue(value) => Some(("value", value.clone())),
@@ -4337,6 +4494,9 @@ impl ResolvedChangeSet {
                 "    library {}@{} sha256:{}\n",
                 lock.package, lock.version, lock.digest
             ));
+        }
+        if let Some(digest) = &self.package_aliases {
+            output.push_str(&format!("    package_aliases = sha256:{digest}\n"));
         }
         for donor in &self.donors {
             output.push_str(&format!("    donor {} {}\n", donor.alias, donor.node));
@@ -4661,7 +4821,12 @@ pub fn change_set_prelude_with_packages(
     packages: &ResolvedPackages,
     namespace: &str,
 ) -> Result<String, ReplayError> {
-    change_set_prelude_with_locks(document, namespace, &package_locks_from_resolved(packages))
+    let mut source =
+        change_set_prelude_with_locks(document, namespace, &package_locks_from_resolved(packages))?;
+    if let Some(digest) = packages.alias_digest() {
+        source.push_str(&format!("    package_aliases = sha256:{digest}\n"));
+    }
+    Ok(source)
 }
 
 fn change_set_prelude_with_locks(
@@ -4689,13 +4854,21 @@ fn verify_base_and_locks(
     source_digest: &str,
     identity_digest: &str,
     locks: &[LibraryLock],
+    aliases: Option<&str>,
 ) -> Result<(), ReplayError> {
     let catalog = conlang_language::library::embedded_catalog()
         .map_err(|error| ReplayError::Library(error.to_string()))?;
     let packages = catalog
         .resolve_legacy(spec)
         .map_err(|error| ReplayError::Library(error.to_string()))?;
-    verify_base_and_locks_with_packages(base, &packages, source_digest, identity_digest, locks)
+    verify_base_and_locks_with_packages(
+        base,
+        &packages,
+        source_digest,
+        identity_digest,
+        locks,
+        aliases,
+    )
 }
 
 fn verify_base_and_locks_with_packages(
@@ -4704,12 +4877,18 @@ fn verify_base_and_locks_with_packages(
     source_digest: &str,
     identity_digest: &str,
     locks: &[LibraryLock],
+    aliases: Option<&str>,
 ) -> Result<(), ReplayError> {
     if base.identities().source_sha256 != source_digest {
         return Err(ReplayError::BaseSourceMismatch);
     }
     if identity_manifest_digest(base)? != identity_digest {
         return Err(ReplayError::BaseIdentitiesMismatch);
+    }
+    if packages.alias_digest().as_deref() != aliases {
+        return Err(ReplayError::LibraryLockMismatch(
+            "package alias bindings differ".into(),
+        ));
     }
     let actual = package_locks_from_resolved(packages);
     if actual != locks {
@@ -4872,12 +5051,15 @@ impl ChangePackageRuntime {
         source: &str,
         identities: &str,
         locks: &[LibraryLock],
+        aliases: Option<&str>,
     ) -> Result<(), ReplayError> {
         match self {
-            Self::Legacy(spec) => verify_base_and_locks(base, spec, source, identities, locks),
-            Self::Resolved(packages) => {
-                verify_base_and_locks_with_packages(base, packages, source, identities, locks)
+            Self::Legacy(spec) => {
+                verify_base_and_locks(base, spec, source, identities, locks, aliases)
             }
+            Self::Resolved(packages) => verify_base_and_locks_with_packages(
+                base, packages, source, identities, locks, aliases,
+            ),
         }
     }
 
@@ -4950,6 +5132,7 @@ impl ChangeInterpreter {
             &changeset.base_source,
             &changeset.base_identities,
             &changeset.libraries,
+            changeset.package_aliases.as_deref(),
         )?;
         let mut document = self.base.fork(self.namespace.clone())?;
         let before = document.clone();
@@ -5109,6 +5292,9 @@ fn item_group(item: &SignItem) -> u16 {
 }
 
 fn kind_at(language: &Language, address: &NodeAddress) -> Option<NodeKind> {
+    let (language, local_address) = language.scope_at_address(&address.0)?;
+    let address = &NodeAddress(local_address.to_vec());
+
     if let Some(item) = item_at_address(language, address) {
         return Some(item_kind(item));
     }
@@ -5208,6 +5394,9 @@ fn case_at<'a>(
     language: &'a Language,
     address: &NodeAddress,
 ) -> Option<&'a conlang_language::TypedCase> {
+    let (language, local_address) = language.scope_at_address(&address.0)?;
+    let address = &NodeAddress(local_address.to_vec());
+
     if let [AddressSegment::Paradigms(index), AddressSegment::CaseExpression, tail @ ..] =
         address.0.as_slice()
     {
@@ -5223,6 +5412,11 @@ fn case_at_mut<'a>(
     language: &'a mut Language,
     address: &NodeAddress,
 ) -> Result<&'a mut TypedCase, EditError> {
+    let (language, local_address) = language
+        .scope_at_address_mut(&address.0)
+        .ok_or_else(|| EditError::FieldMismatch("invalid lexical scope".into()))?;
+    let address = &NodeAddress(local_address.to_vec());
+
     if let [AddressSegment::Paradigms(index), AddressSegment::CaseExpression, tail @ ..] =
         address.0.as_slice()
     {
@@ -5278,6 +5472,11 @@ fn application_at<'a>(
     language: &'a Language,
     address: &NodeAddress,
 ) -> Result<&'a SignApplication, EditError> {
+    let (language, local_address) = language
+        .scope_at_address(&address.0)
+        .ok_or_else(|| EditError::FieldMismatch("invalid lexical scope".into()))?;
+    let address = &NodeAddress(local_address.to_vec());
+
     if let [AddressSegment::Paradigms(index), AddressSegment::CaseExpression, tail @ ..] =
         address.0.as_slice()
     {
@@ -5307,6 +5506,11 @@ fn application_at_mut<'a>(
     language: &'a mut Language,
     address: &NodeAddress,
 ) -> Result<&'a mut SignApplication, EditError> {
+    let (language, local_address) = language
+        .scope_at_address_mut(&address.0)
+        .ok_or_else(|| EditError::FieldMismatch("invalid lexical scope".into()))?;
+    let address = &NodeAddress(local_address.to_vec());
+
     if let [AddressSegment::Paradigms(index), AddressSegment::CaseExpression, tail @ ..] =
         address.0.as_slice()
     {
@@ -5571,17 +5775,17 @@ fn expression_node_kind(expression: &Expression) -> Option<NodeKind> {
 }
 
 fn parse_belongs_target(value: &str) -> (String, Vec<String>) {
-    if let Some(open) = value.find('<') {
-        let name = value[..open].to_owned();
-        if let Some(inside) = value[open + 1..].strip_suffix('>') {
-            let args = inside.split(',').map(|s| s.trim().to_owned()).collect();
-            return (name, args);
-        }
-    }
-    (value.to_owned(), vec![])
+    conlang_language::type_ref::TypeRef::parse(value)
+        .map(|value| value.split_mount())
+        .unwrap_or_else(|_| (value.to_owned(), vec![]))
 }
 
 fn trait_at<'a>(language: &'a Language, address: &NodeAddress) -> Result<&'a TraitDef, EditError> {
+    let (language, local_address) = language
+        .scope_at_address(&address.0)
+        .ok_or_else(|| EditError::FieldMismatch("invalid lexical scope".into()))?;
+    let address = &NodeAddress(local_address.to_vec());
+
     let [AddressSegment::Traits(index)] = address.0.as_slice() else {
         return Err(EditError::FieldMismatch(
             "expected trait address".to_owned(),
@@ -5597,6 +5801,11 @@ fn trait_at_mut<'a>(
     language: &'a mut Language,
     address: &NodeAddress,
 ) -> Result<&'a mut TraitDef, EditError> {
+    let (language, local_address) = language
+        .scope_at_address_mut(&address.0)
+        .ok_or_else(|| EditError::FieldMismatch("invalid lexical scope".into()))?;
+    let address = &NodeAddress(local_address.to_vec());
+
     let [AddressSegment::Traits(index)] = address.0.as_slice() else {
         return Err(EditError::FieldMismatch(
             "expected trait address".to_owned(),
@@ -5612,6 +5821,11 @@ fn sign_at_mut<'a>(
     language: &'a mut Language,
     address: &NodeAddress,
 ) -> Result<&'a mut SignDef, EditError> {
+    let (language, local_address) = language
+        .scope_at_address_mut(&address.0)
+        .ok_or_else(|| EditError::FieldMismatch("invalid lexical scope".into()))?;
+    let address = &NodeAddress(local_address.to_vec());
+
     let [AddressSegment::Signs(index)] = address.0.as_slice() else {
         return Err(EditError::FieldMismatch("expected sign address".to_owned()));
     };
@@ -5625,6 +5839,13 @@ fn items_at<'a>(
     language: &'a Language,
     parent: &NodeEntryV1,
 ) -> Result<&'a Vec<SignItem>, EditError> {
+    let (language, local_address) = language
+        .scope_at_address(&parent.address.0)
+        .ok_or_else(|| EditError::FieldMismatch("invalid lexical scope".into()))?;
+    let mut local_parent = parent.clone();
+    local_parent.address = NodeAddress(local_address.to_vec());
+    let parent = &local_parent;
+
     match parent.address.0.as_slice() {
         [AddressSegment::Signs(index)] => Ok(&language.signs[*index].items),
         [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block)] => {
@@ -5652,6 +5873,13 @@ fn items_at_mut<'a>(
     language: &'a mut Language,
     parent: &NodeEntryV1,
 ) -> Result<&'a mut Vec<SignItem>, EditError> {
+    let (language, local_address) = language
+        .scope_at_address_mut(&parent.address.0)
+        .ok_or_else(|| EditError::FieldMismatch("invalid lexical scope".into()))?;
+    let mut local_parent = parent.clone();
+    local_parent.address = NodeAddress(local_address.to_vec());
+    let parent = &local_parent;
+
     match parent.address.0.as_slice() {
         [AddressSegment::Signs(index)] => Ok(&mut language.signs[*index].items),
         [AddressSegment::Traits(trait_index), AddressSegment::Blocks(block)] => {
@@ -5676,6 +5904,9 @@ fn items_at_mut<'a>(
 }
 
 fn item_at_address<'a>(language: &'a Language, address: &NodeAddress) -> Option<&'a SignItem> {
+    let (language, local_address) = language.scope_at_address(&address.0)?;
+    let address = &NodeAddress(local_address.to_vec());
+
     fn expression_item_at<'a>(
         expression: &'a Expression,
         path: &[AddressSegment],
@@ -5772,6 +6003,9 @@ fn item_at_address_mut_option<'a>(
     language: &'a mut Language,
     address: &NodeAddress,
 ) -> Option<&'a mut SignItem> {
+    let (language, local_address) = language.scope_at_address_mut(&address.0)?;
+    let address = &NodeAddress(local_address.to_vec());
+
     fn expression_item_at_mut<'a>(
         expression: &'a mut Expression,
         path: &[AddressSegment],
@@ -6192,13 +6426,15 @@ fn slot_rename_scope(
             let (registry, _) = conlang_language::ontology::OntologyRegistry::build(&[language]);
             for (index, trait_def) in language.traits.iter().enumerate() {
                 let probe = SignDef {
+                    exported: false,
                     id: conlang_language::SignId::synthetic(),
                     name: "__slot_rename_probe".to_owned(),
-                    items: vec![SignItem::TraitMount {
+                    body: (vec![SignItem::TraitMount {
                         name: trait_def.name.clone(),
                         kind: conlang_language::TraitMountKind::Declaration,
                         args: vec![],
-                    }],
+                    }])
+                    .into(),
                 };
                 let inherited_owner = registry
                     .inheritance_order(&probe)
@@ -6566,138 +6802,6 @@ fn rewrite_sign_refs_in_case(case: &mut TypedCase, old: &str, new: &str) {
     }
 }
 
-fn rewrite_trait_refs(language: &mut Language, old: &str, new: &str) {
-    for sign in &mut language.signs {
-        rewrite_trait_refs_in_items(&mut sign.items, old, new);
-    }
-    for trait_def in &mut language.traits {
-        for block in &mut trait_def.blocks {
-            rewrite_trait_refs_in_items(&mut block.items, old, new);
-        }
-    }
-}
-
-fn rewrite_trait_refs_in_items(items: &mut [SignItem], old: &str, new: &str) {
-    for item in items {
-        match item {
-            SignItem::TraitMount {
-                name,
-                kind:
-                    conlang_language::TraitMountKind::Whole | conlang_language::TraitMountKind::Block(_),
-                ..
-            }
-            | SignItem::TraitMount {
-                name,
-                kind: conlang_language::TraitMountKind::Declaration,
-                ..
-            } if name == old => *name = new.to_owned(),
-            SignItem::Slot(slot) => {
-                if let SlotConstraint::Category(name) = &mut slot.constraint {
-                    if name == old {
-                        *name = new.to_owned();
-                    }
-                }
-            }
-            SignItem::RoleDecl(role) => {
-                if let SlotConstraint::Category(name) = &mut role.constraint {
-                    if name == old {
-                        *name = new.to_owned();
-                    }
-                }
-            }
-            SignItem::SignExpression(expression) => {
-                rewrite_trait_refs_in_expression(&mut expression.expression, old, new)
-            }
-            SignItem::FeatureExpression(expression) => {
-                rewrite_trait_refs_in_expression(&mut expression.expression, old, new)
-            }
-            SignItem::RoleExpression(expression) => {
-                rewrite_trait_refs_in_expression(&mut expression.expression, old, new)
-            }
-            SignItem::Realization(realization) => {
-                let case = &mut realization.expression;
-                rewrite_trait_refs_in_case(case, old, new);
-            }
-            _ => {}
-        }
-    }
-}
-
-fn rewrite_trait_refs_in_expression(expression: &mut Expression, old: &str, new: &str) {
-    match expression {
-        Expression::Projection { value, .. } => rewrite_trait_refs_in_expression(value, old, new),
-        Expression::Case(case) => rewrite_trait_refs_in_case(case, old, new),
-        _ => {}
-    }
-}
-
-fn rewrite_trait_refs_in_case(case: &mut TypedCase, old: &str, new: &str) {
-    let compares_phon_category = case
-        .scrutinee
-        .as_deref()
-        .and_then(|value| value.split_once('.'))
-        .is_some_and(|(_, projection)| projection == "phon");
-    for branch in &mut case.branches {
-        match &mut branch.condition {
-            conlang_language::CaseCondition::Guard(guard) => {
-                *guard = rewrite_bracketed_category(guard, old, new);
-            }
-            conlang_language::CaseCondition::Equals(category)
-                if compares_phon_category && category == old =>
-            {
-                *category = new.to_owned();
-            }
-            conlang_language::CaseCondition::Equals(_)
-            | conlang_language::CaseCondition::Bundle(_)
-            | conlang_language::CaseCondition::Base
-            | conlang_language::CaseCondition::Else => {}
-        }
-        for belongs in &mut branch.belongs {
-            if belongs == old {
-                *belongs = new.to_owned();
-            }
-        }
-        rewrite_trait_refs_in_expression(&mut branch.result, old, new);
-    }
-}
-
-fn rewrite_bracketed_category(source: &str, old: &str, new: &str) -> String {
-    source
-        .split("&&")
-        .map(str::trim)
-        .map(|conjunct| {
-            let category = conjunct
-                .strip_prefix('[')
-                .and_then(|value| value.strip_suffix(']'))
-                .or_else(|| {
-                    let (field, value) = conjunct.split_once("==")?;
-                    let field = field.trim();
-                    let category_valued = field == "$self"
-                        || field
-                            .strip_prefix("$slot.")
-                            .is_some_and(|slot| !slot.contains('.'));
-                    category_valued.then(|| value.trim()).and_then(|value| {
-                        value
-                            .strip_prefix('[')
-                            .and_then(|value| value.strip_suffix(']'))
-                    })
-                })
-                .map(str::trim);
-            if category == Some(old) {
-                match (conjunct.find('['), conjunct.rfind(']')) {
-                    (Some(open), Some(close)) if open < close => {
-                        format!("{}[{new}]{}", &conjunct[..open], &conjunct[close + 1..])
-                    }
-                    _ => conjunct.to_owned(),
-                }
-            } else {
-                conjunct.to_owned()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" && ")
-}
-
 fn snapshots(document: &LanguageDocument) -> BTreeMap<NodeId, NodeSnapshot> {
     document
         .identities()
@@ -6734,6 +6838,13 @@ fn snapshot_by_id(document: &LanguageDocument, id: &NodeId) -> Option<NodeSnapsh
 }
 
 fn debug_value(language: &Language, entry: &NodeEntryV1) -> String {
+    let Some((language, address)) = language.scope_at_address(&entry.address.0) else {
+        return "<invalid scope>".into();
+    };
+    let mut local_entry = entry.clone();
+    local_entry.address = NodeAddress(address.to_vec());
+    let entry = &local_entry;
+
     match entry.address.0.as_slice() {
         [] => "Language".to_owned(),
         [AddressSegment::DslDeclarations(index)] => format!("{:?}", language.dsl_decls[*index]),
@@ -6900,4 +7011,34 @@ mod tests {
     fn canonical_anchor_variants_are_distinct() {
         assert_ne!(Anchor::Start, Anchor::End);
     }
+}
+
+pub(crate) fn members_at<'a>(
+    language: &'a Language,
+    address: &NodeAddress,
+) -> Result<&'a Language, EditError> {
+    let (scope, tail) = language
+        .scope_at_address(&address.0)
+        .ok_or_else(|| EditError::FieldMismatch("invalid lexical scope".into()))?;
+    let [owner] = tail else {
+        return Err(EditError::FieldMismatch("expected scope owner".into()));
+    };
+    scope
+        .members_at(owner)
+        .ok_or_else(|| EditError::FieldMismatch("expected Sign or trait scope".into()))
+}
+
+pub(crate) fn members_at_mut<'a>(
+    language: &'a mut Language,
+    address: &NodeAddress,
+) -> Result<&'a mut Language, EditError> {
+    let (scope, tail) = language
+        .scope_at_address_mut(&address.0)
+        .ok_or_else(|| EditError::FieldMismatch("invalid lexical scope".into()))?;
+    let [owner] = tail else {
+        return Err(EditError::FieldMismatch("expected scope owner".into()));
+    };
+    scope
+        .members_at_mut(owner)
+        .ok_or_else(|| EditError::FieldMismatch("expected Sign or trait scope".into()))
 }

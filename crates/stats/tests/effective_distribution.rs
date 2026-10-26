@@ -97,7 +97,7 @@ fn prior_package(name: &str, rows: &str) -> PackageSources {
         ),
         exports: format!("stable_id\tkind\talias\nplugin:{name}:Marker\ttrait\t{name}Marker\n"),
         tables: "path\ttype\ndata/phoible-subset.tsv\tengine:SegmentPrior\n".to_owned(),
-        code: format!("trait {name}Marker:\n"),
+        code: format!("export trait {name}Marker:\n"),
         data: rows.to_owned(),
         data_files: vec![PackageFile {
             path: "data/phoible-subset.tsv".to_owned(),

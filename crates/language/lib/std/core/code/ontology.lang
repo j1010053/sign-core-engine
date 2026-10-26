@@ -3,89 +3,89 @@
    be overridden locally.  Keep executable declarations in code/, lookup
    metadata in data/, and package policy in config/ (architecture repair 6). */
 
-marker trait Semantic:
-trait SemanticFrame:
+export marker trait Semantic:
+export trait SemanticFrame:
     belongs Semantic
-trait EventFrame:
+export trait EventFrame:
     belongs SemanticFrame
-trait Entity:
+export trait Entity:
     belongs Semantic
-trait Relation:
+export trait Relation:
     belongs Semantic
 
 /* P75:`number` 帶 `?` —— agreement number 依定義是**由脈絡供給**的
    (DerivationContext 注入,或外層構式經 slot_features 設定),詞條自己不一定有。
    `person` 不標:實測沒有任何讀取路徑會在它缺席時觸發,不無憑據放寬。 */
-trait AgreementBearer:
+export trait AgreementBearer:
     syn:
         feature:
             number = enum(singular, plural)?
             person = enum(first, second, third)
 
-marker trait Predicate:
-trait Copula:
+export marker trait Predicate:
+export trait Copula:
     belongs Predicate
-trait Verb:
+export trait Verb:
     belongs Predicate
     belongs Event
-trait Intransitive:
+export trait Intransitive:
     belongs Verb
-trait Transitive:
+export trait Transitive:
     belongs Verb
-trait Ditransitive:
+export trait Ditransitive:
     belongs Transitive
 
 /* 語法化階梯(P14 Life Cycle 軸)的兩級。`reanalyze{target: category}` 搬動的是
    `belongs`,故階梯上的每一級都必須是本體樹裡真存在的範疇——否則「重新分析成
    助動詞」寫不出目標。Aux 仍是謂語性的;Bound 已是附著形式,不再獨立作謂語,
    故不 belongs Predicate。 */
-trait Aux:
+export trait Aux:
     belongs Predicate
-marker trait Bound:
+export marker trait Bound:
 
 /* 名詞性 → 語意實體。P71-S:這類推論是**語言學分析**,故住套件而非引擎;
    換一個 std 就換一套推論(此前硬寫在 `sem.rs` 的 bridge)。 */
-trait Nominal:
+export trait Nominal:
     belongs AgreementBearer
     AgreementBearer[0]
     belongs Entity
-trait Noun:
+export trait Noun:
     belongs Nominal
-trait Pronoun:
+export trait Pronoun:
     belongs Nominal
-marker trait Adposition:
-trait Locative:
+export marker trait Adposition:
+export trait Locative:
     belongs Adposition
 
-trait Physical:
+export trait Physical:
     belongs Entity
-trait Animate:
+export trait Animate:
     belongs Physical
-trait Human:
+export trait Human:
     belongs Animate
-trait Event:
+export trait Event:
     belongs EventFrame
-trait Motion:
+export trait Motion:
     belongs Event
-trait TransferFrame:
+export trait TransferFrame:
     belongs EventFrame
     sem:
         roles:
             agent [Animate]
             theme [Entity]
             recipient [Animate]?
-trait Transfer:
+export trait Transfer:
     belongs TransferFrame
     TransferFrame[0]
 
-marker trait Pragmatic:
-trait Illocution:
+export marker trait Pragmatic:
+export trait Illocution:
     belongs Pragmatic
-trait SocialDeixis:
+export trait SocialDeixis:
     belongs Pragmatic
-trait InfoStructure:
+export trait InfoStructure:
     belongs Pragmatic
-trait Stance:
+export trait Stance:
     belongs Pragmatic
-trait Deixis:
+export trait Deixis:
     belongs Pragmatic

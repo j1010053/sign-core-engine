@@ -13,3 +13,6 @@
 - AB模組需求分配_v0.2.md：模組邊界與需求分配。
 - 架構修補彙整_01-04_v1.0.md、架構修補彙整_05-11_v1.0.md：P 系列權威彙整。
 - 架構修補01…11：各次修補的詳細設計與落地脈絡。
+
+- [case 共用求值與 Paradigm 分類選擇（共用求值已納入 I34，其餘仍為提案）](case-evaluation-unification-proposal.md)
+- [統一使用 base 分支控制零命中行為（提案，未實作）](base-branch-control-proposal.md)

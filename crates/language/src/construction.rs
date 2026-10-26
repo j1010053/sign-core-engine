@@ -14,7 +14,7 @@
 use crate::ontology::OntologyRegistry;
 use crate::reference;
 use crate::sem::{self, SemNode};
-use crate::synchronic::{self, Patch, RuleRecord, RuleStatus};
+use crate::synchronic::{self, Patch, RuleRecord};
 pub use crate::SlotMapOp;
 use crate::{
     CaseCondition, Dim, Expression, Language, SignDef, SignItem, Slot, SlotConstraint,
@@ -296,7 +296,7 @@ pub struct OccurrenceRecord {
     pub reevaluated: bool,
     pub probe_rules: Vec<RuleRecord>,
     pub committed_rules: Vec<RuleRecord>,
-    /// Feature/role case branches evaluated while rebuilding this occurrence
+    /// Feature/role and phon realization branches evaluated while rebuilding this occurrence
     /// from its immutable deep state.  These records belong to the filler
     /// occurrence, not to the enclosing construction's case trace.
     pub cases: Vec<OccurrenceCaseRecord>,
@@ -307,6 +307,7 @@ pub struct OccurrenceRecord {
 pub enum OccurrenceCaseStatus {
     Matched,
     Unmatched,
+    /// Legacy trace compatibility; the case evaluator no longer emits this.
     MoreSpecificBlocked,
 }
 
@@ -345,6 +346,44 @@ impl TokenExpressionError {
         match self {
             Self::Construction(error) => error,
             other => CxgError::FeatureExpression(other.to_string()),
+        }
+    }
+}
+
+impl From<crate::case_eval::FeatureCaseError> for TokenExpressionError {
+    fn from(error: crate::case_eval::FeatureCaseError) -> Self {
+        use crate::case_eval::FeatureCaseError;
+        match error {
+            FeatureCaseError::Undeclared { dim, name } => Self::UndeclaredFeature { dim, name },
+            FeatureCaseError::OutOfDomain {
+                dim,
+                name,
+                value,
+                domain,
+            } => Self::FeatureOutOfDomain {
+                dim,
+                name,
+                value,
+                domain,
+            },
+            FeatureCaseError::DefaultMissing { context } => Self::CaseDefaultMissing { context },
+            FeatureCaseError::Invalid(message) => Self::Invalid(message),
+        }
+    }
+}
+
+impl OccurrenceCaseRecord {
+    fn from_event(target: &str, event: crate::case_eval::CaseEvent) -> Self {
+        Self {
+            target: target.to_owned(),
+            branch: event.branch,
+            status: if event.matched {
+                OccurrenceCaseStatus::Matched
+            } else {
+                OccurrenceCaseStatus::Unmatched
+            },
+            source: event.source,
+            diagnostic_code: event.diagnostic_code,
         }
     }
 }
@@ -547,7 +586,12 @@ impl DerivedToken {
             Dim::Sem => {
                 self.sem.features.insert(name.to_owned(), value);
             }
-            Dim::Phon | Dim::Prag => {
+            Dim::Prag => {
+                let path = format!("prag.{name}");
+                self.prag.retain(|(candidate, _)| candidate != &path);
+                self.prag.push((path, value));
+            }
+            Dim::Phon => {
                 return Err(TokenExpressionError::Invalid(format!(
                     "typed features are not supported in the {dim:?} dimension"
                 )));
@@ -801,7 +845,7 @@ fn required_feature_set<'a>(items: impl Iterator<Item = &'a SignItem>) -> BTreeS
 
 fn sign_material(sign: &SignDef, reg: &OntologyRegistry) -> Result<FillerMaterial, CxgError> {
     let base_sign = reg.effective_sign(sign);
-    let (sign, probe_rules) = evaluate_occurrence_sign(&base_sign, reg)?;
+    let (sign, probe_rules, cases) = evaluate_occurrence_sign(&base_sign, reg)?;
     let phon_projection = sign.project(Dim::Phon, reg).defs;
     let phon = phon_projection
         .iter()
@@ -835,7 +879,7 @@ fn sign_material(sign: &SignDef, reg: &OntologyRegistry) -> Result<FillerMateria
         occurrence_token: None,
         probe_rules: probe_rules.clone(),
         committed_rules: probe_rules,
-        committed_cases: Vec::new(),
+        committed_cases: cases,
         realization: None,
     })
 }
@@ -889,6 +933,10 @@ fn committed_sign_material(
 }
 
 fn token_material(token: &DerivedToken) -> Result<FillerMaterial, CxgError> {
+    let mut sem = token.sem.clone();
+    // The token's producer is authoritative; semantic projections retain it
+    // when crossing into a frozen filler or a semantic role.
+    sem.construction_id = Some(token.construction_id.clone());
     Ok(FillerMaterial {
         name: format!("{} token", token.construction),
         categories: token.syn_categories.clone(),
@@ -898,7 +946,7 @@ fn token_material(token: &DerivedToken) -> Result<FillerMaterial, CxgError> {
             .unwrap_or_else(|| token.symbolic_phon_form()),
         phon_projection: token.phon.clone(),
         syn: token.syn.clone(),
-        sem: token.sem.clone(),
+        sem,
         prag: token.prag.clone(),
         provenance: FillerProvenance::Derived(Box::new(token.provenance.clone())),
         feature_domains: token
@@ -1130,17 +1178,23 @@ fn validate_binary_constraints(
 fn evaluate_occurrence_sign(
     base: &SignDef,
     reg: &OntologyRegistry,
-) -> Result<(SignDef, Vec<RuleRecord>), CxgError> {
+) -> Result<(SignDef, Vec<RuleRecord>, Vec<OccurrenceCaseRecord>), CxgError> {
     let mut sign = base.clone();
     let mut records = Vec::new();
+    let mut cases = Vec::new();
     for dim in [Dim::Syn, Dim::Sem, Dim::Prag] {
         let (next, pass) = synchronic::run_sign_dim_rules(&sign, dim, reg);
         sign = next;
         records.extend(pass);
-        sign = synchronic::run_sign_feature_expressions(&sign, dim, reg)
-            .map_err(CxgError::FeatureExpression)?;
+        sign = synchronic::run_sign_feature_expressions(&sign, dim, reg, |name, event| {
+            cases.push(OccurrenceCaseRecord::from_event(
+                &format!("{}.feature.{name}", dim.keyword()),
+                event,
+            ));
+        })
+        .map_err(|error| CxgError::FeatureExpression(error.to_string()))?;
     }
-    Ok((sign, records))
+    Ok((sign, records, cases))
 }
 
 fn slot_feature_source(value: &str) -> Option<(String, String)> {
@@ -1223,73 +1277,8 @@ fn token_case_condition_matches(
     condition: &CaseCondition,
     reg: &OntologyRegistry,
 ) -> Result<bool, TokenExpressionError> {
-    match condition {
-        CaseCondition::Base if case.selection == crate::CaseSelection::FirstMatch => Ok(true),
-        CaseCondition::Else if case.selection == crate::CaseSelection::Accumulate => Ok(true),
-        CaseCondition::Base | CaseCondition::Else => Err(TokenExpressionError::Invalid(format!(
-            "{:?} uses the wrong fallback condition {condition:?}",
-            case.selection
-        ))),
-        CaseCondition::Bundle(pattern) => {
-            if pattern.len() != case.match_features.len() || case.match_features.is_empty() {
-                return Err(TokenExpressionError::Invalid(
-                    "bundle match row/header arity mismatch".to_owned(),
-                ));
-            }
-            Ok(case
-                .match_features
-                .iter()
-                .zip(pattern)
-                .all(|(path, expected)| {
-                    expected
-                        .as_deref()
-                        .is_none_or(|expected| token_scalar(token, path) == Some(expected))
-                }))
-        }
-        CaseCondition::Guard(guard) => {
-            for conjunct in guard.split("&&").map(str::trim) {
-                let (status, _, _, error) = synchronic::evaluate_token_guard(token, conjunct, reg);
-                match status {
-                    RuleStatus::Matched => {}
-                    RuleStatus::Unmatched => return Ok(false),
-                    RuleStatus::Error => {
-                        return Err(TokenExpressionError::Invalid(
-                            error.unwrap_or_else(|| format!("case guard {conjunct:?} failed")),
-                        ))
-                    }
-                }
-            }
-            Ok(true)
-        }
-        CaseCondition::Equals(expected) => {
-            let scrutinee = case.scrutinee.as_deref().ok_or_else(|| {
-                TokenExpressionError::Invalid("equality case is missing its scrutinee".to_owned())
-            })?;
-            // 與 `CompiledSystem::case_equals_matches` 同一判準。
-            let read = reference::parse(&reference::SCRUTINEE, scrutinee).map_err(|error| {
-                TokenExpressionError::Invalid(format!("case scrutinee {scrutinee:?}: {error}"))
-            })?;
-            // 一律純量比對;範疇比對走 guard 形(`$slot.NAME == [Trait]`)。
-            match (&read.subject, read.dim, read.path.as_deref()) {
-                // 填充者的純量欄位,與 `$self` 對稱。
-                (reference::Subject::Slot(slot), Some(dim), Some(path)) => {
-                    let Some(filler) = token.fillers.iter().find(|filler| &filler.slot == slot)
-                    else {
-                        return Ok(false);
-                    };
-                    Ok(filler.scalar(dim, path) == Some(expected))
-                }
-                (reference::Subject::SelfSign, _, _) => {
-                    let path = read.dim_path().expect("SCRUTINEE requires a dimension");
-                    Ok(token_scalar(token, &path) == Some(expected))
-                }
-                _ => Err(TokenExpressionError::Invalid(format!(
-                    "case scrutinee {scrutinee:?} needs a field: `$slot.NAME.DIM.FIELD`; \
-                     to test a filler's category use a guard case (`$slot.NAME == [Trait]`)"
-                ))),
-            }
-        }
-    }
+    synchronic::token_case_matches(token, case, condition, reg)
+        .map_err(TokenExpressionError::Invalid)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1304,58 +1293,19 @@ fn evaluate_token_feature_case(
     reg: &OntologyRegistry,
     records: &mut Vec<OccurrenceCaseRecord>,
 ) -> Result<Option<String>, TokenExpressionError> {
-    for (index, branch) in case.branches.iter().enumerate() {
-        if !token_case_condition_matches(token, case, &branch.condition, reg)? {
-            records.push(OccurrenceCaseRecord {
-                target: target.to_owned(),
-                branch: index,
-                status: OccurrenceCaseStatus::Unmatched,
-                source: branch.source,
-                diagnostic_code: None,
-            });
-            continue;
-        }
-        let value = match &branch.result {
-            Expression::EnumValue(value) => Some(value.clone()),
-            Expression::ImplicitBase => base.clone(),
-            Expression::Case(nested) => evaluate_token_feature_case(
-                token,
-                nested,
-                dim,
-                name,
-                domain,
-                base.clone(),
-                target,
-                reg,
-                records,
-            )?,
-            _ => {
-                return Err(TokenExpressionError::Invalid(format!(
-                    "feature case {}.{name} returned a non-enum expression",
-                    dim.keyword()
-                )))
-            }
-        };
-        if let Some(value) = &value {
-            if !domain.contains(value) {
-                return Err(TokenExpressionError::FeatureOutOfDomain {
-                    dim,
-                    name: name.to_owned(),
-                    value: value.clone(),
-                    domain: domain.join(", "),
-                });
-            }
-        }
-        records.push(OccurrenceCaseRecord {
-            target: target.to_owned(),
-            branch: index,
-            status: OccurrenceCaseStatus::Matched,
-            source: branch.source,
-            diagnostic_code: None,
-        });
-        return Ok(value);
-    }
-    Ok(base)
+    let mut host = crate::case_eval::FeatureCaseHost {
+        matches: |case: &TypedCase, condition: &CaseCondition| {
+            synchronic::token_case_matches(token, case, condition, reg)
+        },
+        record: |event| records.push(OccurrenceCaseRecord::from_event(target, event)),
+        dim,
+        name: name.to_owned(),
+        domain: domain.to_vec(),
+        base,
+    };
+    crate::case_eval::evaluate(case, &mut host)
+        .map(|result| result.value)
+        .map_err(Into::into)
 }
 
 fn apply_token_feature_expressions(
@@ -1436,73 +1386,87 @@ fn evaluate_token_role_case(
     reg: &OntologyRegistry,
     records: &mut Vec<OccurrenceCaseRecord>,
 ) -> Result<Option<SemNode>, TokenExpressionError> {
-    for (index, branch) in case.branches.iter().enumerate() {
-        if !token_case_condition_matches(token, case, &branch.condition, reg)? {
-            records.push(OccurrenceCaseRecord {
-                target: target.to_owned(),
-                branch: index,
-                status: OccurrenceCaseStatus::Unmatched,
-                source: branch.source,
-                diagnostic_code: None,
-            });
-            continue;
-        }
-        let selected = match &branch.result {
-            Expression::ImplicitBase => base.clone(),
-            Expression::Slot(slot) => {
-                let Some(filler) = token
-                    .fillers
-                    .iter()
-                    .find(|filler| &filler.slot == slot)
-                    .cloned()
-                else {
-                    records.push(OccurrenceCaseRecord {
-                        target: target.to_owned(),
-                        branch: index,
-                        status: OccurrenceCaseStatus::MoreSpecificBlocked,
-                        source: branch.source,
-                        diagnostic_code: Some("CASE_MORE_SPECIFIC_BLOCKED"),
-                    });
-                    continue;
-                };
-                if let Some(required) = constraint {
-                    if !reg.categories_satisfy(&filler.sem.types, required) {
-                        return Err(CxgError::RoleCategoryMismatch {
-                            role: role.to_owned(),
-                            required: required.to_owned(),
-                            has: filler.sem.types,
-                        }
-                        .into());
-                    }
-                }
-                Some(filler.sem)
-            }
-            Expression::Case(nested) => evaluate_token_role_case(
-                token,
-                nested,
-                role,
-                constraint,
-                base.clone(),
-                target,
-                reg,
-                records,
-            )?,
-            _ => {
-                return Err(TokenExpressionError::Invalid(format!(
-                    "semantic role {role:?} returned a non-slot expression"
-                )))
-            }
-        };
-        records.push(OccurrenceCaseRecord {
-            target: target.to_owned(),
-            branch: index,
-            status: OccurrenceCaseStatus::Matched,
-            source: branch.source,
-            diagnostic_code: None,
-        });
-        return Ok(selected);
+    use crate::case_eval::{self, BranchValue, CaseEvent, CaseHost};
+    struct RoleHost<'a> {
+        token: &'a DerivedToken,
+        role: &'a str,
+        constraint: Option<&'a str>,
+        base: Option<SemNode>,
+        target: &'a str,
+        reg: &'a OntologyRegistry,
+        records: &'a mut Vec<OccurrenceCaseRecord>,
     }
-    Ok(base)
+    impl CaseHost for RoleHost<'_> {
+        type Value = Option<SemNode>;
+        type Error = TokenExpressionError;
+        fn matches(
+            &self,
+            case: &TypedCase,
+            condition: &CaseCondition,
+        ) -> Result<bool, Self::Error> {
+            token_case_condition_matches(self.token, case, condition, self.reg)
+        }
+        fn base(&self) -> Result<Self::Value, Self::Error> {
+            Ok(self.base.clone())
+        }
+        fn leaf(
+            &mut self,
+            expression: &Expression,
+        ) -> Result<BranchValue<Self::Value>, Self::Error> {
+            let Expression::Slot(slot) = expression else {
+                return Err(self.invalid(format!(
+                    "semantic role {:?} returned a non-slot expression",
+                    self.role
+                )));
+            };
+            let Some(filler) = self
+                .token
+                .fillers
+                .iter()
+                .find(|filler| &filler.slot == slot)
+            else {
+                // Preserve the existing optional/residual-role policy. The
+                // pipeline checks required roles once saturated. An absent
+                // selected slot never causes another branch to be selected.
+                return Ok(None.into());
+            };
+            if let Some(required) = self.constraint {
+                if !self.reg.type_satisfies(
+                    &filler.sem.types,
+                    filler.sem.construction_id.as_ref(),
+                    required,
+                ) {
+                    return Err(CxgError::RoleCategoryMismatch {
+                        role: self.role.to_owned(),
+                        required: required.to_owned(),
+                        has: filler.sem.types.clone(),
+                    }
+                    .into());
+                }
+            }
+            Ok(Some(filler.sem.clone()).into())
+        }
+        fn invalid(&self, message: String) -> Self::Error {
+            TokenExpressionError::Invalid(message)
+        }
+        fn record(&mut self, _case: &TypedCase, event: CaseEvent) {
+            self.records
+                .push(OccurrenceCaseRecord::from_event(self.target, event));
+        }
+    }
+    case_eval::evaluate(
+        case,
+        &mut RoleHost {
+            token,
+            role,
+            constraint,
+            base,
+            target,
+            reg,
+            records,
+        },
+    )
+    .map(|result| result.value)
 }
 
 fn apply_token_role_expressions(
@@ -1658,7 +1622,7 @@ fn apply_occurrence_constraints(
                 }
             }
         }
-        let (evaluated, records) = evaluate_occurrence_sign(&constrained, reg)?;
+        let (evaluated, records, cases) = evaluate_occurrence_sign(&constrained, reg)?;
         for (feature, value) in constraints {
             let path = format!("syn.{feature}");
             let projection = evaluated.project(Dim::Syn, reg);
@@ -1689,6 +1653,7 @@ fn apply_occurrence_constraints(
         material.prag = evaluated.project(Dim::Prag, reg).defs;
         material.occurrence_sign = Some(evaluated);
         material.committed_rules = records;
+        material.committed_cases = cases;
         return Ok(());
     }
 
@@ -1741,7 +1706,22 @@ fn apply_occurrence_constraints(
                     token.sem.features.insert(feature.clone(), current.clone());
                 }
             }
-            Dim::Phon | Dim::Prag => {}
+            Dim::Prag => {
+                let path = format!("prag.{feature}");
+                if let Some((_, actual)) = token.prag.iter().find(|(key, _)| key == &path) {
+                    if actual != current {
+                        return Err(CxgError::SlotFeatureConflict {
+                            slot: slot.to_owned(),
+                            feature: feature.clone(),
+                            expected: current.clone(),
+                            actual: actual.clone(),
+                        });
+                    }
+                } else {
+                    token.prag.push((path, current.clone()));
+                }
+            }
+            Dim::Phon => {}
         }
         token.remember_context(*dim, feature.clone(), current.clone());
     }
@@ -1797,267 +1777,130 @@ fn apply_occurrence_constraints(
     Ok(())
 }
 
+enum FillerPhonSource<'a> {
+    Stored(&'a SignDef),
+    Applied(&'a DerivedToken),
+}
+
+struct FillerPhonHost<'a> {
+    source: FillerPhonSource<'a>,
+    default: String,
+    filler: &'a str,
+    reg: &'a OntologyRegistry,
+    declarations: &'a [String],
+    records: &'a mut Vec<OccurrenceCaseRecord>,
+}
+
+impl crate::case_eval::CaseHost for FillerPhonHost<'_> {
+    type Value = String;
+    type Error = CxgError;
+    fn matches(&self, case: &TypedCase, condition: &CaseCondition) -> Result<bool, CxgError> {
+        match self.source {
+            FillerPhonSource::Stored(sign) => {
+                synchronic::sign_case_matches(sign, case, condition, self.reg)
+            }
+            FillerPhonSource::Applied(token) => {
+                synchronic::token_case_matches(token, case, condition, self.reg)
+            }
+        }
+        .map_err(|message| self.invalid(message))
+    }
+    fn base(&self) -> Result<String, CxgError> {
+        Ok(self.default.clone())
+    }
+    fn leaf(
+        &mut self,
+        expression: &Expression,
+    ) -> Result<crate::case_eval::BranchValue<String>, CxgError> {
+        crate::case_eval::phon_leaf(self, expression)
+    }
+    fn invalid(&self, message: String) -> CxgError {
+        CxgError::FillerRealizationGuard {
+            filler: self.filler.to_owned(),
+            message,
+        }
+    }
+    fn record(&mut self, _case: &TypedCase, event: crate::case_eval::CaseEvent) {
+        self.records
+            .push(OccurrenceCaseRecord::from_event("phon.realization", event));
+    }
+}
+
+impl crate::case_eval::PhonHost for FillerPhonHost<'_> {
+    fn expand(&self, template: &str) -> Result<String, CxgError> {
+        match self.source {
+            FillerPhonSource::Applied(token) => token.expand_phon_template(template),
+            FillerPhonSource::Stored(_) => Ok(template
+                .strip_prefix('/')
+                .and_then(|s| s.strip_suffix('/'))
+                .unwrap_or(template)
+                .to_owned()),
+        }
+    }
+    fn rules(&self, input: &str, rules: &[&crate::Rule]) -> Result<String, CxgError> {
+        use crate::case_eval::CaseHost;
+        crate::phon_rules::apply(self.declarations, input, rules)
+            .map_err(|error| self.invalid(error.to_string()))
+    }
+    fn interpolate(&mut self, _application: &crate::SignApplication) -> Result<String, CxgError> {
+        use crate::case_eval::CaseHost;
+        // Construction's low-level occurrence API has no Sign application
+        // service. Keep this existing capability boundary explicit.
+        Err(self.invalid("phon projection applications require system evaluation; unavailable in filler realization".to_owned()))
+    }
+}
+
 fn realize_stored_filler(
     material: &mut FillerMaterial,
     reg: &OntologyRegistry,
+    declarations: &[String],
 ) -> Result<(), CxgError> {
-    if let Some(token) = material.occurrence_token.as_mut() {
+    let (source, sign, default) = if let Some(token) = material.occurrence_token.as_ref() {
         if !token.is_saturated() {
-            // An unsaturated Sign is still a legitimate symbolic filler.
-            // Realization is a concrete boundary, so preserve its variables
-            // until a later application supplies them.
+            // Symbolic fillers retain their variables until they are saturated.
             material.phon = token.symbolic_phon_form();
             return Ok(());
         }
-        let realization = token.rule_sign.items.iter().find_map(|item| match item {
-            SignItem::Realization(realization) => Some(realization),
-            _ => None,
-        });
-        let mut selected: Option<String> = None;
-        if let Some(realization) = realization {
-            {
-                let case = &realization.expression;
-                for branch in &case.branches {
-                    let matched = match &branch.condition {
-                        crate::CaseCondition::Base => true,
-                        crate::CaseCondition::Else => {
-                            return Err(CxgError::FillerRealizationGuard {
-                                filler: material.name.clone(),
-                                message: "`case` realization uses `base`, not `else`".to_owned(),
-                            });
-                        }
-                        crate::CaseCondition::Bundle(pattern) => {
-                            pattern.len() == case.match_features.len()
-                                && !case.match_features.is_empty()
-                                && case.match_features.iter().zip(pattern).all(
-                                    |(path, expected)| {
-                                        expected.as_deref().is_none_or(|expected| {
-                                            token_scalar(token, path) == Some(expected)
-                                        })
-                                    },
-                                )
-                        }
-                        crate::CaseCondition::Guard(guard) => {
-                            let mut matched = true;
-                            for conjunct in guard.split("&&").map(str::trim) {
-                                let (status, _, _, error) =
-                                    synchronic::evaluate_token_guard(token, conjunct, reg);
-                                match status {
-                                    RuleStatus::Matched => {}
-                                    RuleStatus::Unmatched => {
-                                        matched = false;
-                                        break;
-                                    }
-                                    RuleStatus::Error => {
-                                        return Err(CxgError::FillerRealizationGuard {
-                                            filler: material.name.clone(),
-                                            message: error.unwrap_or_else(|| {
-                                                "unknown realization guard error".to_owned()
-                                            }),
-                                        });
-                                    }
-                                }
-                            }
-                            matched
-                        }
-                        crate::CaseCondition::Equals(_) => false,
-                    };
-                    if matched {
-                        // P93:分支可能是 phon fragment。這條路徑拿不到 phon
-                        // program,故帶規則的分支明確報錯,不靜默丟掉規則。
-                        if branch
-                            .result
-                            .phon_branch_rules()
-                            .iter()
-                            .any(|item| matches!(item, crate::SignItem::Rule(_)))
-                        {
-                            return Err(CxgError::FillerRealizationGuard {
-                                filler: material.name.clone(),
-                                message: "an occurrence realization branch cannot carry rules \
-                                          yet — this path has no phon program to run them"
-                                    .to_owned(),
-                            });
-                        }
-                        match branch.result.phon_base_template() {
-                            Some(template) => selected = Some(template.to_owned()),
-                            None if matches!(&branch.result, Expression::ImplicitBase) => {}
-                            None => {
-                                return Err(CxgError::FillerRealizationGuard {
-                                    filler: material.name.clone(),
-                                    message: "occurrence realization requires a direct Phon result"
-                                        .to_owned(),
-                                })
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-        let input = if let Some(template) = selected.as_deref() {
-            token.expand_phon_template(template)?
-        } else {
-            token.phon_form()?
-        };
-        if input.contains("$self")
-            || input.contains("$slot")
-            || input.contains('{')
-            || input.contains('}')
-            || input.contains('/')
-        {
-            return Err(CxgError::ImpureFillerRealization {
-                filler: material.name.clone(),
-                input,
-            });
-        }
-        token.record_realized_phon_input(input.clone());
-        material.realization = Some(input.clone());
-        material.phon = input.clone();
-        let root = format!("/{input}/");
-        if let Some((_, value)) = material
-            .phon_projection
-            .iter_mut()
-            .find(|(path, _)| path == "phon")
-        {
-            *value = root;
-        } else {
-            material.phon_projection.push(("phon".to_owned(), root));
-        }
-        return Ok(());
-    }
-    let Some(sign) = material.occurrence_sign.as_ref() else {
+        (
+            FillerPhonSource::Applied(token),
+            &token.rule_sign,
+            token.phon_form()?,
+        )
+    } else if let Some(sign) = material.occurrence_sign.as_ref() {
+        (FillerPhonSource::Stored(sign), sign, material.phon.clone())
+    } else {
         return Ok(());
     };
     let realization = sign.items.iter().find_map(|item| match item {
         SignItem::Realization(realization) => Some(realization),
         _ => None,
     });
-    let Some(realization) = realization else {
+    let input = if let Some(realization) = realization {
+        crate::case_eval::evaluate(
+            &realization.expression,
+            &mut FillerPhonHost {
+                source,
+                default,
+                filler: &material.name,
+                reg,
+                declarations,
+                records: &mut material.committed_cases,
+            },
+        )?
+        .value
+    } else if matches!(source, FillerPhonSource::Stored(_)) {
         return Ok(());
+    } else {
+        default
     };
-    let mut selected = None;
-    {
-        let case = &realization.expression;
-        for branch in &case.branches {
-            let matched = match &branch.condition {
-                crate::CaseCondition::Base => true,
-                crate::CaseCondition::Else => {
-                    return Err(CxgError::FillerRealizationGuard {
-                        filler: material.name.clone(),
-                        message: "`case` realization uses `base`, not `else`".to_owned(),
-                    });
-                }
-                crate::CaseCondition::Bundle(pattern) => {
-                    pattern.len() == case.match_features.len()
-                        && !case.match_features.is_empty()
-                        && case
-                            .match_features
-                            .iter()
-                            .zip(pattern)
-                            .all(|(path, expected)| {
-                                expected.as_deref().is_none_or(|expected| {
-                                    let path = path.strip_prefix("$self.").unwrap_or(path);
-                                    let Some((dimension, _)) = path.split_once('.') else {
-                                        return false;
-                                    };
-                                    let Some(dimension) = Dim::parse(dimension) else {
-                                        return false;
-                                    };
-                                    sign.project(dimension, reg)
-                                        .defs
-                                        .iter()
-                                        .rev()
-                                        .find(|(candidate, _)| candidate == path)
-                                        .is_some_and(|(_, value)| value == expected)
-                                })
-                            })
-                }
-                crate::CaseCondition::Guard(guard) => {
-                    let mut matched = true;
-                    for conjunct in guard.split("&&").map(str::trim) {
-                        let (status, _, _, error) =
-                            synchronic::evaluate_sign_guard(sign, conjunct, reg);
-                        match status {
-                            RuleStatus::Matched => {}
-                            RuleStatus::Unmatched => {
-                                matched = false;
-                                break;
-                            }
-                            RuleStatus::Error => {
-                                return Err(CxgError::FillerRealizationGuard {
-                                    filler: material.name.clone(),
-                                    message: error.unwrap_or_else(|| {
-                                        "unknown realization guard error".to_owned()
-                                    }),
-                                });
-                            }
-                        }
-                    }
-                    matched
-                }
-                crate::CaseCondition::Equals(_) => false,
-            };
-            if matched {
-                match &branch.result {
-                    crate::Expression::ImplicitBase => {}
-                    crate::Expression::PhonTemplate(template) => selected = Some(template.as_str()),
-                    // P93:分支存成 phon fragment(模板 + 若干規則)。這條路徑是
-                    // **已存 sign 當 filler** 時的自我實現,拿不到 phon program,
-                    // 故只跑得動純模板的分支。帶規則的分支明確報錯,不靜默丟掉。
-                    fragment @ crate::Expression::DimFragment {
-                        dim: crate::Dim::Phon,
-                        ..
-                    } => {
-                        if fragment
-                            .phon_branch_rules()
-                            .iter()
-                            .any(|item| matches!(item, crate::SignItem::Rule(_)))
-                        {
-                            return Err(CxgError::FillerRealizationGuard {
-                                filler: material.name.clone(),
-                                message: "a stored filler's realization branch cannot carry \
-                                          rules yet — this path has no phon program to run them"
-                                    .to_owned(),
-                            });
-                        }
-                        let Some(template) = fragment.phon_base_template() else {
-                            return Err(CxgError::FillerRealizationGuard {
-                                filler: material.name.clone(),
-                                message: "stored realization requires a direct Phon result"
-                                    .to_owned(),
-                            });
-                        };
-                        selected = Some(template);
-                    }
-                    _ => {
-                        return Err(CxgError::FillerRealizationGuard {
-                            filler: material.name.clone(),
-                            message: "stored realization requires a direct Phon result".to_owned(),
-                        })
-                    }
-                }
-                break;
-            }
-        }
-    }
-    let Some(template) = selected else {
-        return Ok(());
-    };
-    let input = template
-        .strip_prefix('/')
-        .and_then(|value| value.strip_suffix('/'))
-        .unwrap_or(template)
-        .to_owned();
-    if input.contains("$self")
-        || input.contains("$slot")
-        || input.contains('{')
-        || input.contains('}')
-        || input.contains('/')
-    {
+    if !crate::phon_rules::is_pure_input(&input) {
         return Err(CxgError::ImpureFillerRealization {
             filler: material.name.clone(),
             input,
         });
+    }
+    if let Some(token) = material.occurrence_token.as_mut() {
+        token.record_realized_phon_input(input.clone());
     }
     material.phon = input.clone();
     material.realization = Some(input.clone());
@@ -2114,7 +1957,11 @@ fn resolve_sem(
             });
         }
         if let Some((_, filler)) = filler_nodes.iter().find(|(slot, _)| slot == &binding.slot) {
-            if !declaration.constraint.is_satisfied_by(&filler.types, reg) {
+            if !declaration.constraint.is_satisfied_by_instance(
+                &filler.types,
+                filler.construction_id.as_ref(),
+                reg,
+            ) {
                 return Err(CxgError::RoleCategoryMismatch {
                     role: binding.name.clone(),
                     required: declaration.constraint.display_name().to_owned(),
@@ -2183,7 +2030,34 @@ pub fn apply_with<'a>(
     fillers: &[SlotFiller<'a>],
     mapping: &SlotMap,
 ) -> Result<DerivedToken, CxgError> {
+    require_construction(lang, reg, construction)?;
     apply_with_committed(lang, reg, construction, &[], fillers, mapping)
+}
+
+/// Instantiate an occurrence, including a lexical Sign with no parameters.
+/// Only the complete system derivation entry point may use this broader path.
+pub(crate) fn instantiate_sign<'a>(
+    lang: &Language,
+    reg: &OntologyRegistry,
+    sign: &str,
+    fillers: &[SlotFiller<'a>],
+    mapping: &SlotMap,
+) -> Result<DerivedToken, CxgError> {
+    apply_with_committed(lang, reg, sign, &[], fillers, mapping)
+}
+
+fn require_construction(
+    lang: &Language,
+    reg: &OntologyRegistry,
+    name: &str,
+) -> Result<(), CxgError> {
+    let sign = lang
+        .sign_named(name)
+        .ok_or_else(|| CxgError::UnknownConstruction(name.into()))?;
+    if slots_of(&reg.effective_sign(sign)).is_empty() {
+        return Err(CxgError::NotAConstruction(name.into()));
+    }
+    Ok(())
 }
 
 /// Resume an unsaturated Sign from its committed, internal-slot occurrence
@@ -2198,6 +2072,7 @@ pub(crate) fn resume_with<'a>(
     additional: &[SlotFiller<'a>],
     mapping: &SlotMap,
 ) -> Result<DerivedToken, CxgError> {
+    require_construction(lang, reg, construction)?;
     apply_with_committed(lang, reg, construction, committed, additional, mapping)
 }
 
@@ -2214,9 +2089,6 @@ fn apply_with_committed<'a>(
         .ok_or_else(|| CxgError::UnknownConstruction(construction.to_owned()))?;
     let cx = reg.effective_sign(local_cx);
     let slots = slots_of(&cx);
-    if slots.is_empty() {
-        return Err(CxgError::NotAConstruction(construction.to_owned()));
-    }
     // Preserve only the caller-supplied mapping for a later application.
     // Source-declared SlotMap operations are recomputed from the source Sign;
     // storing the combined map would apply those operations twice on resume.
@@ -2313,11 +2185,11 @@ fn apply_with_committed<'a>(
             .iter()
             .find(|candidate| candidate.internal.name == *slot_name)
             .expect("mapped slot checked");
-        if !slot
-            .internal
-            .constraint
-            .is_satisfied_by(&filler.categories, reg)
-        {
+        if !slot.internal.constraint.is_satisfied_by_instance(
+            &filler.categories,
+            filler.sem.construction_id.as_ref(),
+            reg,
+        ) {
             return Err(CxgError::CategoryMismatch {
                 slot: slot
                     .external
@@ -2414,7 +2286,7 @@ fn apply_with_committed<'a>(
         apply_occurrence_constraints(slot, constraints, target, reg)?;
     }
     for (_, filler) in &mut provided {
-        realize_stored_filler(filler, reg)?;
+        realize_stored_filler(filler, reg, &lang.dsl_decls)?;
     }
     provided.sort_by_key(|(name, _)| {
         mapped

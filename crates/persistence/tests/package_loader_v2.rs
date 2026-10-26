@@ -62,7 +62,10 @@ data = ["data/categories.tsv"]
         package.join("config/public.tsv"),
         "stable_id\tkind\talias\ncatalog:persist-test:PersistCaseUnique\ttrait\tPersistCaseUnique\n",
     );
-    write(package.join("code/main.lang"), "trait PersistCaseUnique:\n");
+    write(
+        package.join("code/main.lang"),
+        "export trait PersistCaseUnique:\n",
+    );
     write(
         package.join("code/extra.lang"),
         "trait PersistExtraUnique:\n",
@@ -274,7 +277,7 @@ fn vendored_reader_preserves_manifest_order_and_resolves_offline() {
     );
     assert_eq!(
         reference.code,
-        "trait PersistCaseUnique:\n\ntrait PersistExtraUnique:\n"
+        "export trait PersistCaseUnique:\n\ntrait PersistExtraUnique:\n"
     );
     assert_eq!(reference.functions[0].path, "code/recipes.chg");
     assert_eq!(reference.data_files[0].path, "data/categories.tsv");
@@ -341,6 +344,70 @@ fn vendored_reader_preserves_manifest_order_and_resolves_offline() {
         graph.packages().unwrap().lock_digest(),
         resolved.lock_digest()
     );
+}
+
+#[test]
+fn source_exports_and_project_qualifiers_survive_offline_reopen() {
+    let temp = TestDirectory::new("source-exports");
+    let store = GraphStore::init(&temp.0).unwrap();
+    let package = store.root().join("packages/natural/english");
+    write(package.join("package.toml"), "schema = 2\nid = \"natural:english\"\nversion = \"1\"\nlayer = \"overlay\"\ncapabilities = [\"traits\", \"signs\"]\ncode = [\"main.lang\"]\n");
+    let package_code = "Symbol a\nClass vowel {a}\nmarker trait Secret:\nexport marker trait Noun:\nexport sign word:\n    belongs Noun\n    phon:\n        /a/\n";
+    write(package.join("main.lang"), package_code);
+    let mut spec =
+        PackageSpec::default().with_root("natural:english".parse::<PackageId>().unwrap());
+    spec.aliases
+        .insert("English".into(), "natural:english".parse().unwrap());
+    store
+        .write_project(&ProjectDocument::from_package_spec(&spec))
+        .unwrap();
+    let project = store.read_project().unwrap().unwrap();
+    let resolved = store
+        .resolve_project_packages(&project, Vec::new())
+        .unwrap();
+    store
+        .write_packages_lock(&PackagesLock::from_resolved(&resolved))
+        .unwrap();
+    let reopened = store
+        .resolve_project_packages(&project, Vec::new())
+        .unwrap();
+    assert_eq!(resolved.lock_digest(), reopened.lock_digest());
+    assert_eq!(reopened.intent.aliases, spec.aliases);
+    assert_eq!(reopened.packages()[0].exports.len(), 2);
+    let caller = conlang_language::LanguageDocument::import_new_root(
+        "sign local:\n    belongs English.Noun\n",
+        "exports:persist",
+    )
+    .unwrap();
+    let (source, identities) = caller.dump_pair().unwrap();
+    let caller = conlang_language::LanguageDocument::open(&source, &identities).unwrap();
+    let system = conlang_language::compile_with_packages_ref(caller.language(), &reopened).unwrap();
+    assert_eq!(
+        system
+            .derive(
+                "English.word",
+                &[],
+                &conlang_language::construction::SlotMap::identity()
+            )
+            .unwrap()
+            .surface,
+        "a"
+    );
+    let private =
+        conlang_language::Language::parse("sign bad:\n    belongs English.Secret\n").unwrap();
+    assert!(conlang_language::compile_with_packages_ref(&private, &reopened).is_err());
+    // Visibility changes alter package bytes and must invalidate an existing lock.
+    write(
+        package.join("main.lang"),
+        &package_code.replace("export marker trait Noun", "marker trait Noun"),
+    );
+    assert!(matches!(
+        store.resolve_project_packages(&project, Vec::new()),
+        Err(StoreError::PackageLockMismatch {
+            field: "digest",
+            ..
+        })
+    ));
 }
 
 #[test]

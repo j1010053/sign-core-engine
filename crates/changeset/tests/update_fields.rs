@@ -68,11 +68,11 @@ fn invalid_bool_for_global_is_rejected() {
 
 #[test]
 fn marker_and_type_params_updates_round_trip_through_chg() {
-    let root = base();
+    let root = LanguageDocument::import_new_root("trait Schema:\n    pass\n", "evo:root").unwrap();
     let spec = LibrarySpec::default();
     let mut source = change_set_prelude(&root, &spec, "evo:trait-header").unwrap();
     source.push_str(
-        "\n    statement 0:\n        update trait(\"LocalNoun\").type_params = \"C: Nominal, T\"\n",
+        "\n    statement 0:\n        update trait(\"Schema\").type_params = \"C: Nominal, T\"\n",
     );
 
     let resolved = UnresolvedChangeSet::parse(&source)
@@ -95,9 +95,7 @@ fn marker_and_type_params_updates_round_trip_through_chg() {
         .run(&resolved)
         .unwrap()
         .document;
-    assert!(document
-        .source()
-        .contains("trait LocalNoun<C: Nominal, T>:"));
+    assert!(document.source().contains("trait Schema<C: Nominal, T>:"));
 
     let base = base();
     let spec = LibrarySpec::default();

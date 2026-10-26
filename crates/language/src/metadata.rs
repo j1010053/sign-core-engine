@@ -77,15 +77,27 @@ pub(crate) fn parse_origin(value: &str) -> Option<SignRef> {
     value
         .strip_prefix("sign(")
         .and_then(|inner| inner.strip_suffix(')'))
-        .filter(|inner| ident_ok(inner))
+        .filter(|inner| ident_ok(inner) || crate::type_ref::TypeRef::parse(inner).is_ok())
         .map(|inner| SignRef(inner.to_owned()))
 }
 
 /// `sign(a), sign(b)` —— 融合成分清單(P54)。與 `origin` 的差別:`origin` 是
 /// **單一**來源(衍生自誰),`components` 是**線性組合的各成分**(au = à + le)。
 pub(crate) fn parse_components(value: &str) -> Option<Vec<SignRef>> {
+    let mut depth = 0usize;
     let parsed: Option<Vec<SignRef>> = value
-        .split(',')
+        .split(|ch| match ch {
+            '(' => {
+                depth += 1;
+                false
+            }
+            ')' => {
+                depth = depth.saturating_sub(1);
+                false
+            }
+            ',' => depth == 0,
+            _ => false,
+        })
         .map(|part| parse_origin(part.trim()))
         .collect();
     parsed.filter(|refs| refs.len() >= 2)

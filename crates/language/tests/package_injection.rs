@@ -43,7 +43,7 @@ fn an_injected_plugin_participates_in_selection() {
     let catalog = LibraryCatalog::with_packages([plugin(
         "tonal",
         " std:core",
-        "trait tonalMarker:\n    belongs Noun\n",
+        "export trait tonalMarker:\n    belongs Noun\n",
     )])
     .expect("注入的 package 應通過同一套驗證");
 
@@ -68,7 +68,7 @@ fn an_injected_plugin_is_not_loaded_unless_declared() {
     let catalog = LibraryCatalog::with_packages([plugin(
         "tonal",
         " std:core",
-        "trait tonalMarker:\n    belongs Noun\n",
+        "export trait tonalMarker:\n    belongs Noun\n",
     )])
     .unwrap();
     let loaded: Vec<_> = catalog
@@ -85,7 +85,7 @@ fn an_injected_plugin_is_not_loaded_unless_declared() {
 #[test]
 fn an_injected_package_faces_the_same_validation() {
     // rule_namespace 必須等於 package id
-    let mut bad = plugin("bogus", "", "trait bogusMarker:\n");
+    let mut bad = plugin("bogus", "", "export trait bogusMarker:\n");
     bad.config = bad
         .config
         .replace("rule_namespace = plugin:bogus", "rule_namespace = wrong");
@@ -95,7 +95,7 @@ fn an_injected_package_faces_the_same_validation() {
     );
 
     // 依賴不存在的 package
-    let missing = plugin("orphan", " plugin:nope", "trait orphanMarker:\n");
+    let missing = plugin("orphan", " plugin:nope", "export trait orphanMarker:\n");
     let catalog = LibraryCatalog::with_packages([missing]).expect("catalog 本身可建");
     assert!(
         catalog
@@ -105,28 +105,21 @@ fn an_injected_package_faces_the_same_validation() {
     );
 }
 
-/// 注入者與內嵌者**同處一個 catalog**,故跨 package 的唯一性一併把關。
-///
-/// 走的是 `validate_catalog`(重複 id / alias),與上一條的 `load_sources`
-/// (單一 package 的 manifest 與匯出存在性)是不同關卡。
-///
-/// **這條初版寫錯過**:當時讓 package 匯出 `Noun` 卻沒在自己的 code 定義它,
-/// 於是被 `load_sources` 的「匯出必須存在」先擋下——測試通過,但**理由不對**,
-/// `with_packages` 拿掉 `validate_catalog` 照樣全綠。突變測試抓到後才改成
-/// 「package 自己定義 `Noun`」,讓它必須撞到 catalog 層才會失敗。
+/// 跨套件同名合法；套件本身的 ID 仍必須唯一。
 #[test]
-fn an_injected_package_may_not_collide_with_an_embedded_one() {
-    // 自己定義 `Noun` 並匯出——單一 package 完全合法,但 alias 撞上 std:core
-    let mut clash = plugin("clash", "", "trait Noun:\n");
+fn injected_packages_have_scoped_names_and_unique_ids() {
+    let mut clash = plugin("clash", " std:core", "export trait Noun:\n");
     clash.exports = "stable_id\tkind\talias\nplugin:clash:Noun\ttrait\tNoun\n".to_owned();
-    let error = LibraryCatalog::with_packages([clash]).expect_err("alias 撞名應被拒");
-    assert!(
-        format!("{error}").contains("Noun"),
-        "要是 catalog 層的撞名,不是匯出不存在:{error}"
-    );
+    let catalog = LibraryCatalog::with_packages([clash]).expect("package names are scoped");
+    let selection = catalog
+        .select(&LibrarySpec::default().with_plugin(id(LibraryKind::Plugin, "clash")))
+        .expect("same exported names can be selected together");
+    assert!(selection
+        .packages
+        .contains(&id(LibraryKind::Plugin, "clash")));
 
     // 同一個 package 注入兩次:各自合法,catalog 層才看得出重複
-    let once = plugin("twice", "", "trait twiceMarker:\n");
+    let once = plugin("twice", "", "export trait twiceMarker:\n");
     let again = once.clone();
     let error = LibraryCatalog::with_packages([once, again]).expect_err("重複 id 應被拒");
     assert!(format!("{error}").contains("twice"), "{error}");
@@ -135,7 +128,7 @@ fn an_injected_package_may_not_collide_with_an_embedded_one() {
 /// 注入的 `data` 走一般 `data_sources` 通道——這正是 E1 先驗庫要用的路。
 #[test]
 fn injected_data_files_are_carried_like_any_other_package_data() {
-    let mut sources = plugin("priors", "", "trait priorsMarker:\n");
+    let mut sources = plugin("priors", "", "export trait priorsMarker:\n");
     sources.config = sources
         .config
         .replace("data = data/notes.tsv\n", "data = data/freq.tsv\n");

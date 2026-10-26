@@ -6,17 +6,19 @@
 //! ③ Resolved ──Stage 排序(P18)─────────────────────▶ ④ Ordered
 //! (⑤ Codegen → Compiled Grammar/Sign = 步驟 11)
 //! ```
-//! ①–④ **全是合法 Language**(同一文字語法逐步降階):每 pass 純函數
-//! `Language → Language`,無隱藏狀態——單獨跑一個 pass = 在完整 pipeline 裡跑它;
-//! `diff(dump(②), dump(③))` 即該 pass 的人類可讀報告。實作界定見 I16(docs/05 §9)。
+//! ①–④ 每 pass 是純函數 `Language → Language`。AST 保留顯式展開的來源紀錄，
+//! 供後續繼承避免重複套用；dump 是人類可讀的診斷視圖，不包含全部編譯產物。
+//! 來源持久化使用未展開的 LanguageDocument。實作界定見 I16、I33。
 //! Index Generation 為 Compile Artifact(IDE/搜尋),不影響語意(P8)。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{Language, Rule, SignItem};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CompileError {
+    #[error("{0}")]
+    TypeReference(String),
     #[error("sign {sign:?} references unknown trait {name:?}")]
     UnknownTrait { sign: String, name: String },
     #[error("sign {sign:?} references {name:?} block {block}, but it has {blocks} block(s)")]
@@ -176,45 +178,44 @@ fn find_trait<'a>(
 ///
 /// 替換觸及 `SlotConstraint::Category`、`RoleDecl` constraint、
 /// 以及巢狀 `TraitMount::Declaration` 的 args(傳播)。
-fn substitute_type_params(items: &mut [SignItem], subst: &[(&str, &str)]) {
-    if subst.is_empty() {
-        return;
-    }
-    for item in items {
-        match item {
-            SignItem::Slot(slot) => {
-                if let crate::SlotConstraint::Category(ref mut cat) = slot.constraint {
-                    for &(param, arg) in subst {
-                        if cat.as_str() == param {
-                            *cat = arg.to_owned();
-                            break;
-                        }
-                    }
+fn substitute_type_params(
+    items: &mut [SignItem],
+    template: &crate::TraitDef,
+    args: &[String],
+    owner: &str,
+) -> Result<(), CompileError> {
+    let reference = crate::type_ref::TypeRef::mount(&template.name, args)
+        .map_err(CompileError::TypeReference)?;
+    let ordered = reference
+        .segments
+        .last()
+        .unwrap()
+        .ordered_arguments(&template.type_params)
+        .map_err(|message| {
+            if message.starts_with("TYPE_PARAM_ARITY_MISMATCH:") {
+                CompileError::TypeParamArityMismatch {
+                    sign: owner.to_owned(),
+                    name: template.name.clone(),
+                    expected: template.type_params.len(),
+                    given: args.len(),
                 }
+            } else {
+                CompileError::TypeReference(message)
             }
-            SignItem::RoleDecl(role) => {
-                if let crate::SlotConstraint::Category(ref mut cat) = role.constraint {
-                    for &(param, arg) in subst {
-                        if cat.as_str() == param {
-                            *cat = arg.to_owned();
-                            break;
-                        }
-                    }
-                }
-            }
-            SignItem::TraitMount { args, .. } => {
-                for a in args.iter_mut() {
-                    for &(param, arg) in subst {
-                        if a.as_str() == param {
-                            *a = arg.to_owned();
-                            break;
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
+        })?;
+    let bindings = template
+        .type_params
+        .iter()
+        .zip(ordered)
+        .map(|(parameter, argument)| (parameter.name.clone(), argument))
+        .collect();
+    crate::package_scope::visit_items(items, &mut |name, _| {
+        *name = crate::type_ref::TypeRef::parse(name)?
+            .substitute(&bindings)
+            .to_string();
+        Ok(())
+    })
+    .map_err(CompileError::TypeReference)
 }
 
 /// P76:從同容器的 Declaration 中找出某個 trait 的型別實參。
@@ -239,7 +240,15 @@ fn expand_item_sequence(
     source: &[SignItem],
     active: &mut Vec<String>,
 ) -> Result<Vec<SignItem>, CompileError> {
-    expand_item_sequence_with(src, externals, sign, source, active, false)
+    expand_item_sequence_with(
+        src,
+        externals,
+        sign,
+        source,
+        active,
+        false,
+        &mut BTreeSet::new(),
+    )
 }
 
 /// `expand_declarations`:`belongs X` 要不要也展開。
@@ -254,6 +263,7 @@ fn expand_item_sequence_with(
     source: &[SignItem],
     active: &mut Vec<String>,
     expand_declarations: bool,
+    materialized: &mut BTreeSet<String>,
 ) -> Result<Vec<SignItem>, CompileError> {
     let mut used: BTreeMap<&str, (bool, Vec<u32>)> = BTreeMap::new();
     for item in source {
@@ -326,15 +336,8 @@ fn expand_item_sequence_with(
                     .iter()
                     .flat_map(|block| block.items.iter().cloned())
                     .collect();
-                if !trait_def.type_params.is_empty() && args.len() == trait_def.type_params.len() {
-                    let subst: Vec<(&str, &str)> = trait_def
-                        .type_params
-                        .iter()
-                        .zip(args.iter())
-                        .map(|(p, a)| (p.name.as_str(), a.as_str()))
-                        .collect();
-                    substitute_type_params(&mut selected, &subst);
-                }
+                substitute_type_params(&mut selected, trait_def, args, sign)?;
+                materialized.insert(name.clone());
                 active.push(name.clone());
                 output.extend(expand_item_sequence_with(
                     src,
@@ -343,6 +346,7 @@ fn expand_item_sequence_with(
                     &selected,
                     active,
                     expand_declarations,
+                    materialized,
                 )?);
                 active.pop();
             }
@@ -371,17 +375,6 @@ fn expand_item_sequence_with(
                 } else {
                     find_declaration_args(source, name).unwrap_or(&[])
                 };
-                // 驗證 arity
-                if !trait_def.type_params.is_empty() || !args.is_empty() {
-                    if args.len() != trait_def.type_params.len() {
-                        return Err(CompileError::TypeParamArityMismatch {
-                            sign: sign.to_owned(),
-                            name: name.clone(),
-                            expected: trait_def.type_params.len(),
-                            given: args.len(),
-                        });
-                    }
-                }
                 let mut selected = match kind {
                     crate::TraitMountKind::Declaration => Vec::new(),
                     crate::TraitMountKind::Whole => trait_def
@@ -393,16 +386,8 @@ fn expand_item_sequence_with(
                         trait_def.blocks[*index as usize].items.clone()
                     }
                 };
-                // P76:參數替換
-                if !trait_def.type_params.is_empty() && !args.is_empty() {
-                    let subst: Vec<(&str, &str)> = trait_def
-                        .type_params
-                        .iter()
-                        .zip(args.iter())
-                        .map(|(p, a)| (p.name.as_str(), a.as_str()))
-                        .collect();
-                    substitute_type_params(&mut selected, &subst);
-                }
+                substitute_type_params(&mut selected, trait_def, args, sign)?;
+                materialized.insert(name.clone());
                 active.push(name.clone());
                 output.extend(expand_item_sequence_with(
                     src,
@@ -411,6 +396,7 @@ fn expand_item_sequence_with(
                     &selected,
                     active,
                     expand_declarations,
+                    materialized,
                 )?);
                 active.pop();
             }
@@ -450,7 +436,15 @@ pub fn trait_view(
         kind: crate::TraitMountKind::Whole,
         args,
     };
-    expand_item_sequence_with(src, externals, trait_name, &[mount], &mut Vec::new(), true)
+    expand_item_sequence_with(
+        src,
+        externals,
+        trait_name,
+        &[mount],
+        &mut Vec::new(),
+        true,
+        &mut BTreeSet::new(),
+    )
 }
 
 /// Pass ①→②:Trait Expansion(I16-a/b)。
@@ -471,8 +465,17 @@ pub fn expand_traits_with(
     out.signs.clear();
     for sign in &src.signs {
         let mut expanded = sign.clone();
-        expanded.items =
-            expand_item_sequence(src, externals, &sign.name, &sign.items, &mut Vec::new())?;
+        let mut materialized = sign.body.materialized_traits.clone();
+        expanded.items = expand_item_sequence_with(
+            src,
+            externals,
+            &sign.name,
+            &sign.items,
+            &mut Vec::new(),
+            false,
+            &mut materialized,
+        )?;
+        expanded.body.materialized_traits = materialized;
         out.signs.push(expanded);
     }
     Ok(out)
@@ -571,6 +574,24 @@ pub fn compile(src: &Language) -> Result<Pipeline, CompileError> {
 
 /// 同上,但展開時可額外查**外部語言**的 trait(std / 套件)——見 [`find_trait`]。
 pub fn compile_with(src: &Language, externals: &[&Language]) -> Result<Pipeline, CompileError> {
+    if crate::specialization::needs_lowering(src)
+        || externals
+            .iter()
+            .any(|l| crate::specialization::needs_lowering(l))
+    {
+        let source =
+            crate::specialization::qualify_members(src).map_err(CompileError::TypeReference)?;
+        let mut standard = Language::new();
+        for external in externals {
+            standard.append_library(
+                crate::specialization::qualify_members(external)
+                    .map_err(CompileError::TypeReference)?,
+            );
+        }
+        let prepared = crate::specialization::prepare(&standard, &source)
+            .map_err(CompileError::TypeReference)?;
+        return compile_with(&prepared.language, &[&prepared.standard]);
+    }
     // Index Generation(Compile Artifact;自 ① 收集,展開後即不可得)
     let mut trait_index: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for t in src.traits.iter().filter(|t| !t.global) {

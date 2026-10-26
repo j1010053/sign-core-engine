@@ -27,3 +27,11 @@
 | Wire/UI V1 相容界線與延後的 Diff UI v2 | 本頁上方與差異向量架構文件 | 現有 Wire V1 未新增欄位、未 bump schema |
 
 教學若與 `docs/` 的規範或 P 系列決策衝突，以規範與架構決策為準；修正教學時必須同步更新可執行範例測試。
+
+## 套件、模板與型別參數
+
+- [套件 export 與限定引用](package-exports/README.md)
+- [巢狀宣告與型別傳遞](nested-types/README.md)
+- [Sign／trait 成員作用域](template-scopes/README.md)
+- [Sign 實例型別與 TP](instance-types/README.md)
+- [具名型別實參](named-type-arguments/README.md)

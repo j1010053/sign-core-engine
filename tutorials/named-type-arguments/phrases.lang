@@ -1,0 +1,68 @@
+Symbol a
+Symbol u
+Symbol b
+Class vowel {a, u, b}
+
+marker trait TenseHead:
+marker trait V:
+
+export trait XP<Head, Spec, Comp>:
+    marker trait Bar:
+    export sign bar-comp:
+        belongs Bar
+        syn:
+            slots:
+                head [Head]
+                comp [Comp]?
+        sem:
+            roles:
+                head [Head]
+                head = {$slot.head}
+                comp [Comp]?
+                comp = {$slot.comp}
+        phon:
+            /{$slot.head} {$slot.comp}/
+    export sign bar-adjunct:
+        belongs Bar
+        syn:
+            slots:
+                adjunct [*]
+                head [Bar]
+        phon:
+            /{$slot.adjunct} {$slot.head}/
+    syn:
+        slots:
+            spec [Spec]?
+            head [Bar]
+    phon:
+        /{$slot.spec} {$slot.head}/
+
+export sign DP:
+    phon:
+        /a/
+export sign VP:
+    syn:
+        slots:
+            head [V]
+    phon:
+        /{$slot.head}/
+export sign TP:
+    belongs XP<TenseHead, Comp=VP, Spec=DP>
+    XP[0]
+
+sign tense:
+    belongs TenseHead
+    phon:
+        /u/
+sign verb:
+    belongs V
+    phon:
+        /b/
+
+sign demo:
+    syn:
+        slots:
+            phrase [TP]
+        map phrase autofill TP(spec: DP(), head: XP<Comp=VP, Spec=DP, Head=TenseHead>.bar-comp(head: tense(), comp: VP(head: verb())))
+    phon:
+        /{$slot.phrase}/

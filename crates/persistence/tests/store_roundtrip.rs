@@ -53,6 +53,95 @@ sign right:
             choice = left | right
 "#;
 
+#[test]
+fn named_type_arguments_and_tokens_survive_graph_store_reopen() {
+    use conlang_language::construction::SlotMap;
+    let document = LanguageDocument::import_new_root(
+        include_str!("../../../tutorials/named-type-arguments/phrases.lang"),
+        "store:named-types",
+    )
+    .unwrap();
+    let system = conlang_language::compile_document(&document, &LibrarySpec::default()).unwrap();
+    let before = system.derive("demo", &[], &SlotMap::identity()).unwrap();
+    let member_id = system.evaluate_sign("TP.bar-comp").unwrap().sign.id;
+    let mut graph = EvolutionGraph::new(LibrarySpec::default());
+    let root = graph.add_root(document.clone()).unwrap();
+    let temp = TestDirectory::new("named-types");
+    GraphStore::init(&temp.0).unwrap().save(&graph).unwrap();
+    let loaded = GraphStore::open(&temp.0)
+        .unwrap()
+        .load(LibrarySpec::default())
+        .unwrap();
+    let restored = loaded.snapshot(&root).unwrap();
+    assert_eq!(restored.dump_pair().unwrap(), document.dump_pair().unwrap());
+    let system = conlang_language::compile_document(restored, &LibrarySpec::default()).unwrap();
+    let after = system.derive("demo", &[], &SlotMap::identity()).unwrap();
+    assert_eq!(after.surface, "a u b");
+    assert_eq!(after.token, before.token);
+    assert_eq!(
+        system
+            .evaluate_sign("XP<Spec=DP, Head=TenseHead, Comp=VP>.bar-comp")
+            .unwrap()
+            .sign
+            .id,
+        member_id
+    );
+}
+
+#[test]
+fn instance_types_and_semantic_identity_survive_graph_store_reopen() {
+    use conlang_language::construction::SlotMap;
+    let document = LanguageDocument::import_new_root(
+        include_str!("../../../tutorials/instance-types/phrases.lang"),
+        "store:instance-types",
+    )
+    .unwrap();
+    let system = conlang_language::compile_document(&document, &LibrarySpec::default()).unwrap();
+    let before = system.derive("demo", &[], &SlotMap::identity()).unwrap();
+    let semantics = conlang_language::SemanticDocumentV1::from_sem_node(&before.token.sem);
+    let mut graph = EvolutionGraph::new(LibrarySpec::default());
+    let root = graph.add_root(document.clone()).unwrap();
+    let temp = TestDirectory::new("instance-types");
+    GraphStore::init(&temp.0).unwrap().save(&graph).unwrap();
+    let loaded = GraphStore::open(&temp.0)
+        .unwrap()
+        .load(LibrarySpec::default())
+        .unwrap();
+    let restored = loaded.snapshot(&root).unwrap();
+    assert_eq!(restored.dump_pair().unwrap(), document.dump_pair().unwrap());
+    let system = conlang_language::compile_document(restored, &LibrarySpec::default()).unwrap();
+    let after = system.derive("demo", &[], &SlotMap::identity()).unwrap();
+    assert_eq!(after.surface, "a u b");
+    assert_eq!(after.token, before.token);
+    assert_eq!(
+        system.validate_semantic_document(&semantics).unwrap(),
+        before.token.sem
+    );
+    let vp = system
+        .derive(
+            "VP",
+            &[conlang_language::construction::SlotFiller::sign(
+                "head", "verb",
+            )],
+            &SlotMap::identity(),
+        )
+        .unwrap();
+    let bar = system
+        .derive(
+            "TP.bar-comp",
+            &[
+                conlang_language::construction::SlotFiller::sign("head", "tense"),
+                conlang_language::construction::SlotFiller::token("comp", &vp.token),
+            ],
+            &SlotMap::identity(),
+        )
+        .unwrap();
+    assert_eq!(
+        bar.token.sem.role("comp").unwrap().construction_id,
+        Some(vp.token.construction_id)
+    );
+}
+
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug)]
@@ -587,4 +676,91 @@ fn removing_a_root_frees_its_identity_namespace() {
     let again = LanguageDocument::import_new_root(ROOT, "store:root").unwrap();
     let reborn = graph.add_root(again).expect("namespace 已釋放,應可重加");
     assert_eq!(reborn, root_id, "內容定址:同一份 root 得到同一個 id");
+}
+
+#[test]
+fn nested_generic_source_and_compiled_origin_survive_graph_store_reopen() {
+    let source = "Symbol a\nClass vowel {a}\nmarker trait N:\ntrait XP<T>:\n    export sign leaf:\n        syn:\n            slots:\n                head [T]\n        phon:\n            /{$slot.head}/\nsign bind:\n    belongs XP<N>\nsign word:\n    belongs N\n    phon:\n        /a/\n";
+    let document = LanguageDocument::import_new_root(source, "store:nested").unwrap();
+    let leaf = document.ref_for_sign("XP.leaf").unwrap();
+    let mut graph = EvolutionGraph::new(LibrarySpec::default());
+    let root = graph.add_root(document.clone()).unwrap();
+    let temp = TestDirectory::new("nested-generics");
+    let store = GraphStore::init(&temp.0).unwrap();
+    store.save(&graph).unwrap();
+    let loaded = GraphStore::open(&temp.0)
+        .unwrap()
+        .load(LibrarySpec::default())
+        .unwrap();
+    let restored = loaded.snapshot(&root).unwrap();
+    assert_eq!(restored.dump_pair().unwrap(), document.dump_pair().unwrap());
+    assert_eq!(restored.ref_for_sign("XP.leaf").unwrap(), leaf);
+    let system = conlang_language::compile_document(restored, &LibrarySpec::default()).unwrap();
+    let derivation = system
+        .derive(
+            "XP<N>.leaf",
+            &[conlang_language::construction::SlotFiller::sign(
+                "head", "word",
+            )],
+            &conlang_language::construction::SlotMap::identity(),
+        )
+        .unwrap();
+    assert_eq!(derivation.surface, "a");
+    assert_eq!(
+        &system.source_sign_id(&derivation.token.construction_id).0,
+        &leaf.id
+    );
+}
+
+#[test]
+fn sign_scopes_and_template_aliases_survive_graph_store_reopen() {
+    let source = include_str!("../../../tutorials/template-scopes/example.lang");
+    let document = LanguageDocument::import_new_root(source, "store:template-scopes").unwrap();
+    let leaf = document.ref_for_sign("Phrase.head").unwrap();
+    let inner = document.ref_for_sign("Container.inner").unwrap();
+    let mut graph = EvolutionGraph::new(LibrarySpec::default());
+    let root = graph.add_root(document.clone()).unwrap();
+    let temp = TestDirectory::new("template-scopes");
+    let store = GraphStore::init(&temp.0).unwrap();
+    store.save(&graph).unwrap();
+    let loaded = GraphStore::open(&temp.0)
+        .unwrap()
+        .load(LibrarySpec::default())
+        .unwrap();
+    let restored = loaded.snapshot(&root).unwrap();
+    assert_eq!(restored.dump_pair().unwrap(), document.dump_pair().unwrap());
+    assert_eq!(restored.ref_for_sign("Container.inner").unwrap(), inner);
+    assert!(restored.ref_for_sign("NP.head").is_none());
+    let system = conlang_language::compile_document(restored, &LibrarySpec::default()).unwrap();
+    let result = system
+        .derive(
+            "NP.head",
+            &[conlang_language::construction::SlotFiller::sign(
+                "head", "noun",
+            )],
+            &Default::default(),
+        )
+        .unwrap();
+    assert_eq!(result.surface, "a");
+    assert_eq!(
+        system.source_sign_id(&result.token.construction_id).0,
+        leaf.id
+    );
+    assert_eq!(
+        system
+            .derive("NP", &[], &Default::default())
+            .unwrap()
+            .surface,
+        "a"
+    );
+    assert_eq!(
+        system
+            .derive("Container", &[], &Default::default())
+            .unwrap()
+            .surface,
+        "ba"
+    );
+    assert!(system
+        .derive("NP.private-head", &[], &Default::default())
+        .is_err());
 }

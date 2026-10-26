@@ -24,44 +24,54 @@ fn lang_dump_golden_matches_patch05_sample() {
     let r1 = l.rule("a => ə / _#", Stage::Word);
     let r2 = l.rule("n => m / _[+labial]", Stage::Stem);
     l.add_trait(TraitDef {
+        exported: false,
         name: "CorePhonology".into(),
         global: true,
         marker: false,
         type_params: vec![],
-        blocks: vec![
-            Block {
-                items: vec![SignItem::Rule(r1)],
-            },
-            Block {
-                items: vec![SignItem::Rule(r2)],
-            },
-        ],
+        body: (
+            vec![
+                Block {
+                    items: vec![SignItem::Rule(r1)],
+                },
+                Block {
+                    items: vec![SignItem::Rule(r2)],
+                },
+            ],
+            crate::Language::new(),
+        )
+            .into(),
     });
 
     // trait VerbCommon(Definition + syn 規則)
     let r3 = l.rule("valence => 2 / _[+move]", Stage::Word);
     l.add_trait(TraitDef {
+        exported: false,
         name: "VerbCommon".into(),
         global: false,
         marker: false,
         type_params: vec![],
-        blocks: vec![
-            Block {
-                items: vec![
-                    SignItem::Def(Def {
-                        path: "syn.provides".into(),
-                        value: "VERB".into(),
-                    }),
-                    SignItem::Def(Def {
-                        path: "syn.requires".into(),
-                        value: "[agent, patient]".into(),
-                    }),
-                ],
-            },
-            Block {
-                items: vec![SignItem::Rule(r3)],
-            },
-        ],
+        body: (
+            vec![
+                Block {
+                    items: vec![
+                        SignItem::Def(Def {
+                            path: "syn.provides".into(),
+                            value: "VERB".into(),
+                        }),
+                        SignItem::Def(Def {
+                            path: "syn.requires".into(),
+                            value: "[agent, patient]".into(),
+                        }),
+                    ],
+                },
+                Block {
+                    items: vec![SignItem::Rule(r3)],
+                },
+            ],
+            crate::Language::new(),
+        )
+            .into(),
     });
 
     // sign go:trait block 顯式插入位置有語意(P5)

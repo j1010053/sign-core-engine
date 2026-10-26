@@ -41,6 +41,9 @@ pub struct DerivationEdge {
 /// 一個組合語意節點(meaning 極)。**唯讀視圖**;修改走 patch(12e)。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SemNode {
+    /// Concrete producer identity, retained through token composition. External
+    /// semantic frames without identity cannot claim a nominal Sign type.
+    pub construction_id: Option<crate::SignId>,
     /// Ontological semantic/frame types. Frame identity is never a free scalar.
     pub types: Vec<String>,
     /// Values of declared `sem: feature:` enums.
@@ -179,6 +182,7 @@ impl SemNode {
             })
             .collect();
         SemNode {
+            construction_id: Some(sign.id.clone()),
             types,
             features,
             source: SemanticSource {

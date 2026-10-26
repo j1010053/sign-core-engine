@@ -41,7 +41,7 @@ fn resolved_with_unused_package(code: &str) -> ResolvedPackages {
         exports:
             "stable_id\tkind\talias\ncatalog:unused:UnusedCatalogMarker\ttrait\tUnusedCatalogMarker\n"
                 .to_owned(),
-        code: "trait UnusedCatalogMarker:\n".to_owned(),
+        code: "export trait UnusedCatalogMarker:\n".to_owned(),
         ..PackageSources::default()
     };
     let catalog = LibraryCatalog::with_packages([injected_package(code), unused])
@@ -58,7 +58,7 @@ fn document() -> LanguageDocument {
 #[test]
 fn compile_key_uses_the_resolved_package_lock_directly() {
     let document = document();
-    let packages = resolved("trait AppInjectedMarker:\n");
+    let packages = resolved("export trait AppInjectedMarker:\n");
 
     let key = CompileKey::of_with_packages(&document, &packages).expect("cache key");
 
@@ -68,7 +68,7 @@ fn compile_key_uses_the_resolved_package_lock_directly() {
 #[test]
 fn compile_service_consumes_injected_packages_without_rediscovery() {
     let document = document();
-    let packages = resolved("trait AppInjectedMarker:\n");
+    let packages = resolved("export trait AppInjectedMarker:\n");
     let mut service = CompileService::new();
 
     assert!(service
@@ -99,8 +99,8 @@ fn compile_service_consumes_injected_packages_without_rediscovery() {
 #[test]
 fn changed_resolved_package_bytes_do_not_reuse_a_stale_entry() {
     let document = document();
-    let first_packages = resolved("trait AppInjectedMarker:\n");
-    let changed_packages = resolved("trait AppInjectedMarker:\ntrait AdditionalMarker:\n");
+    let first_packages = resolved("export trait AppInjectedMarker:\n");
+    let changed_packages = resolved("export trait AppInjectedMarker:\ntrait AdditionalMarker:\n");
     let mut service = CompileService::new();
 
     let first_key =
@@ -123,8 +123,8 @@ fn changed_resolved_package_bytes_do_not_reuse_a_stale_entry() {
 #[test]
 fn different_available_export_indexes_do_not_share_a_cache_entry() {
     let document = document();
-    let narrow = resolved("trait AppInjectedMarker:\n");
-    let wider = resolved_with_unused_package("trait AppInjectedMarker:\n");
+    let narrow = resolved("export trait AppInjectedMarker:\n");
+    let wider = resolved_with_unused_package("export trait AppInjectedMarker:\n");
     let narrow_key = CompileKey::of_with_packages(&document, &narrow).expect("narrow key");
     let wider_key = CompileKey::of_with_packages(&document, &wider).expect("wider key");
 
@@ -140,4 +140,36 @@ fn different_available_export_indexes_do_not_share_a_cache_entry() {
         .expect("wider compile");
     assert_eq!(service.stats(), (0, 2));
     assert_eq!(service.len(), 2);
+}
+
+#[test]
+fn changing_only_a_project_alias_cannot_reuse_a_compiled_system() {
+    let catalog = LibraryCatalog::with_packages([
+        injected_package("export marker trait AppInjectedMarker:\n"),
+        PackageSources {
+            config: "schema = 2\nid = \"catalog:other\"\nversion = \"1\"\nlayer = \"reference\"\ncapabilities = [\"traits\"]\ncode = [\"main.lang\"]\n".into(),
+            code: "export marker trait Other:\n".into(), ..Default::default()
+        },
+    ]).unwrap();
+    let mut spec = PackageSpec::default()
+        .with_root(PackageId::new("plugin", "app-probe"))
+        .with_root(PackageId::new("catalog", "other"));
+    spec.aliases
+        .insert("English".into(), PackageId::new("plugin", "app-probe"));
+    let original = catalog.resolve(&spec).unwrap();
+    spec.aliases
+        .insert("English".into(), PackageId::new("catalog", "other"));
+    let changed = catalog.resolve(&spec).unwrap();
+    let doc = LanguageDocument::import_new_root(
+        "sign probe:\n    belongs English.AppInjectedMarker\n",
+        "app:aliases",
+    )
+    .unwrap();
+    let original_key = CompileKey::of_with_packages(&doc, &original).unwrap();
+    let changed_key = CompileKey::of_with_packages(&doc, &changed).unwrap();
+    assert_eq!(original_key.library_lock, changed_key.library_lock);
+    assert_ne!(original_key.package_aliases, changed_key.package_aliases);
+    let mut service = CompileService::new();
+    assert!(service.get_with_packages(&doc, &original).is_ok());
+    assert!(service.get_with_packages(&doc, &changed).is_err());
 }

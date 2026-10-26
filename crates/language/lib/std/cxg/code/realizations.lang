@@ -4,7 +4,7 @@
    keywords. A natural-language package may inherit one of these patterns or
    provide a different realization. */
 
-trait PrepositionalPhrase:
+export trait PrepositionalPhrase:
     belongs AdpositionConstruction
     AdpositionConstruction[0]
     phon:
@@ -17,7 +17,7 @@ trait PrepositionalPhrase:
         before($slot.marker, $slot.complement)
         adjacent($slot.marker, $slot.complement)
 
-trait PostpositionalPhrase:
+export trait PostpositionalPhrase:
     belongs AdpositionConstruction
     AdpositionConstruction[0]
     phon:
@@ -30,7 +30,7 @@ trait PostpositionalPhrase:
         before($slot.complement, $slot.marker)
         adjacent($slot.complement, $slot.marker)
 
-trait SVOTransitiveClause:
+export trait SVOTransitiveClause:
     belongs TransitiveClauseConstruction
     TransitiveClauseConstruction[0]
     phon:
@@ -45,7 +45,7 @@ trait SVOTransitiveClause:
         adjacent($slot.subject, $slot.predicate)
         adjacent($slot.predicate, $slot.object)
 
-trait OVSTransitiveClause:
+export trait OVSTransitiveClause:
     belongs TransitiveClauseConstruction
     TransitiveClauseConstruction[0]
     phon:
@@ -60,7 +60,7 @@ trait OVSTransitiveClause:
         adjacent($slot.object, $slot.predicate)
         adjacent($slot.predicate, $slot.subject)
 
-trait PrefixNegation:
+export trait PrefixNegation:
     belongs NegationConstruction
     NegationConstruction[0]
     syn:
@@ -72,7 +72,7 @@ trait PrefixNegation:
         before($slot.negator, $slot.predicate)
         adjacent($slot.negator, $slot.predicate)
 
-trait SuffixNegation:
+export trait SuffixNegation:
     belongs NegationConstruction
     NegationConstruction[0]
     syn:
@@ -84,7 +84,7 @@ trait SuffixNegation:
         before($slot.predicate, $slot.negator)
         adjacent($slot.predicate, $slot.negator)
 
-trait InitialPolarQuestion:
+export trait InitialPolarQuestion:
     belongs PolarQuestionConstruction
     PolarQuestionConstruction[0]
     syn:
@@ -96,7 +96,7 @@ trait InitialPolarQuestion:
         before($slot.particle, $slot.clause)
         adjacent($slot.particle, $slot.clause)
 
-trait SerialPredicate:
+export trait SerialPredicate:
     belongs SerialPredicateConstruction
     SerialPredicateConstruction[0]
     phon:

@@ -109,9 +109,10 @@ fn sense_names(language: &Language, sign: &str) -> Vec<String> {
 
 fn new_sign(name: &str, gloss: &str) -> SignDef {
     SignDef {
+        exported: false,
         id: SignId::synthetic(),
         name: name.to_owned(),
-        items: vec![
+        body: (vec![
             SignItem::TraitMount {
                 name: "LocalNoun".to_owned(),
                 kind: conlang_language::TraitMountKind::Declaration,
@@ -122,7 +123,8 @@ fn new_sign(name: &str, gloss: &str) -> SignDef {
                 gloss: gloss.to_owned(),
                 source: conlang_language::SourceLocation::unknown(),
             }),
-        ],
+        ])
+        .into(),
     }
 }
 

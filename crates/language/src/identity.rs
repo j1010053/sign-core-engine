@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{metadata, Language, Realization, RuleId, SignId, SignItem, SlotConstraint};
 
+mod legacy_refs;
+mod legacy_refs_v2;
+
 pub const IDENTITY_SCHEMA_V2: &str = "conlang.language-identities/v2";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -21,6 +24,11 @@ pub enum IdentityNamespace {
     Document(String),
     Library(String),
     Synthetic,
+    /// A compiled handle: source node plus a concrete owner/type environment.
+    Instantiation {
+        source: Box<NodeId>,
+        arguments: String,
+    },
 }
 
 impl fmt::Display for IdentityNamespace {
@@ -31,6 +39,9 @@ impl fmt::Display for IdentityNamespace {
                 formatter.write_str(value)
             }
             IdentityNamespace::Synthetic => formatter.write_str("synthetic"),
+            IdentityNamespace::Instantiation { source, arguments } => {
+                write!(formatter, "instance({source};{arguments})")
+            }
         }
     }
 }
@@ -104,6 +115,7 @@ pub struct NodeRef {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum EditableField {
+    Exported,
     Name,
     Global,
     Marker,
@@ -236,6 +248,11 @@ pub enum RefTargetV1 {
         spelling: String,
         expected: NodeKind,
     },
+    /// A type-position reference whose declaration kind is resolved by the
+    /// package/lexical binder. It may name a trait or a Sign, never a Paradigm.
+    ExternalType {
+        spelling: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -263,6 +280,13 @@ pub struct IdentityManifestV2 {
     pub source_sha256: String,
     pub nodes: Vec<NodeEntryV1>,
     pub refs: Vec<RefBindingV1>,
+    /// Absent on original v2 documents. Version 2 binds nested owners, type
+    /// arguments and bounds with lexical parameter scope. Version 3 also binds
+    /// Sign scopes, inherited aliases and nested autofill arguments; version 4
+    /// adds Sign type references and type-bearing rule guards. Loaded legacy
+    /// manifests retain their exact bytes/digest until an edit upgrades them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_semantics: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -309,6 +333,7 @@ impl LanguageDocument {
         let nodes = enumerate_nodes(&language, &namespace, &mut next);
         bind_runtime_ids(&mut language, &nodes)?;
         let refs = collect_refs(&language, &nodes);
+        let reference_semantics = reference_semantics(&language, &nodes, &refs);
         let identities = IdentityManifestV2 {
             schema: IDENTITY_SCHEMA_V2.to_owned(),
             root_namespace: namespace.clone(),
@@ -320,6 +345,7 @@ impl LanguageDocument {
             source_sha256: sha256_hex(canonical_source.as_bytes()),
             nodes,
             refs,
+            reference_semantics,
         };
         Ok(LanguageDocument {
             language,
@@ -353,7 +379,17 @@ impl LanguageDocument {
             .map_err(|error| IdentityError::Parse(error.to_string()))?;
         validate_shape(&language, &identities)?;
         bind_runtime_ids(&mut language, &identities.nodes)?;
-        let actual_refs = collect_refs(&language, &identities.nodes);
+        let actual_refs = match identities.reference_semantics {
+            None => legacy_refs::collect_refs(&language, &identities.nodes),
+            Some(2) => legacy_refs_v2::collect_refs(&language, &identities.nodes),
+            Some(3) => collect_refs_v3(&language, &identities.nodes),
+            Some(4) => collect_refs(&language, &identities.nodes),
+            Some(other) => {
+                return Err(IdentityError::InvalidManifest(format!(
+                    "unsupported reference_semantics {other}"
+                )))
+            }
+        };
         if actual_refs != identities.refs {
             return Err(IdentityError::ShapeMismatch(
                 "reference bindings differ from the sidecar".to_owned(),
@@ -514,33 +550,24 @@ impl LanguageDocument {
     }
 
     pub fn ref_for_sign(&self, name: &str) -> Option<NodeRef> {
-        let index = self
-            .language
-            .signs
-            .iter()
-            .position(|sign| sign.name == name)?;
-        self.node_at(&NodeAddress(vec![AddressSegment::Signs(index)]))
-            .map(|entry| NodeRef::new(entry.id.clone(), NodeKind::Sign))
+        self.ref_for_declaration(name, NodeKind::Sign)
     }
-
     pub fn ref_for_trait(&self, name: &str) -> Option<NodeRef> {
-        let index = self
-            .language
-            .traits
-            .iter()
-            .position(|item| item.name == name)?;
-        self.node_at(&NodeAddress(vec![AddressSegment::Traits(index)]))
-            .map(|entry| NodeRef::new(entry.id.clone(), NodeKind::Trait))
+        self.ref_for_declaration(name, NodeKind::Trait)
+    }
+    pub fn ref_for_paradigm(&self, name: &str) -> Option<NodeRef> {
+        self.ref_for_declaration(name, NodeKind::Paradigm)
     }
 
-    pub fn ref_for_paradigm(&self, name: &str) -> Option<NodeRef> {
-        let index = self
-            .language
-            .paradigms
+    fn ref_for_declaration(&self, name: &str, kind: NodeKind) -> Option<NodeRef> {
+        self.identities
+            .nodes
             .iter()
-            .position(|item| item.name == name)?;
-        self.node_at(&NodeAddress(vec![AddressSegment::Paradigms(index)]))
-            .map(|entry| NodeRef::new(entry.id.clone(), NodeKind::Paradigm))
+            .find(|entry| {
+                entry.kind == kind
+                    && declaration_name(&self.language, &entry.address).as_deref() == Some(name)
+            })
+            .map(|entry| NodeRef::new(entry.id.clone(), kind))
     }
 
     /// Controlled bridge for the edit crate.  Reconstitution validates every
@@ -571,7 +598,7 @@ impl LanguageDocument {
         identities.refs = collect_refs(&language, &identities.nodes)
             .into_iter()
             .map(|mut binding| {
-                if matches!(binding.target, RefTargetV1::External { .. }) {
+                if matches!(&binding.target, RefTargetV1::External { spelling, .. } | RefTargetV1::ExternalType { spelling } if !reference_is_parameter(&language, &identities.nodes, &binding.owner, spelling)) {
                     if let Some(RefTargetV1::Local { target }) =
                         previous_refs.get(&(binding.owner.clone(), binding.field.clone()))
                     {
@@ -583,6 +610,11 @@ impl LanguageDocument {
                 binding
             })
             .collect();
+        identities.reference_semantics = identities.reference_semantics.max(reference_semantics(
+            &language,
+            &identities.nodes,
+            &identities.refs,
+        ));
         identities.source_sha256 = sha256_hex(language.dump().as_bytes());
         identities
             .nodes
@@ -717,12 +749,36 @@ fn canonicalize_named_containers(language: &mut Language, identities: &mut Ident
             _ => {}
         }
     }
+    for (segment, members) in language.member_scopes_mut() {
+        let prefix = NodeAddress(vec![segment.clone()]);
+        let mut nested = identities.clone();
+        nested
+            .nodes
+            .retain(|entry| entry.address.0.len() > 1 && entry.address.starts_with(&prefix));
+        for entry in &mut nested.nodes {
+            entry.address.0.remove(0);
+        }
+        canonicalize_named_containers(members, &mut nested);
+        for mut entry in nested.nodes {
+            entry.address.0.insert(0, segment.clone());
+            if let Some(original) = identities
+                .nodes
+                .iter_mut()
+                .find(|original| original.id == entry.id)
+            {
+                original.address = entry.address;
+            }
+        }
+    }
 }
 
 fn editable_field(kind: NodeKind, name: &str) -> Option<EditableField> {
     match (kind, name) {
         (NodeKind::Trait | NodeKind::Paradigm | NodeKind::Sign, "name") => {
             Some(EditableField::Name)
+        }
+        (NodeKind::Trait | NodeKind::Sign | NodeKind::Paradigm, "exported") => {
+            Some(EditableField::Exported)
         }
         (NodeKind::Trait, "global") => Some(EditableField::Global),
         (NodeKind::Trait, "marker") => Some(EditableField::Marker),
@@ -1201,20 +1257,48 @@ fn enumerate_nodes(language: &Language, namespace: &str, next: &mut u64) -> Vec<
             NodeAddress(vec![AddressSegment::Distribution(index)]),
         );
     }
+    enumerate_scope(
+        language,
+        &root,
+        &NodeAddress::root(),
+        namespace,
+        next,
+        &mut entries,
+    );
+    entries.sort_by(|left, right| left.id.cmp(&right.id));
+    entries
+}
+
+fn enumerate_scope(
+    language: &Language,
+    root: &NodeId,
+    base: &NodeAddress,
+    namespace: &str,
+    next: &mut u64,
+    entries: &mut Vec<NodeEntryV1>,
+) {
     for (trait_index, trait_def) in language.traits.iter().enumerate() {
-        let trait_address = NodeAddress(vec![AddressSegment::Traits(trait_index)]);
+        let trait_address = base.child(AddressSegment::Traits(trait_index));
         let trait_id = push_entry(
-            &mut entries,
+            entries,
             namespace,
             next,
             NodeKind::Trait,
             Some(root.clone()),
             trait_address.clone(),
         );
+        enumerate_scope(
+            &trait_def.members,
+            &trait_id,
+            &trait_address,
+            namespace,
+            next,
+            entries,
+        );
         for (block_index, block) in trait_def.blocks.iter().enumerate() {
             let block_address = trait_address.child(AddressSegment::Blocks(block_index));
             let block_id = push_entry(
-                &mut entries,
+                entries,
                 namespace,
                 next,
                 NodeKind::Block,
@@ -1224,21 +1308,21 @@ fn enumerate_nodes(language: &Language, namespace: &str, next: &mut u64) -> Vec<
             for (item_index, item) in block.items.iter().enumerate() {
                 let address = block_address.child(AddressSegment::Items(item_index));
                 let item_id = push_entry(
-                    &mut entries,
+                    entries,
                     namespace,
                     next,
                     item_kind(item),
                     Some(block_id.clone()),
                     address.clone(),
                 );
-                enumerate_item_children(item, &address, &item_id, namespace, next, &mut entries);
+                enumerate_item_children(item, &address, &item_id, namespace, next, entries);
             }
         }
     }
     for (paradigm_index, paradigm) in language.paradigms.iter().enumerate() {
-        let paradigm_address = NodeAddress(vec![AddressSegment::Paradigms(paradigm_index)]);
+        let paradigm_address = base.child(AddressSegment::Paradigms(paradigm_index));
         let paradigm_id = push_entry(
-            &mut entries,
+            entries,
             namespace,
             next,
             NodeKind::Paradigm,
@@ -1247,7 +1331,7 @@ fn enumerate_nodes(language: &Language, namespace: &str, next: &mut u64) -> Vec<
         );
         let case_address = paradigm_address.child(AddressSegment::CaseExpression);
         let case_id = push_entry(
-            &mut entries,
+            entries,
             namespace,
             next,
             NodeKind::Case,
@@ -1266,34 +1350,40 @@ fn enumerate_nodes(language: &Language, namespace: &str, next: &mut u64) -> Vec<
             &case_id,
             namespace,
             next,
-            &mut entries,
+            entries,
         );
     }
     for (sign_index, sign) in language.signs.iter().enumerate() {
-        let sign_address = NodeAddress(vec![AddressSegment::Signs(sign_index)]);
+        let sign_address = base.child(AddressSegment::Signs(sign_index));
         let sign_id = push_entry(
-            &mut entries,
+            entries,
             namespace,
             next,
             NodeKind::Sign,
             Some(root.clone()),
             sign_address.clone(),
         );
+        enumerate_scope(
+            &sign.members,
+            &sign_id,
+            &sign_address,
+            namespace,
+            next,
+            entries,
+        );
         for (item_index, item) in sign.items.iter().enumerate() {
             let address = sign_address.child(AddressSegment::Items(item_index));
             let item_id = push_entry(
-                &mut entries,
+                entries,
                 namespace,
                 next,
                 item_kind(item),
                 Some(sign_id.clone()),
                 address.clone(),
             );
-            enumerate_item_children(item, &address, &item_id, namespace, next, &mut entries);
+            enumerate_item_children(item, &address, &item_id, namespace, next, entries);
         }
     }
-    entries.sort_by(|left, right| left.id.cmp(&right.id));
-    entries
 }
 
 fn expected_shape(language: &Language) -> Vec<(NodeAddress, NodeKind)> {
@@ -1410,15 +1500,18 @@ fn bind_runtime_ids(language: &mut Language, nodes: &[NodeEntryV1]) -> Result<()
                 entry.id
             )));
         };
-        match entry.address.0.as_slice() {
+        let (scope, local_address) = language
+            .scope_at_address_mut(&entry.address.0)
+            .ok_or_else(|| IdentityError::ShapeMismatch("invalid lexical scope".into()))?;
+        match local_address {
             [AddressSegment::Signs(index)] if entry.kind == NodeKind::Sign => {
-                let sign = language.signs.get_mut(*index).ok_or_else(|| {
+                let sign = scope.signs.get_mut(*index).ok_or_else(|| {
                     IdentityError::ShapeMismatch("sign address is out of bounds".to_owned())
                 })?;
                 sign.id = SignId::document(namespace, entry.id.ordinal);
             }
             [AddressSegment::Paradigms(index)] if entry.kind == NodeKind::Paradigm => {
-                let paradigm = language.paradigms.get_mut(*index).ok_or_else(|| {
+                let paradigm = scope.paradigms.get_mut(*index).ok_or_else(|| {
                     IdentityError::ShapeMismatch("paradigm address is out of bounds".to_owned())
                 })?;
                 paradigm.id = crate::ParadigmId::document(namespace, entry.id.ordinal);
@@ -1450,9 +1543,31 @@ fn bind_rule(
     }
 }
 
+pub fn declaration_name(language: &Language, address: &NodeAddress) -> Option<String> {
+    fn walk(language: &Language, path: &[AddressSegment]) -> Option<String> {
+        match path {
+            [AddressSegment::Traits(index)] => Some(language.traits.get(*index)?.name.clone()),
+            [AddressSegment::Signs(index)] => Some(language.signs.get(*index)?.name.clone()),
+            [AddressSegment::Paradigms(index)] => {
+                Some(language.paradigms.get(*index)?.name.clone())
+            }
+            [owner @ (AddressSegment::Traits(_) | AddressSegment::Signs(_)), rest @ ..] => {
+                let name = walk(language, std::slice::from_ref(owner))?;
+                Some(format!(
+                    "{name}.{}",
+                    walk(language.members_at(owner)?, rest)?
+                ))
+            }
+            _ => None,
+        }
+    }
+    walk(language, &address.0)
+}
+
 fn node_ids_by_name(
     language: &Language,
     entries: &[NodeEntryV1],
+    instance_types: bool,
 ) -> (
     BTreeMap<String, NodeId>,
     BTreeMap<String, NodeId>,
@@ -1462,23 +1577,40 @@ fn node_ids_by_name(
     let mut signs = BTreeMap::new();
     let mut paradigms = BTreeMap::new();
     for entry in entries {
-        match entry.address.0.as_slice() {
-            [AddressSegment::Traits(index)] if entry.kind == NodeKind::Trait => {
-                if let Some(trait_def) = language.traits.get(*index) {
-                    traits.insert(trait_def.name.clone(), entry.id.clone());
-                }
+        let Some(name) = declaration_name(language, &entry.address) else {
+            continue;
+        };
+        match entry.kind {
+            NodeKind::Trait => {
+                traits.insert(name, entry.id.clone());
             }
-            [AddressSegment::Signs(index)] if entry.kind == NodeKind::Sign => {
-                if let Some(sign) = language.signs.get(*index) {
-                    signs.insert(sign.name.clone(), entry.id.clone());
-                }
+            NodeKind::Sign => {
+                signs.insert(name, entry.id.clone());
             }
-            [AddressSegment::Paradigms(index)] if entry.kind == NodeKind::Paradigm => {
-                if let Some(paradigm) = language.paradigms.get(*index) {
-                    paradigms.insert(paradigm.name.clone(), entry.id.clone());
-                }
+            NodeKind::Paradigm => {
+                paradigms.insert(name, entry.id.clone());
             }
             _ => {}
+        }
+    }
+    if let Ok(bound) = crate::specialization::qualify_members(language) {
+        if let Ok(scopes) = crate::specialization::MemberScopes::new(&Language::new(), &bound) {
+            let aliases = if instance_types {
+                scopes.source_aliases(language)
+            } else {
+                scopes.source_aliases_v3(language)
+            };
+            for (kind, alias, source) in aliases.unwrap_or_default() {
+                let map = match kind {
+                    crate::LibraryExportKind::Trait => &mut traits,
+                    crate::LibraryExportKind::Sign => &mut signs,
+                    crate::LibraryExportKind::Paradigm => &mut paradigms,
+                    crate::LibraryExportKind::Function => continue,
+                };
+                if let Some(id) = map.get(&source).cloned() {
+                    map.insert(alias, id);
+                }
+            }
         }
     }
     (traits, signs, paradigms)
@@ -1489,7 +1621,10 @@ fn reference_target(
     expected: NodeKind,
     locals: &BTreeMap<String, NodeId>,
 ) -> RefTargetV1 {
-    match locals.get(spelling) {
+    let path = crate::type_ref::TypeRef::parse(spelling)
+        .map(|t| t.path())
+        .unwrap_or_else(|_| spelling.into());
+    match locals.get(&path) {
         Some(id) => RefTargetV1::Local {
             target: NodeRef::new(id.clone(), expected),
         },
@@ -1505,11 +1640,14 @@ fn callable_reference_target(
     signs: &BTreeMap<String, NodeId>,
     paradigms: &BTreeMap<String, NodeId>,
 ) -> RefTargetV1 {
-    if let Some(id) = signs.get(spelling) {
+    let path = crate::type_ref::TypeRef::parse(spelling)
+        .map(|t| t.path())
+        .unwrap_or_else(|_| spelling.into());
+    if let Some(id) = signs.get(&path) {
         RefTargetV1::Local {
             target: NodeRef::new(id.clone(), NodeKind::Sign),
         }
-    } else if let Some(id) = paradigms.get(spelling) {
+    } else if let Some(id) = paradigms.get(&path) {
         RefTargetV1::Local {
             target: NodeRef::new(id.clone(), NodeKind::Paradigm),
         }
@@ -1525,6 +1663,9 @@ fn callable_reference_target(
 }
 
 fn item_at<'a>(language: &'a Language, address: &NodeAddress) -> Option<&'a SignItem> {
+    let (language, local_address) = language.scope_at_address(&address.0)?;
+    let address = &NodeAddress(local_address.to_vec());
+
     fn expression_item_at<'a>(
         expression: &'a crate::Expression,
         path: &[AddressSegment],
@@ -1624,6 +1765,9 @@ fn item_at<'a>(language: &'a Language, address: &NodeAddress) -> Option<&'a Sign
 }
 
 fn item_at_mut<'a>(language: &'a mut Language, address: &NodeAddress) -> Option<&'a mut SignItem> {
+    let (language, local_address) = language.scope_at_address_mut(&address.0)?;
+    let address = &NodeAddress(local_address.to_vec());
+
     fn expression_item_at_mut<'a>(
         expression: &'a mut crate::Expression,
         path: &[AddressSegment],
@@ -1726,6 +1870,7 @@ fn collect_application_refs(
     address: &NodeAddress,
     owner: &NodeId,
     entries: &[NodeEntryV1],
+    traits: &BTreeMap<String, NodeId>,
     signs: &BTreeMap<String, NodeId>,
     paradigms: &BTreeMap<String, NodeId>,
     refs: &mut Vec<RefBindingV1>,
@@ -1735,6 +1880,16 @@ fn collect_application_refs(
         field: "application.callee".to_owned(),
         target: callable_reference_target(&application.callee, signs, paradigms),
     });
+    if application.callee.contains('<') || application.callee.contains('.') {
+        collect_reference_type_parts(
+            &application.callee,
+            "application.type_ref",
+            owner,
+            traits,
+            refs,
+            false,
+        );
+    }
     for (index, argument) in application.arguments.iter().enumerate() {
         let crate::SignArgumentValue::Application(nested) = &argument.value else {
             continue;
@@ -1748,6 +1903,7 @@ fn collect_application_refs(
             &nested_address,
             &nested_entry.id,
             entries,
+            traits,
             signs,
             paradigms,
             refs,
@@ -1777,6 +1933,7 @@ fn collect_expression_refs(
                     address,
                     &owner,
                     entries,
+                    traits,
                     signs,
                     paradigms,
                     refs,
@@ -1817,6 +1974,15 @@ fn collect_case_refs(
                 field: format!("case.belongs[{belongs_index}]"),
                 target: reference_target(category, NodeKind::Trait, traits),
             });
+            if category.contains('<') || category.contains('.') {
+                collect_type_reference_refs(
+                    category,
+                    &format!("case.belongs[{belongs_index}].type_ref"),
+                    &branch_entry.id,
+                    traits,
+                    refs,
+                );
+            }
         }
         match &branch.condition {
             crate::CaseCondition::Guard(guard) => {
@@ -1826,6 +1992,15 @@ fn collect_case_refs(
                         field: format!("case.guard[{guard_index}].category"),
                         target: reference_target(&category, NodeKind::Trait, traits),
                     });
+                    if category.contains('<') || category.contains('.') {
+                        collect_type_reference_refs(
+                            &category,
+                            &format!("case.guard[{guard_index}].type_ref"),
+                            &branch_entry.id,
+                            traits,
+                            refs,
+                        );
+                    }
                 }
             }
             crate::CaseCondition::Equals(category)
@@ -1889,10 +2064,207 @@ fn guard_category_references(source: &str) -> Vec<(usize, String)> {
         .collect()
 }
 
-fn collect_refs(language: &Language, entries: &[NodeEntryV1]) -> Vec<RefBindingV1> {
-    let (traits, signs, paradigms) = node_ids_by_name(language, entries);
+fn reference_is_parameter(
+    language: &Language,
+    entries: &[NodeEntryV1],
+    owner: &NodeId,
+    spelling: &str,
+) -> bool {
+    let Some(entry) = entries.iter().find(|entry| &entry.id == owner) else {
+        return false;
+    };
+    let Ok(reference) = crate::type_ref::TypeRef::parse(spelling) else {
+        return false;
+    };
+    let mut prefix = NodeAddress::root();
+    for segment in &entry.address.0 {
+        if !matches!(
+            segment,
+            AddressSegment::Traits(_) | AddressSegment::Signs(_)
+        ) {
+            break;
+        }
+        prefix.0.push(segment.clone());
+        if let Some((scope, [AddressSegment::Traits(index)])) = language.scope_at_address(&prefix.0)
+        {
+            if scope.traits[*index]
+                .type_params
+                .iter()
+                .any(|p| p.name == reference.segments[0].name)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn collect_type_reference_refs(
+    spelling: &str,
+    field: &str,
+    owner: &NodeId,
+    traits: &BTreeMap<String, NodeId>,
+    refs: &mut Vec<RefBindingV1>,
+) {
+    collect_reference_type_parts(spelling, field, owner, traits, refs, true);
+}
+
+fn collect_reference_type_parts(
+    spelling: &str,
+    field: &str,
+    owner: &NodeId,
+    traits: &BTreeMap<String, NodeId>,
+    refs: &mut Vec<RefBindingV1>,
+    terminal_is_trait: bool,
+) {
+    let Ok(reference) = crate::type_ref::TypeRef::parse(spelling) else {
+        return;
+    };
+    fn walk(
+        reference: &crate::type_ref::TypeRef,
+        field: &str,
+        owner: &NodeId,
+        traits: &BTreeMap<String, NodeId>,
+        refs: &mut Vec<RefBindingV1>,
+        terminal_is_trait: bool,
+    ) {
+        let mut path = String::new();
+        for (i, segment) in reference.segments.iter().enumerate() {
+            if i != 0 {
+                path.push('.');
+            }
+            path.push_str(&segment.name);
+            if terminal_is_trait || i + 1 < reference.segments.len() {
+                refs.push(RefBindingV1 {
+                    owner: owner.clone(),
+                    field: format!("{field}.segment.{i}"),
+                    target: reference_target(&path, NodeKind::Trait, traits),
+                });
+            }
+            for (j, argument) in segment.arguments.iter().enumerate() {
+                walk(
+                    &argument.value,
+                    &format!("{field}.segment.{i}.argument.{j}"),
+                    owner,
+                    traits,
+                    refs,
+                    true,
+                );
+            }
+        }
+    }
+    walk(&reference, field, owner, traits, refs, terminal_is_trait);
+}
+
+fn reference_semantics(
+    language: &Language,
+    entries: &[NodeEntryV1],
+    refs: &[RefBindingV1],
+) -> Option<u32> {
+    if refs != collect_refs_v3(language, entries) {
+        Some(4)
+    } else if refs != legacy_refs_v2::collect_refs(language, entries) {
+        Some(3)
+    } else if language.has_members() || refs != legacy_refs::collect_refs(language, entries) {
+        Some(2)
+    } else {
+        None
+    }
+}
+
+fn collect_inline_argument_refs(
+    application: &crate::SignApplication,
+    field: &str,
+    owner: &NodeId,
+    traits: &BTreeMap<String, NodeId>,
+    signs: &BTreeMap<String, NodeId>,
+    paradigms: &BTreeMap<String, NodeId>,
+    refs: &mut Vec<RefBindingV1>,
+) {
+    for (index, argument) in application.arguments.iter().enumerate() {
+        if let crate::SignArgumentValue::Application(nested) = &argument.value {
+            let field = format!("{field}.argument.{index}");
+            refs.push(RefBindingV1 {
+                owner: owner.clone(),
+                field: format!("{field}.callee"),
+                target: callable_reference_target(&nested.callee, signs, paradigms),
+            });
+            if nested.callee.contains('<') || nested.callee.contains('.') {
+                collect_reference_type_parts(
+                    &nested.callee,
+                    &format!("{field}.type_ref"),
+                    owner,
+                    traits,
+                    refs,
+                    false,
+                );
+            }
+            collect_inline_argument_refs(nested, &field, owner, traits, signs, paradigms, refs);
+        }
+    }
+}
+
+// Frozen v3 binding remains the shared structural traversal. The v4 pass
+// below refines type-position targets without changing historical sidecars.
+fn collect_refs_v3(language: &Language, entries: &[NodeEntryV1]) -> Vec<RefBindingV1> {
+    let (traits, signs, paradigms) = node_ids_by_name(language, entries, false);
     let mut refs = Vec::new();
     for entry in entries {
+        let (mut traits, mut signs, mut paradigms) =
+            (traits.clone(), signs.clone(), paradigms.clone());
+        let mut prefix = NodeAddress::root();
+        let mut parameters = std::collections::BTreeSet::new();
+        for segment in &entry.address.0 {
+            if !matches!(
+                segment,
+                AddressSegment::Traits(_) | AddressSegment::Signs(_)
+            ) {
+                break;
+            }
+            prefix.0.push(segment.clone());
+            if let Some((scope, [AddressSegment::Traits(index)])) =
+                language.scope_at_address(&prefix.0)
+            {
+                parameters.extend(
+                    scope.traits[*index]
+                        .type_params
+                        .iter()
+                        .map(|p| p.name.clone()),
+                );
+            }
+            if let Some(owner) = declaration_name(language, &prefix) {
+                for map in [&mut traits, &mut signs, &mut paradigms] {
+                    let aliases = map
+                        .iter()
+                        .filter_map(|(name, id)| {
+                            name.strip_prefix(&format!("{owner}."))
+                                .map(|name| (name.to_owned(), id.clone()))
+                        })
+                        .collect::<Vec<_>>();
+                    map.extend(aliases);
+                }
+            }
+        }
+        for parameter in parameters {
+            traits.remove(&parameter);
+        }
+        if entry.kind == NodeKind::Trait {
+            if let Some((scope, [AddressSegment::Traits(index)])) =
+                language.scope_at_address(&entry.address.0)
+            {
+                for (index, parameter) in scope.traits[*index].type_params.iter().enumerate() {
+                    if let Some(bound) = &parameter.bound {
+                        collect_type_reference_refs(
+                            bound,
+                            &format!("type_params.{index}.bound"),
+                            &entry.id,
+                            &traits,
+                            &mut refs,
+                        );
+                    }
+                }
+            }
+        }
         let Some(item) = item_at(language, &entry.address) else {
             continue;
         };
@@ -1952,6 +2324,78 @@ fn collect_refs(language: &Language, entries: &[NodeEntryV1]) -> Vec<RefBindingV
                 target,
             });
         }
+        let direct_type = match item {
+            SignItem::TraitMount { name, args, .. } => {
+                Some(crate::type_ref::TypeRef::mount(name, args).map(|r| r.to_string()))
+            }
+            SignItem::Slot(slot) => slot.constraint.category().map(|name| Ok(name.to_owned())),
+            SignItem::RoleDecl(role) => role.constraint.category().map(|name| Ok(name.to_owned())),
+            _ => None,
+        };
+        if let Some(Ok(name)) = direct_type {
+            if name.contains('<') || name.contains('.') {
+                collect_type_reference_refs(&name, "type_ref.0", &entry.id, &traits, &mut refs);
+            }
+        }
+        match item {
+            SignItem::SlotMap(crate::SlotMapOp::AutoFillCall { filler, .. })
+                if filler.callee.contains('<') || filler.callee.contains('.') =>
+            {
+                collect_reference_type_parts(
+                    &filler.callee,
+                    "slot_map.type_ref",
+                    &entry.id,
+                    &traits,
+                    &mut refs,
+                    false,
+                )
+            }
+            SignItem::SlotMap(crate::SlotMapOp::AutoFill { filler, .. })
+                if filler.contains('<') || filler.contains('.') =>
+            {
+                collect_reference_type_parts(
+                    filler,
+                    "slot_map.type_ref",
+                    &entry.id,
+                    &traits,
+                    &mut refs,
+                    false,
+                )
+            }
+            _ => {}
+        }
+        if let SignItem::SlotMap(crate::SlotMapOp::AutoFillCall { filler, .. }) = item {
+            collect_inline_argument_refs(
+                filler, "slot_map", &entry.id, &traits, &signs, &paradigms, &mut refs,
+            );
+        }
+        if let SignItem::Def(def) = item {
+            let names = match def.path.as_str() {
+                "origin" => metadata::parse_origin(&def.value).map(|r| vec![r]),
+                "components" => metadata::parse_components(&def.value),
+                _ => None,
+            };
+            for (index, name) in names.into_iter().flatten().enumerate() {
+                let field = format!("{}.{index}", def.path);
+                if def.path == "components" {
+                    refs.push(RefBindingV1 {
+                        owner: entry.id.clone(),
+                        field: field.clone(),
+                        target: reference_target(&name.0, NodeKind::Sign, &signs),
+                    });
+                }
+                if name.0.contains('<') || name.0.contains('.') {
+                    collect_reference_type_parts(
+                        &name.0,
+                        &format!("{field}.type_ref"),
+                        &entry.id,
+                        &traits,
+                        &mut refs,
+                        false,
+                    );
+                }
+            }
+        }
         match item {
             SignItem::SignExpression(expression) => collect_expression_refs(
                 &expression.expression,
@@ -1996,12 +2440,46 @@ fn collect_refs(language: &Language, entries: &[NodeEntryV1]) -> Vec<RefBindingV
             _ => {}
         }
     }
-    for (index, paradigm) in language.paradigms.iter().enumerate() {
-        let case_address = NodeAddress(vec![
-            AddressSegment::Paradigms(index),
-            AddressSegment::CaseExpression,
-        ]);
+    for entry in entries.iter().filter(|e| e.kind == NodeKind::Paradigm) {
+        let Some((scope, [AddressSegment::Paradigms(index)])) =
+            language.scope_at_address(&entry.address.0)
+        else {
+            continue;
+        };
+        let paradigm = &scope.paradigms[*index];
+        let case_address = entry.address.child(AddressSegment::CaseExpression);
         let case_owner = entry_at(entries, &case_address, NodeKind::Case).map(|entry| &entry.id);
+        let (mut traits, mut signs, mut paradigms) =
+            (traits.clone(), signs.clone(), paradigms.clone());
+        let mut prefix = NodeAddress::root();
+        for segment in &entry.address.0 {
+            if !matches!(
+                segment,
+                AddressSegment::Traits(_) | AddressSegment::Signs(_)
+            ) {
+                break;
+            }
+            prefix.0.push(segment.clone());
+            if let Some((scope, [AddressSegment::Traits(index)])) =
+                language.scope_at_address(&prefix.0)
+            {
+                for parameter in &scope.traits[*index].type_params {
+                    traits.remove(&parameter.name);
+                }
+            }
+            if let Some(owner) = declaration_name(language, &prefix) {
+                for map in [&mut traits, &mut signs, &mut paradigms] {
+                    let aliases = map
+                        .iter()
+                        .filter_map(|(name, id)| {
+                            name.strip_prefix(&format!("{owner}."))
+                                .map(|name| (name.to_owned(), id.clone()))
+                        })
+                        .collect::<Vec<_>>();
+                    map.extend(aliases);
+                }
+            }
+        }
         collect_case_refs(
             &paradigm.selector,
             &case_address,
@@ -2012,6 +2490,145 @@ fn collect_refs(language: &Language, entries: &[NodeEntryV1]) -> Vec<RefBindingV
             &paradigms,
             &mut refs,
         );
+    }
+    // Intermediate type-reference segments can name Sign scopes as well as traits.
+    // The final category reference retains its original expected kind.
+    for binding in &mut refs {
+        if binding.field.contains(".segment.") {
+            if let RefTargetV1::External {
+                spelling,
+                expected: NodeKind::Trait,
+            } = &binding.target
+            {
+                let path = crate::type_ref::TypeRef::parse(spelling)
+                    .map(|r| r.path())
+                    .unwrap_or_else(|_| spelling.clone());
+                if let Some(id) = signs.get(&path) {
+                    binding.target = RefTargetV1::Local {
+                        target: NodeRef::new(id.clone(), NodeKind::Sign),
+                    };
+                }
+            }
+        }
+    }
+    refs.sort_by(|left, right| (&left.owner, &left.field).cmp(&(&right.owner, &right.field)));
+    refs
+}
+
+fn collect_refs(language: &Language, entries: &[NodeEntryV1]) -> Vec<RefBindingV1> {
+    let mut refs = collect_refs_v3(language, entries);
+    let (traits, signs, _) = node_ids_by_name(language, entries, true);
+    let scoped = |all: &BTreeMap<String, NodeId>, entry: &NodeEntryV1| {
+        let mut map = all.clone();
+        let mut prefix = NodeAddress::root();
+        for segment in &entry.address.0 {
+            if !matches!(
+                segment,
+                AddressSegment::Traits(_) | AddressSegment::Signs(_)
+            ) {
+                break;
+            }
+            prefix.0.push(segment.clone());
+            if let Some(owner) = declaration_name(language, &prefix) {
+                let aliases = all
+                    .iter()
+                    .filter_map(|(name, id)| {
+                        name.strip_prefix(&format!("{owner}."))
+                            .map(|local| (local.to_owned(), id.clone()))
+                    })
+                    .collect::<Vec<_>>();
+                map.extend(aliases);
+            }
+        }
+        map
+    };
+    // Textual rule guards also participate in identity tracking. Use the same
+    // reference visitor as compilation/rename, rather than another guard parser.
+    for entry in entries {
+        let Some(item @ (SignItem::Rule(_) | SignItem::FeatureRule(_))) =
+            item_at(language, &entry.address)
+        else {
+            continue;
+        };
+        let local_traits = scoped(&traits, entry);
+        let mut index = 0;
+        let _ = crate::package_scope::visit_items(&mut [item.clone()], &mut |name, kind| {
+            if kind != crate::package_scope::RefKind::Type {
+                return Ok(());
+            }
+            let field = format!("rule.type.{index}");
+            refs.push(RefBindingV1 {
+                owner: entry.id.clone(),
+                field: field.clone(),
+                target: reference_target(name, NodeKind::Trait, &local_traits),
+            });
+            if name.contains('.') || name.contains('<') {
+                collect_reference_type_parts(
+                    name,
+                    &field,
+                    &entry.id,
+                    &local_traits,
+                    &mut refs,
+                    true,
+                );
+            }
+            index += 1;
+            Ok(())
+        });
+    }
+    for binding in &mut refs {
+        let Some(entry) = entries.iter().find(|entry| entry.id == binding.owner) else {
+            continue;
+        };
+        let type_position = matches!(
+            binding.field.as_str(),
+            "slot.constraint" | "role.constraint" | "case.equals.category"
+        ) || binding.field.starts_with("case.guard[")
+            || binding.field.starts_with("rule.type.")
+            || (binding.field.contains(".segment.") && binding.field.contains(".argument."))
+            || (binding.field.starts_with("type_ref.")
+                && matches!(
+                    item_at(language, &entry.address),
+                    Some(SignItem::Slot(_) | SignItem::RoleDecl(_))
+                ));
+        if !type_position {
+            continue;
+        }
+        // The v3 segment pass could bind a captured parameter to a same-named
+        // global Sign. Correct that binding only in v4; v3 remains byte-stable.
+        if let RefTargetV1::Local { target } = &binding.target {
+            if let Some(name) = entries
+                .iter()
+                .find(|entry| entry.id == target.id)
+                .and_then(|entry| declaration_name(language, &entry.address))
+                .filter(|name| reference_is_parameter(language, entries, &entry.id, name))
+            {
+                binding.target = RefTargetV1::External {
+                    spelling: name,
+                    expected: NodeKind::Trait,
+                };
+            }
+        }
+        if let RefTargetV1::External {
+            spelling,
+            expected: NodeKind::Trait,
+        } = &binding.target
+        {
+            if reference_is_parameter(language, entries, &entry.id, spelling) {
+                continue;
+            }
+            let path = crate::type_ref::TypeRef::parse(spelling)
+                .map(|r| r.path())
+                .unwrap_or_else(|_| spelling.clone());
+            binding.target = match scoped(&signs, entry).get(&path) {
+                Some(id) => RefTargetV1::Local {
+                    target: NodeRef::new(id.clone(), NodeKind::Sign),
+                },
+                None => RefTargetV1::ExternalType {
+                    spelling: spelling.clone(),
+                },
+            };
+        }
     }
     refs.sort_by(|left, right| (&left.owner, &left.field).cmp(&(&right.owner, &right.field)));
     refs
@@ -2101,6 +2718,52 @@ pub fn sha256_hex(input: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn previous_type_reference_semantics_preserve_bytes_and_upgrade_only_on_edit() {
+        let source = "sign VP:\n    phon:\n        /a/\nsign Host:\n    syn:\n        slots:\n            item [VP]\n    phon:\n        /{$slot.item}/\n";
+        let current = LanguageDocument::import_new_root(source, "identity:type-v3").unwrap();
+        assert_eq!(current.identities.reference_semantics, Some(4));
+        let mut previous = current.identities.clone();
+        previous.reference_semantics = Some(3);
+        previous.refs = collect_refs_v3(current.language(), &previous.nodes);
+        let json = format!("{}\n", serde_json::to_string_pretty(&previous).unwrap());
+        let opened = LanguageDocument::open(&current.source(), &json).unwrap();
+        assert_eq!(opened.dump_pair().unwrap().1, json);
+        let stable = opened.ref_for_sign("VP").unwrap();
+        let (language, manifest) = opened.into_edit_parts();
+        let upgraded = LanguageDocument::from_edit_parts(language, manifest).unwrap();
+        assert_eq!(upgraded.identities.reference_semantics, Some(4));
+        assert_eq!(upgraded.ref_for_sign("VP").unwrap(), stable);
+        let (source, identities) = upgraded.dump_pair().unwrap();
+        assert_eq!(
+            LanguageDocument::open(&source, &identities).unwrap(),
+            upgraded
+        );
+    }
+
+    #[test]
+    fn previous_nested_reference_semantics_preserve_bytes_until_edit() {
+        let source = "trait Owner:\n    export sign leaf:\n        phon:\n            /a/\nsign use:\n    syn:\n        slots:\n            value [*]\n        map value autofill Owner.leaf()\n    phon:\n        /{$slot.value}/\n";
+        let current = LanguageDocument::import_new_root(source, "identity:scope-v2").unwrap();
+        assert_eq!(current.identities.reference_semantics, Some(3));
+        let mut previous = current.identities.clone();
+        previous.reference_semantics = Some(2);
+        previous.refs = legacy_refs_v2::collect_refs(current.language(), &previous.nodes);
+        let json = format!("{}\n", serde_json::to_string_pretty(&previous).unwrap());
+        let opened = LanguageDocument::open(&current.source(), &json).unwrap();
+        assert_eq!(opened.manifest_json().unwrap(), json);
+        let stable = opened.ref_for_sign("Owner.leaf").unwrap();
+        let (language, manifest) = opened.into_edit_parts();
+        let upgraded = LanguageDocument::from_edit_parts(language, manifest).unwrap();
+        assert_eq!(upgraded.identities.reference_semantics, Some(3));
+        assert_eq!(upgraded.ref_for_sign("Owner.leaf").unwrap(), stable);
+        let (text, ids) = upgraded.dump_pair().unwrap();
+        assert_eq!(LanguageDocument::open(&text, &ids).unwrap(), upgraded);
+        let mut corrupt = previous;
+        corrupt.refs.clear();
+        assert!(LanguageDocument::open(&text, &serde_json::to_string(&corrupt).unwrap()).is_err());
+    }
 
     #[test]
     fn sha256_matches_standard_vector() {

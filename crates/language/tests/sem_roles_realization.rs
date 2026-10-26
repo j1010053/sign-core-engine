@@ -359,6 +359,7 @@ fn semantic_document_v1_canonicalizes_types_and_object_keys_at_every_boundary() 
     let document = SemanticDocumentV1 {
         schema: SEMANTIC_SCHEMA_V1.to_owned(),
         root: SemanticNodeV1 {
+            construction_id: None,
             source: SemanticSourceV1 {
                 package: Some("natural:fixture".to_owned()),
                 sign: "root".to_owned(),
@@ -372,6 +373,7 @@ fn semantic_document_v1_canonicalizes_types_and_object_keys_at_every_boundary() 
                 (
                     "z_role".to_owned(),
                     SemanticNodeV1 {
+                        construction_id: None,
                         source: SemanticSourceV1 {
                             package: None,
                             sign: "z".to_owned(),
@@ -387,6 +389,7 @@ fn semantic_document_v1_canonicalizes_types_and_object_keys_at_every_boundary() 
                 (
                     "a_role".to_owned(),
                     SemanticNodeV1 {
+                        construction_id: None,
                         source: SemanticSourceV1 {
                             package: None,
                             sign: "a".to_owned(),

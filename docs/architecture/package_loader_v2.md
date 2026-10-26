@@ -1,8 +1,9 @@
-# Package Loader v2（Phase A）
+# Package Loader v2
 
 > 狀態：`feat/package-loader-v2` 的實作契約。語言層、ChangeSet、lock、persistence，
 > 以及 app 的 canonical project-open／workspace compile 流程均已完成 v2 接線。
-> 本文只描述 Phase A 已落地的行為，不預告 qualified symbol 等後續語法。
+> 2026-10-16：名稱可見性已更新為顯式 `export` 與 `Alias.Name`；詳細契約見
+> [套件匯出與限定名稱](../implementation/package-exports-and-qualified-names.md)。
 
 Package Loader v2 把「專案想要哪些套件」與「這次實際使用哪些套件 bytes」分開：
 
@@ -25,22 +26,17 @@ flowchart LR
     S --> L["packages.lock.json / persistence"]
 ```
 
-## 1. Phase A 的明確邊界：仍使用全域 bare export alias
+## 1. 顯式匯出與套件限定名稱
 
-Phase A **沒有**實作或宣稱 `.lang`／`.chg` 的一般 qualified-symbol 語法。
+`.lang` 的 trait、paradigm、sign 只有加上 `export` 才可供外部直接引用或本地覆寫。
+引用使用 `Alias.Name`，例如 `English.Noun`；`[packages.aliases]` 現已參與解析。
+相同裸名可以由不同套件匯出；同時選取時若無法唯一解析，必須使用限定名。
+同一套件內的宣告／匯出名仍須唯一，Sign 與 Paradigm 共用 callable namespace。
 
-- `config/exports.tsv` 的 `alias` 仍是單一 bare identifier；
-- 建立 catalog 時，所有保留下來的 package 之 bare export alias 必須全域唯一；
-  不同 package 匯出相同 alias 會得到 `DuplicateAlias`，即使它們不會同時成為 roots；
-- export stable ID 也必須全域唯一，且必須以 `<package-id>:` 開頭；
-- `PackageSpec.aliases`／`project.toml` 的 `[packages.aliases]` 目前只保存 project-local
-  qualifier 意圖，並驗證 target package 確實在選取閉包內；它尚未接入 DSL symbol lookup；
-- 因此不要把 `case = "catalog:case"` 解讀成 `.lang` 已可寫 `case::Noun`，也不要據此
-  宣稱 `.chg` 已有通用 qualified trait/sign/function lookup。既有 `.chg` function naming
-  行為是另一個既有契約，並不等於 loader v2 已完成一般名稱限定。
-
-移除全域 bare alias 唯一性、定義消歧規則與把 project aliases 接入 parser／IR／
-diagnostic，是後續 Phase B；不屬於本文的完成條件。
+`exports.tsv` 的 alias 仍是套件內的裸名，stable ID 仍須全域唯一並以 `<package-id>:` 開頭。
+對 trait／paradigm／sign，它只能補充 stable ID，不能把沒有 `export` 的宣告變成公開。
+`.chg` function 的既有 `::` 呼叫契約維持獨立；本次 `.` 語法適用三種 `.lang` 定義。
+本地覆寫與重播的界線見[完整契約](../implementation/package-exports-and-qualified-names.md)。
 
 ## 2. 身分與相容層
 
@@ -146,7 +142,7 @@ catalog:case:Accusative	trait	Accusative
 ```
 
 `kind` 是 `trait`、`paradigm`、`sign` 或 `function`。每一列都必須同時滿足：stable ID 前綴正確、
-alias 對應內容確實存在、manifest capability 授權該 kind。
+alias 對應內容確實存在、manifest capability 授權該 kind；`.lang` 定義還必須帶 `export`。
 
 ### 3.2 layers
 
@@ -157,7 +153,7 @@ alias 對應內容確實存在、manifest capability 授權該 kind。
 | `data` | 不把 `.lang` nodes 合併進語言 | 不得有 language declarations；可承載 data 與 functions |
 
 選取排序以 layer rank `reference < data < overlay`、`priority`、package ID 決定；
-依賴仍先於依賴者。cycle、disabled package、未知 dependency 與重複選取名稱都會硬錯。
+依賴仍先於依賴者。cycle、disabled package、未知 dependency 與套件內重複宣告都會硬錯。
 
 ### 3.3 capabilities
 
@@ -168,13 +164,12 @@ traits, paradigms, signs, functions, data
 ```
 
 capability 是授權，不是單純描述。package 提供未授權的 trait/paradigm/sign、function file、
-data file 或 export 時，load 立即失敗。只宣告 `data` 的 data-layer package 可以沒有
-`exports.tsv` 內容；只要 capabilities 含 `traits`、`paradigms`、`signs` 或 `functions`，export table
-就不能以「data-only 零 exports」規則略過。
+data file 或 export 時，load 立即失敗。schema 2 的 `exports.tsv` 可省略；
+trait／paradigm／sign 的公開項目由來源中的 `export` 產生，預設 stable ID 為 `<package-id>:<name>`。
+function 的匯出仍由 export table 宣告。舊 schema 1 的非空 export table 規則保留。
 
-選中的整組 package 共享 callable namespace：不同 package 不可提供同名 Paradigm，
-Sign 與 Paradigm 也不可跨 kind 同名；兩者都會讓 `name(...)` 無法唯一解析，因此在
-組合 Language 前即硬錯。
+每個 package 有自己的 callable namespace；同一套件內 Sign 與 Paradigm 不可同名。
+跨套件的同名 callable 可並存，使用限定名消歧。
 
 ## 4. 離線解析與 source precedence
 
@@ -244,9 +239,10 @@ intent；它們直接使用 snapshot 內的 standard/overlay/export index/packag
 ### 6.2 app session 與 compile cache
 
 - `CompileKey::of_with_packages` 以 document digest、identity digest、
-  `ResolvedPackages::lock_digest()`、完整 resolver-visible export-index digest 與 compiler
+  `ResolvedPackages::lock_digest()`、`alias_digest()`、完整 resolver-visible export-index digest 與 compiler
   semantics version 建 key；未選取 package 雖不改 grammar bytes，仍可能改變 dependency
   diagnostic／ontology suggestions，因此不能共用同一 cache entry；
+- project alias 改指另一個已選套件時，即使 package bytes 完全相同，也會產生不同 key；
 - `CompileService::{get_with_packages,peek_with_packages}` 使用同一 snapshot；
 - legacy `CompileKey::of`／`CompileService::get` 仍為 v1 compatibility。
 
@@ -295,7 +291,8 @@ library <package-id>@<exact-version> sha256:<semantic-digest>
 ```
 
 resolve/replay 在執行第一個 statement 前，比對 base source、identity manifest 與整組
-package ID/version/digest。`EvolutionGraph` 的 resolved variant 持有 snapshot，commit、
+package ID/version/digest。有顯式 project aliases 時，prelude 另寫
+`package_aliases = sha256:<alias-digest>`，也必須完全一致。`EvolutionGraph` 的 resolved variant 持有 snapshot，commit、
 restore、fsck、rebase 與 replay 不再另查 embedded catalog。
 
 ### 6.4 persistence
@@ -323,7 +320,7 @@ roots = ["catalog:case@1.0.0"]
 ```
 
 目前 `ProjectDocument` 沒有獨立 schema 欄位；使用 `roots`／`aliases` 即是 v2 intent。
-若要保存未來 qualifier 意圖，可另加：
+若要指定引用時的套件別名，可加：
 
 ```toml
 [packages.aliases]
@@ -332,7 +329,7 @@ case = "catalog:case"
 
 `roots` 是直接依賴；`catalog:linguistic-units@1.0.0` 由 `catalog:case` 的 manifest
 遞移帶入，不必重複列入。alias target 可以是 root 或已選取的遞移 dependency，但
-再次強調：Phase A 不會因此讓 `case::Nominative` 成為合法 `.lang` 語法。
+此處設定後可寫 `case.Nominative`。未設定別名時，唯一的套件 name 也可作為 qualifier。
 
 legacy project 仍可使用：
 
@@ -372,13 +369,16 @@ schema 常數是 `conlang-packages-lock/v1`。lock 包含 roots 與所有遞移 
 或未知 schema 都拒絕。實際 digest 必須由 `PackagesLock::from_resolved`／
 `write_resolved_packages_lock` 產生，不應手填範例值。
 
-三種 lock 表面必須分清楚：
+各種 lock 表面必須分清楚：
 
 - package semantic digest：`sha256(package_lock_content(package))`；schema 2 納入
-  schema/layer/capabilities、ID/version/rule namespace/priority、ordered paths、requires、
+  schema/layer/capabilities、ID/version/rule namespace/priority、ordered paths、requires、manifest aliases、
   exports 與 code/function/data bytes，並只把 CRLF 正規化為 LF；
 - `ResolvedPackages::lock_digest()`／ChangeSet library locks：canonical
   `id@version + semantic digest` set；
+- `ResolvedPackages::alias_digest()`／ChangeSet `package_aliases`：另鎖定 project 的
+  顯式 alias bindings；有設定才寫入 prelude，resolve 與 replay 都比對。新增、移除或
+  改指 alias 均使舊 ChangeSet 拒絕重播，避免相同 package bytes 被賦予不同引用意義；
 - `packages.lock.json`：再保存並驗證 source provenance 與 layer，作為 project-open
   的精確離線解析紀錄。
 
@@ -411,8 +411,8 @@ filesystem 僅由 persistence host 在 resolve 前處理，而且：
 3. **升級 manifest。** 加 `schema = 2`、`layer`、精確 `capabilities`；把 paths 與
    `requires` 改成 arrays，dependency 優先寫 exact `id@version`；確認
    `rule_namespace == id`。
-4. **整理 exports。** stable ID 改為 `<package-id>:<symbol>`，並在 Phase A 內消除所有
-   catalog-wide bare alias 衝突。不要以尚未存在的 qualified-symbol 語法掩蓋衝突。
+4. **整理 exports。** 對公開的 trait／paradigm／sign 加上 `export`。stable ID 為
+   `<package-id>:<symbol>`；同名匯出使用 `Alias.Symbol`，不再要求 catalog-wide bare alias 唯一。
 5. **轉換 project intent。** 將 v1 `std/natural/plugins` 的直接依賴改寫成 v2
    `roots`；不要把 resolver 算出的所有 transitive packages 都誤寫成 roots。
 6. **先離線 resolve，再產 lock。** 使用 project vendored、已安裝 cache 與 embedded
@@ -423,22 +423,21 @@ filesystem 僅由 persistence host 在 resolve 前處理，而且：
    `load_with_packages`，compile/check/cache/ChangeSet/function/replay 全部改傳同一 snapshot。
 8. **保留 replay 證據。** 已存在的 `.chg` 仍用原本 ID/version/digest 驗證；不要為了
    通過新版 resolver 而無理由重寫歷史 prelude 或 snapshot。
-9. **最後才規劃 Phase B。** qualified symbol 必須先定義 parser、IR、alias scope、
-   ambiguity diagnostic、ChangeSet serialization 與 replay contract，再解除全域 bare
-   alias 唯一性。
+9. **檢查引用。** 依[套件引用教學](../../tutorials/package-exports/README.md)確認公開／私有邊界、
+   限定名稱與本地覆寫。內建套件也已補上顯式匯出，因此舊 digest 會失效；不能靜默改寫歷史鎖。
 
 ## 10. 已知未涵蓋範圍
 
-Phase A 刻意沒有提供：
+目前沒有提供：
 
-- `.lang`／`.chg` 的通用 qualified-symbol resolver；
+- `.chg` function 的 `.` 名稱語法；它沿用既有 function resolver；
 - 同一 `PackageId` 多版本並存；source precedence 後每個 ID 只有一個候選；
 - SemVer range／SAT dependency solving；
 - registry、crawler、download、signature verification、install/update；
 - 對 package directory 的 adversarial concurrent mutation 防護；reader 會拒絕 traversal、
   absolute path 與掃描時可見的 symlink，但 metadata 檢查到開檔之間不是 capability-based
   `openat` transaction，host 應序列化更新並把 vendored/installed cache 視為受信本機來源；
-- 自動把 `PackageSpec.aliases` 改寫成 DSL imports；
+- 額外的 `import` 語法；套件選取與別名由 manifest／project 管理；
 - lock mismatch 時的隱式更新或網路回退。
 
 核心行為回歸測試位於：

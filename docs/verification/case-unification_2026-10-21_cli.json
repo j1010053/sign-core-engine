@@ -1,0 +1,128 @@
+[
+  {
+    "example": "missing-bundle",
+    "entry": "direct",
+    "exit_code": 1,
+    "evidence": [
+      "PREVIEW: F:\\Project\\conlang-craft\\audits\\2026-10-21-case-implementation\\cases\\missing-bundle.lang: 推導失敗: invalid Sign expression: $self.syn.trigger has no value on \"atom#token\"; assign it, or declare `trigger = enum(on, off)?` if absence is expected (P75)"
+    ]
+  },
+  {
+    "example": "missing-bundle",
+    "entry": "filler",
+    "exit_code": 1,
+    "evidence": [
+      "PREVIEW: F:\\Project\\conlang-craft\\audits\\2026-10-21-case-implementation\\cases\\missing-bundle.lang: 推導失敗: typed feature expression failed: $self.syn.trigger has no value on \"atom\"; assign it, or declare `trigger = enum(on, off)?` if absence is expected (P75)"
+    ]
+  },
+  {
+    "example": "missing-guard",
+    "entry": "direct",
+    "exit_code": 1,
+    "evidence": [
+      "PREVIEW: F:\\Project\\conlang-craft\\audits\\2026-10-21-case-implementation\\cases\\missing-guard.lang: 推導失敗: invalid Sign expression: $self.syn.trigger has no value on \"atom#token\"; assign it, or declare `trigger = enum(on, off)?` if absence is expected (P75)"
+    ]
+  },
+  {
+    "example": "missing-guard",
+    "entry": "filler",
+    "exit_code": 1,
+    "evidence": [
+      "PREVIEW: F:\\Project\\conlang-craft\\audits\\2026-10-21-case-implementation\\cases\\missing-guard.lang: 推導失敗: typed feature expression failed: $self.syn.trigger has no value on \"atom\"; assign it, or declare `trigger = enum(on, off)?` if absence is expected (P75)"
+    ]
+  },
+  {
+    "example": "missing-equals",
+    "entry": "direct",
+    "exit_code": 1,
+    "evidence": [
+      "PREVIEW: F:\\Project\\conlang-craft\\audits\\2026-10-21-case-implementation\\cases\\missing-equals.lang: 推導失敗: invalid Sign expression: $self.syn.trigger has no value on \"atom#token\"; assign it, or declare `trigger = enum(on, off)?` if absence is expected (P75)"
+    ]
+  },
+  {
+    "example": "missing-equals",
+    "entry": "filler",
+    "exit_code": 1,
+    "evidence": [
+      "PREVIEW: F:\\Project\\conlang-craft\\audits\\2026-10-21-case-implementation\\cases\\missing-equals.lang: 推導失敗: typed feature expression failed: $self.syn.trigger has no value on \"atom\"; assign it, or declare `trigger = enum(on, off)?` if absence is expected (P75)"
+    ]
+  },
+  {
+    "example": "nested-feature",
+    "entry": "direct",
+    "exit_code": 0,
+    "evidence": [
+      "表層: \"a\"",
+      "音形實現輸入: \"a\"",
+      "  syn.syn.outcome = \"yes\"",
+      "  分支 1: 符合；來源行 17",
+      "  分支 1: 符合；來源行 15",
+      "  音形實現 \"a\" → 表層 \"a\""
+    ]
+  },
+  {
+    "example": "nested-feature",
+    "entry": "filler",
+    "exit_code": 0,
+    "evidence": [
+      "表層: \"a\"",
+      "音形實現輸入: \"a\"",
+      "  slot.item.syn.syn.outcome = \"yes\"",
+      "  分支 1: 符合；來源行 17",
+      "  分支 1: 符合；來源行 15",
+      "  音形實現 \"a\" → 表層 \"a\""
+    ]
+  },
+  {
+    "example": "nested-phon",
+    "entry": "direct",
+    "exit_code": 0,
+    "evidence": [
+      "表層: \"e\"",
+      "音形實現輸入: \"e\"",
+      "  分支 1: 符合；來源行 15",
+      "  分支 1: 符合；來源行 13",
+      "  音形實現 \"e\" → 表層 \"e\""
+    ]
+  },
+  {
+    "example": "nested-phon",
+    "entry": "filler",
+    "exit_code": 0,
+    "evidence": [
+      "表層: \"e\"",
+      "音形實現輸入: \"e\"",
+      "  分支 1: 符合；來源行 15",
+      "  分支 1: 符合；來源行 13",
+      "  填槽 item 的音形實現: \"e\"",
+      "  音形實現 \"e\" → 表層 \"e\""
+    ]
+  },
+  {
+    "example": "blocked-guard",
+    "entry": "direct",
+    "exit_code": 1,
+    "evidence": [
+      "PREVIEW: F:\\Project\\conlang-craft\\audits\\2026-10-21-case-implementation\\cases\\blocked-guard.lang: 推導失敗: slot \"item\" requires [Needed], but filler \"atom\" is not (has: [\"Other\"])"
+    ]
+  },
+  {
+    "example": "blocked-bundle",
+    "entry": "direct",
+    "exit_code": 1,
+    "evidence": [
+      "PREVIEW: F:\\Project\\conlang-craft\\audits\\2026-10-21-case-implementation\\cases\\blocked-bundle.lang: 推導失敗: slot \"item\" requires [Needed], but filler \"atom\" is not (has: [\"Other\"])"
+    ]
+  },
+  {
+    "example": "xp-template",
+    "entry": "autofill",
+    "exit_code": 0,
+    "evidence": [
+      "表層: \"ba\"",
+      "音形實現輸入: \"ba\"",
+      "  填槽 phrase 的音形實現: \"ba\"",
+      "  音形實現 \"ba\" → 表層 \"ba\""
+    ]
+  }
+]

@@ -2,6 +2,9 @@
 //! construction tokens. Token rules may read immutable filler snapshots with
 //! `$slot.<name>.<dim>.<path>` and `unify(...)`.
 
+mod case;
+pub(crate) use case::{sign_case_matches, token_case_matches};
+
 use std::collections::BTreeSet;
 
 use crate::construction::{slots_of, FillerSnapshot};
@@ -601,7 +604,7 @@ pub(crate) fn validate_rule(
             Ok(parsed) => {
                 let mut errors = Vec::new();
                 if let Some(Guard::IsA(category)) = &parsed.guard {
-                    if !registry.has(category) {
+                    if !registry.has_type(category) {
                         errors.push(format!(
                             "branch {index}: unknown category guard [{category}]"
                         ));
@@ -609,7 +612,7 @@ pub(crate) fn validate_rule(
                 }
                 if let Some(Guard::SelfIsA(category) | Guard::SlotIsA(_, category)) = &parsed.guard
                 {
-                    if !registry.has(category) {
+                    if !registry.has_type(category) {
                         errors.push(format!(
                             "branch {index}: unknown category guard [{category}]"
                         ));
@@ -889,7 +892,7 @@ pub(crate) fn validate_realization_guard(
 ) -> Result<(), String> {
     match parse_guard(source)? {
         Guard::IsA(category) | Guard::SelfIsA(category) => registry
-            .has(&category)
+            .has_type(&category)
             .then_some(())
             .ok_or_else(|| format!("unknown category guard [{category}]")),
         Guard::SlotIsA(slot, category) => {
@@ -897,7 +900,7 @@ pub(crate) fn validate_realization_guard(
                 return Err(format!("unknown slot reference {slot:?}"));
             }
             registry
-                .has(&category)
+                .has_type(&category)
                 .then_some(())
                 .ok_or_else(|| format!("unknown category guard [{category}]"))
         }
@@ -980,14 +983,10 @@ fn guard_matches(
             let Some(bound) = bindings.get(name) else {
                 return GuardResult::Error(format!("guard references unbound `${name}`"));
             };
-            if !registry.has(category) {
+            if !registry.has_type(category) {
                 return GuardResult::Error(format!("unknown category guard [{category}]"));
             }
-            if registry
-                .sign_categories(bound)
-                .iter()
-                .any(|item| item == category)
-            {
+            if registry.sign_satisfies(bound, category) {
                 GuardResult::Matched
             } else {
                 GuardResult::Unmatched
@@ -1028,14 +1027,10 @@ fn guard_matches(
             }
         }
         Guard::IsA(category) => {
-            if !registry.has(category) {
+            if !registry.has_type(category) {
                 return GuardResult::Error(format!("unknown category guard [{category}]"));
             }
-            if registry
-                .sign_categories(sign)
-                .iter()
-                .any(|candidate| candidate == category)
-            {
+            if registry.sign_satisfies(sign, category) {
                 GuardResult::Matched
             } else {
                 GuardResult::Unmatched
@@ -1062,20 +1057,16 @@ fn guard_matches(
             }
         }
         Guard::SelfIsA(category) => {
-            if !registry.has(category) {
+            if !registry.has_type(category) {
                 GuardResult::Error(format!("unknown category guard [{category}]"))
-            } else if registry
-                .sign_categories(sign)
-                .iter()
-                .any(|item| item == category)
-            {
+            } else if registry.sign_satisfies(sign, category) {
                 GuardResult::Matched
             } else {
                 GuardResult::Unmatched
             }
         }
         Guard::SlotIsA(slot, category) => {
-            if !registry.has(category) {
+            if !registry.has_type(category) {
                 return GuardResult::Error(format!("unknown category guard [{category}]"));
             }
             let Some(declaration) = context.slots.iter().find(|item| item.name == *slot) else {
@@ -1083,7 +1074,13 @@ fn guard_matches(
             };
             let filler = context.fillers.iter().find(|item| item.slot == *slot);
             match filler {
-                Some(filler) if filler.categories.iter().any(|item| item == category) => {
+                Some(filler)
+                    if registry.type_satisfies(
+                        &filler.categories,
+                        filler.sem.construction_id.as_ref(),
+                        category,
+                    ) =>
+                {
                     GuardResult::Matched
                 }
                 Some(_) => GuardResult::Unmatched,
@@ -1397,19 +1394,9 @@ pub(crate) fn run_sign_feature_expressions(
     sign: &SignDef,
     dim: Dim,
     registry: &OntologyRegistry,
-) -> Result<SignDef, String> {
-    fn scalar(sign: &SignDef, path: &str, registry: &OntologyRegistry) -> Option<String> {
-        let path = path.strip_prefix("$self.").unwrap_or(path);
-        let (dimension, _) = path.split_once('.')?;
-        let dimension = Dim::parse(dimension)?;
-        sign.project(dimension, registry)
-            .defs
-            .into_iter()
-            .rev()
-            .find(|(candidate, _)| candidate == path)
-            .map(|(_, value)| value)
-    }
-
+    mut record: impl FnMut(&str, crate::case_eval::CaseEvent),
+) -> Result<SignDef, crate::case_eval::FeatureCaseError> {
+    use crate::case_eval::{self, FeatureCaseError, FeatureCaseHost};
     let expressions = sign
         .items
         .iter()
@@ -1422,108 +1409,58 @@ pub(crate) fn run_sign_feature_expressions(
         .collect::<Vec<_>>();
     let mut current = sign.clone();
     for expression in expressions {
-        let declaration = current.items.iter().rev().find_map(|item| match item {
-            SignItem::FeatureDecl(declaration)
-                if declaration.dim == dim && declaration.name == expression.name =>
+        let Expression::Case(case) = &expression.expression else {
+            return Err(FeatureCaseError::Invalid(format!(
+                "{}.{} feature expression must be a typed case",
+                dim.keyword(),
+                expression.name
+            )));
+        };
+        let declaration = current
+            .items
+            .iter()
+            .rev()
+            .find_map(|item| match item {
+                SignItem::FeatureDecl(declaration)
+                    if declaration.dim == dim && declaration.name == expression.name =>
+                {
+                    Some(declaration)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| FeatureCaseError::Undeclared {
+                dim,
+                name: expression.name.clone(),
+            })?;
+        let path = format!("{}.{}", dim.keyword(), expression.name);
+        let base = current.items.iter().rev().find_map(|item| match item {
+            SignItem::Def(def) if def.path == path => Some(def.value.clone()),
+            SignItem::FeatureValue(feature)
+                if feature.dim == dim && feature.name == expression.name =>
             {
-                Some(declaration)
+                Some(feature.values.join(" | "))
             }
             _ => None,
         });
-        let Some(declaration) = declaration else {
-            return Err(format!(
-                "FEATURE_EXPRESSION_UNDECLARED: {}.{}",
-                dim.keyword(),
-                expression.name
-            ));
+        let mut host = FeatureCaseHost {
+            matches: |case: &crate::TypedCase, condition: &CaseCondition| {
+                sign_case_matches(&current, case, condition, registry)
+            },
+            record: |event| record(&expression.name, event),
+            dim,
+            name: expression.name.clone(),
+            domain: declaration.values.clone(),
+            base,
         };
-        let Expression::Case(case) = &expression.expression else {
-            return Err(format!(
-                "FEATURE_EXPRESSION_NOT_CASE: {}.{}",
-                dim.keyword(),
-                expression.name
-            ));
-        };
-        let mut selected = None;
-        for branch in &case.branches {
-            let matched = match &branch.condition {
-                CaseCondition::Base => true,
-                CaseCondition::Else => {
-                    return Err("CASE_ELSE_NOT_ALLOWED: `case` uses `base`, not `else`".to_owned())
-                }
-                CaseCondition::Bundle(pattern) => {
-                    if pattern.len() != case.match_features.len() || case.match_features.is_empty()
-                    {
-                        return Err(
-                            "CASE_BUNDLE_ARITY_MISMATCH: bundle row/header mismatch".to_owned()
-                        );
-                    }
-                    case.match_features
-                        .iter()
-                        .zip(pattern)
-                        .all(|(path, expected)| {
-                            expected.as_deref().is_none_or(|expected| {
-                                scalar(&current, path, registry).as_deref() == Some(expected)
-                            })
-                        })
-                }
-                CaseCondition::Guard(guard) => {
-                    let (status, _, _, error) = evaluate_sign_guard(&current, guard, registry);
-                    match status {
-                        RuleStatus::Matched => true,
-                        RuleStatus::Unmatched => false,
-                        RuleStatus::Error => {
-                            return Err(error.unwrap_or_else(|| {
-                                format!("CASE_GUARD_ERROR: guard {guard:?} failed")
-                            }))
-                        }
-                    }
-                }
-                CaseCondition::Equals(expected) => {
-                    let scrutinee = case.scrutinee.as_deref().ok_or_else(|| {
-                        "CASE_SCRUTINEE_MISSING: equality case has no scrutinee".to_owned()
-                    })?;
-                    scalar(&current, scrutinee, registry).as_deref() == Some(expected.as_str())
-                }
-            };
-            if !matched {
-                continue;
-            }
-            if matches!(&branch.result, Expression::ImplicitBase) {
-                break;
-            }
-            let Expression::EnumValue(value) = &branch.result else {
-                return Err(format!(
-                    "CASE_BRANCH_TYPE_MISMATCH: {}.{} must return an enum value",
-                    dim.keyword(),
-                    expression.name
-                ));
-            };
-            if !declaration.values.contains(value) {
-                return Err(format!(
-                    "FEATURE_EXPRESSION_VALUE_OUT_OF_DOMAIN: {value:?} is outside enum({})",
-                    declaration.values.join(", ")
-                ));
-            }
-            selected = Some(value.clone());
-            break;
-        }
-        if let Some(value) = selected {
+        let selected = case_eval::evaluate(case, &mut host)?
+            .value
+            .ok_or_else(|| FeatureCaseError::DefaultMissing { context: path })?;
+        if host.base.as_ref() != Some(&selected) {
+            // Keep the actual base, including a multi-valued FeatureValue,
+            // rather than rewriting it as one joined enum literal.
             current = Patch::for_dim(dim)
-                .set(&expression.name, &value)
+                .set(&expression.name, &selected)
                 .apply(&current);
-        } else if scalar(
-            &current,
-            &format!("{}.{}", dim.keyword(), expression.name),
-            registry,
-        )
-        .is_none()
-        {
-            return Err(format!(
-                "CASE_DEFAULT_MISSING: {}.{} has no matching branch and no base value",
-                dim.keyword(),
-                expression.name
-            ));
         }
     }
     Ok(current)
@@ -1571,44 +1508,10 @@ fn token_sign(token: &crate::construction::DerivedToken) -> SignDef {
         }));
     }
     SignDef {
+        exported: false,
         id: token.rule_sign.id.clone(),
         name: format!("{}#token", token.construction),
-        items,
-    }
-}
-
-pub(crate) fn evaluate_token_guard(
-    token: &crate::construction::DerivedToken,
-    source: &str,
-    registry: &OntologyRegistry,
-) -> (RuleStatus, Vec<SlotRead>, Vec<SelfRead>, Option<String>) {
-    let guard = match parse_guard(source) {
-        Ok(guard) => guard,
-        Err(error) => return (RuleStatus::Error, Vec::new(), Vec::new(), Some(error)),
-    };
-    let sign = token_sign(token);
-    let slots = slots_of(&token.rule_sign);
-    let context = EvalContext {
-        fillers: &token.fillers,
-        slots: &slots,
-    };
-    let mut slot_reads = Vec::new();
-    let mut self_reads = Vec::new();
-    let result = guard_matches(
-        &guard,
-        &sign,
-        Dim::Phon,
-        registry,
-        &context,
-        &mut slot_reads,
-        &mut self_reads,
-        &GuardBindings::new(),
-        &std::collections::BTreeMap::new(),
-    );
-    match result {
-        GuardResult::Matched => (RuleStatus::Matched, slot_reads, self_reads, None),
-        GuardResult::Unmatched => (RuleStatus::Unmatched, slot_reads, self_reads, None),
-        GuardResult::Error(error) => (RuleStatus::Error, slot_reads, self_reads, Some(error)),
+        body: (items).into(),
     }
 }
 
@@ -1647,9 +1550,10 @@ pub fn guard_matches_bindings(
     // function 層沒有 ambient sign;無主體形(`[Trait]`、裸 `field ==`)因此
     // 無所依附,交給呼叫端當「沒有主體」處理。
     let placeholder = SignDef {
+        exported: false,
         id: crate::SignId::synthetic(),
         name: String::new(),
-        items: Vec::new(),
+        body: (Vec::new()).into(),
     };
     let context = EvalContext {
         fillers: &[],
@@ -1820,9 +1724,10 @@ pub fn run_token_dim_rules(
         })
     }));
     let sign = SignDef {
+        exported: false,
         id: token.rule_sign.id.clone(),
         name: format!("{}#token", token.construction),
-        items,
+        body: (items).into(),
     };
     let slots = slots_of(&token.rule_sign);
     let (sign, records) = run_dim_rules(&sign, dim, registry, &token.fillers, &slots);

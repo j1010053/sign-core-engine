@@ -308,7 +308,7 @@ sign SubjectVerb:
 // ── diagnostics ──
 
 #[test]
-fn marker_trait_rejects_type_params() {
+fn marker_trait_accepts_type_params() {
     let lang = parse(
         "\
 marker trait Bad<C>:
@@ -317,10 +317,7 @@ marker trait Bad<C>:
     );
     let report = conlang_language::check_language(&lang);
     let codes: Vec<_> = report.diagnostics().iter().map(|d| d.code).collect();
-    assert!(
-        codes.contains(&"TYPE_PARAM_ON_MARKER_TRAIT"),
-        "marker trait with type params should be flagged: {codes:?}"
-    );
+    assert!(!report.has_errors(), "generic markers are valid: {codes:?}");
 }
 
 #[test]
@@ -560,8 +557,8 @@ sign Bad:
         .iter()
         .map(|diagnostic| diagnostic.code)
         .collect::<Vec<_>>();
-    assert!(codes.contains(&"SLOT_UNKNOWN_CATEGORY"), "{codes:?}");
-    assert!(codes.contains(&"ROLE_UNKNOWN_CONSTRAINT"), "{codes:?}");
+    // Unknown type arguments now fail before their substitution into slots/roles.
+    assert!(codes.contains(&"TYPE_ARGUMENT_UNKNOWN"), "{codes:?}");
 }
 
 #[test]

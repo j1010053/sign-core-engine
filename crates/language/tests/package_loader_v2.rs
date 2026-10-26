@@ -15,7 +15,7 @@ fn reference_package(id: &str, version: &str, alias: &str) -> PackageSources {
              code = [\"code/main.lang\"]\n"
         ),
         exports: format!("stable_id\tkind\talias\n{id}:{alias}\ttrait\t{alias}\n"),
-        code: format!("trait {alias}:\n"),
+        code: format!("export trait {alias}:\n"),
         ..PackageSources::default()
     }
 }
@@ -24,7 +24,7 @@ fn code_package_with_manifest(config: String, id: &str, alias: &str) -> PackageS
     PackageSources {
         config,
         exports: format!("stable_id\tkind\talias\n{id}:{alias}\ttrait\t{alias}\n"),
-        code: format!("trait {alias}:\n"),
+        code: format!("export trait {alias}:\n"),
         ..PackageSources::default()
     }
 }
@@ -116,18 +116,18 @@ code = ["code/main.lang"]
             "catalog:copula-paradigm:BE\tparadigm\tBE\n",
         )
         .to_owned(),
-        code: r#"paradigm BE:
+        code: r#"export paradigm BE:
     case [syn.person]:
         [third]: is()
         base: be()
 
-sign be:
+export sign be:
     syn:
         feature:
             person = enum(first, third)
             person = first | third
 
-sign is:
+export sign is:
     syn:
         feature:
             person = enum(first, third)
@@ -184,18 +184,18 @@ code = ["code/main.lang"]
             "catalog:missing-paradigm-capability:be\tsign\tbe\n",
         )
         .to_owned(),
-        code: r#"paradigm BE:
+        code: r#"export paradigm BE:
     case [syn.person]:
         [third]: is()
         base: be()
 
-sign be:
+export sign be:
     syn:
         feature:
             person = enum(first, third)
             person = first | third
 
-sign is:
+export sign is:
     syn:
         feature:
             person = enum(first, third)
@@ -236,18 +236,18 @@ fn overlay_callable_package(id: &str, exported_sign: &str, code: &str) -> Packag
 }
 
 #[test]
-fn selected_packages_reject_duplicate_paradigms_and_cross_kind_callable_names() {
+fn selected_packages_scope_duplicate_paradigms_and_cross_kind_callable_names() {
     let first_id: PackageId = "natural:first-callables".parse().unwrap();
     let second_id: PackageId = "natural:second-callables".parse().unwrap();
     let first = overlay_callable_package(
         "natural:first-callables",
         "alpha",
-        r#"paradigm SHARED:
+        r#"export paradigm SHARED:
     case [syn.choice]:
         [a]: alpha()
         base: alpha()
 
-sign alpha:
+export sign alpha:
     syn:
         feature:
             choice = enum(a, b)
@@ -257,12 +257,12 @@ sign alpha:
     let second = overlay_callable_package(
         "natural:second-callables",
         "beta",
-        r#"paradigm SHARED:
+        r#"export paradigm SHARED:
     case [syn.choice]:
         [b]: beta()
         base: beta()
 
-sign beta:
+export sign beta:
     syn:
         feature:
             choice = enum(a, b)
@@ -270,25 +270,36 @@ sign beta:
 "#,
     );
     let catalog = LibraryCatalog::with_packages([first, second]).unwrap();
-    let error = catalog
+    let selected = catalog
         .resolve(
             &PackageSpec::default()
                 .with_root(first_id.clone())
                 .with_root(second_id.clone()),
         )
-        .expect_err("two selected packages cannot define the same Paradigm name");
-    assert!(matches!(&error, LibraryLoadError::DuplicateParadigm(name) if name == "SHARED"));
-    assert_eq!(error.code(), "LIBRARY_PARADIGM_DUPLICATE");
+        .unwrap();
+    let system = compile_with_packages_ref(&Language::new(), &selected).unwrap();
+    let context = conlang_language::DerivationContext::new().feature(
+        conlang_language::Dim::Syn,
+        "choice",
+        "a",
+    );
+    assert!(system
+        .evaluate_paradigm("first-callables.SHARED", &context)
+        .is_ok());
+    assert!(system
+        .evaluate_paradigm("second-callables.SHARED", &context)
+        .is_ok());
+    assert!(system.evaluate_paradigm("SHARED", &context).is_err());
 
     let paradigm_package = overlay_callable_package(
         "natural:first-callables",
         "alpha",
-        r#"paradigm COLLIDE:
+        r#"export paradigm COLLIDE:
     case [syn.choice]:
         [a]: alpha()
         base: alpha()
 
-sign alpha:
+export sign alpha:
     syn:
         feature:
             choice = enum(a, b)
@@ -298,7 +309,7 @@ sign alpha:
     let sign_package = overlay_callable_package(
         "natural:second-callables",
         "COLLIDE",
-        r#"sign COLLIDE:
+        r#"export sign COLLIDE:
     syn:
         feature:
             choice = enum(a, b)
@@ -306,15 +317,21 @@ sign alpha:
 "#,
     );
     let catalog = LibraryCatalog::with_packages([paradigm_package, sign_package]).unwrap();
-    let error = catalog
+    let selected = catalog
         .resolve(
             &PackageSpec::default()
                 .with_root(first_id)
                 .with_root(second_id),
         )
-        .expect_err("Sign and Paradigm share one callable namespace across packages");
-    assert!(matches!(&error, LibraryLoadError::CallableNameCollision(name) if name == "COLLIDE"));
-    assert_eq!(error.code(), "LIBRARY_CALLABLE_NAME_COLLISION");
+        .unwrap();
+    let system = compile_with_packages_ref(&Language::new(), &selected).unwrap();
+    assert!(system
+        .evaluate_paradigm("first-callables.COLLIDE", &context)
+        .is_ok());
+    assert!(system.evaluate_sign("second-callables.COLLIDE").is_ok());
+    assert!(system
+        .evaluate_sign_expression("COLLIDE", &context)
+        .is_err());
 }
 
 #[test]
@@ -333,7 +350,7 @@ code = ["code/main.lang"]
             "catalog:reference-paradigm:PICK\tparadigm\tPICK\n",
         )
         .to_owned(),
-        code: r#"paradigm PICK:
+        code: r#"export paradigm PICK:
     case [syn.choice]:
         [a]: missing()
         base: missing()

@@ -119,6 +119,11 @@
 
 ## 3. 實作原則(執行語意 §9,每次 PR 自問)
 
+新增 Sign／trait 共享內容能力時，必查[模板一致性約束](docs/implementation/trait-template-consistency.md)：
+直接 Sign 與模板套用須共用表示與遍歷，核對完整推導的行為等價性，並提供作用域及錯誤反例。
+同名成員一律報錯，未定義覆寫語法前不得隱式覆寫。
+
+
 1. **不重複造輪子**:需要新能力先查 crate(已核定清單見 M0 實作參照 §6;刻意不用 petgraph/slotmap/rayon)。
 2. **基礎先行**:具名動詞一律由原語組合(spread=迭代 associate、shift=delink+associate、
    fill=逐Ø insert+associate…),不得另闢狀態。

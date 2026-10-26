@@ -53,7 +53,7 @@ code = ["code/marker.lang"]
         .to_owned(),
         exports: "stable_id\tkind\talias\ncatalog:edit-marker:Marker\ttrait\tExternalEditMarker\n"
             .to_owned(),
-        code: "trait ExternalEditMarker:\n".to_owned(),
+        code: "export trait ExternalEditMarker:\n".to_owned(),
         source: PackageSource::Injected("edit-test".to_owned()),
         ..PackageSources::default()
     };

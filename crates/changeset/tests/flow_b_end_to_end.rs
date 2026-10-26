@@ -95,6 +95,7 @@ fn goal_call() -> FunctionCall {
 fn package() -> LibraryPackage {
     let id = LibraryId::new(LibraryKind::Plugin, "flowb");
     LibraryPackage {
+        aliases: Default::default(),
         name: id.name.clone(),
         rule_namespace: id.to_string(),
         version: "test".to_owned(),

@@ -64,8 +64,12 @@ fn indent_of(raw: &str) -> usize {
 /// name 部分可能帶角括號(P76 泛型 trait);呼叫端負責用
 /// [`split_type_params`] 拆出 base name 與參數列表。
 fn container_head(text: &str) -> Option<(&'static str, &str)> {
+    let text = text.strip_prefix("export ").unwrap_or(text);
     for kw in ["global trait", "marker trait", "trait", "paradigm", "sign"] {
-        if let Some(rest) = text.strip_prefix(kw) {
+        if let Some(rest) = text
+            .strip_prefix(kw)
+            .and_then(|rest| rest.strip_prefix(' '))
+        {
             if let Some(name) = rest.strip_suffix(':') {
                 let name = name.trim();
                 if name.is_empty() {
@@ -75,7 +79,7 @@ fn container_head(text: &str) -> Option<(&'static str, &str)> {
                     Some(pos) => &name[..pos],
                     None => name,
                 };
-                if !base.is_empty() && !base.contains(char::is_whitespace) {
+                if symbol_ok(base) {
                     return Some((kw, name));
                 }
             }
@@ -120,7 +124,7 @@ fn parse_trait_type_param_list_at(
     line: usize,
 ) -> Result<Vec<crate::TraitTypeParam>, ParseError> {
     let mut params = Vec::new();
-    for part in inside.split(',') {
+    for part in crate::type_ref::comma_parts(inside) {
         let part = part.trim();
         if part.is_empty() {
             return Err(err(line, "empty type parameter"));
@@ -131,7 +135,7 @@ fn parse_trait_type_param_list_at(
             if !ident_ok(pname) {
                 return Err(err(line, format!("invalid type parameter name `{pname}`")));
             }
-            if !ident_ok(bound) {
+            if crate::type_ref::TypeRef::parse(bound).is_err() {
                 return Err(err(line, format!("invalid bound `{bound}`")));
             }
             params.push(crate::TraitTypeParam {
@@ -153,26 +157,9 @@ fn parse_trait_type_param_list_at(
 
 /// P76:`belongs Name<Arg1, Arg2>` → (name, args)。
 fn split_type_args(full: &str, line: usize) -> Result<(String, Vec<String>), ParseError> {
-    let Some(open) = full.find('<') else {
-        return Ok((full.to_owned(), vec![]));
-    };
-    let base = &full[..open];
-    let rest = &full[open + 1..];
-    let Some(inside) = rest.strip_suffix('>') else {
-        return Err(err(line, "unclosed `<` in type argument list"));
-    };
-    let mut args = Vec::new();
-    for part in inside.split(',') {
-        let part = part.trim();
-        if part.is_empty() {
-            return Err(err(line, "empty type argument"));
-        }
-        if !ident_ok(part) {
-            return Err(err(line, format!("invalid type argument `{part}`")));
-        }
-        args.push(part.to_owned());
-    }
-    Ok((base.to_owned(), args))
+    crate::type_ref::TypeRef::parse(full)
+        .map(|reference| reference.split_mount())
+        .map_err(|message| err(line, message))
 }
 
 fn is_language_head(text: &str) -> bool {
@@ -185,8 +172,8 @@ fn split_arguments(source: &str, line: usize) -> Result<Vec<&str>, ParseError> {
     let mut output = Vec::new();
     for (index, character) in source.char_indices() {
         match character {
-            '(' | '{' => depth += 1,
-            ')' | '}' => {
+            '(' | '{' | '<' => depth += 1,
+            ')' | '}' | '>' => {
                 if depth == 0 {
                     return Err(err(line, "unbalanced application argument"));
                 }
@@ -230,15 +217,22 @@ fn parse_argument_value(source: &str, line: usize) -> Result<SignArgumentValue, 
         .map(SignArgumentValue::Application)
 }
 
-/// 在**巢狀深度 0** 找具名引數的分隔符(`:`,或舊寫法 `=`)。
-/// 巢狀 application/`{…}` 內的分隔符屬於內層,不能在這裡切。
-fn split_argument_name(argument: &str) -> Option<(&str, &str)> {
+/// Only split bindings at depth zero; `=` in a type argument belongs to that type.
+fn split_top_level_binding<'a>(
+    argument: &'a str,
+    separators: &[char],
+) -> Option<(&'a str, &'a str)> {
     let mut depth = 0usize;
     for (index, character) in argument.char_indices() {
         match character {
-            '(' | '{' | '[' => depth += 1,
-            ')' | '}' | ']' => depth = depth.saturating_sub(1),
-            ':' | '=' if depth == 0 => return Some((&argument[..index], &argument[index + 1..])),
+            '(' | '{' | '[' | '<' => depth += 1,
+            ')' | '}' | ']' | '>' => depth = depth.saturating_sub(1),
+            separator if depth == 0 && separators.contains(&separator) => {
+                return Some((
+                    &argument[..index],
+                    &argument[index + separator.len_utf8()..],
+                ))
+            }
             _ => {}
         }
     }
@@ -253,7 +247,7 @@ fn parse_sign_application(source: &str, line: usize) -> Result<SignApplication, 
         return Err(err(line, "Sign application must end with `)`"));
     };
     let callee = source[..open].trim();
-    if !ident_ok(callee) {
+    if crate::type_ref::TypeRef::parse(callee).is_err() {
         return Err(err(line, "Sign application callee must be an identifier"));
     }
     let mut parsed = Vec::new();
@@ -262,7 +256,7 @@ fn parse_sign_application(source: &str, line: usize) -> Result<SignApplication, 
         // 用 `key: value`)。`=` 為舊寫法,仍接受以免既有檔案失效。
         // **必須只在頂層切**:巢狀 application(`Outer(v: Wrap(v: {$self}))`)
         // 內層的分隔符不屬於這一層。
-        let (name, value) = match split_argument_name(argument) {
+        let (name, value) = match split_top_level_binding(argument, &[':', '=']) {
             Some((name, value)) if ident_ok(name.trim()) => (Some(name.trim().to_owned()), value),
             Some(_) => return Err(err(line, "named argument must name a slot")),
             None => (None, argument),
@@ -810,7 +804,7 @@ fn parse_typed_case(
                 index += 1;
                 continue;
             }
-            let Some((category, _args)) = belongs_target(&line.text, line.no)? else {
+            let Some((category, args)) = belongs_target(&line.text, line.no)? else {
                 return Err(err(
                     line.no,
                     "only `belongs` may follow a Sign branch result",
@@ -822,7 +816,11 @@ fn parse_typed_case(
                     "`belongs` is only valid in a case branch whose result type is Sign",
                 ));
             }
-            belongs.push(category);
+            belongs.push(
+                crate::type_ref::TypeRef::mount(&category, &args)
+                    .map_err(|m| err(line.no, m))?
+                    .to_string(),
+            );
             index += 1;
         }
         branches.push(CaseBranch {
@@ -877,10 +875,12 @@ fn parse_constraint(source: &str, line: usize) -> Result<BinaryConstraint, Parse
 fn trait_use(l: &str) -> Option<(String, Option<u32>)> {
     match l.find('[') {
         // 裸 `Name` = 整個 trait
-        None => ident_ok(l).then(|| (l.to_owned(), None)),
+        None => crate::type_ref::TypeRef::parse(l)
+            .is_ok()
+            .then(|| (l.to_owned(), None)),
         Some(open) => {
             let name = &l[..open];
-            if !ident_ok(name) {
+            if crate::type_ref::TypeRef::parse(name).is_err() {
                 return None;
             }
             let inside = l[open + 1..].strip_suffix(']')?.trim();
@@ -900,6 +900,11 @@ fn ident_ok(s: &str) -> bool {
             .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
 }
 
+/// A symbol reference may be qualified; slot/feature/parameter names may not.
+pub(crate) fn symbol_ok(s: &str) -> bool {
+    !s.is_empty() && s.split('.').all(ident_ok)
+}
+
 /// `belongs Name` 或 `belongs Name<Arg1, Arg2>`(P76)。
 fn belongs_target(l: &str, line: usize) -> Result<Option<(String, Vec<String>)>, ParseError> {
     let Some(rest) = l.strip_prefix("belongs ") else {
@@ -910,7 +915,7 @@ fn belongs_target(l: &str, line: usize) -> Result<Option<(String, Vec<String>)>,
         return Err(err(line, "`belongs` expects a trait name"));
     }
     let (name, args) = split_type_args(full, line)?;
-    if !ident_ok(&name) {
+    if crate::type_ref::TypeRef::parse(&name).is_err() {
         return Err(err(line, "`belongs` expects a single trait name"));
     }
     Ok(Some((name, args)))
@@ -928,7 +933,7 @@ fn parse_slot(l: &str, line: usize) -> Result<Slot, ParseError> {
         return Err(err(line, "slot filler must be `[Trait]` (optional `?`)"));
     };
     let filler = inner.trim();
-    if !ident_ok(name) || (filler != "*" && !ident_ok(filler)) {
+    if !ident_ok(name) || (filler != "*" && crate::type_ref::TypeRef::parse(filler).is_err()) {
         return Err(err(
             line,
             "slot name and filler must be identifiers, or use `[*]`",
@@ -939,7 +944,7 @@ fn parse_slot(l: &str, line: usize) -> Result<Slot, ParseError> {
         constraint: if filler == "*" {
             SlotConstraint::AnySign
         } else {
-            SlotConstraint::Category(filler.to_owned())
+            SlotConstraint::Category(crate::type_ref::TypeRef::parse(filler).unwrap().to_string())
         },
         optional,
     })
@@ -1039,10 +1044,12 @@ fn parse_slot_map(l: &str, line: usize) -> Result<Option<SlotMapOp>, ParseError>
             slot: slot.to_owned(),
             to: to.to_owned(),
         },
-        ("autofill", Some(filler)) if ident_ok(filler) => SlotMapOp::AutoFill {
-            slot: slot.to_owned(),
-            filler: filler.to_owned(),
-        },
+        ("autofill", Some(filler)) if crate::type_ref::TypeRef::parse(filler).is_ok() => {
+            SlotMapOp::AutoFill {
+                slot: slot.to_owned(),
+                filler: filler.to_owned(),
+            }
+        }
         ("autofill", Some(filler)) if filler.contains('(') => SlotMapOp::AutoFillCall {
             slot: slot.to_owned(),
             filler: parse_sign_application(filler, line)?,
@@ -1487,11 +1494,12 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                     Some(index) => crate::TraitMountKind::Block(index),
                     None => crate::TraitMountKind::Whole,
                 };
-                blocks.last_mut().unwrap().items.push(SignItem::TraitMount {
-                    name,
-                    kind,
-                    args: vec![],
-                });
+                let (name, args) = split_type_args(&name, no)?;
+                blocks
+                    .last_mut()
+                    .unwrap()
+                    .items
+                    .push(SignItem::TraitMount { name, kind, args });
             } else if !text.contains("=>")
                 && text
                     .split_once('=')
@@ -1820,7 +1828,7 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
             continue;
         }
         if in_roles {
-            if let Some((name, value)) = text.split_once('=') {
+            if let Some((name, value)) = split_top_level_binding(text, &['=']) {
                 let name = name.trim();
                 let value = value.trim();
                 if value.is_empty() {
@@ -1899,7 +1907,9 @@ fn parse_body(lang: &mut Language, body: &[Line]) -> Result<Vec<Block>, ParseErr
                     ));
                 };
                 let constraint = constraint.trim();
-                if !ident_ok(name.trim()) || (constraint != "*" && !ident_ok(constraint)) {
+                if !ident_ok(name.trim())
+                    || (constraint != "*" && crate::type_ref::TypeRef::parse(constraint).is_err())
+                {
                     return Err(err(
                         no,
                         "role name and constraint must be identifiers, or use `[*]`",
@@ -2200,9 +2210,13 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
         })
         .collect();
 
-    let mut i = 0usize;
-    let mut seen_language = false;
+    parse_lines(&mut lang, &lines, false)?;
+    Ok(lang)
+}
 
+fn parse_lines(lang: &mut Language, lines: &[Line], nested: bool) -> Result<(), ParseError> {
+    let mut i = 0usize;
+    let mut seen_language = nested;
     while i < lines.len() {
         let ln = &lines[i];
         if ln.text.is_empty() {
@@ -2231,6 +2245,14 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
                 "`prosody = …` is retired; use DSL `Prosody LEVEL < …` in the declaration preamble",
             ));
         }
+        if (ln.text == "export" || ln.text.starts_with("export "))
+            && container_head(&ln.text).is_none()
+        {
+            return Err(err(
+                ln.no,
+                "`export` must prefix a trait, sign or paradigm declaration",
+            ));
+        }
         // dsl 域 verbatim(首個 language 頭之前)
         if !seen_language && !is_language_head(&ln.text) {
             lang.dsl_decls.push(ln.text.clone());
@@ -2255,6 +2277,7 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
                     .push((k.trim().to_owned(), v.trim().to_owned()));
             }
         } else if let Some((kw, name_raw)) = container_head(&ln.text) {
+            let exported = ln.text.starts_with("export ");
             let header_indent = ln.indent;
             let header_line = ln.no;
             i += 1;
@@ -2293,7 +2316,7 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
                         ));
                     }
                     let (selector, next) =
-                        parse_typed_case(&mut lang, &body, 0, ExpressionType::SignContext)?;
+                        parse_typed_case(lang, &body, 0, ExpressionType::SignContext)?;
                     if next != body.len() {
                         return Err(err(
                             body[next].no,
@@ -2329,24 +2352,37 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
                         }
                     }
                     lang.add_paradigm(name_raw.to_owned(), selector);
+                    if let Some(value) = lang.paradigms.last_mut() {
+                        value.exported = exported;
+                    }
                 }
                 "sign" => {
                     if name_raw.contains('<') {
                         return Err(err(header_line, "signs cannot have type parameters"));
                     }
-                    let blocks = parse_body(&mut lang, &body)?;
+                    let (body, members) = parse_scoped_body(lang, &body)?;
+                    let blocks = parse_body(lang, &body)?;
                     let items: Vec<SignItem> = blocks.into_iter().flat_map(|b| b.items).collect();
                     lang.add_sign(name_raw.to_owned(), items);
+                    if let Some(value) = lang.signs.last_mut() {
+                        value.body.members = members;
+                        value.exported = exported;
+                    }
                 }
                 _ => {
-                    let blocks = parse_body(&mut lang, &body)?;
+                    if nested && kw == "global trait" {
+                        return Err(err(header_line, "global traits cannot be nested"));
+                    }
+                    let (body, members) = parse_scoped_body(lang, &body)?;
+                    let blocks = parse_body(lang, &body)?;
                     let (base_name, type_params) = split_type_params(name_raw, header_line)?;
                     lang.add_trait(TraitDef {
+                        exported,
                         name: base_name.to_owned(),
                         global: kw == "global trait",
                         marker: kw == "marker trait",
                         type_params,
-                        blocks,
+                        body: (blocks, members).into(),
                     });
                 }
             }
@@ -2354,7 +2390,44 @@ pub fn parse(src: &str) -> Result<Language, ParseError> {
             return Err(err(ln.no, format!("unexpected line {:?}", ln.text)));
         }
     }
-    Ok(lang)
+    Ok(())
+}
+
+/// Shared declaration-body parser. Member declarations never consume block indices.
+fn parse_scoped_body(
+    lang: &mut Language,
+    body: &[Line],
+) -> Result<(Vec<Line>, Language), ParseError> {
+    let (body, member_lines) = extract_members(body);
+    let mut members = Language::new();
+    members.next_rule = lang.next_rule;
+    members.next_sign = lang.next_sign;
+    members.next_paradigm = lang.next_paradigm;
+    parse_lines(&mut members, &member_lines, true)?;
+    lang.next_rule = members.next_rule;
+    lang.next_sign = members.next_sign;
+    lang.next_paradigm = members.next_paradigm;
+    Ok((body, members))
+}
+
+fn extract_members(body: &[Line]) -> (Vec<Line>, Vec<Line>) {
+    let Some(first) = body.first() else {
+        return (vec![], vec![]);
+    };
+    let mut content = Vec::new();
+    let mut members = Vec::new();
+    let mut in_member = false;
+    for line in body {
+        if line.indent == first.indent {
+            in_member = container_head(&line.text).is_some();
+        }
+        if in_member {
+            members.push(line.clone());
+        } else {
+            content.push(line.clone());
+        }
+    }
+    (content, members)
 }
 
 #[cfg(test)]

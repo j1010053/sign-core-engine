@@ -92,7 +92,7 @@ fn packages_exports_and_combined_ontology_are_deterministic() {
             .find(|package| package.rule_namespace == namespace)
             .unwrap_or_else(|| panic!("missing {namespace}"))
     };
-    assert_eq!(by_name("std:core").exports.len(), 30);
+    assert_eq!(by_name("std:core").exports.len(), 32);
     assert_eq!(by_name("std:grambank").exports.len(), 76);
     assert_eq!(by_name("std:cxg").exports.len(), 27);
     // P52 路徑庫:一個參數化 Recipe 加功能 Goal；路徑與權重留在 data。
@@ -135,8 +135,8 @@ fn packages_exports_and_combined_ontology_are_deterministic() {
     // Step 17 adds the Future and Perfect Goal exports. V3 Paradigms use the
     // package-level export catalog and deliberately do not enter this legacy
     // trait-only stdlib registry.
-    assert_eq!(stable_ids.len(), 136);
-    assert_eq!(aliases.len(), 136);
+    assert_eq!(stable_ids.len(), 138);
+    assert_eq!(aliases.len(), 138);
 
     for alias in [
         "Semantic",

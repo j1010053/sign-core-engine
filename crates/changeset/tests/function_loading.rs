@@ -115,6 +115,7 @@ use conlang_language::{LibraryExport, LibraryExportKind, LibraryId, LibraryKind,
 fn synthetic(functions: &'static str, exported: &[&str]) -> LibraryPackage {
     let id = LibraryId::new(LibraryKind::Plugin, "fixture");
     LibraryPackage {
+        aliases: Default::default(),
         name: id.name.clone(),
         rule_namespace: id.to_string(),
         version: "test".to_owned(),

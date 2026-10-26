@@ -975,11 +975,14 @@ fn a_new_trait_is_a_birth_not_a_change() {
 
 #[test]
 fn trait_marker_and_type_parameter_headers_are_structural_changes() {
-    let before = trait_base();
+    let source = TRAIT_ROOT
+        .replace("trait LocalNoun:", "trait LocalNoun<C: Nominal>:")
+        .replace("belongs LocalNoun", "belongs LocalNoun<Nominal>");
+    let before = LanguageDocument::import_new_root(&source, "evo:troot").unwrap();
     let parameterized = apply(
         &before,
         "evo:trait-params",
-        &statement("update trait(\"LocalNoun\").type_params = \"C: Nominal\""),
+        &statement("update trait(\"LocalNoun\").type_params = \"C: Entity\""),
     );
     let parameter_diff = diff_vector(&before, &parameterized);
     assert_eq!(parameter_diff.structural.trait_content.counts.changed, 1);

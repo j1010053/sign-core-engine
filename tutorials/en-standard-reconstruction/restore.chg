@@ -2,9 +2,9 @@ changeset evo:en-standard-restore:
     schema = conlang.changeset/v1
     base_source = sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
     base_identities = sha256:b60d365862eecde76dd4557a2e82f7487a492c0635b61c10d0d4404af130a9c8
-    library std:core@0.1.0 sha256:ba59a480c593673c8440e6493a9f78901ba52b934425dd089132800aa31371e2
-    library std:cxg@0.1.0 sha256:3d67129858634b7d07a77409fa864b6ee87afb04d7b71f4dc095bb71efb4d3b2
-    library std:grambank@1.0-subset.1 sha256:ff23ec9ce86a3857f5ed83bb52ba02ffb687cab85061784dcac36f698a078618
+    library std:core@0.1.0 sha256:a62f238a1ac577d5e6c6ac1ed557c4eade832140700f82b47c4e1fca7b4abc08
+    library std:cxg@0.1.0 sha256:0b25fd4df7565be59649fe6be2327682f1c5d52658e43f425bbb13756e2aace2
+    library std:grambank@1.0-subset.1 sha256:dd5f7ed511731c9c40fe02b08cd0c85d7da34f2c1647228ea09fd6920806ab05
     library std:grammaticalization@0.6.0 sha256:5663f653a7764ba93b13318728d37a185973305686f4dc8c897e745ed1a2effd
 
     #0:
@@ -45,147 +45,147 @@ changeset evo:en-standard-restore:
         insert into node(language, @evo:en-standard:0) at end:
             Class vowel {a, e, i, o, u, y}
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishAdjective:
+            export trait EnglishAdjective:
                 belongs Semantic
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishAuxiliary:
+            export trait EnglishAuxiliary:
                 belongs Predicate
                 belongs AgreementBearer
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishBigProperty:
+            export trait EnglishBigProperty:
                 belongs Semantic
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishBookConcept:
+            export trait EnglishBookConcept:
                 belongs Entity
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishCaseBearer:
+            export trait EnglishCaseBearer:
                 belongs Nominal
                 syn:
                     feature:
                         case = enum(nominative, accusative)
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishClauseFrame:
+            export trait EnglishClauseFrame:
                 belongs EventFrame
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishConstruction:
+            export trait EnglishConstruction:
                 belongs StandardEnglishProfile
                 belongs FormMeaningConstruction
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishCopula:
+            export trait EnglishCopula:
                 belongs EnglishAuxiliary
                 belongs Copula
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishCopulaFrame:
+            export trait EnglishCopulaFrame:
                 belongs EventFrame
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishCopularFrame:
+            export trait EnglishCopularFrame:
                 belongs EventFrame
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishCountMeaning:
+            export trait EnglishCountMeaning:
                 sem:
                     feature:
                         number = enum(singular, plural)
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishCountNounFrame:
+            export trait EnglishCountNounFrame:
                 belongs SemanticFrame
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishDeterminer:
+            export trait EnglishDeterminer:
                 belongs Semantic
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishDoSupportFrame:
+            export trait EnglishDoSupportFrame:
                 belongs EventFrame
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishDogConcept:
+            export trait EnglishDogConcept:
                 belongs Entity
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishFiniteIntransitivePredicate:
+            export trait EnglishFiniteIntransitivePredicate:
                 belongs Intransitive
                 belongs EnglishNominativeSubjectCaseAssigner
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishFiniteTransitiveCaseAssigner:
+            export trait EnglishFiniteTransitiveCaseAssigner:
                 belongs EnglishNominativeSubjectCaseAssigner
                 belongs EnglishObjectCaseAssigner
                 syn:
                     feature:
                         object_case = accusative
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishFiniteTransitivePredicate:
+            export trait EnglishFiniteTransitivePredicate:
                 belongs Transitive
                 belongs EnglishFiniteTransitiveCaseAssigner
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishHouseConcept:
+            export trait EnglishHouseConcept:
                 belongs Entity
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishIdentifiability:
+            export trait EnglishIdentifiability:
                 belongs Semantic
                 sem:
                     feature:
                         identifiability = enum(definite, indefinite)
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishInRelation:
+            export trait EnglishInRelation:
                 belongs Relation
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishNegationFrame:
+            export trait EnglishNegationFrame:
                 belongs EventFrame
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishNegator:
+            export trait EnglishNegator:
                 belongs Semantic
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishNominativeSubjectCaseAssigner:
+            export trait EnglishNominativeSubjectCaseAssigner:
                 belongs EnglishSubjectCaseAssigner
                 syn:
                     feature:
                         subject_case = nominative
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishObjectCaseAssigner:
+            export trait EnglishObjectCaseAssigner:
                 belongs Predicate
                 syn:
                     feature:
                         object_case = enum(nominative, accusative)
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishPassiveFrame:
+            export trait EnglishPassiveFrame:
                 belongs EventFrame
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishPluralMarker:
+            export trait EnglishPluralMarker:
                 belongs Semantic
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishQuestionFrame:
+            export trait EnglishQuestionFrame:
                 belongs EventFrame
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishReferenceFrame:
+            export trait EnglishReferenceFrame:
                 belongs SemanticFrame
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishRelationFrame:
+            export trait EnglishRelationFrame:
                 belongs SemanticFrame
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishRunFrame:
+            export trait EnglishRunFrame:
                 belongs EventFrame
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishSeeFrame:
+            export trait EnglishSeeFrame:
                 belongs EventFrame
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishSubjectCaseAssigner:
+            export trait EnglishSubjectCaseAssigner:
                 belongs Predicate
                 syn:
                     feature:
                         subject_case = enum(nominative, accusative)
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishThirdFemininePerson:
+            export trait EnglishThirdFemininePerson:
                 belongs Human
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishThirdSingular:
+            export trait EnglishThirdSingular:
                 belongs AgreementBearer
                 syn:
                     feature:
                         number = singular
                         person = third
         insert into node(language, @evo:en-standard:0) at end:
-            trait EnglishVoiceBearer:
+            export trait EnglishVoiceBearer:
                 syn:
                     feature:
                         voice = enum(active, passive)
         insert into node(language, @evo:en-standard:0) at end:
-            trait StandardEnglishProfile:
+            export trait StandardEnglishProfile:
                 belongs GB020_Present
                 belongs GB021_Present
                 belongs GB028_Absent
@@ -212,17 +212,17 @@ changeset evo:en-standard-restore:
                 belongs GB322_Absent
                 belongs GB522_Absent
         insert into node(language, @evo:en-standard:0) at end:
-            paradigm EnglishBE:
+            export paradigm EnglishBE:
                 case [syn.finite_form]:
                     [third_singular]: is()
                     base: be()
         insert into node(language, @evo:en-standard:0) at end:
-            paradigm EnglishDO:
+            export paradigm EnglishDO:
                 case [syn.finite_form]:
                     [third_singular]: does()
                     base: do()
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign EnglishAttributiveNP:
+            export sign EnglishAttributiveNP:
                 belongs EnglishConstruction
                 belongs AttributionConstruction
                 belongs EnglishReferenceFrame
@@ -233,7 +233,7 @@ changeset evo:en-standard-restore:
                 phon:
                     /{$slot.attribute} {$slot.nominal}/
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign EnglishCopularPredication:
+            export sign EnglishCopularPredication:
                 belongs EnglishConstruction
                 belongs CopularPredicationConstruction
                 belongs EnglishCopularFrame
@@ -251,7 +251,7 @@ changeset evo:en-standard-restore:
                 prag:
                     clause-type = declarative
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign EnglishCountNounForm:
+            export sign EnglishCountNounForm:
                 belongs EnglishConstruction
                 belongs EnglishCountMeaning
                 belongs EnglishCountNounFrame
@@ -274,7 +274,7 @@ changeset evo:en-standard-restore:
                         referent [Entity]
                         referent = {$slot.stem}
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign EnglishDefiniteNP:
+            export sign EnglishDefiniteNP:
                 belongs EnglishConstruction
                 belongs DeterminationConstruction
                 belongs EnglishReferenceFrame
@@ -287,7 +287,7 @@ changeset evo:en-standard-restore:
                 prag:
                     identifiability = identifiable
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign EnglishDoNegation:
+            export sign EnglishDoNegation:
                 belongs EnglishConstruction
                 belongs NegationConstruction
                 belongs EnglishNegationFrame
@@ -309,7 +309,7 @@ changeset evo:en-standard-restore:
                 prag:
                     clause-type = declarative
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign EnglishIndefiniteNP:
+            export sign EnglishIndefiniteNP:
                 belongs EnglishConstruction
                 belongs DeterminationConstruction
                 belongs EnglishReferenceFrame
@@ -322,7 +322,7 @@ changeset evo:en-standard-restore:
                 prag:
                     identifiability = non-identifiable
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign EnglishIntransitiveClause:
+            export sign EnglishIntransitiveClause:
                 belongs EnglishConstruction
                 belongs IntransitiveClauseConstruction
                 belongs EnglishClauseFrame
@@ -351,7 +351,7 @@ changeset evo:en-standard-restore:
                 prag:
                     clause-type = declarative
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign EnglishPeriphrasticPassive:
+            export sign EnglishPeriphrasticPassive:
                 belongs EnglishConstruction
                 belongs PassiveConstruction
                 belongs EnglishPassiveFrame
@@ -369,7 +369,7 @@ changeset evo:en-standard-restore:
                 prag:
                     perspective = patient-prominent
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign EnglishPluralNP:
+            export sign EnglishPluralNP:
                 belongs EnglishConstruction
                 belongs NumberMarkingConstruction
                 belongs EnglishCountMeaning
@@ -384,7 +384,7 @@ changeset evo:en-standard-restore:
                     feature:
                         number = plural
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign EnglishPolarQuestion:
+            export sign EnglishPolarQuestion:
                 belongs EnglishConstruction
                 belongs PolarQuestionConstruction
                 belongs EnglishQuestionFrame
@@ -403,19 +403,19 @@ changeset evo:en-standard-restore:
                 phon:
                     /{$slot.auxiliary} {$slot.subject} {$slot.clause}/
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign EnglishPossessiveNP:
+            export sign EnglishPossessiveNP:
                 belongs EnglishConstruction
                 belongs PossessionConstruction
                 belongs EnglishReferenceFrame
                 phon:
                     /{$slot.possessor}s {$slot.possessed}/
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign EnglishPrepositionalPhrase:
+            export sign EnglishPrepositionalPhrase:
                 belongs EnglishConstruction
                 belongs PrepositionalPhrase
                 belongs EnglishRelationFrame
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign EnglishSVOTransitiveClause:
+            export sign EnglishSVOTransitiveClause:
                 belongs EnglishConstruction
                 belongs SVOTransitiveClause
                 belongs EnglishClauseFrame
@@ -447,7 +447,7 @@ changeset evo:en-standard-restore:
                 prag:
                     clause-type = declarative
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign a:
+            export sign a:
                 belongs EnglishDeterminer
                 belongs EnglishIdentifiability
                 phon:
@@ -456,7 +456,7 @@ changeset evo:en-standard-restore:
                     feature:
                         identifiability = indefinite
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign be:
+            export sign be:
                 belongs EnglishCopula
                 belongs EnglishCopulaFrame
                 syn:
@@ -466,13 +466,13 @@ changeset evo:en-standard-restore:
                 phon:
                     /be/
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign big:
+            export sign big:
                 belongs EnglishAdjective
                 belongs EnglishBigProperty
                 phon:
                     /big/
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign book:
+            export sign book:
                 belongs Noun
                 belongs EnglishCaseBearer
                 belongs EnglishBookConcept
@@ -480,7 +480,7 @@ changeset evo:en-standard-restore:
                 phon:
                     /book/
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign do:
+            export sign do:
                 belongs EnglishAuxiliary
                 belongs EnglishDoSupportFrame
                 syn:
@@ -490,7 +490,7 @@ changeset evo:en-standard-restore:
                 phon:
                     /do/
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign does:
+            export sign does:
                 belongs EnglishAuxiliary
                 belongs EnglishDoSupportFrame
                 syn:
@@ -500,7 +500,7 @@ changeset evo:en-standard-restore:
                 phon:
                     /does/
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign dog:
+            export sign dog:
                 belongs Noun
                 belongs EnglishCaseBearer
                 belongs EnglishDogConcept
@@ -508,7 +508,7 @@ changeset evo:en-standard-restore:
                 phon:
                     /dog/
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign house:
+            export sign house:
                 belongs Noun
                 belongs EnglishCaseBearer
                 belongs EnglishHouseConcept
@@ -516,13 +516,13 @@ changeset evo:en-standard-restore:
                 phon:
                     /house/
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign in:
+            export sign in:
                 belongs Adposition
                 belongs EnglishInRelation
                 phon:
                     /in/
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign is:
+            export sign is:
                 belongs EnglishCopula
                 belongs EnglishCopulaFrame
                 syn:
@@ -532,7 +532,7 @@ changeset evo:en-standard-restore:
                 phon:
                     /is/
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign john:
+            export sign john:
                 belongs Noun
                 belongs EnglishCaseBearer
                 belongs Human
@@ -540,7 +540,7 @@ changeset evo:en-standard-restore:
                 phon:
                     /john/
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign mary:
+            export sign mary:
                 belongs Noun
                 belongs EnglishCaseBearer
                 belongs Human
@@ -548,12 +548,12 @@ changeset evo:en-standard-restore:
                 phon:
                     /mary/
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign not:
+            export sign not:
                 belongs EnglishNegator
                 phon:
                     /not/
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign plural_s:
+            export sign plural_s:
                 belongs EnglishPluralMarker
                 belongs EnglishCountMeaning
                 phon:
@@ -562,19 +562,19 @@ changeset evo:en-standard-restore:
                     feature:
                         number = plural
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign run:
+            export sign run:
                 belongs EnglishFiniteIntransitivePredicate
                 belongs EnglishRunFrame
                 phon:
                     /run/
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign see:
+            export sign see:
                 belongs EnglishFiniteTransitivePredicate
                 belongs EnglishSeeFrame
                 phon:
                     /see/
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign seen:
+            export sign seen:
                 belongs Transitive
                 belongs EnglishSeeFrame
                 belongs EnglishVoiceBearer
@@ -585,7 +585,7 @@ changeset evo:en-standard-restore:
                 phon:
                     /seen/
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign she:
+            export sign she:
                 belongs Pronoun
                 belongs EnglishCaseBearer
                 belongs EnglishThirdSingular
@@ -599,7 +599,7 @@ changeset evo:en-standard-restore:
                                 /her/
                     /she/
         insert sign under node(language, @evo:en-standard:0) at end:
-            sign the:
+            export sign the:
                 belongs EnglishDeterminer
                 belongs EnglishIdentifiability
                 phon:

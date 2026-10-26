@@ -296,9 +296,10 @@ fn materialize(need: &Need, chosen: &Proposal) -> SignDef {
         }
     }
     SignDef {
+        exported: false,
         id: conlang_language::SignId::synthetic(),
         name: need.name.clone(),
-        items,
+        body: (items).into(),
     }
 }
 

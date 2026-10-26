@@ -22,7 +22,7 @@
 use conlang_changeset::__lock_content_for_tests;
 use conlang_language::{LibraryCatalog, PackageFile, PackageSources};
 
-const CODE: &str = "trait probeMarker:\n    belongs Noun\n";
+const CODE: &str = "export trait probeMarker:\n    belongs Noun\n";
 const DATA: &str = "key\tvalue\nalpha\t1\n";
 
 /// 造一個注入套件,`code` 與 `data` 由呼叫端指定。
@@ -83,7 +83,7 @@ fn the_two_checkouts_really_do_differ_in_bytes() {
 /// 正規化不得把 digest 弄鈍——這是 P26 的底線。
 #[test]
 fn a_real_content_change_still_changes_the_lock() {
-    let changed_code = "trait probeMarker:\n    belongs Verb\n";
+    let changed_code = "export trait probeMarker:\n    belongs Verb\n";
     assert_ne!(
         lock_content(changed_code, DATA),
         lock_content(CODE, DATA),
@@ -121,7 +121,7 @@ fn a_bare_carriage_return_is_not_normalised_away() {
 /// 不是每個消費端都 trim(`data` 更是原文保存),所以不能假設它不可見。
 #[test]
 fn trailing_whitespace_is_not_normalised_away() {
-    let trailing = "trait probeMarker:\n    belongs Noun   \n";
+    let trailing = "export trait probeMarker:\n    belongs Noun   \n";
     assert_ne!(
         lock_content(trailing, DATA),
         lock_content(CODE, DATA),

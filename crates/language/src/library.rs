@@ -374,6 +374,8 @@ fn valid_table_type(value: &str) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LibraryPackage {
+    /// Package-local dependency qualifiers, independent of project aliases.
+    pub aliases: BTreeMap<String, PackageId>,
     pub id: PackageId,
     /// Compatibility short name used by the former stdlib API.
     pub name: String,
@@ -617,6 +619,8 @@ pub enum LibraryLoadError {
     DependencyCycle(String),
     #[error("unknown standard export alias {0:?}")]
     UnknownAlias(String),
+    #[error("ambiguous library export {0:?}; use a package qualifier followed by `.`")]
+    AmbiguousAlias(String),
     #[error("combined library defines duplicate trait {0:?}")]
     DuplicateTrait(String),
     #[error("combined library defines duplicate sign {0:?}")]
@@ -652,6 +656,7 @@ impl LibraryLoadError {
             Self::WrongKind { .. } => "LIBRARY_KIND_MISMATCH",
             Self::DependencyCycle(_) => "LIBRARY_DEPENDENCY_CYCLE",
             Self::UnknownAlias(_) => "LIBRARY_EXPORT_UNKNOWN",
+            Self::AmbiguousAlias(_) => "PACKAGE_SYMBOL_AMBIGUOUS",
             Self::DuplicateTrait(_) => "LIBRARY_TRAIT_DUPLICATE",
             Self::DuplicateSign(_) => "LIBRARY_SIGN_DUPLICATE",
             Self::DuplicateParadigm(_) => "LIBRARY_PARADIGM_DUPLICATE",
@@ -815,6 +820,7 @@ const EMBEDDED_PACKAGES: &[EmbeddedPackage] = &[
 
 #[derive(Default)]
 struct Manifest {
+    aliases: BTreeMap<String, PackageId>,
     schema: u32,
     id: Option<PackageId>,
     kind: Option<LibraryKind>,
@@ -834,6 +840,8 @@ struct Manifest {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TomlManifestV2 {
+    #[serde(default)]
+    aliases: BTreeMap<String, String>,
     schema: u32,
     id: String,
     version: String,
@@ -1191,6 +1199,16 @@ fn parse_toml_manifest(source: &str) -> Result<Manifest, LibraryLoadError> {
         ));
     }
     Ok(Manifest {
+        aliases: raw
+            .aliases
+            .into_iter()
+            .map(|(alias, id)| {
+                if !valid_identifier(&alias) {
+                    return Err(LibraryLoadError::InvalidPackageAlias(alias));
+                }
+                Ok((alias, id.parse()?))
+            })
+            .collect::<Result<_, LibraryLoadError>>()?,
         schema: 2,
         id: Some(id.clone()),
         kind: None,
@@ -1589,13 +1607,7 @@ fn load_package(source: OwnedPackageView<'_>) -> Result<LibraryPackage, LibraryL
             "a package must declare code, functions, or data",
         ));
     }
-    let allow_empty_exports = schema >= 2
-        && manifest.capabilities.is_some_and(|capabilities| {
-            !capabilities.traits
-                && !capabilities.signs
-                && !capabilities.paradigms
-                && !capabilities.functions
-        });
+    let allow_empty_exports = schema >= 2;
     let exports = parse_exports(&id, source.exports, allow_empty_exports)?;
     let tables = parse_tables(&id, source.tables, &data_paths)?;
     let capabilities = manifest.capabilities.unwrap_or(PackageCapabilities {
@@ -1614,7 +1626,8 @@ fn load_package(source: OwnedPackageView<'_>) -> Result<LibraryPackage, LibraryL
                 .any(|export| export.kind == LibraryExportKind::Function),
         data: !data_paths.is_empty(),
     });
-    let package = LibraryPackage {
+    let mut package = LibraryPackage {
+        aliases: manifest.aliases,
         exports,
         name: id.name.clone(),
         id,
@@ -1666,6 +1679,37 @@ fn load_package(source: OwnedPackageView<'_>) -> Result<LibraryPackage, LibraryL
         });
     }
     let language = validate_package_code(&package)?;
+    let declarations = crate::package_scope::declarations(&language);
+    for export in &package.exports {
+        if let Some((_, _, false)) = declarations
+            .iter()
+            .find(|(kind, name, _)| *kind == export.kind && *name == export.alias)
+        {
+            return Err(LibraryLoadError::UnsupportedContent {
+                package: package.id.to_string(),
+                message: format!(
+                    "PACKAGE_PRIVATE_EXPORT: {:?} must be declared with `export`",
+                    export.alias
+                ),
+            });
+        }
+    }
+    for (kind, name, exported) in declarations {
+        if exported
+            && !package
+                .exports
+                .iter()
+                .any(|e| e.kind == kind && e.alias == name)
+        {
+            package.exports.push(LibraryExport {
+                package: package.id.name.clone(),
+                package_id: package.id.clone(),
+                stable_id: format!("{}:{name}", package.id),
+                kind,
+                alias: name.to_owned(),
+            });
+        }
+    }
     for export in &package.exports {
         let present = match export.kind {
             LibraryExportKind::Trait => language.trait_named(&export.alias).is_some(),
@@ -1733,6 +1777,9 @@ pub fn package_lock_content(package: &LibraryPackage) -> String {
     for dependency in &package.requires {
         content.push_str(&format!("requires {dependency}\n"));
     }
+    for (alias, target) in &package.aliases {
+        content.push_str(&format!("alias {alias} {target}\n"));
+    }
     for export in &package.exports {
         content.push_str(&format!(
             "export {} {:?} {}\n",
@@ -1789,9 +1836,32 @@ pub struct ResolvedPackages {
     pub selection: LibrarySelection,
     packages: Vec<LibraryPackage>,
     available_exports: BTreeMap<String, PackageId>,
+    pub(crate) scope: crate::package_scope::PackageScope,
 }
 
 impl ResolvedPackages {
+    pub(crate) fn compilation_sources(
+        &self,
+        caller: &Language,
+    ) -> Result<(Language, Language), String> {
+        let caller = self.scope.lower_caller(caller)?;
+        let mut standard = self.selection.standard.clone();
+        let mut overlay = self.selection.overlay.clone();
+        for source in [&mut standard, &mut overlay] {
+            source
+                .traits
+                .retain(|v| caller.trait_named(&v.name).is_none());
+            source
+                .signs
+                .retain(|v| caller.sign_named(&v.name).is_none());
+            source
+                .paradigms
+                .retain(|v| caller.paradigm_named(&v.name).is_none());
+        }
+        overlay.append_library(caller);
+        Ok((standard, overlay))
+    }
+
     pub fn packages(&self) -> &[LibraryPackage] {
         &self.packages
     }
@@ -1802,6 +1872,22 @@ impl ResolvedPackages {
 
     pub fn available_exports(&self) -> &BTreeMap<String, PackageId> {
         &self.available_exports
+    }
+
+    /// Fingerprint explicit project qualifiers. Default package-name qualifiers
+    /// are determined by the already-locked package set. An empty alias map
+    /// retains the historical ChangeSet prelude shape.
+    pub fn alias_digest(&self) -> Option<String> {
+        if self.intent.aliases.is_empty() {
+            return None;
+        }
+        let content = self
+            .intent
+            .aliases
+            .iter()
+            .map(|(alias, package)| format!("{alias}\t{package}\n"))
+            .collect::<String>();
+        Some(crate::sha256_hex(content.as_bytes()))
     }
 
     pub fn lock_digest(&self) -> String {
@@ -1828,7 +1914,7 @@ fn validate_catalog(packages: &[LibraryPackage]) -> Result<(), LibraryLoadError>
     let mut ids = BTreeSet::new();
     let mut namespaces = BTreeMap::<String, LibraryId>::new();
     let mut stable_ids = BTreeMap::<String, LibraryId>::new();
-    let mut aliases = BTreeMap::<String, LibraryId>::new();
+    let mut aliases = BTreeMap::<(LibraryId, String), LibraryId>::new();
     for package in packages {
         if !ids.insert(package.id.clone()) {
             return Err(LibraryLoadError::DuplicatePackage(package.id.clone()));
@@ -1848,7 +1934,10 @@ fn validate_catalog(packages: &[LibraryPackage]) -> Result<(), LibraryLoadError>
                     second: package.id.clone(),
                 });
             }
-            if let Some(first) = aliases.insert(export.alias.clone(), package.id.clone()) {
+            if let Some(first) = aliases.insert(
+                (package.id.clone(), export.alias.clone()),
+                package.id.clone(),
+            ) {
                 return Err(LibraryLoadError::DuplicateAlias {
                     alias: export.alias.clone(),
                     first,
@@ -1987,17 +2076,25 @@ impl LibraryCatalog {
     /// 名字 → 匯出它的 package(**全 catalog**,不限已選取者)。
     ///
     /// 供 R13 的指路訊息使用:只在名字查無時查詢,故命中必然是尚未宣告的套件。
-    /// 同名由多個 package 匯出時取排序後第一個(catalog 已是決定性排序)。
+    /// 裸名僅在唯一時收錄；限定名供同名匯出指路，避免依排序誤選套件。
     pub fn export_index(&self) -> std::collections::BTreeMap<String, LibraryId> {
-        let mut index = std::collections::BTreeMap::new();
+        let mut candidates = BTreeMap::<String, Vec<LibraryId>>::new();
         for package in &self.packages {
             for export in &package.exports {
-                index
+                candidates
                     .entry(export.alias.clone())
-                    .or_insert_with(|| package.id.clone());
+                    .or_default()
+                    .push(package.id.clone());
+                candidates
+                    .entry(format!("{}.{}", package.id.name, export.alias))
+                    .or_default()
+                    .push(package.id.clone());
             }
         }
-        index
+        candidates
+            .into_iter()
+            .filter_map(|(name, ids)| (ids.len() == 1).then(|| (name, ids[0].clone())))
+            .collect()
     }
 
     pub fn resolve_export(
@@ -2005,13 +2102,22 @@ impl LibraryCatalog {
         kind: LibraryKind,
         alias: &str,
     ) -> Result<LibraryExport, LibraryLoadError> {
-        self.packages
+        let (qualifier, name) = alias
+            .split_once('.')
+            .map_or((None, alias), |(q, n)| (Some(q), n));
+        let matches: Vec<_> = self
+            .packages
             .iter()
             .filter(|package| package.enabled && package.id.legacy_kind() == Some(kind))
+            .filter(|package| qualifier.is_none_or(|q| q == package.id.name))
             .flat_map(|package| package.exports.iter())
-            .find(|export| export.alias == alias)
-            .cloned()
-            .ok_or_else(|| LibraryLoadError::UnknownAlias(alias.to_owned()))
+            .filter(|export| export.alias == name)
+            .collect();
+        match matches.as_slice() {
+            [export] => Ok((*export).clone()),
+            [] => Err(LibraryLoadError::UnknownAlias(alias.to_owned())),
+            _ => Err(LibraryLoadError::AmbiguousAlias(alias.to_owned())),
+        }
     }
 
     fn package(&self, id: &LibraryId) -> Result<&LibraryPackage, LibraryLoadError> {
@@ -2154,38 +2260,31 @@ impl LibraryCatalog {
             }
         }
 
+        let selected = ordered
+            .iter()
+            .map(|id| self.package(id).cloned())
+            .collect::<Result<Vec<_>, _>>()?;
+        let languages = selected
+            .iter()
+            .map(validate_package_code)
+            .collect::<Result<Vec<_>, _>>()?;
+        let scope = crate::package_scope::PackageScope::new(&selected, &languages, spec).map_err(
+            |message| LibraryLoadError::UnsupportedContent {
+                package: "<resolution>".into(),
+                message,
+            },
+        )?;
         let mut standard = Language::new();
         let mut overlay = Language::new();
-        let mut trait_names = BTreeSet::new();
-        let mut sign_names = BTreeSet::new();
-        let mut paradigm_names = BTreeSet::new();
         let mut resolved = Vec::new();
-        for id in &ordered {
-            let package = self.package(id)?;
-            let language = validate_package_code(package)?;
-            for trait_def in &language.traits {
-                if !trait_names.insert(trait_def.name.clone()) {
-                    return Err(LibraryLoadError::DuplicateTrait(trait_def.name.clone()));
+        for (package, source) in selected.iter().zip(&languages) {
+            let id = &package.id;
+            let language = scope.lower_package(source, id).map_err(|message| {
+                LibraryLoadError::UnsupportedContent {
+                    package: id.to_string(),
+                    message,
                 }
-            }
-            for sign in &language.signs {
-                if !sign_names.insert(sign.name.clone()) {
-                    return Err(LibraryLoadError::DuplicateSign(sign.name.clone()));
-                }
-                if paradigm_names.contains(&sign.name) {
-                    return Err(LibraryLoadError::CallableNameCollision(sign.name.clone()));
-                }
-            }
-            for paradigm in &language.paradigms {
-                if !paradigm_names.insert(paradigm.name.clone()) {
-                    return Err(LibraryLoadError::DuplicateParadigm(paradigm.name.clone()));
-                }
-                if sign_names.contains(&paradigm.name) {
-                    return Err(LibraryLoadError::CallableNameCollision(
-                        paradigm.name.clone(),
-                    ));
-                }
-            }
+            })?;
             match package.layer {
                 PackageLayer::Reference => standard.append_library(language),
                 PackageLayer::Overlay => overlay.append_library(language),
@@ -2216,7 +2315,18 @@ impl PackageResolver for LibraryCatalog {
             .iter()
             .map(|id| self.package(id).cloned())
             .collect::<Result<Vec<_>, _>>()?;
+        let languages = packages
+            .iter()
+            .map(validate_package_code)
+            .collect::<Result<Vec<_>, _>>()?;
+        let scope = crate::package_scope::PackageScope::new(&packages, &languages, spec).map_err(
+            |message| LibraryLoadError::UnsupportedContent {
+                package: "<resolution>".into(),
+                message,
+            },
+        )?;
         Ok(ResolvedPackages {
+            scope,
             intent: spec.clone(),
             selection,
             packages,
@@ -2236,6 +2346,7 @@ mod tests {
     fn empty_plugin(name: &str, priority: i32) -> LibraryPackage {
         let id = LibraryId::new(LibraryKind::Plugin, name);
         LibraryPackage {
+            aliases: BTreeMap::new(),
             name: name.to_owned(),
             rule_namespace: id.to_string(),
             id,
@@ -2325,6 +2436,8 @@ mod tests {
 
         let mut alias = catalog.packages.clone();
         alias[1].exports[0].alias = alias[0].exports[0].alias.clone();
+        assert!(validate_catalog(&alias).is_ok(), "names are package-scoped");
+        alias[0].exports[1].alias = alias[0].exports[0].alias.clone();
         assert!(matches!(
             validate_catalog(&alias),
             Err(LibraryLoadError::DuplicateAlias { .. })
@@ -2410,6 +2523,7 @@ mod tests {
     fn std_traits_reject_source_declared_slot_maps() {
         let id = LibraryId::new(LibraryKind::Std, "slotmap-boundary");
         let package = LibraryPackage {
+            aliases: BTreeMap::new(),
             name: id.name.clone(),
             id: id.clone(),
             version: "test".to_owned(),

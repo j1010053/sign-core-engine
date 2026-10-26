@@ -1,6 +1,6 @@
 ---
 source: crates/language/tests/roundtrip.rs
-assertion_line: 115
+assertion_line: 124
 expression: "format!(\"{lang:#?}\")"
 ---
 Language {
@@ -22,70 +22,203 @@ Language {
     ],
     traits: [
         TraitDef {
+            body: ScopedBody {
+                content: TraitBlocks {
+                    blocks: [
+                        Block {
+                            items: [
+                                Rule(
+                                    Rule {
+                                        id: RuleId(
+                                            NodeId {
+                                                namespace: Ephemeral,
+                                                ordinal: 0,
+                                            },
+                                        ),
+                                        name: None,
+                                        phon_block: None,
+                                        propagate: false,
+                                        body: "a => ə / _#",
+                                        stage: Word,
+                                        dim: Phon,
+                                        else_chain: [
+                                            "ɐ / _[+cons]",
+                                            "e",
+                                        ],
+                                        then_chain: [],
+                                        source: SourceLocation {
+                                            line: 13,
+                                            column: 0,
+                                        },
+                                        branch_sources: [
+                                            SourceLocation {
+                                                line: 14,
+                                                column: 0,
+                                            },
+                                            SourceLocation {
+                                                line: 15,
+                                                column: 0,
+                                            },
+                                        ],
+                                    },
+                                ),
+                            ],
+                        },
+                        Block {
+                            items: [
+                                Rule(
+                                    Rule {
+                                        id: RuleId(
+                                            NodeId {
+                                                namespace: Ephemeral,
+                                                ordinal: 1,
+                                            },
+                                        ),
+                                        name: None,
+                                        phon_block: None,
+                                        propagate: false,
+                                        body: "n => m / _[+labial]",
+                                        stage: Stem,
+                                        dim: Phon,
+                                        else_chain: [],
+                                        then_chain: [],
+                                        source: SourceLocation {
+                                            line: 18,
+                                            column: 0,
+                                        },
+                                        branch_sources: [],
+                                    },
+                                ),
+                            ],
+                        },
+                    ],
+                },
+                members: Language {
+                    dsl_decls: [],
+                    distribution: [],
+                    traits: [],
+                    signs: [],
+                    paradigms: [],
+                    rule_namespace: Local,
+                    next_rule: 0,
+                    next_sign: 0,
+                    next_paradigm: 0,
+                },
+                materialized_traits: {},
+            },
+            exported: false,
             name: "CorePhonology",
             global: true,
             marker: false,
             type_params: [],
-            blocks: [
-                Block {
-                    items: [
-                        Rule(
-                            Rule {
-                                id: RuleId(
-                                    NodeId {
-                                        namespace: Ephemeral,
-                                        ordinal: 0,
+        },
+        TraitDef {
+            body: ScopedBody {
+                content: TraitBlocks {
+                    blocks: [
+                        Block {
+                            items: [
+                                Def(
+                                    Def {
+                                        path: "syn.provides",
+                                        value: "VERB",
                                     },
                                 ),
-                                name: None,
-                                phon_block: None,
-                                propagate: false,
-                                body: "a => ə / _#",
-                                stage: Word,
-                                dim: Phon,
-                                else_chain: [
-                                    "ɐ / _[+cons]",
-                                    "e",
-                                ],
-                                then_chain: [],
-                                source: SourceLocation {
-                                    line: 13,
-                                    column: 0,
-                                },
-                                branch_sources: [
-                                    SourceLocation {
-                                        line: 14,
-                                        column: 0,
+                                Def(
+                                    Def {
+                                        path: "syn.requires",
+                                        value: "[agent, patient]",
                                     },
-                                    SourceLocation {
-                                        line: 15,
-                                        column: 0,
+                                ),
+                            ],
+                        },
+                        Block {
+                            items: [
+                                Def(
+                                    Def {
+                                        path: "syn.arity",
+                                        value: "2",
                                     },
-                                ],
-                            },
-                        ),
+                                ),
+                            ],
+                        },
                     ],
                 },
-                Block {
+                members: Language {
+                    dsl_decls: [],
+                    distribution: [],
+                    traits: [],
+                    signs: [],
+                    paradigms: [],
+                    rule_namespace: Local,
+                    next_rule: 2,
+                    next_sign: 0,
+                    next_paradigm: 0,
+                },
+                materialized_traits: {},
+            },
+            exported: false,
+            name: "VerbCommon",
+            global: false,
+            marker: false,
+            type_params: [],
+        },
+    ],
+    signs: [
+        SignDef {
+            body: ScopedBody {
+                content: Block {
                     items: [
+                        TraitMount {
+                            name: "VerbCommon",
+                            kind: Block(
+                                0,
+                            ),
+                            args: [],
+                        },
+                        TraitMount {
+                            name: "VerbCommon",
+                            kind: Block(
+                                1,
+                            ),
+                            args: [],
+                        },
+                        Def(
+                            Def {
+                                path: "entrenchment",
+                                value: "0.8",
+                            },
+                        ),
+                        Def(
+                            Def {
+                                path: "sem.senses",
+                                value: "[ sense s1 { concept = GO } ]",
+                            },
+                        ),
+                        Def(
+                            Def {
+                                path: "phon",
+                                value: "/go/",
+                            },
+                        ),
                         Rule(
                             Rule {
                                 id: RuleId(
                                     NodeId {
                                         namespace: Ephemeral,
-                                        ordinal: 1,
+                                        ordinal: 2,
                                     },
                                 ),
                                 name: None,
                                 phon_block: None,
                                 propagate: false,
-                                body: "n => m / _[+labial]",
-                                stage: Stem,
+                                body: "o => ə / _#",
+                                stage: Phrase,
                                 dim: Phon,
                                 else_chain: [],
                                 then_chain: [],
                                 source: SourceLocation {
-                                    line: 18,
+                                    line: 36,
                                     column: 0,
                                 },
                                 branch_sources: [],
@@ -93,45 +226,20 @@ Language {
                         ),
                     ],
                 },
-            ],
-        },
-        TraitDef {
-            name: "VerbCommon",
-            global: false,
-            marker: false,
-            type_params: [],
-            blocks: [
-                Block {
-                    items: [
-                        Def(
-                            Def {
-                                path: "syn.provides",
-                                value: "VERB",
-                            },
-                        ),
-                        Def(
-                            Def {
-                                path: "syn.requires",
-                                value: "[agent, patient]",
-                            },
-                        ),
-                    ],
+                members: Language {
+                    dsl_decls: [],
+                    distribution: [],
+                    traits: [],
+                    signs: [],
+                    paradigms: [],
+                    rule_namespace: Local,
+                    next_rule: 2,
+                    next_sign: 0,
+                    next_paradigm: 0,
                 },
-                Block {
-                    items: [
-                        Def(
-                            Def {
-                                path: "syn.arity",
-                                value: "2",
-                            },
-                        ),
-                    ],
-                },
-            ],
-        },
-    ],
-    signs: [
-        SignDef {
+                materialized_traits: {},
+            },
+            exported: false,
             id: SignId(
                 NodeId {
                     namespace: Ephemeral,
@@ -139,63 +247,6 @@ Language {
                 },
             ),
             name: "go",
-            items: [
-                TraitMount {
-                    name: "VerbCommon",
-                    kind: Block(
-                        0,
-                    ),
-                    args: [],
-                },
-                TraitMount {
-                    name: "VerbCommon",
-                    kind: Block(
-                        1,
-                    ),
-                    args: [],
-                },
-                Def(
-                    Def {
-                        path: "entrenchment",
-                        value: "0.8",
-                    },
-                ),
-                Def(
-                    Def {
-                        path: "sem.senses",
-                        value: "[ sense s1 { concept = GO } ]",
-                    },
-                ),
-                Def(
-                    Def {
-                        path: "phon",
-                        value: "/go/",
-                    },
-                ),
-                Rule(
-                    Rule {
-                        id: RuleId(
-                            NodeId {
-                                namespace: Ephemeral,
-                                ordinal: 2,
-                            },
-                        ),
-                        name: None,
-                        phon_block: None,
-                        propagate: false,
-                        body: "o => ə / _#",
-                        stage: Phrase,
-                        dim: Phon,
-                        else_chain: [],
-                        then_chain: [],
-                        source: SourceLocation {
-                            line: 36,
-                            column: 0,
-                        },
-                        branch_sources: [],
-                    },
-                ),
-            ],
         },
     ],
     paradigms: [],

@@ -1,0 +1,17 @@
+sign NP:
+    syn:
+        slots:
+            head [English.Noun]
+    phon:
+        /{$slot.head}/
+
+sign plural_cat:
+    syn:
+        slots:
+            head [English.Noun]
+        map head autofill English.CatForms()
+        feature:
+            number = enum(singular, plural)
+            number = plural
+    phon:
+        /{$slot.head}/

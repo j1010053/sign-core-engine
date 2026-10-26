@@ -245,6 +245,12 @@ fn signal_value(
 }
 
 fn explicit_name(document: &LanguageDocument, entry: &NodeEntryV1) -> Option<String> {
+    if let Some(name) =
+        conlang_language::identity::declaration_name(document.language(), &entry.address)
+    {
+        return Some(name);
+    }
+
     let language = document.language();
     match entry.address.0.as_slice() {
         [AddressSegment::Distribution(index)] => {
@@ -330,6 +336,12 @@ fn subtree_fingerprint(
 
 fn anonymous_node_value(document: &LanguageDocument, entry: &NodeEntryV1) -> String {
     let language = document.language();
+    let Some((language, address)) = language.scope_at_address(&entry.address.0) else {
+        return "<invalid scope>".into();
+    };
+    let mut local_entry = entry.clone();
+    local_entry.address = conlang_language::NodeAddress(address.to_vec());
+    let entry = &local_entry;
     match entry.address.0.as_slice() {
         [AddressSegment::Traits(index)] => {
             let mut value = language.traits[*index].clone();
@@ -470,6 +482,9 @@ fn materialize_reconciled(
                 RefTargetV1::External { spelling, expected } => RefTargetV1::External {
                     spelling: spelling.clone(),
                     expected: *expected,
+                },
+                RefTargetV1::ExternalType { spelling } => RefTargetV1::ExternalType {
+                    spelling: spelling.clone(),
                 },
             },
         })

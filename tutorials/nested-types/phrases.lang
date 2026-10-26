@@ -1,0 +1,73 @@
+/* A minimal phrase template. a / b / u are test words, not English data. */
+Symbol a
+Symbol b
+Symbol u
+Class vowel {a, u}
+Class consonant {b}
+
+marker trait N:
+marker trait V:
+
+export trait XP<T>:
+    /* Private to XP, its receivers and their inner scopes; T is captured here. */
+    marker trait Bar:
+
+    export sign bar-comp:
+        belongs Bar
+        syn:
+            slots:
+                head [T]
+                comp [*]?
+        sem:
+            roles:
+                head [T]
+                head = {$slot.head}
+        phon:
+            /{$slot.head}{$slot.comp}/
+
+    export sign bar-adjunct:
+        belongs Bar
+        syn:
+            slots:
+                adjunct [*]?
+                head [Bar]
+        phon:
+            /{$slot.adjunct}{$slot.head}/
+
+    syn:
+        slots:
+            spec [*]?
+            head [Bar]
+    phon:
+        /{$slot.spec}{$slot.head}/
+
+sign NP:
+    belongs XP<N>
+    XP[0]
+
+sign VP:
+    belongs XP<V>
+    XP[0]
+
+sign noun:
+    belongs N
+    phon:
+        /a/
+
+sign verb:
+    belongs V
+    phon:
+        /u/
+
+sign adj:
+    phon:
+        /b/
+
+/* Ordinary calls compose the tree; the lexical scope stays in XP. */
+sign demo:
+    syn:
+        slots:
+            phrase [*]
+        map phrase autofill NP(head: XP<N>.bar-adjunct(adjunct: adj(), head: XP<N>.bar-comp(head: noun())))
+    phon:
+        /{$slot.phrase}/

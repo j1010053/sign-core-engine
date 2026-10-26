@@ -413,6 +413,7 @@ fn a_malformed_path_builtin_is_a_broken_input() {
 fn function_package(source: &str) -> conlang_language::LibraryPackage {
     let id = conlang_language::LibraryId::new(conlang_language::LibraryKind::Plugin, "probe");
     conlang_language::LibraryPackage {
+        aliases: Default::default(),
         name: id.name.clone(),
         rule_namespace: id.to_string(),
         version: "test".to_owned(),

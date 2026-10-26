@@ -6,20 +6,20 @@
    choose a language-specific order, exponent, or allomorph. Concrete but still
    cross-linguistic realization patterns live in realizations.lang. */
 
-trait FormMeaningConstruction:
+export trait FormMeaningConstruction:
     syn:
         feature:
             pairing = enum(form_meaning)
             pairing = form_meaning
 
-trait HeadProjection:
+export trait HeadProjection:
     belongs FormMeaningConstruction
     FormMeaningConstruction[0]
     syn:
         slots:
             head [*]
 
-trait ControllerTargetAgreement:
+export trait ControllerTargetAgreement:
     belongs FormMeaningConstruction
     FormMeaningConstruction[0]
     syn:
@@ -30,7 +30,7 @@ trait ControllerTargetAgreement:
             agreement_number = enum(singular, plural)
             agreement_number => unify($slot.controller.syn.number, $slot.target.syn.number)
 
-trait DeterminationConstruction:
+export trait DeterminationConstruction:
     belongs FormMeaningConstruction
     FormMeaningConstruction[0]
     syn:
@@ -44,7 +44,7 @@ trait DeterminationConstruction:
             specifier = {$slot.determiner}
             referent = {$slot.nominal}
 
-trait NumberMarkingConstruction:
+export trait NumberMarkingConstruction:
     belongs FormMeaningConstruction
     FormMeaningConstruction[0]
     syn:
@@ -58,7 +58,7 @@ trait NumberMarkingConstruction:
             referent = {$slot.nominal}
             marker = {$slot.marker}
 
-trait AttributionConstruction:
+export trait AttributionConstruction:
     belongs FormMeaningConstruction
     FormMeaningConstruction[0]
     syn:
@@ -72,7 +72,7 @@ trait AttributionConstruction:
             property = {$slot.attribute}
             referent = {$slot.nominal}
 
-trait PossessionConstruction:
+export trait PossessionConstruction:
     belongs FormMeaningConstruction
     FormMeaningConstruction[0]
     syn:
@@ -86,7 +86,7 @@ trait PossessionConstruction:
             possessor = {$slot.possessor}
             possessed = {$slot.possessed}
 
-trait AdpositionConstruction:
+export trait AdpositionConstruction:
     belongs FormMeaningConstruction
     FormMeaningConstruction[0]
     syn:
@@ -100,7 +100,7 @@ trait AdpositionConstruction:
             relation = {$slot.marker}
             ground = {$slot.complement}
 
-trait IntransitiveClauseConstruction:
+export trait IntransitiveClauseConstruction:
     belongs FormMeaningConstruction
     FormMeaningConstruction[0]
     syn:
@@ -114,7 +114,7 @@ trait IntransitiveClauseConstruction:
             actor = {$slot.subject}
             event = {$slot.predicate}
 
-trait TransitiveClauseConstruction:
+export trait TransitiveClauseConstruction:
     belongs FormMeaningConstruction
     FormMeaningConstruction[0]
     syn:
@@ -133,7 +133,7 @@ trait TransitiveClauseConstruction:
 
 /* General copular predication, including property predicates. GB117 is
    narrower: its behavioral evidence concerns predicate nominals. */
-trait CopularPredicationConstruction:
+export trait CopularPredicationConstruction:
     belongs FormMeaningConstruction
     FormMeaningConstruction[0]
     syn:
@@ -151,7 +151,7 @@ trait CopularPredicationConstruction:
 /* GB117-compatible abstract behavior. Required, optional, and zero-copula
    strategies are distinct construction schemas; the GB117 value alone does
    not select one for every predicate-nominal construction in a language. */
-trait PredicateNominalConstruction:
+export trait PredicateNominalConstruction:
     belongs FormMeaningConstruction
     FormMeaningConstruction[0]
     syn:
@@ -165,25 +165,25 @@ trait PredicateNominalConstruction:
             topic = {$slot.subject}
             predication = {$slot.predicate}
 
-trait RequiredCopulaPredicateNominal:
+export trait RequiredCopulaPredicateNominal:
     belongs PredicateNominalConstruction
     PredicateNominalConstruction[0]
     syn:
         slots:
             copula [Copula]
 
-trait OptionalCopulaPredicateNominal:
+export trait OptionalCopulaPredicateNominal:
     belongs PredicateNominalConstruction
     PredicateNominalConstruction[0]
     syn:
         slots:
             copula [Copula]?
 
-trait ZeroCopulaPredicateNominal:
+export trait ZeroCopulaPredicateNominal:
     belongs PredicateNominalConstruction
     PredicateNominalConstruction[0]
 
-trait NegationConstruction:
+export trait NegationConstruction:
     belongs FormMeaningConstruction
     FormMeaningConstruction[0]
     syn:
@@ -197,7 +197,7 @@ trait NegationConstruction:
             scope [Event]
             scope = {$slot.predicate}
 
-trait PolarQuestionConstruction:
+export trait PolarQuestionConstruction:
     belongs FormMeaningConstruction
     FormMeaningConstruction[0]
     syn:
@@ -210,7 +210,7 @@ trait PolarQuestionConstruction:
     prag:
         illocution = polar-question
 
-trait PassiveConstruction:
+export trait PassiveConstruction:
     belongs FormMeaningConstruction
     FormMeaningConstruction[0]
     syn:
@@ -228,7 +228,7 @@ trait PassiveConstruction:
             event = {$slot.predicate}
             agent = {$slot.agent}
 
-trait SerialPredicateConstruction:
+export trait SerialPredicateConstruction:
     belongs FormMeaningConstruction
     FormMeaningConstruction[0]
     syn:

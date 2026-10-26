@@ -332,7 +332,10 @@ fn push_body(out: &mut String, blocks: &[Block]) {
         }
         // 2) trait macro 引用(保序):None = 裸 Name(整個 trait)、Some(n) = Name[n]
         for it in items {
-            if let SignItem::TraitMount { name, kind, .. } = it {
+            if let SignItem::TraitMount { name, kind, args } = it {
+                let name = crate::type_ref::TypeRef::mount(name, args)
+                    .map(|r| r.to_string())
+                    .unwrap_or_else(|_| name.clone());
                 match kind {
                     // 宣告那一份由 belongs 區段印,這裡只印展開點
                     crate::TraitMountKind::Declaration => {}
@@ -624,6 +627,9 @@ fn rule_dim(r: &crate::Rule) -> &'static str {
 }
 
 fn push_trait(out: &mut String, t: &TraitDef) {
+    if t.exported {
+        out.push_str("export ");
+    }
     let kw = if t.global {
         "global trait"
     } else if t.marker {
@@ -638,7 +644,16 @@ fn push_trait(out: &mut String, t: &TraitDef) {
         out.push('>');
     }
     out.push_str(":\n");
+    push_members(out, &t.members);
     push_body(out, &t.blocks);
+}
+
+fn push_members(out: &mut String, members: &Language) {
+    for line in print(members).lines() {
+        out.push_str("    ");
+        out.push_str(line);
+        out.push('\n');
+    }
 }
 
 /// Canonical form of a trait type-parameter list, without the surrounding `<…>`.
@@ -690,14 +705,23 @@ pub fn print(l: &Language) -> String {
     let mut paradigms: Vec<_> = l.paradigms.iter().collect();
     paradigms.sort_by(|a, b| a.name.cmp(&b.name));
     for paradigm in paradigms {
-        let mut s = format!("paradigm {}:\n", paradigm.name);
+        let mut s = format!(
+            "{}paradigm {}:\n",
+            if paradigm.exported { "export " } else { "" },
+            paradigm.name
+        );
         push_case(&mut s, "    ", &paradigm.selector);
         sections.push(s);
     }
     let mut signs: Vec<_> = l.signs.iter().collect();
     signs.sort_by(|a, b| a.name.cmp(&b.name));
     for sg in signs {
-        let mut s = format!("sign {}:\n", sg.name);
+        let mut s = format!(
+            "{}sign {}:\n",
+            if sg.exported { "export " } else { "" },
+            sg.name
+        );
+        push_members(&mut s, &sg.members);
         push_body(
             &mut s,
             std::slice::from_ref(&Block {
@@ -720,24 +744,30 @@ mod tests {
         let mk = |flip: bool| {
             let mut l = Language::new();
             let a = TraitDef {
+                exported: false,
                 name: "Alpha".into(),
                 global: false,
                 marker: false,
                 type_params: vec![],
-                blocks: vec![Block {
-                    items: vec![SignItem::TraitMount {
-                        name: "Beta".into(),
-                        kind: crate::TraitMountKind::Declaration,
-                        args: vec![],
+                body: (
+                    vec![Block {
+                        items: vec![SignItem::TraitMount {
+                            name: "Beta".into(),
+                            kind: crate::TraitMountKind::Declaration,
+                            args: vec![],
+                        }],
                     }],
-                }],
+                    crate::Language::new(),
+                )
+                    .into(),
             };
             let b = TraitDef {
+                exported: false,
                 name: "Beta".into(),
                 global: false,
                 marker: false,
                 type_params: vec![],
-                blocks: vec![Block::default()],
+                body: (vec![Block::default()], crate::Language::new()).into(),
             };
             if flip {
                 l.add_trait(b.clone());

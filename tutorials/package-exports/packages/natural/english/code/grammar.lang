@@ -1,0 +1,33 @@
+Symbol k
+Symbol a
+Symbol t
+Symbol s
+Class vowel {a}
+
+export trait Noun:
+    syn:
+        feature:
+            number = enum(singular, plural)
+
+export paradigm CatForms:
+    case [syn.number]:
+        [plural]: cats()
+        base: cat()
+
+export sign cat:
+    belongs Noun
+    Noun[0]
+    syn:
+        feature:
+            number = singular
+    phon:
+        /kat/
+
+sign cats:
+    belongs Noun
+    Noun[0]
+    syn:
+        feature:
+            number = plural
+    phon:
+        /kats/

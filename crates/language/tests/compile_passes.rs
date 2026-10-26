@@ -275,11 +275,12 @@ fn bare_and_empty_brackets_inline_whole_trait() {
 fn error_duplicate_names() {
     let mut l = Language::new();
     let t = TraitDef {
+        exported: false,
         name: "T".into(),
         global: false,
         marker: false,
         type_params: vec![],
-        blocks: vec![Block::default()],
+        body: (vec![Block::default()], crate::Language::new()).into(),
     };
     l.add_trait(t.clone());
     l.add_trait(t);

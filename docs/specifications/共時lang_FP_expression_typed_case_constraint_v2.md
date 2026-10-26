@@ -149,9 +149,8 @@ phon:
                 /{en_3sg({$self}).phon.ret}/
 ```
 
-branch 依來源序求值。Unmatched 繼續；既有 guard／equals 分支的硬 category/constraint
-blocking 記錄 `CASE_MORE_SPECIFIC_BLOCKED` 後繼續；Error 立即停止，不能落入 `base`。
-V3 bundle 列一旦匹配，結果 blocking 亦為 Error，不繼續其他列。`Base:` 可讀，
+branch 依來源序求值。只有 Unmatched 繼續；guard／Equals／bundle 命中後，
+任何結果或約束錯誤立即停止，不能繼續其他列或落入 `base`（I34）。`Base:` 可讀，
 canonical 一律輸出 `base:`；`when` 的 fallback 則仍為 `else:`。
 
 branch 結果也可再是相容 context type 的 `case`；parser／printer、validator、runtime、
@@ -206,7 +205,7 @@ context／rule／feature／role／Sign-case pipeline 驗證所有候選，回傳
 | equal/order constraints | `fp_v2::binary_constraints_execute_at_application` 與八個 `std/cxg` recipe E2E |
 | competition 不暗選 | `fp_v2::competition_returns_all_candidates_and_samples_deterministically` |
 | entrenchment 極大有限權重仍維持比例／決定性 | `fp_v2::entrenchment_sampling_normalizes_finite_weights_before_they_overflow` |
-| candidate 完整求值／零候選／blocking fallback | `runtime_sealing.rs` 的 candidate 與 hard-constraint 反例 |
+| candidate 完整求值／零候選／命中後不回退 | `runtime_sealing.rs` 的 candidate 與 hard-constraint 反例 |
 | Stored `$self` 不重播規則且保留 deep/source provenance | `runtime_sealing.rs` 的 inherited-rule 與 contextual source-baseline 反例 |
 | identity-preserving migration | `fp_v2::explicit_document_migration_preserves_existing_node_ids` |
 | expression identity 可由四原語定址 | `identity_sidecar.rs` 與 `primitive_edits.rs` 的 Application／Case／CaseBranch／Constraint 反例；匿名 fragment 的 items／Refs 另由 `anonymous_sign_context_fragment_items_keep_stable_identity_and_refs` 固定 |

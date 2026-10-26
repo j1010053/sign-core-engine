@@ -326,7 +326,9 @@ pub fn diff_vector(before: &LanguageDocument, after: &LanguageDocument) -> DiffV
                         changed[slot] += 1;
                     }
                 }
-                if projection(sign, None) != projection(other, None) {
+                if projection(sign, None) != projection(other, None)
+                    || sign.exported != other.exported
+                {
                     changed[4] += 1;
                 }
             }
@@ -405,9 +407,9 @@ fn paradigm_counts(before: &LanguageDocument, after: &LanguageDocument) -> DiffC
 fn paradigms_by_id(document: &LanguageDocument) -> BTreeMap<&NodeId, &ParadigmDef> {
     document
         .language()
-        .paradigms
-        .iter()
-        .map(|paradigm| (&paradigm.id.0, paradigm))
+        .paradigms_recursive()
+        .into_iter()
+        .map(|(_, paradigm)| (&paradigm.id.0, paradigm))
         .collect()
 }
 
@@ -422,16 +424,92 @@ fn paradigms_by_id(document: &LanguageDocument) -> BTreeMap<&NodeId, &ParadigmDe
 /// 邊算不進來——這不影響 reach 的正確性:reach 的目標集合同樣只來自本文件
 /// (套件的 trait 不會 `belongs` 一個下游文件的 trait,依賴方向不允許)。
 fn reach_index(document: &LanguageDocument) -> ReachIndex {
-    let (registry, _) = conlang_language::ontology::OntologyRegistry::build(&[document.language()]);
+    // Count source definitions once. Stable reference bindings resolve lexical
+    // members and parameters without counting compiled instances as new signs.
+    let entries = document
+        .identities()
+        .nodes
+        .iter()
+        .map(|entry| (entry.id.clone(), entry))
+        .collect::<BTreeMap<_, _>>();
+    let names = document
+        .language()
+        .traits_recursive()
+        .into_iter()
+        .filter_map(|(name, _)| document.ref_for_trait(&name).map(|r| (r.id, name)))
+        .collect::<BTreeMap<_, _>>();
+    let mut parents: BTreeMap<NodeId, Vec<String>> = BTreeMap::new();
+    for binding in &document.identities().refs {
+        if binding.field != "belongs" {
+            continue;
+        }
+        let conlang_language::RefTargetV1::Local { target } = &binding.target else {
+            continue;
+        };
+        let Some(name) = names.get(&target.id) else {
+            continue;
+        };
+        let Some(item) = entries.get(&binding.owner) else {
+            continue;
+        };
+        let Some(parent) = item.parent.as_ref().and_then(|id| entries.get(id)) else {
+            continue;
+        };
+        let container = if parent.kind == conlang_language::NodeKind::Block {
+            parent
+                .parent
+                .as_ref()
+                .and_then(|id| entries.get(id))
+                .copied()
+        } else if parent.kind == conlang_language::NodeKind::Sign {
+            Some(*parent)
+        } else {
+            None
+        };
+        if let Some(container) = container {
+            parents
+                .entry(container.id.clone())
+                .or_default()
+                .push(name.clone());
+        }
+    }
+    let memberships = |id: &NodeId| {
+        parents
+            .get(id)
+            .into_iter()
+            .flatten()
+            .map(|name| SignItem::TraitMount {
+                name: name.clone(),
+                kind: conlang_language::TraitMountKind::Declaration,
+                args: vec![],
+            })
+            .collect()
+    };
+    let mut source = conlang_language::Language::new();
+    for (name, original) in document.language().traits_recursive() {
+        let mut value = original.clone();
+        value.name = name.clone();
+        value.type_params.clear();
+        value.members = conlang_language::Language::new();
+        value.blocks = vec![conlang_language::Block {
+            items: memberships(&document.ref_for_trait(&name).unwrap().id),
+        }];
+        source.traits.push(value);
+    }
+    for (name, original) in document.language().signs_recursive() {
+        let mut value = original.clone();
+        value.name = name;
+        value.items = memberships(&value.id.0);
+        source.signs.push(value);
+    }
+    let (registry, _) = conlang_language::ontology::OntologyRegistry::build(&[&source]);
     ReachIndex {
-        closures: document
-            .language()
+        closures: source
             .signs
             .iter()
             .map(|sign| registry.sign_categories(sign).into_iter().collect())
             .collect(),
-        globals: document
-            .language()
+        globals: source
             .traits
             .iter()
             .filter(|def| def.global)
@@ -561,6 +639,7 @@ fn trait_content_counts(
         // `global` 決定這個 trait 是不是自動引用的 phon-rule macro(P6),
         // 那是跨維的身分改變,不屬於任何單一維。
         if trait_projection(old_trait, None) != trait_projection(new_trait, None)
+            || old_trait.exported != new_trait.exported
             || old_trait.global != new_trait.global
             || old_trait.marker != new_trait.marker
             || old_trait.type_params != new_trait.type_params
@@ -806,7 +885,7 @@ fn trait_rules_by_id(
     document: &LanguageDocument,
 ) -> BTreeMap<conlang_language::RuleId, TraitRuleEntry> {
     let mut out = BTreeMap::new();
-    for def in &document.language().traits {
+    for (name, def) in document.language().traits_recursive() {
         for block in &def.blocks {
             for item in &block.items {
                 let (SignItem::Rule(rule) | SignItem::FeatureRule(rule)) = item else {
@@ -816,7 +895,7 @@ fn trait_rules_by_id(
                     rule.id.clone(),
                     TraitRuleEntry {
                         dim: rule.dim,
-                        declared_in: def.name.clone(),
+                        declared_in: name.clone(),
                         item: SignItem::without_source_location(item),
                     },
                 );
@@ -850,20 +929,15 @@ struct SignClosures {
     after: ReachIndex,
 }
 
-fn traits_by_name(document: &LanguageDocument) -> BTreeMap<&str, &conlang_language::TraitDef> {
-    document
-        .language()
-        .traits
-        .iter()
-        .map(|def| (def.name.as_str(), def))
-        .collect()
+fn traits_by_name(document: &LanguageDocument) -> BTreeMap<String, &conlang_language::TraitDef> {
+    document.language().traits_recursive().into_iter().collect()
 }
 
 fn signs_by_id(document: &LanguageDocument) -> BTreeMap<NodeId, &SignDef> {
     document
         .language()
-        .signs
-        .iter()
-        .map(|sign| (sign.id.0.clone(), sign))
+        .signs_recursive()
+        .into_iter()
+        .map(|(_, sign)| (sign.id.0.clone(), sign))
         .collect()
 }

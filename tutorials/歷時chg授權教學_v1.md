@@ -301,23 +301,33 @@ sign 的 items 則是字面順序，`at start` 真的會放到最前面：
 `type_params` 的值只寫角括號**裡面**的清單；`.lang` 與 `.chg` 共用同一個
 `name: Bound, T` parser 與 canonical printer：
 
-<!-- chg-test: base=self:1; ns=evo:params; expect=trait LocalNoun<C: Nominal, T>: -->
+範例先建立尚未被使用的 `Agreement`。若替已被引用的 trait 改變參數數量，所有引用也必須提供完整實參；裸 `belongs LocalNoun` 不能引用改成泛型的 `LocalNoun<C>`。
+
+<!-- chg-test: base=self:1; ns=evo:params; expect=trait Agreement<C: Nominal, T>: -->
 ```chg
     #0:
-        update trait("LocalNoun").type_params = "C: Nominal, T"
+        insert into language at end:
+            trait Agreement:
+                pass
+    #1:
+        update trait("Agreement").type_params = "C: Nominal, T"
 ```
 
 空字串表示清除參數。下面先新增、再清除，最後把空 trait 收緊成 marker；replay
 結果不會殘留角括號：
 
-<!-- chg-test: base=self:1; ns=evo:marker; expect=marker trait LocalNoun:; absent=trait LocalNoun< -->
+<!-- chg-test: base=self:1; ns=evo:marker; expect=marker trait Agreement:; absent=trait Agreement< -->
 ```chg
     #0:
-        update trait("LocalNoun").type_params = "C: Nominal, T"
+        insert into language at end:
+            trait Agreement:
+                pass
     #1:
-        update trait("LocalNoun").type_params = ""
+        update trait("Agreement").type_params = "C: Nominal, T"
     #2:
-        update trait("LocalNoun").marker = true
+        update trait("Agreement").type_params = ""
+    #3:
+        update trait("Agreement").marker = true
 ```
 
 `global` 與 `marker` 互斥；不論是手寫 `.lang` 或程式化 edit 都會得到同一個

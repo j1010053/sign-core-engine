@@ -422,13 +422,15 @@ pub fn expand(
             // `origin` 是單一來源、`components` 是線性組合的各成分——au = à + le
             // 兩者都必須留下,否則 `fuse(a,b)` 與 `fuse(a,c)` 會產出相同結果。
             let fused = SignDef {
+                exported: false,
                 id: conlang_language::SignId::synthetic(),
                 name: name.clone(),
-                items: vec![SignItem::Sense(Sense {
+                body: (vec![SignItem::Sense(Sense {
                     name: "core".to_owned(),
                     gloss: gloss.clone(),
                     source: SourceLocation::unknown(),
-                })],
+                })])
+                .into(),
             }
             .with_provenance(SignProvenance::Derived)
             .with_origin(SignRef(left.clone()))
@@ -671,9 +673,10 @@ fn expand_split(
             .map(|(_, edge)| SignItem::SenseEdge((*edge).clone())),
     );
     let derived = SignDef {
+        exported: false,
         id: conlang_language::SignId::synthetic(),
         name: new_name.to_owned(),
-        items,
+        body: (items).into(),
     }
     .with_provenance(SignProvenance::Derived)
     .with_origin(SignRef(sign.to_owned()));

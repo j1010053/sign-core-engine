@@ -67,7 +67,7 @@ code = ["code/main.lang"]
     );
     write(
         package.join("code/main.lang"),
-        &format!("trait AppSessionExternalMarker:\n{extra_code}"),
+        &format!("export trait AppSessionExternalMarker:\n{extra_code}"),
     );
 }
 

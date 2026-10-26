@@ -142,6 +142,9 @@ fn flatten_values(acc: BTreeMap<String, (usize, SignItem)>) -> Vec<SignItem> {
 #[derive(Debug, Clone, Default)]
 pub struct OntologyRegistry {
     tree: BTreeMap<String, OntoNode>,
+    /// Read-only nominal type index. These are Sign identities, never trait
+    /// nodes or content-inheritance roots.
+    instance_types: BTreeMap<String, (crate::SignId, Vec<String>)>,
     /// The one V3 automatic template.  `None` means that the language chose no
     /// global trait (or that validation found an ambiguous invalid source).
     global: Option<String>,
@@ -385,17 +388,6 @@ fn block_shape_diagnostics(langs: &[&Language]) -> Vec<Diagnostic> {
                     ),
                 ));
             }
-            // P76:marker trait 不得有型別參數
-            if def.marker && !def.type_params.is_empty() {
-                out.push(Diagnostic::new(
-                    Severity::Error,
-                    "TYPE_PARAM_ON_MARKER_TRAIT",
-                    format!(
-                        "marker trait {:?} 不得有型別參數(marker 無內容可供替換)",
-                        def.name
-                    ),
-                ));
-            }
             // P76:型別參數不得重名
             {
                 let mut seen = std::collections::BTreeSet::new();
@@ -533,11 +525,53 @@ impl OntologyRegistry {
             }
         }
         detect_cycles(&reg.tree, &mut diags);
+        for sign in langs.iter().flat_map(|language| &language.signs) {
+            reg.instance_types.insert(
+                sign.name.clone(),
+                (sign.id.clone(), reg.sign_categories(sign)),
+            );
+        }
         (reg, diags)
     }
 
     pub fn has(&self, name: &str) -> bool {
         self.tree.contains_key(name)
+    }
+
+    pub fn has_type(&self, name: &str) -> bool {
+        self.has(name) ^ self.instance_types.contains_key(name)
+    }
+
+    /// One predicate for slots, roles and guards. Nominal matching uses the
+    /// concrete construction ID, including captured generic arguments.
+    pub fn type_satisfies(
+        &self,
+        categories: &[String],
+        construction: Option<&crate::SignId>,
+        required: &str,
+    ) -> bool {
+        if !self.has_type(required) {
+            return false;
+        }
+        match self.instance_types.get(required) {
+            Some((id, _)) => construction == Some(id),
+            None => self.categories_satisfy(categories, required),
+        }
+    }
+
+    pub fn sign_satisfies(&self, sign: &SignDef, required: &str) -> bool {
+        self.type_satisfies(&self.sign_categories(sign), Some(&sign.id), required)
+    }
+
+    /// Type containment is classification-only; it never copies Sign content.
+    pub fn type_is_within(&self, left: &str, right: &str) -> bool {
+        if !self.has_type(left) || !self.has_type(right) {
+            return false;
+        }
+        match self.instance_types.get(left) {
+            Some((id, categories)) => self.type_satisfies(categories, Some(id), right),
+            None => self.has(right) && self.is_within(left, right),
+        }
     }
 
     pub fn category_is_a(&self, category: &str, ancestor: &str) -> bool {
@@ -618,7 +652,7 @@ impl OntologyRegistry {
             (_, crate::SlotConstraint::AnySign) => true,
             (crate::SlotConstraint::AnySign, _) => false,
             (crate::SlotConstraint::Category(a), crate::SlotConstraint::Category(b)) => {
-                self.is_within(a, b)
+                self.type_is_within(a, b)
             }
         };
         constraint_ok && (right.optional || !left.optional)
@@ -836,6 +870,9 @@ impl OntologyRegistry {
             .map(|global| self.closure(global).into_iter().collect::<BTreeSet<_>>())
             .unwrap_or_default();
         for source in self.inheritance_order(sign) {
+            if sign.body.materialized_traits.contains(&source.trait_name) {
+                continue;
+            }
             if let Some(node) = self.node(&source.trait_name) {
                 let automatic_global_phon = automatic_global_phon.contains(&source.trait_name);
                 for item in &node.items {
@@ -1159,11 +1196,14 @@ impl OntologyRegistry {
                 .map(SignItem::SlotMap),
         );
         items.extend(rules);
-        SignDef {
-            id: sign.id.clone(),
-            name: sign.name.clone(),
-            items,
-        }
+        let mut effective = sign.clone();
+        effective.items = items;
+        effective.body.materialized_traits.extend(
+            self.inheritance_order(sign)
+                .into_iter()
+                .map(|source| source.trait_name),
+        );
+        effective
     }
 
     /// Structured P38–P40 validation. Resolved Def conflicts are warnings
@@ -1214,13 +1254,15 @@ impl OntologyRegistry {
                     .iter()
                     .filter(|item| !item.global)
                     .map(|trait_def| SignDef {
+                        exported: false,
                         id: crate::SignId::synthetic(),
                         name: trait_def.name.clone(),
-                        items: vec![SignItem::TraitMount {
+                        body: (vec![SignItem::TraitMount {
                             name: trait_def.name.clone(),
                             kind: crate::TraitMountKind::Declaration,
                             args: vec![],
-                        }],
+                        }])
+                        .into(),
                     }),
             );
             for sign in &candidates {
@@ -1491,7 +1533,7 @@ impl OntologyRegistry {
                         let Some(required) = slot.constraint.category() else {
                             continue;
                         };
-                        if !self.has(required)
+                        if !self.has_type(required)
                             && !is_abstract_type_param(&type_param_scopes, &owner, required)
                         {
                             report.push(
@@ -1637,8 +1679,8 @@ pub(crate) fn type_param_bound_diagnostics(
                     Some(outer_param) => outer_param
                         .bound
                         .as_deref()
-                        .is_some_and(|outer_bound| registry.category_is_a(outer_bound, bound)),
-                    None => registry.category_is_a(arg, bound),
+                        .is_some_and(|outer_bound| registry.type_is_within(outer_bound, bound)),
+                    None => registry.type_is_within(arg, bound),
                 };
                 if !satisfies {
                     let reason = match outer_param.and_then(|param| param.bound.as_deref()) {

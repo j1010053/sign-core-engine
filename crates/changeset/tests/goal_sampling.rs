@@ -75,6 +75,7 @@ fn package(
 ) -> LibraryPackage {
     let id = LibraryId::new(LibraryKind::Plugin, name);
     LibraryPackage {
+        aliases: Default::default(),
         name: id.name.clone(),
         rule_namespace: id.to_string(),
         version: "test".to_owned(),

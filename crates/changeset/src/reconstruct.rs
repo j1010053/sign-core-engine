@@ -125,7 +125,7 @@ enum ShallowNode {
 /// **前提:兩邊的 id 出自同一血脈**。手改出來的 `.lang` 是一段沒有 id 的文字,
 /// 得先「認親」(配 id)才能餵進來——那是另一件事,不在本模組。
 ///
-/// 發出順序:**放寬型更新 → 移動 → 新增 → 刪除 → 收緊型更新**。新增排在刪除
+/// 發出順序:**宣告更名 → 放寬型更新 → 移動 → 新增 → 刪除 → 收緊型更新**。新增排在刪除
 /// 之前,是為了讓錨點(`Anchor::After(兄弟)`)在套用當下一定還指得到人；
 /// `marker=true` 延到刪除後，避免內容尚未移除時形成無效的中間狀態。
 pub fn reconstruct(
@@ -144,6 +144,42 @@ pub fn reconstruct(
     let mut covered_added = BTreeSet::new();
     let mut covered_removed = BTreeSet::new();
     let mut deferred_updates = Vec::new();
+
+    // A declaration rename rewrites all of its references atomically. Apply
+    // those edits before comparing dependent slots, arguments and guards; an
+    // explicit reference update first can point at a type not yet declared.
+    for (id, old_entry) in &old {
+        if !matches!(
+            old_entry.kind,
+            NodeKind::Trait | NodeKind::Sign | NodeKind::Paradigm
+        ) {
+            continue;
+        }
+        let Some(new_entry) = new.get(id) else {
+            continue;
+        };
+        let current = working
+            .identities()
+            .nodes
+            .iter()
+            .find(|entry| &entry.id == id)
+            .ok_or_else(|| ReconstructError::Unsupported {
+                kind: old_entry.kind,
+                detail: "renamed declaration lost its identity".into(),
+            })?;
+        let old_node = shallow_at(&working, current)?;
+        let new_node = shallow_at(after, new_entry)?;
+        for change in shallow_state_updates(&old_node, &new_node)? {
+            if matches!(change, NodeUpdate::Rename(_)) {
+                let edit = PrimitiveEdit::Update {
+                    node: NodeRef::new(id.clone(), old_entry.kind),
+                    change,
+                };
+                working = apply_structural(working, &edit)?;
+                edits.push(edit);
+            }
+        }
+    }
 
     // ── ① 更新:兩邊都有的,比淺層欄位 ──
     for (id, old_entry) in &old {
@@ -165,7 +201,16 @@ pub fn reconstruct(
                 ),
             });
         }
-        let old_node = shallow_at(before, old_entry)?;
+        let current = working
+            .identities()
+            .nodes
+            .iter()
+            .find(|entry| &entry.id == id)
+            .ok_or_else(|| ReconstructError::Unsupported {
+                kind: old_entry.kind,
+                detail: "updated node lost its identity".into(),
+            })?;
+        let old_node = shallow_at(&working, current)?;
         let new_node = shallow_at(after, new_entry)?;
         for change in shallow_state_updates(&old_node, &new_node)? {
             let edit = PrimitiveEdit::Update {
@@ -906,6 +951,9 @@ fn shallow_updates(
         }
         // trait / sign 的子節點(blocks / items)各自有 entry,故這裡**只比自己的欄位**。
         (DetachedNode::Trait(old), DetachedNode::Trait(new)) => {
+            if old.exported != new.exported {
+                updates.push(NodeUpdate::Exported(new.exported));
+            }
             if old.name != new.name {
                 updates.push(NodeUpdate::Rename(new.name.clone()));
             }
@@ -927,11 +975,17 @@ fn shallow_updates(
             }
         }
         (DetachedNode::Sign(old), DetachedNode::Sign(new)) => {
+            if old.exported != new.exported {
+                updates.push(NodeUpdate::Exported(new.exported));
+            }
             if old.name != new.name {
                 updates.push(NodeUpdate::Rename(new.name.clone()));
             }
         }
         (DetachedNode::Paradigm(old), DetachedNode::Paradigm(new)) => {
+            if old.exported != new.exported {
+                updates.push(NodeUpdate::Exported(new.exported));
+            }
             if old.name != new.name {
                 updates.push(NodeUpdate::Rename(new.name.clone()));
             }
@@ -1038,13 +1092,13 @@ fn item_updates(before: &SignItem, after: &SignItem) -> Result<Vec<NodeUpdate>, 
             SignItem::TraitMount {
                 name: old_name,
                 kind: old_kind,
-                ..
+                args: old_args,
             },
-            SignItem::TraitMount { name, kind, .. },
+            SignItem::TraitMount { name, kind, args },
         ) => {
-            if old_name != name || old_kind != kind {
+            if old_name != name || old_kind != kind || old_args != args {
                 updates.push(NodeUpdate::TraitUse {
-                    name: name.clone(),
+                    name: format_belongs_target(name, args),
                     block: kind.block(),
                 });
             }

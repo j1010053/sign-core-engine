@@ -271,9 +271,12 @@ fn marker_enablement_is_replayed_after_content_deletion_and_preserves_identity()
 
 #[test]
 fn trait_type_parameters_and_bounds_round_trip() {
-    round_trip(
+    let before =
+        LanguageDocument::import_new_root("trait Schema:\n    pass\n", "evo:header").unwrap();
+    round_trip_from(
         "trait type parameters",
-        &statement("update trait(\"LocalNoun\").type_params = \"C: Nominal, T\""),
+        before,
+        &statement("update trait(\"Schema\").type_params = \"C: Nominal, T\""),
     );
 }
 

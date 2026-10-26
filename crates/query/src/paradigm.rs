@@ -65,9 +65,13 @@ pub fn paradigms(system: &CompiledSystem) -> ParadigmCatalog {
     let mut entries = language
         .paradigms
         .iter()
-        .map(|paradigm| {
+        .filter_map(|paradigm| {
+            let name = system.public_symbol_name(
+                &paradigm.name,
+                conlang_language::LibraryExportKind::Paradigm,
+            )?;
             let parameters = system
-                .callable_parameters(&paradigm.name)
+                .callable_parameters(&name)
                 .unwrap_or_default()
                 .into_iter()
                 .map(|parameter| ParadigmParameter {
@@ -108,13 +112,13 @@ pub fn paradigms(system: &CompiledSystem) -> ParadigmCatalog {
                     }
                 })
                 .collect();
-            ParadigmEntry {
+            Some(ParadigmEntry {
                 id: paradigm.id.to_string(),
-                name: paradigm.name.clone(),
+                name,
                 match_features: paradigm.selector.match_features.clone(),
                 parameters,
                 branches,
-            }
+            })
         })
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.name.cmp(&right.name));

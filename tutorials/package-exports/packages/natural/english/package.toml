@@ -1,0 +1,6 @@
+schema = 2
+id = "natural:english"
+version = "1.0.0"
+layer = "overlay"
+capabilities = ["traits", "signs", "paradigms"]
+code = ["code/grammar.lang"]

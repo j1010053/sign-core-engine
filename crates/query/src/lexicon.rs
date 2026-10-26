@@ -22,9 +22,9 @@
 //! 的同一條線在讀取側的體現:換一個視角不該讓詞典少掉幾個詞,否則使用者會以為
 //! 詞不見了。故 [`LexiconFilter`] 決定「有哪些」、[`ViewConfig`] 只決定「怎麼排」。
 
-use serde::{Deserialize, Serialize};
 use conlang_language::sem::SemNode;
 use conlang_language::{CompiledSystem, Dim, SignDef};
+use serde::{Deserialize, Serialize};
 
 /// 「有哪些詞」——只有這裡能改變入選集合。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,10 +123,7 @@ fn entry_of(sign: &SignDef, system: &CompiledSystem) -> LexiconEntry {
 fn admits(entry: &LexiconEntry, filter: &LexiconFilter, system: &CompiledSystem) -> bool {
     if let Some(required) = &filter.category {
         // 單一判定出處:不在這裡寫 `categories.contains(required)`。
-        if !system
-            .ontology
-            .categories_satisfy(&entry.categories, required)
-        {
+        if !system.categories_satisfy(&entry.categories, required) {
             return false;
         }
     }
@@ -146,10 +143,23 @@ fn admits(entry: &LexiconEntry, filter: &LexiconFilter, system: &CompiledSystem)
 ///
 /// `filter` 決定有哪些、`view` 只決定怎麼排(見模組文件 ③)。
 pub fn lexicon(system: &CompiledSystem, filter: &LexiconFilter, view: &ViewConfig) -> Lexicon {
-    let signs = &system.effective_language().signs;
+    let signs: Vec<_> = system
+        .effective_language()
+        .signs
+        .iter()
+        .filter_map(|sign| {
+            system
+                .public_symbol_name(&sign.name, conlang_language::LibraryExportKind::Sign)
+                .map(|name| (sign, name))
+        })
+        .collect();
     let mut entries: Vec<LexiconEntry> = signs
         .iter()
-        .map(|sign| entry_of(sign, system))
+        .map(|(sign, name)| {
+            let mut entry = entry_of(sign, system);
+            entry.name = name.clone();
+            entry
+        })
         .filter(|entry| admits(entry, filter, system))
         .collect();
 

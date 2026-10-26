@@ -85,6 +85,77 @@ fn invalid_namespace_is_rejected_instead_of_using_random_identity() {
     );
 }
 
+#[test]
+fn legacy_generic_sidecar_keeps_its_digest_and_upgrades_only_on_edit() {
+    use conlang_language::{NodeRef, RefBindingV1};
+    let current = LanguageDocument::import_new_root(
+        "marker trait T:\ntrait Box<T>:\n    syn:\n        slots:\n            head [T]\nsign use:\n    belongs Box<T>\n    phon:\n        /{$slot.head}/\n",
+        "identity:legacy-generic",
+    ).unwrap();
+    assert_eq!(current.identities().reference_semantics, Some(2));
+    // The pre-nested binder bound a same-spelled global T, and recorded only
+    // the generic declaration, not the argument. This is the old wire format.
+    let mut legacy = current.identities().clone();
+    legacy.reference_semantics = None;
+    let slot = legacy
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::Slot)
+        .unwrap()
+        .id
+        .clone();
+    let belongs = legacy
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::Belongs)
+        .unwrap()
+        .id
+        .clone();
+    legacy.refs = vec![
+        RefBindingV1 {
+            owner: slot,
+            field: "slot.constraint".into(),
+            target: RefTargetV1::Local {
+                target: current.ref_for_trait("T").unwrap(),
+            },
+        },
+        RefBindingV1 {
+            owner: belongs,
+            field: "belongs".into(),
+            target: RefTargetV1::Local {
+                target: current.ref_for_trait("Box").unwrap(),
+            },
+        },
+    ];
+    legacy
+        .refs
+        .sort_by(|a, b| (&a.owner, &a.field).cmp(&(&b.owner, &b.field)));
+    let json = format!("{}\n", serde_json::to_string_pretty(&legacy).unwrap());
+    let reopened = LanguageDocument::open(&current.source(), &json).unwrap();
+    assert_eq!(reopened.manifest_json().unwrap(), json);
+    let report = check_document(&reopened, &LibrarySpec::default());
+    assert!(!report.has_errors(), "{:?}", report.diagnostics());
+    let (language, manifest) = reopened.into_edit_parts();
+    let upgraded = LanguageDocument::from_edit_parts(language, manifest).unwrap();
+    assert_eq!(upgraded.identities().reference_semantics, Some(2));
+    assert_eq!(upgraded.identities().nodes, legacy.nodes);
+    assert_eq!(upgraded, current);
+    // Neither version accepts corruption disguised as backward compatibility.
+    legacy.refs[0].target = RefTargetV1::Local {
+        target: NodeRef::new(current.root_ref().id, NodeKind::Trait),
+    };
+    assert!(
+        LanguageDocument::open(&current.source(), &serde_json::to_string(&legacy).unwrap())
+            .is_err()
+    );
+    let mut unknown = current.identities().clone();
+    unknown.reference_semantics = Some(999);
+    assert!(
+        LanguageDocument::open(&current.source(), &serde_json::to_string(&unknown).unwrap())
+            .is_err()
+    );
+}
+
 /// v1 identity 已**硬移除**(2026-07-24):v1 sidecar 不再可載入 → `UnknownSchema`
 /// (顯式拒絕、不默默升級)。升級無損的證據見 Stage A commit 前的
 /// `v1_is_read_and_canonically_upgraded_to_v2`(git history)。

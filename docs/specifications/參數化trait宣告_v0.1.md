@@ -1,6 +1,12 @@
 # 參數化 trait 宣告(P76 提案)
 
-> **狀態:提案,未裁定。**
+> **2026-10-25 修訂：**依 [I36](../implementation/named-type-arguments.md)，型別實參支援 `Param=Type` 及先位置後具名；以同一綁定規則整理至宣告順序，保留所有必要實參檢查。
+
+> **2026-10-23 修訂：**依 [I35](../implementation/sign-instance-types.md)，型別實參及 slot／role／guard 可使用 Sign 實例型別；Sign 不是內容模板，參數上界仍為 trait。以下僅限範疇實參的原條款由 I35 擴充。
+
+> **2026-10-18 修訂：**型別參數傳遞、遞迴型別引用、泛型 marker、完整實參檢查與巢狀宣告，依 [I32](../implementation/nested-types-and-specialization.md) 實作。以下原文中「marker 不可帶參數」及僅限簡單名稱／替換的條款由 I32 取代；其餘 P76 契約繼續適用。
+
+> **狀態：原始提案存檔；現行契約依上列 I32–I36 實作修訂。**
 > 承 P5(trait = macro 模板,全 block 或全不用)、P22(三道界:無量詞、無計算、無副作用)、
 > P41(slot 宣告)、P71(封閉清單與 feature 分工)。
 > 緣起:`package/盤點_lang-chg-data可表達的資料結構_v0.1.md` §8.2。

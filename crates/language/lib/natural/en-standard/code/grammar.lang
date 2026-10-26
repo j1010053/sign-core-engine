@@ -30,7 +30,7 @@ Symbol y
 
 Class vowel {a, e, i, o, u, y}
 
-trait StandardEnglishProfile:
+export trait StandardEnglishProfile:
     belongs GB020_Present
     belongs GB021_Present
     belongs GB028_Absent
@@ -57,30 +57,30 @@ trait StandardEnglishProfile:
     belongs GB322_Absent
     belongs GB522_Absent
 
-trait EnglishConstruction:
+export trait EnglishConstruction:
     belongs StandardEnglishProfile
     belongs FormMeaningConstruction
 
 /* Natural-language-specific semantic and feature schemas.  AgreementBearer
    comes from std:core; its domains are deliberately inherited rather than
    recreated as unconstrained syn paths. */
-trait EnglishCountMeaning:
+export trait EnglishCountMeaning:
     sem:
         feature:
             number = enum(singular, plural)
 
-trait EnglishIdentifiability:
+export trait EnglishIdentifiability:
     belongs Semantic
     sem:
         feature:
             identifiability = enum(definite, indefinite)
 
-trait EnglishVoiceBearer:
+export trait EnglishVoiceBearer:
     syn:
         feature:
             voice = enum(active, passive)
 
-trait EnglishThirdSingular:
+export trait EnglishThirdSingular:
     belongs AgreementBearer
     syn:
         feature:
@@ -91,112 +91,112 @@ trait EnglishThirdSingular:
    predicate that licenses that occurrence.  A clause copies the predicate's
    requirement into a per-slot occurrence context; the lexical sign remains
    immutable and the nominal selects its own surface realization. */
-trait EnglishCaseBearer:
+export trait EnglishCaseBearer:
     belongs Nominal
     syn:
         feature:
             case = enum(nominative, accusative)
 
-trait EnglishSubjectCaseAssigner:
+export trait EnglishSubjectCaseAssigner:
     belongs Predicate
     syn:
         feature:
             subject_case = enum(nominative, accusative)
 
-trait EnglishNominativeSubjectCaseAssigner:
+export trait EnglishNominativeSubjectCaseAssigner:
     belongs EnglishSubjectCaseAssigner
     syn:
         feature:
             subject_case = nominative
 
-trait EnglishObjectCaseAssigner:
+export trait EnglishObjectCaseAssigner:
     belongs Predicate
     syn:
         feature:
             object_case = enum(nominative, accusative)
 
-trait EnglishFiniteTransitiveCaseAssigner:
+export trait EnglishFiniteTransitiveCaseAssigner:
     belongs EnglishNominativeSubjectCaseAssigner
     belongs EnglishObjectCaseAssigner
     syn:
         feature:
             object_case = accusative
 
-trait EnglishFiniteIntransitivePredicate:
+export trait EnglishFiniteIntransitivePredicate:
     belongs Intransitive
     belongs EnglishNominativeSubjectCaseAssigner
 
-trait EnglishFiniteTransitivePredicate:
+export trait EnglishFiniteTransitivePredicate:
     belongs Transitive
     belongs EnglishFiniteTransitiveCaseAssigner
 
-trait EnglishDeterminer:
+export trait EnglishDeterminer:
     belongs Semantic
-trait EnglishAdjective:
+export trait EnglishAdjective:
     belongs Semantic
-trait EnglishAuxiliary:
+export trait EnglishAuxiliary:
     belongs Predicate
     belongs AgreementBearer
-trait EnglishCopula:
+export trait EnglishCopula:
     belongs EnglishAuxiliary
     belongs Copula
-trait EnglishNegator:
+export trait EnglishNegator:
     belongs Semantic
-trait EnglishPluralMarker:
+export trait EnglishPluralMarker:
     belongs Semantic
 
 /* Semantic frame identity is ontology membership.  These traits distinguish
    frame/function classes without introducing a mutable `frame = string`. */
-trait EnglishReferenceFrame:
+export trait EnglishReferenceFrame:
     belongs SemanticFrame
-trait EnglishRelationFrame:
+export trait EnglishRelationFrame:
     belongs SemanticFrame
-trait EnglishClauseFrame:
+export trait EnglishClauseFrame:
     belongs EventFrame
-trait EnglishCopularFrame:
+export trait EnglishCopularFrame:
     belongs EventFrame
-trait EnglishNegationFrame:
+export trait EnglishNegationFrame:
     belongs EventFrame
-trait EnglishQuestionFrame:
+export trait EnglishQuestionFrame:
     belongs EventFrame
-trait EnglishPassiveFrame:
+export trait EnglishPassiveFrame:
     belongs EventFrame
-trait EnglishCountNounFrame:
+export trait EnglishCountNounFrame:
     belongs SemanticFrame
-trait EnglishRunFrame:
+export trait EnglishRunFrame:
     belongs EventFrame
-trait EnglishSeeFrame:
+export trait EnglishSeeFrame:
     belongs EventFrame
-trait EnglishCopulaFrame:
+export trait EnglishCopulaFrame:
     belongs EventFrame
-trait EnglishDoSupportFrame:
+export trait EnglishDoSupportFrame:
     belongs EventFrame
-trait EnglishDogConcept:
+export trait EnglishDogConcept:
     belongs Entity
-trait EnglishThirdFemininePerson:
+export trait EnglishThirdFemininePerson:
     belongs Human
-trait EnglishBookConcept:
+export trait EnglishBookConcept:
     belongs Entity
-trait EnglishHouseConcept:
+export trait EnglishHouseConcept:
     belongs Entity
-trait EnglishBigProperty:
+export trait EnglishBigProperty:
     belongs Semantic
-trait EnglishInRelation:
+export trait EnglishInRelation:
     belongs Relation
 
 /* Horizontal allomorph links.  Clause constructions derive `finite_form`
    first; deferred autofill then selects a stored member Sign. */
-paradigm EnglishBE:
+export paradigm EnglishBE:
     case [syn.finite_form]:
         [third_singular]: is()
         base: be()
 
-paradigm EnglishDO:
+export paradigm EnglishDO:
     case [syn.finite_form]:
         [third_singular]: does()
         base: do()
 
-sign john:
+export sign john:
     belongs Noun
     belongs EnglishCaseBearer
     belongs Human
@@ -204,7 +204,7 @@ sign john:
     phon:
         /john/
 
-sign mary:
+export sign mary:
     belongs Noun
     belongs EnglishCaseBearer
     belongs Human
@@ -214,7 +214,7 @@ sign mary:
 
 /* One lexical sign realizes two surface case forms.  Case is supplied by its
    clause occurrence, never stored back into this source sign. */
-sign she:
+export sign she:
     belongs Pronoun
     belongs EnglishCaseBearer
     belongs EnglishThirdSingular
@@ -230,7 +230,7 @@ sign she:
 
 /* `dog` is a lexical stem.  Singular/plural surface realization belongs to
    EnglishCountNounForm, whose SignId stays stable across contexts. */
-sign dog:
+export sign dog:
     belongs Noun
     belongs EnglishCaseBearer
     belongs EnglishDogConcept
@@ -238,7 +238,7 @@ sign dog:
     phon:
         /dog/
 
-sign book:
+export sign book:
     belongs Noun
     belongs EnglishCaseBearer
     belongs EnglishBookConcept
@@ -246,7 +246,7 @@ sign book:
     phon:
         /book/
 
-sign house:
+export sign house:
     belongs Noun
     belongs EnglishCaseBearer
     belongs EnglishHouseConcept
@@ -254,7 +254,7 @@ sign house:
     phon:
         /house/
 
-sign the:
+export sign the:
     belongs EnglishDeterminer
     belongs EnglishIdentifiability
     sem:
@@ -263,7 +263,7 @@ sign the:
     phon:
         /the/
 
-sign a:
+export sign a:
     belongs EnglishDeterminer
     belongs EnglishIdentifiability
     sem:
@@ -272,19 +272,19 @@ sign a:
     phon:
         /a/
 
-sign big:
+export sign big:
     belongs EnglishAdjective
     belongs EnglishBigProperty
     phon:
         /big/
 
-sign in:
+export sign in:
     belongs Adposition
     belongs EnglishInRelation
     phon:
         /in/
 
-sign plural_s:
+export sign plural_s:
     belongs EnglishPluralMarker
     belongs EnglishCountMeaning
     sem:
@@ -296,19 +296,19 @@ sign plural_s:
 /* These are deep lexical bases.  Their finite spell-outs are selected by the
    containing finite-clause constructions, rather than by sibling runs/sees
    signs. */
-sign run:
+export sign run:
     belongs EnglishFiniteIntransitivePredicate
     belongs EnglishRunFrame
     phon:
         /run/
 
-sign see:
+export sign see:
     belongs EnglishFiniteTransitivePredicate
     belongs EnglishSeeFrame
     phon:
         /see/
 
-sign be:
+export sign be:
     belongs EnglishCopula
     belongs EnglishCopulaFrame
     syn:
@@ -318,7 +318,7 @@ sign be:
     phon:
         /be/
 
-sign do:
+export sign do:
     belongs EnglishAuxiliary
     belongs EnglishDoSupportFrame
     syn:
@@ -328,7 +328,7 @@ sign do:
     phon:
         /do/
 
-sign does:
+export sign does:
     belongs EnglishAuxiliary
     belongs EnglishDoSupportFrame
     syn:
@@ -338,7 +338,7 @@ sign does:
     phon:
         /does/
 
-sign is:
+export sign is:
     belongs EnglishCopula
     belongs EnglishCopulaFrame
     syn:
@@ -348,14 +348,14 @@ sign is:
     phon:
         /is/
 
-sign not:
+export sign not:
     belongs EnglishNegator
     phon:
         /not/
 
 /* An irregular lexicalized participle: deliberately retained as a
    workaround, not evidence for productive regular morphology. */
-sign seen:
+export sign seen:
     belongs Transitive
     belongs EnglishSeeFrame
     belongs EnglishVoiceBearer
@@ -366,7 +366,7 @@ sign seen:
     phon:
         /seen/
 
-sign EnglishDefiniteNP:
+export sign EnglishDefiniteNP:
     belongs EnglishConstruction
     belongs DeterminationConstruction
     belongs EnglishReferenceFrame
@@ -379,7 +379,7 @@ sign EnglishDefiniteNP:
     phon:
         /{$slot.determiner} {$slot.nominal}/
 
-sign EnglishIndefiniteNP:
+export sign EnglishIndefiniteNP:
     belongs EnglishConstruction
     belongs DeterminationConstruction
     belongs EnglishReferenceFrame
@@ -395,7 +395,7 @@ sign EnglishIndefiniteNP:
 /* One deep noun-form construction.  A DerivationContext supplies its number
    constraint; the sem feature reads finalized syn state through read-only
    $self, then realization chooses a complete phon template. */
-sign EnglishCountNounForm:
+export sign EnglishCountNounForm:
     belongs EnglishConstruction
     belongs EnglishCountMeaning
     belongs EnglishCountNounFrame
@@ -418,7 +418,7 @@ sign EnglishCountNounForm:
                 base:
                     /{$slot.stem}/
 
-sign EnglishPluralNP:
+export sign EnglishPluralNP:
     belongs EnglishConstruction
     belongs NumberMarkingConstruction
     belongs EnglishCountMeaning
@@ -433,14 +433,14 @@ sign EnglishPluralNP:
     phon:
         /{$slot.nominal}{$slot.marker}/
 
-sign EnglishPossessiveNP:
+export sign EnglishPossessiveNP:
     belongs EnglishConstruction
     belongs PossessionConstruction
     belongs EnglishReferenceFrame
     phon:
         /{$slot.possessor}s {$slot.possessed}/
 
-sign EnglishAttributiveNP:
+export sign EnglishAttributiveNP:
     belongs EnglishConstruction
     belongs AttributionConstruction
     belongs EnglishReferenceFrame
@@ -451,12 +451,12 @@ sign EnglishAttributiveNP:
     phon:
         /{$slot.attribute} {$slot.nominal}/
 
-sign EnglishPrepositionalPhrase:
+export sign EnglishPrepositionalPhrase:
     belongs EnglishConstruction
     belongs PrepositionalPhrase
     belongs EnglishRelationFrame
 
-sign EnglishIntransitiveClause:
+export sign EnglishIntransitiveClause:
     belongs EnglishConstruction
     belongs IntransitiveClauseConstruction
     belongs EnglishClauseFrame
@@ -485,7 +485,7 @@ sign EnglishIntransitiveClause:
                 base:
                     /{$slot.subject} {$slot.predicate}/
 
-sign EnglishSVOTransitiveClause:
+export sign EnglishSVOTransitiveClause:
     belongs EnglishConstruction
     belongs SVOTransitiveClause
     belongs EnglishClauseFrame
@@ -517,7 +517,7 @@ sign EnglishSVOTransitiveClause:
                 base:
                     /{$slot.subject} {$slot.predicate} {$slot.object}/
 
-sign EnglishCopularPredication:
+export sign EnglishCopularPredication:
     belongs EnglishConstruction
     belongs CopularPredicationConstruction
     belongs EnglishCopularFrame
@@ -535,7 +535,7 @@ sign EnglishCopularPredication:
     phon:
         /{$slot.subject} {$slot.copula} {$slot.predicate}/
 
-sign EnglishDoNegation:
+export sign EnglishDoNegation:
     belongs EnglishConstruction
     belongs NegationConstruction
     belongs EnglishNegationFrame
@@ -557,7 +557,7 @@ sign EnglishDoNegation:
     phon:
         /{$slot.subject} {$slot.auxiliary} {$slot.negator} {$slot.predicate}/
 
-sign EnglishPolarQuestion:
+export sign EnglishPolarQuestion:
     belongs EnglishConstruction
     belongs PolarQuestionConstruction
     belongs EnglishQuestionFrame
@@ -576,7 +576,7 @@ sign EnglishPolarQuestion:
     phon:
         /{$slot.auxiliary} {$slot.subject} {$slot.clause}/
 
-sign EnglishPeriphrasticPassive:
+export sign EnglishPeriphrasticPassive:
     belongs EnglishConstruction
     belongs PassiveConstruction
     belongs EnglishPassiveFrame

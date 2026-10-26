@@ -34,6 +34,9 @@ pub struct SemanticEdgeV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SemanticNodeV1 {
+    /// Optional concrete construction identity; absent in legacy documents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub construction_id: Option<crate::SignId>,
     pub source: SemanticSourceV1,
     pub types: Vec<String>,
     pub features: BTreeMap<String, String>,
@@ -87,6 +90,7 @@ impl SemanticNodeV1 {
         types.sort_unstable();
         types.dedup();
         let mut value = SemanticNodeV1 {
+            construction_id: node.construction_id.clone(),
             source: SemanticSourceV1 {
                 package: node.source.package.clone(),
                 sign: node.source.sign.clone(),
@@ -129,6 +133,7 @@ impl SemanticNodeV1 {
     pub fn into_sem_node(mut self) -> SemNode {
         self.canonicalize();
         SemNode {
+            construction_id: self.construction_id,
             types: self.types,
             features: self.features,
             source: crate::sem::SemanticSource {

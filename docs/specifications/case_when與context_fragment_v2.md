@@ -27,6 +27,10 @@ Syn／Sem／Prag fragment。
 即停止。Unmatched 才繼續；Error 立即中止且不進 `base`。`case` 的 fallback
 關鍵字是 `base`，不接受 `else`。
 
+此規則涵蓋條件與命中結果的錯誤，適用於 guard、Equals、bundle 及所有入口。
+I34 取消 Sign guard／Equals 的硬約束失敗回退；role 命中未填 slot 後也不再改試下一支，
+其合法缺席／未飽和／必填檢查仍依原 role 契約。直接推導與 filler 共用巢狀 case 求值。
+
 ```lang
 syn:
     case:
@@ -40,6 +44,8 @@ syn:
 
 `base` 可直接帶純量結果，也可留白。空白 `base:` 回傳該 context 的既有基底：
 Sign 保留目前 Sign、feature 保留目前值、role 保留目前 binding、phon 保留深層模板。
+沒有寫 base 的既有政策也保留；Paradigm 仍必須有最後、非空的成員 application base。
+後續統一 base 控制的語法僅見[提案](../architecture/base-branch-control-proposal.md)，尚未採納。
 
 ## Bundle match：先宣告欄位，再寫值列
 
@@ -121,7 +127,8 @@ realization 的 scalar 選擇仍使用 `case:`。
 
 `case` 與 `when` 在 IR 共用 `TypedCase` 與同一 fragment merge executor，並用
 `CaseSelection::{FirstMatch, Accumulate}` 保留可觀察語意。`CaseRecord` 同樣記錄 selection、
-branch、Matched／Unmatched／MoreSpecificBlocked、來源行與 diagnostic code。
+branch、Matched／Unmatched、來源行與 diagnostic code。`MoreSpecificBlocked` 僅保留舊 API
+相容值，新 case 求值不再產生它。共用求值邊界見 [I34](../implementation/case-evaluation-unification.md)。
 
 identity sidecar 為 Case、CaseBranch 與 fragment 內項目配置 stable NodeId。Primitive
 Edit／`.chg` 可用 typed `selection = case|when` 更新 Case；Update 保留 Case NodeId，
@@ -141,3 +148,6 @@ Edit／`.chg` 可用 typed `selection = case|when` 更新 Case；Update 保留 C
 | bundle parse／canonical／first-match／`_`／空白 base | `bundle_match::bundle_case_round_trips_and_uses_first_match_wildcards_and_empty_base` |
 | bundle 欄數、欄位與 enum domain 負例 | `bundle_match::bundle_header_rows_are_shape_checked_by_the_parser`、`bundle_match::bundle_fields_and_values_are_checked_against_typed_feature_domains` |
 | `when` bundle frozen matching 與 `else` | `bundle_match::when_bundle_matching_reads_one_frozen_snapshot_and_else_is_fallback_only` |
+| 三種 case 條件、直接／stored filler／token filler 的缺值、巢狀結果及 base | `case_evaluation_unification.rs` |
+| 命中結果硬約束錯誤不得回退 | `runtime_sealing::matched_case_constraint_failure_is_fatal_instead_of_trying_base`、`case_evaluation_unification::a_matched_sign_result_cannot_fall_through_to_base_in_any_case_syntax` |
+| role 未填 slot 不改選下一支，optional／partial 政策保留 | `case_evaluation_unification::role_absence_stops_selection_and_retains_optional_and_partial_policy` |

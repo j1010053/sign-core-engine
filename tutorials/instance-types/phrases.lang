@@ -1,0 +1,72 @@
+/* Diagnostic words a / u / b illustrate types, not English phonology. */
+Symbol a
+Symbol u
+Symbol b
+Class vowel {a, u, b}
+
+marker trait TenseHead:
+marker trait V:
+
+export trait XP<H, S, C>:
+    marker trait Bar:
+    export sign bar-comp:
+        belongs Bar
+        syn:
+            slots:
+                head [H]
+                comp [C]?
+        sem:
+            roles:
+                head [H]
+                head = {$slot.head}
+                comp [C]?
+                comp = {$slot.comp}
+        phon:
+            /{$slot.head} {$slot.comp}/
+    export sign bar-adjunct:
+        belongs Bar
+        syn:
+            slots:
+                adjunct [*]
+                head [Bar]
+        phon:
+            /{$slot.adjunct} {$slot.head}/
+    syn:
+        slots:
+            spec [S]?
+            head [Bar]
+    phon:
+        /{$slot.spec} {$slot.head}/
+
+export sign DP:
+    phon:
+        /a/
+
+export sign VP:
+    syn:
+        slots:
+            head [V]
+    phon:
+        /{$slot.head}/
+
+export sign TP:
+    belongs XP<TenseHead, DP, VP>
+    XP[0]
+
+sign tense:
+    belongs TenseHead
+    phon:
+        /u/
+
+sign verb:
+    belongs V
+    phon:
+        /b/
+
+sign demo:
+    syn:
+        slots:
+            phrase [TP]
+        map phrase autofill TP(spec: DP(), head: TP.bar-comp(head: tense(), comp: VP(head: verb())))
+    phon:
+        /{$slot.phrase}/
